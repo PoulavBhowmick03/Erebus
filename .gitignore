@@ -1,0 +1,19 @@
+# Never commit key material. See CLAUDE.md constraint 7.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+seed*.txt
+
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Cairo
+contracts/target/
+.snfoundry_cache/

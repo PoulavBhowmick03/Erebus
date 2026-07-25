@@ -1,0 +1,23 @@
+[package]
+name = "erebus"
+version = "0.0.0"
+edition = "2024_07"
+
+# Pinned to match starkware-libs/starknet-privacy .tool-versions. The machine may have
+# newer scarb/snforge globally; asdf honours the .tool-versions next to this file.
+[dependencies]
+starknet = "2.17.0"
+
+[dev-dependencies]
+snforge_std = "0.59.0"
+assert_macros = "2.17.0"
+
+[scripts]
+test = "snforge test"
+
+[tool.scarb]
+allow-prebuilt-plugins = ["snforge_std"]
+
+[[target.starknet-contract]]
+sierra = true
+casm = true
