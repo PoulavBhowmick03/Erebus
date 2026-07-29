@@ -23,3 +23,13 @@ export {
   deriveTransportKey,
   deriveViewingPublicKey,
 } from "./crypto/channel-secret.js";
+
+export type { MessageType, WireMessage } from "./channel/wire.js";
+export {
+  decodeMessage,
+  encodeMessage,
+  noteIndexForMessage,
+  NOTES_PER_MESSAGE,
+  PAYLOAD_BITS_PER_NOTE,
+  truncateMemoHash,
+} from "./channel/wire.js";
