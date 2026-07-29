@@ -8,19 +8,6 @@ importers:
 
   .: {}
 
-  mcp-server:
-    dependencies:
-      '@erebus/sdk':
-        specifier: workspace:*
-        version: link:../sdk/ts
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.0
-        version: 22.20.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-
   sdk/ts:
     dependencies:
       '@starkware-libs/starknet-privacy-sdk':
