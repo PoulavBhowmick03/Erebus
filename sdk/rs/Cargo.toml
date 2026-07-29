@@ -1,0 +1,30 @@
+[package]
+name = "erebus-sdk"
+version = "0.0.0"
+edition = "2021"
+description = "Rust client for Erebus — private agent coordination on STRK20"
+license = "Apache-2.0"
+
+[dependencies]
+# Felt252 and Stark-curve arithmetic. Published, unlike the software-mansion fork
+# that starknet-privacy's own crates pin by git rev.
+starknet-types-core = { version = "0.2", features = ["curve", "serde"] }
+# Poseidon and Stark ECDSA.
+starknet-crypto = "0.8"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Async HTTP for the proving service and RPC. Decided 2026-07-28 (ARCHITECTURE §3).
+# rustls rather than native-tls: no OpenSSL in the build, which keeps cross-compilation
+# and any future PyO3 wheel tractable.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"

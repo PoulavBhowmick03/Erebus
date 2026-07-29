@@ -1,0 +1,149 @@
+{
+  "constants": {
+    "invoke_prefix": "0x696e766f6b65",
+    "l1_gas_name": "0x4c315f474153",
+    "l2_gas_name": "0x4c325f474153",
+    "l1_data_gas_name": "0x4c315f44415441"
+  },
+  "vectors": [
+    {
+      "name": "proof_invocation_zero_fee",
+      "sender_address": "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+      "version": "0x3",
+      "compiled_calldata": [
+        "0x1",
+        "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+        "0x360f8727b971d0bc6b93fc840d637c077f8ae59eb6ca8ce27fdb5422b688192",
+        "0x3",
+        "0xdeadbeef",
+        "0xcafebabe",
+        "0x0"
+      ],
+      "chain_id": "0x534e5f5345504f4c4941",
+      "nonce": "0x0",
+      "account_deployment_data": [],
+      "nonce_da_mode": 0,
+      "fee_da_mode": 0,
+      "resource_bounds": {
+        "l1_gas": {
+          "max_amount": "0x1",
+          "max_price_per_unit": "0x0"
+        },
+        "l2_gas": {
+          "max_amount": "0x5f5e100",
+          "max_price_per_unit": "0x0"
+        },
+        "l1_data_gas": {
+          "max_amount": "0x1",
+          "max_price_per_unit": "0x0"
+        }
+      },
+      "tip": "0x0",
+      "paymaster_data": [],
+      "proof_facts": [],
+      "tx_hash": "0x1d09bae1126e0ff481c5f2ca3ef69e1e0830b26b0c8c68b7031eec55459fb8d"
+    },
+    {
+      "name": "with_proof_facts",
+      "sender_address": "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+      "version": "0x3",
+      "compiled_calldata": [
+        "0x1",
+        "0x2",
+        "0x3"
+      ],
+      "chain_id": "0x534e5f5345504f4c4941",
+      "nonce": "0x7",
+      "account_deployment_data": [],
+      "nonce_da_mode": 0,
+      "fee_da_mode": 0,
+      "resource_bounds": {
+        "l1_gas": {
+          "max_amount": "0x1234",
+          "max_price_per_unit": "0x5678"
+        },
+        "l2_gas": {
+          "max_amount": "0xabcdef",
+          "max_price_per_unit": "0x99"
+        },
+        "l1_data_gas": {
+          "max_amount": "0x42",
+          "max_price_per_unit": "0x7"
+        }
+      },
+      "tip": "0x0",
+      "paymaster_data": [],
+      "proof_facts": [
+        "0xaa",
+        "0xbb",
+        "0xcc"
+      ],
+      "tx_hash": "0x60f073ae1cbb5f2ea3b8d47e9d489e6e1760b2d51fc7379847f6bcd43fe65bc"
+    },
+    {
+      "name": "nonempty_paymaster_and_deployment_data",
+      "sender_address": "0xa11ce",
+      "version": "0x3",
+      "compiled_calldata": [
+        "0x9"
+      ],
+      "chain_id": "0x534e5f5345504f4c4941",
+      "nonce": "0x2a",
+      "account_deployment_data": [
+        "0x111",
+        "0x222"
+      ],
+      "nonce_da_mode": 1,
+      "fee_da_mode": 1,
+      "resource_bounds": {
+        "l1_gas": {
+          "max_amount": "0x1234",
+          "max_price_per_unit": "0x5678"
+        },
+        "l2_gas": {
+          "max_amount": "0xabcdef",
+          "max_price_per_unit": "0x99"
+        },
+        "l1_data_gas": {
+          "max_amount": "0x42",
+          "max_price_per_unit": "0x7"
+        }
+      },
+      "tip": "0x1234",
+      "paymaster_data": [
+        "0x333"
+      ],
+      "proof_facts": [],
+      "tx_hash": "0x55152cc56846a9caeb808547477e0bc914e6890a92d9e7a095758225e2bb84b"
+    },
+    {
+      "name": "empty_calldata",
+      "sender_address": "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+      "version": "0x3",
+      "compiled_calldata": [],
+      "chain_id": "0x534e5f5345504f4c4941",
+      "nonce": "0x0",
+      "account_deployment_data": [],
+      "nonce_da_mode": 0,
+      "fee_da_mode": 0,
+      "resource_bounds": {
+        "l1_gas": {
+          "max_amount": "0x1",
+          "max_price_per_unit": "0x0"
+        },
+        "l2_gas": {
+          "max_amount": "0x5f5e100",
+          "max_price_per_unit": "0x0"
+        },
+        "l1_data_gas": {
+          "max_amount": "0x1",
+          "max_price_per_unit": "0x0"
+        }
+      },
+      "tip": "0x0",
+      "paymaster_data": [],
+      "proof_facts": [],
+      "tx_hash": "0xcab428d8f77b11135cc95865d5b0f8b13768911045d08f90301aae667f027d"
+    }
+  ]
+}
