@@ -126,7 +126,7 @@ fn multiple_inputs_are_all_consumed() {
         .accept_and_settle(
             token(),
             &many,
-            Payment { amount: 1, index: 4, salt: salt() },
+            Payment { amount: 950_000, index: 4, salt: salt() },
             Acceptance { message_index: 2, message: accept_message() },
         )
         .expect("valid");
@@ -209,6 +209,30 @@ fn a_non_acceptance_message_is_rejected() {
         )
         .expect_err("a counter is not a settlement record");
     assert!(matches!(error, ChannelError::NotAnAcceptance(MessageType::Counter)));
+}
+
+/// Atomicity puts the acceptance and the payment in one proof, so both land or neither
+/// does. That says nothing about them *agreeing*. An acceptance recording 950,000 next to a
+/// note carrying 1 is atomic and also a robbery — the counterparty ends up underpaid holding
+/// a valid on-chain acceptance, which is the exact failure Erebus claims to remove.
+#[test]
+fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
+    let channel = Channel::derive(&alice(), bob());
+    let error = channel
+        .accept_and_settle(
+            token(),
+            &inputs(),
+            Payment { amount: 1, index: 4, salt: salt() },
+            Acceptance { message_index: 2, message: accept_message() },
+        )
+        .expect_err("the record says 950000 and the note carries 1");
+    assert!(matches!(
+        error,
+        ChannelError::AmountMismatch {
+            agreed: 950_000,
+            paid: 1
+        }
+    ));
 }
 
 #[test]

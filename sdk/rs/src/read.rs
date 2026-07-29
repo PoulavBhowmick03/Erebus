@@ -147,6 +147,22 @@ impl ChannelReader {
         source: &impl NoteSource,
     ) -> Result<Option<WireMessage>, ReadError> {
         let ids = self.note_ids(message_index);
+
+        // A settlement's payment note lands at index 4k+4 — exactly where this message's
+        // first note would be, because a message is 4 notes wide and a payment is 1. So the
+        // walk reaches it and would otherwise report a torn message.
+        //
+        // A value note is never part of a message: every negotiation note is zero-amount by
+        // construction, which is the same rule that keeps structured salts off value notes.
+        // So finding value here means the negotiation ended in a settlement, and that is the
+        // end of the transcript rather than an error.
+        let first = u64::from(message_index) * NOTES_PER_MESSAGE as u64;
+        if let Some(note) = self.note(first, source) {
+            if note.is_value_note() {
+                return Ok(None);
+            }
+        }
+
         let found: Vec<Felt> = ids.iter().filter_map(|id| source.packed_value(*id)).collect();
 
         if found.is_empty() {

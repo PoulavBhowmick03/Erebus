@@ -282,6 +282,14 @@ impl OfferBook {
             .map(|e| (e.id, e.message))
     }
 
+    /// Every message, in the order it was recorded.
+    ///
+    /// [`crate::read::reconstruct`] records in `created_at` order, so for a reconstructed
+    /// book this is the order the negotiation actually happened in.
+    pub fn entries(&self) -> impl Iterator<Item = (OfferId, WireMessage)> + '_ {
+        self.entries.iter().map(|e| (e.id, e.message))
+    }
+
     /// Every message recorded, in the order it was recorded.
     pub fn len(&self) -> usize {
         self.entries.len()

@@ -848,6 +848,41 @@ key derivation, but only once you have already been bitten.
 
 ---
 
+## F23 — Atomicity guarantees both legs land, not that they agree (P2.1)
+
+Not the stack fighting us — us nearly fooling ourselves with the stack's own vocabulary,
+which is worth recording because the sentence is in our PoC.
+
+"Acceptance and payment go into one action set, so they share one proof: either both land
+or neither does." True, and it is the design's whole point. What it does **not** say is that
+the two legs describe the same trade.
+
+`accept_and_settle` took the payment amount and the acceptance message as separate
+arguments and never compared them. An acceptance recording 950,000 next to a payment note
+carrying 1 is perfectly atomic, proves cleanly, and applies on-chain — and leaves the
+counterparty underpaid holding a valid, permanent, on-chain acceptance of terms they never
+got. That is precisely the failure Erebus exists to remove, reintroduced one level above
+where we were looking for it.
+
+The pool cannot catch this. It has no concept of an offer, an acceptance, or an agreed
+amount; it sees a note creation and a note creation.
+
+**Found by mutation testing, not by review.** The mutation was "make `paid_amount` copy the
+agreed amount instead of reading the payment note" and it survived — every test used a
+settlement where the two happened to be equal, so nothing could tell the difference. The
+surviving mutant is what pointed at the missing check.
+
+**Worked around:** `ChannelError::AmountMismatch` rejects the disagreement at construction,
+and `DisclosedSettlement` keeps `agreed_amount` and `paid_amount` as separate fields with an
+`is_consistent()` on top. Enforce on write, verify on read — the read-side check still
+matters, because a record on chain may have been written by a different client or a hostile
+one, and an auditor has to be able to detect what our SDK refuses to produce.
+
+**What would have made it easier.** Nothing in the stack. The lesson is about the word
+*atomic*: it is a claim about scheduling, not about semantics, and it reads like both.
+
+---
+
 ## F4 — Target network: Sepolia. Confirmed, not assumed. (P0.1)
 
 **Sepolia. The pool is live and callable; mainnet has no published deployment.**

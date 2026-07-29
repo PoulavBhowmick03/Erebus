@@ -479,9 +479,30 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
 state untouched.
 
 ### P2.2 — Viewing key disclosure
-- [ ] Grant a viewing key to a third party
-- [ ] Reconstruct the full record: participants, all offers, settlement
-- [ ] Verify no leakage about unrelated users or channels
+- [x] Grant a viewing key to a third party — `Channel::grant_viewing_key` produces a
+      `ViewingGrant` carrying the **two channel keys**, never a pool private key. Serializable
+      because granting means handing it over; redacting `Debug` so it cannot land in a log.
+- [x] Reconstruct the full record: participants, all offers, settlement —
+      `disclosure::reveal` *(`sdk/rs/src/disclosure.rs`, 11 tests in `tests/disclosure.rs`)*.
+      Attributes every message to an address, and keeps `agreed_amount` and `paid_amount`
+      separate so an auditor can check they match. **Unreviewed — written by Claude.**
+- [x] Verify no leakage about unrelated users or channels — pinned three ways: a grant for
+      A↔B reveals nothing of A↔C, nothing of a second token between the same parties, and
+      confers no spending authority (a nullifier needs the pool key, which no grant carries).
+
+      **The scoping is real and it is better than the pool's own.** STRK20's `SetViewingKey`
+      escrows your *pool private key* to a single pool-wide auditor at registration —
+      all-or-nothing, every channel, forever (`privacy.cairo:329-334`). An Erebus grant is a
+      channel key: one relationship, one token. Worth correcting in `poc.md`, whose
+      Disclosure paragraph currently claims "nobody else learns anything", which is not true
+      of the pool auditor.
+
+- [ ] **A half grant is rejected, not partially disclosed.** Granting only the direction you
+      derived yourself leaves the acceptance replying to an invisible counter, and
+      `reveal` errors rather than returning a plausible-looking partial record. Recorded as a
+      deliberate choice: for a compliance path, a record that quietly omits what the
+      counterparty said is worse than no record. Revisit if an auditor ever legitimately
+      holds one direction only.
 
 **Acceptance:** a Kleidouchos account reveals the complete negotiation and payment; a
 different account with a different key sees nothing. *(This is DoD #3.)*

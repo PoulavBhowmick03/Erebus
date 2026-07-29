@@ -25,6 +25,7 @@ pub mod action_set;
 pub mod actions;
 pub mod channel;
 pub mod decrypt;
+pub mod disclosure;
 pub mod hashes;
 pub mod negotiation;
 pub mod prover;

@@ -37,6 +37,7 @@ use crate::actions::{
     ClientAction, CreateEncNoteInput, FeltEntropy, NoteSalt, OpenChannelInput,
     OpenSubchannelInput, RandomSalt, SetViewingKeyInput, UseNoteInput,
 };
+use crate::disclosure::ViewingGrant;
 use crate::hashes;
 use crate::subchannel::{IndexError, SubchannelCursor};
 use crate::wire::{encode_message, MessageType, WireError, WireMessage, NOTES_PER_MESSAGE};
@@ -62,6 +63,17 @@ pub enum ChannelError {
     /// A settlement consumed no notes.
     #[error("a settlement must spend at least one note")]
     NothingToSpend,
+    /// The acceptance record and the payment note disagree on the amount.
+    #[error(
+        "acceptance records {agreed} but the payment note carries {paid}; \
+         atomicity guarantees both land, not that they agree"
+    )]
+    AmountMismatch {
+        /// What the acceptance message says.
+        agreed: u128,
+        /// What the payment note actually carries.
+        paid: u128,
+    },
     /// The payment note index falls inside the acceptance record's range.
     #[error(
         "payment note index {payment} collides with the acceptance record at {acceptance_first}..{}",
@@ -310,6 +322,26 @@ impl Channel {
         Ok((message_index, set))
     }
 
+    /// Grants a scoped viewing key for this channel pair on `token`.
+    ///
+    /// `incoming_key` is the counterparty's channel *to us*, learned from their
+    /// `EncChannelInfo`. Both are needed because channels are directional and one direction
+    /// is half a conversation.
+    ///
+    /// What leaves here is a channel key, not a pool private key. The holder can read every
+    /// message and decrypt every amount in this channel, and can do nothing anywhere else —
+    /// spending needs a nullifier, which needs the owner's pool key, which no grant carries.
+    /// See [`crate::disclosure`] for how this differs from the pool's own auditor escrow.
+    pub fn grant_viewing_key(&self, identity: &PoolIdentity, incoming_key: Felt, token: Felt) -> ViewingGrant {
+        ViewingGrant::new(
+            self.channel_key,
+            incoming_key,
+            token,
+            identity.address(),
+            self.counterparty.address,
+        )
+    }
+
     /// A single zero-amount note carrying a structured salt.
     fn data_note(&self, token: Felt, index: u32, salt: NoteSalt) -> ClientAction {
         ClientAction::CreateEncNote(CreateEncNoteInput {
@@ -368,6 +400,17 @@ impl Channel {
         }
         if spend.is_empty() {
             return Err(ChannelError::NothingToSpend);
+        }
+        // Atomicity puts the acceptance and the payment in one proof, so both land or
+        // neither does. It says nothing about them *agreeing*. Without this check the SDK
+        // will happily write "accepted at 900" alongside a note carrying 800, and the
+        // counterparty ends up underpaid holding a valid on-chain acceptance — which is the
+        // exact failure Erebus claims to remove, reintroduced one level up.
+        if payment.amount != acceptance.message.amount {
+            return Err(ChannelError::AmountMismatch {
+                agreed: acceptance.message.amount,
+                paid: payment.amount,
+            });
         }
 
         // The payment note and the acceptance notes share one subchannel index space.
