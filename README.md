@@ -14,6 +14,11 @@ Agents open an **Eleusis** — an encrypted channel that hides not just the cont
 
 Current milestone: prove `open channel → structured negotiation → atomic shielded settlement → selective disclosure` works on live STRK20 primitives.
 
+Target is **Starknet Sepolia** — privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
+Mainnet has no STRK20 deployment yet. Where the stack has fought us is logged honestly in
+[docs/friction.md](./docs/friction.md); the largest constraint so far is that a pool note
+has no payload field, so negotiation state is carried in note salts at 119 bits each.
+
 ---
 
 ## The problem
@@ -41,7 +46,7 @@ It provides four things existing rails do not:
 | **Relationship privacy** | The channel's existence, participants, and cadence are hidden — not just the message contents. Notes live at storage locations derived from a secret shared only between the two parties. |
 | **Atomic negotiate → settle** | The accepted offer and the shielded payment are one proven state transition. No "agreed but never paid" gap, no separate payment hop. |
 | **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record — terms and payment — to a specific counterparty without exposing anything to the public or leaking data about unrelated users. |
-| **Agent autonomy** | Starknet account abstraction plus paymasters mean an agent transacts without holding a public gas balance. No seed-phrase babysitting. |
+| **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end — STRK20 ships no paymaster of its own, so this rides on a third party. |
 
 ## Why Starknet, why STRK20
 
@@ -67,12 +72,31 @@ Agent B ─┘                                          │                     
 ## Repo layout
 
 ```
-/contracts      Cairo — channel logic, offer state, settlement integration
-/sdk            TypeScript + Python client libraries
-/mcp-server     MCP server exposing Erebus tools to any agent framework
-/agents         Reference agents demonstrating the loop
+/sdk/rs         Rust client — primary implementation, holds all key material
+/sdk/ts         TypeScript — differential-test oracle only, ships nothing
+/sdk/py         Thin binding over /sdk/rs — no protocol logic
+/contracts      Cairo — conformance probes against the upstream pool
+/mcp-server     MCP server (Python) exposing Erebus tools to any agent framework
+/agents         Reference agents demonstrating the loop (Python)
 /docs           Specs, protocol notes, integration guides
 ```
+
+The call path is `agents → mcp-server → sdk/py → sdk/rs → Starknet` — **Python above the
+binding, Rust below it.** Key material never crosses upward, which makes that boundary an
+enforced one rather than a convention.
+
+**On the Rust client.** Upstream ships a TypeScript SDK and a Rust `discovery-core` crate.
+`discovery-core` covers reads — hashes, storage slots, ECDH, decryption. There is no Rust
+write side: nothing builds `ClientAction`s, serialises calldata, signs, or calls the
+prover. Erebus's Rust client fills that gap and is useful outside this project. The
+TypeScript implementation is kept as the oracle it is differential-tested against —
+there's no written spec for the wire format, so two agreeing implementations is the
+strongest correctness signal on offer.
+
+**On Python above it.** The official `mcp` SDK is first-class, so the tool layer has no
+reason to be TypeScript. `/sdk/py` exists only to reach Rust from Python; it is
+deliberately not a third client, because a third implementation is a third place for a
+wrong hash preimage to hide silently.
 
 ## Brand vocabulary
 

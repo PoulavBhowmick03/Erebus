@@ -59,15 +59,42 @@ The one exception: the package name and top-level namespace may be `erebus` (e.g
 ## Repo layout
 
 ```
-/contracts      Cairo — channel logic, offer state, settlement, disclosure
-/sdk/ts         TypeScript client
-/sdk/py         Python client (agent-framework facing)
-/mcp-server     MCP server exposing Erebus tools
-/agents         Reference agents demonstrating the loop
+/sdk/rs         Rust client — the primary implementation, sole holder of key material
+/sdk/ts         TypeScript — differential-test oracle only, ships nothing
+/sdk/py         Thin binding over /sdk/rs — no protocol logic
+/contracts      Cairo — probes only; the MVP needs no contract of our own
+/mcp-server     MCP server (Python) exposing Erebus tools
+/agents         Reference agents demonstrating the loop (Python)
 /docs           Specs and integration guides
 ```
 
-Ownership: `/contracts` is Poulav's. `/agents`, `/mcp-server`, `/sdk/py` are Ishita's. `/sdk/ts` is shared — coordinate before changing the interface.
+The call path is `agents → mcp-server → sdk/py → sdk/rs → Starknet`, Python above the
+binding and Rust below it. `/sdk/ts` is not in it.
+
+Ownership: `/sdk/rs` and `/contracts` are Poulav's. `/agents`, `/mcp-server` are Ishita's.
+`/sdk/py` and `/sdk/ts` are shared — coordinate before changing the interface.
+
+**Two things shifted after the P0.2 and Rust decisions, and the layout above reflects them:**
+
+- **`/contracts` is nearly empty and that is correct.** The salt-lane decision means the negotiation payload rides in note salts and settlement uses the pool's own actions, so no Erebus contract is needed. What lives there is `probes/` — throwaway conformance tests run inside a checkout of `starkware-libs/starknet-privacy`, because their test harness is `#[cfg(test)]`-gated. Poulav's work has moved into `/sdk/rs`.
+- **`/sdk/ts` is not dead weight.** It stays alive as the oracle the Rust port is differential-tested against. Do not delete it to "clean up" — two implementations agreeing on the same Cairo vectors is the strongest correctness signal available here, and there is no written spec to fall back on.
+**A third shift, decided 2026-07-28: everything above the SDK is Python.**
+
+- **`/sdk/py` is required, but as a binding — not an implementation.** The earlier note here
+  said it might be unnecessary. That was resolved the other way: the MCP server is Python
+  (the official `mcp` SDK is first-class), so something has to reach Rust from Python.
+  What it must *not* become is a third client. **If `/sdk/py` grows a hash function, a
+  salt encoder, or anything that could disagree with `/sdk/rs`, that is a bug** — every
+  failure mode in this protocol is silent, and a third implementation is a third place for
+  a wrong preimage to hide. It marshals arguments and returns results. Nothing else.
+- **The seam mechanism is undecided** — subprocess (`erebus-cli`, JSON over stdio) or
+  PyO3/maturin. Costs are in ARCHITECTURE.md §3. It belongs to both tracks, which means by
+  default it belongs to neither; it is the likeliest thing to be discovered broken on
+  integration day.
+- **This is not for x402/ERC-8004 reuse.** That was checked and it does not transfer as
+  code: ERC-8004 is EVM-only, and while x402 has an official Python SDK, x402-on-Starknet
+  exists only in TypeScript (`NethermindEth/x402-starknet`). Do not reintroduce a
+  TypeScript agent layer on the theory that it buys x402 compatibility. It does not.
 
 ---
 
@@ -117,32 +144,45 @@ Do not paper over rough edges silently.
 
 ## Conventions
 
+- **Rust:** `#![forbid(unsafe_code)]`. No `unwrap`/`expect` outside tests and const-known values. Prefer newtypes for protocol invariants — the point of writing this in Rust is that things like "structured salts only on zero-amount notes", phase ordering, and `tip == 0` become unrepresentable rather than remembered.
 - **Cairo:** follow the conventions in `starkware-libs/starknet-privacy`. Match their patterns rather than inventing new ones — this codebase composes their primitives.
 - **TypeScript:** strict mode. No `any` in the SDK's public surface.
-- **Python:** type hints on all public functions. `uv` for dependency management.
+- **Python:** type hints on all public functions. `uv` for dependency management. MCP server uses the official `mcp` SDK — `mcp.server.MCPServer` on v2.x (**`FastMCP` was removed in `mcp` 2.0**; it only exists on `mcp<2`). `/sdk/py` stays a binding — no protocol logic, no crypto, no encoding.
 - **Commits:** conventional commits. Keep contract changes and agent changes in separate commits.
 - **Tests:** every contract entry point needs at least a happy-path test before it is considered done. Agent policy logic needs unit tests for the accept/reject decision.
-- **No LLM-generated Cairo without review.** Poulav reviews every line of contract code regardless of who or what wrote it.
+- **No LLM-generated Cairo or Rust protocol code without review.** Poulav reviews every line, regardless of who or what wrote it. The Rust client is protocol-critical for the same reason the Cairo is: there is no written spec, and every mistake fails silently.
+
+### Nothing lands in `/sdk/rs` unpinned
+
+Every derivation must be pinned by a known-answer test before it is trusted — against the Cairo reference vectors (`sdk/rs/tests/fixtures/cairo-reference-data.json`, regenerate with `snforge test generate_reference_hashes --include-ignored`), or where Cairo emits no vector, against the TypeScript SDK byte-for-byte.
+
+This is not ceremony. Every failure mode in this protocol is silent: a wrong hash preimage derives a storage slot nobody wrote to, and the note is simply "not found" with no error anywhere. The first bug of the Rust port was exactly this — domain tags truncated into a `u128` — and the KATs caught it in thirty seconds instead of a day. See `docs/friction.md` F12.
 
 ## Commands
 
 ```bash
-# Contracts
-scarb build
-snforge test
+# Rust SDK — verified working
+cd sdk/rs && cargo test
 
-# TypeScript SDK
-pnpm install && pnpm build && pnpm test
+# TypeScript SDK — verified working
+pnpm install && pnpm -r typecheck && cd sdk/ts && pnpm vitest run
 
-# Python SDK / agents
-uv sync
-uv run pytest
+# Cairo probes — copy into a starknet-privacy checkout first, see contracts/README.md
+cd ../starknet-privacy && snforge test p0_2
 
-# MCP server
-pnpm --filter mcp-server dev
+# Python binding / agents — not yet scaffolded beyond a stub
+uv sync && uv run pytest
+
+# MCP server (Python) — not yet implemented
+uv run mcp dev mcp-server/src/server.py
 ```
 
-*(Update these once the repo is actually scaffolded — they are the intended shape, not verified working commands.)*
+Toolchain: scarb 2.17.0 / starknet-foundry 0.59.0 (pinned via asdf to match upstream's
+`.tool-versions`), Node 20+, Rust stable.
+
+The TS SDK depends on a **sibling checkout** of `starkware-libs/starknet-privacy` — it is
+published to GitHub Packages, not npmjs. Clone it next to this repo and run
+`cd sdk && npm ci && npm run build` there once. See `docs/friction.md` F8.
 
 ---
 
