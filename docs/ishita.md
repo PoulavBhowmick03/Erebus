@@ -33,21 +33,36 @@ settled channel — they open a new one. Mock this: a write after settle should 
 succeed. It is an open decision (`poulav.md` P1.3) and may change, so keep it behind one
 helper rather than sprinkled through the policy engine.
 
-**`withdrawn` does not exist — do not mock it.** §4's data model lists `withdrawn` as an
-`OfferStatus` and draws a `proposed --> withdrawn` transition, but nothing can reach it:
-`ErebusClient` has no `withdrawOffer` and the wire format has only `Offer | Counter |
-Accept`. Leave it out of your `OfferStatus` enum until P0.3 settles it. If your policy
-engine currently withdraws offers, that path has no implementation waiting for it.
+**`withdrawn` is cut — decided 2026-07-30, do not mock it.** It is out of §4 now. Not
+because it was unbuilt, but because it cannot work: notes are write-once, so a retraction has
+to be a new message, and that races. You write "I withdraw offer 3"; the counterparty has
+already built a settlement against offer 3; their proof applies and you are bound to terms
+you tried to pull. Withdrawal only ever works if the counterparty voluntarily checks first,
+and not needing them to be well-behaved is the entire point of atomic settlement.
+
+**If your policy engine wants to retract, use a short `deadline` instead.** It gives you the
+same capability with no race, because the expiry travels inside the offer and the
+counterparty knows it the moment they read it. An agent that would have withdrawn after 30
+seconds should offer with a 30-second deadline.
 
 `expired` **is** real and is enforced client-side — the pool has no `deadline` field, so
 nothing on-chain stops an agent accepting a stale offer. Your policy engine checking the
 deadline is not belt-and-braces, it is the enforcement.
 
-**`memoHash` has a range constraint.** It must be a valid `felt252`, i.e. below the STARK
-prime. A raw SHA-256 or Keccak digest is 256 bits and **will be rejected** — the TS oracle
-accepted these silently and the Rust does not (`friction.md` F19). If your agents hash
-anything into `memoHash`, truncate to 128 bits. This is a live P0.3 item; flag it if your
-side wants different behaviour.
+**`memoHash` is 128-bit — resolved 2026-07-30, and simpler than it was.** §4 used to declare
+it a `felt252`, which was wrong: the wire has only ever carried 128 bits. So if your agents
+hash something into `memoHash`, take the low 128 bits and pass that. A raw SHA-256 or
+Keccak digest is 256 bits and does not fit.
+
+Worth knowing *why* you are truncating rather than just doing it: 128 bits is 2^64 collision
+resistance. Fine for a commitment to a memo neither side is trying to forge, and the reason
+the field is deliberately narrow rather than accidentally so.
+
+**Two MCP servers, not one — decided 2026-07-30.** Each agent runs its own instance with its
+own identity and its own prover URL. Not a multi-tenant server with two identities
+configured, because that process would hold both agents' pool keys and contradict the custody
+claim we have already made to StarkWare. The demo then shows the real topology, which is the
+one an actual deployment has.
 
 **Erebus holds no keys, and that shapes your MCP server.** The library runs inside the agent
 operator's process, against the operator's own prover — because the proving call carries the
@@ -55,12 +70,25 @@ pool private key in the clear. So the MCP server is something an operator runs, 
 service we host. It needs a prover URL and identity in its config, and it should fail loudly
 rather than fall back to a shared endpoint. See `docs/custody-design.md`.
 
-**Real error surface for the mock.** These now exist as concrete Rust types rather than
-guesses, so mock these rather than inventing your own: `NotAnAcceptance`, `ZeroPayment`,
-`NothingToSpend`, `IndexCollision`, `NotSequential`, `AlreadyWritten`, `Misaligned`, and
-from the prover, screening rejection (JSON-RPC `10000`) distinct from a generic failure
-(`-32603`, which carries no reason at all — see F20). The `SettlementErrorCode` mapping is
-still a **guess and a P0.3 item**; do not treat the draft list as frozen.
+**`SettlementErrorCode` is frozen — 2026-07-30.** Full list in ARCHITECTURE §4. It is
+grouped by *what you should do*, because an agent cannot sensibly branch on twelve codes:
+
+- **Do not retry, the offer is wrong:** `OFFER_EXPIRED`, `OFFER_UNKNOWN`, `ALREADY_SETTLED`,
+  `NOT_YOUR_OFFER`, `AMOUNT_MISMATCH`, `INSUFFICIENT_NOTES`, `INDEX_CONFLICT`
+- **Retry may succeed:** `SCREENING_UNAVAILABLE`, `PROVER_UNAVAILABLE`, `PROOF_EXPIRED`,
+  `SUBMIT_FAILED`
+- **Terminal:** `SCREENING_REJECTED`
+- **Opaque:** `PROOF_FAILED` — genuinely so. The prover answers a failed execution with a bare
+  JSON-RPC `-32603` carrying no reason at all (F20), so this is not a lazy mapping on our side.
+
+Mock at least one from each group. The retry/no-retry split is the only distinction your
+agent logic actually needs to branch on.
+
+**One more that affects your agents directly.** `AMOUNT_MISMATCH` exists because the SDK now
+refuses to write a settlement whose acceptance record and payment note disagree. Atomicity
+guarantees both legs land, not that they describe the same trade (friction F23). If your
+policy engine ever computes the payment separately from the accepted terms, that is where it
+will show up.
 
 ---
 

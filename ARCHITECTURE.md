@@ -185,16 +185,37 @@ because it constrains the seam below: PyO3 across an async boundary needs a runt
 on one side, whereas a subprocess CLI can keep the runtime entirely inside Rust and hand
 Python plain JSON. Decide the seam knowing this, not around it.
 
-### The Python ↔ Rust seam — **mechanism undecided**
+### The Python ↔ Rust seam — **DECIDED 2026-07-30: subprocess**
 
-The shape is settled; how the boundary is crossed is not. Two candidates:
+`sdk/rs` grows an `erebus-cli` binary. JSON on stdin, JSON on stdout, one request per
+invocation. `sdk/py` shells out to it and marshals nothing else.
 
 | | How | Cost |
 |---|---|---|
-| **Subprocess** | `sdk/rs` grows an `erebus-cli` binary; JSON on stdin, JSON on stdout; Python shells out | No FFI, no build matrix. Process spawn per call — irrelevant against a ~29 s proof. Key material isolated by the OS |
+| **Subprocess** ✅ | `erebus-cli`; JSON on stdin, JSON on stdout; Python shells out | No FFI, no wheel matrix. Process spawn per call — irrelevant against a ~29 s proof. Key material isolated by the OS |
 | **PyO3 / maturin** | In-process native extension | Better ergonomics, no spawn. You own a wheel build per platform and a type conversion for every value crossing |
 
 The surface is small either way — the seven `ErebusClient` methods in §4.
+
+**Why subprocess, in order of weight:**
+
+1. **The process boundary is load-bearing for custody.** Constraint 6 is currently
+   *structural*: `PoolIdentity` exposes no accessor, so nothing can ask for the pool key.
+   In-process, that guarantee weakens to "the same heap as whatever agent code is loaded,"
+   and the claim we made to StarkWare — that Erebus runs inside the operator's process and
+   holds nothing reachable — acquires a footnote. A subprocess keeps an OS boundary there.
+2. **Async stays on one side.** The prover client is async (see above). PyO3 across an async
+   boundary needs a runtime owned by one language and is a known source of deadlocks;
+   a subprocess keeps the runtime entirely inside Rust.
+3. **Errors are explicit.** A JSON envelope we design carries `SettlementErrorCode` through
+   by construction, rather than depending on an exception mapping surviving the FFI.
+4. **Failures are loud.** Serializing everything means felts cross as strings, which is a
+   place to get encoding wrong — but wrong there is a *parse error*, not a silently mangled
+   felt. In a protocol where every other failure is silent, that asymmetry is worth a
+   millisecond.
+
+Cost accepted: a per-platform binary to ship alongside the Python package. Not a saving over
+PyO3 — that needed per-platform wheels anyway — so distribution is a wash.
 
 **This seam is the highest-risk item in the plan** and it belongs to neither track by
 default, which is exactly why it gets missed. Build one method end-to-end early, with a
@@ -251,7 +272,7 @@ interface OfferTerms {
   amount: bigint;            // token base units
   token: ContractAddress;    // ERC-20 address
   deadline: number;          // unix seconds
-  memoHash: string;          // felt252 — hash of off-chain detail, not the detail itself
+  memoHash: bigint;          // 128-bit — hash of off-chain detail, not the detail itself
   nonce: number;             // replay protection
 }
 
@@ -260,8 +281,7 @@ type OfferStatus =
   | "countered"
   | "accepted"
   | "expired"
-  | "settled"
-  | "withdrawn";
+  | "settled";
 
 interface Offer {
   offerId: OfferId;
@@ -286,7 +306,50 @@ interface DisclosedRecord {
   offers: Offer[];
   settlement: SettlementReceipt;
 }
+
+// Frozen 2026-07-30. Grouped by what the caller should do about it, which is the only
+// distinction the agent layer needs — an agent cannot act on twelve separate codes.
+type SettlementErrorCode =
+  // Do not retry. The offer is wrong; build a different one.
+  | "OFFER_EXPIRED"
+  | "OFFER_UNKNOWN"
+  | "ALREADY_SETTLED"
+  | "NOT_YOUR_OFFER"
+  | "AMOUNT_MISMATCH"        // acceptance and payment disagree — see friction F23
+  | "INSUFFICIENT_NOTES"
+  | "INDEX_CONFLICT"         // contiguity or write-once; the subchannel state is not what we thought
+  // Retry may succeed.
+  | "SCREENING_UNAVAILABLE"
+  | "PROVER_UNAVAILABLE"
+  | "PROOF_EXPIRED"          // proof validity is 450 blocks
+  | "SUBMIT_FAILED"
+  // Terminal for this counterparty or this deposit.
+  | "SCREENING_REJECTED"
+  // The prover refused and told us nothing. JSON-RPC -32603 carries no reason at all,
+  // so this is genuinely opaque rather than lazily mapped — see friction F20.
+  | "PROOF_FAILED";
 ```
+
+**`memoHash` is 128-bit, not a `felt252`.** It was declared as a felt and the wire has only
+ever carried 128 bits (`sdk/rs/src/wire.rs:156`). That gap is friction **F19**: pass a
+SHA-256 digest and the Rust rejects it while the TypeScript silently truncates, so the two
+clients disagree about what the same memo commits to. Declaring the real width removes the
+truncation step both sides could disagree about. Callers hashing something truncate
+explicitly, which also makes the 2^64 collision resistance a visible choice rather than a
+buried one.
+
+**`withdrawn` is gone, and not because it was unimplemented.** It cannot be made to work.
+Notes are write-once, so an offer cannot be deleted or edited once written — "withdraw" has
+to be a *new* message retracting an earlier one. That races with no ordering guarantee: A
+writes the retraction, B has already built a settlement against the original, B's proof
+applies, and A is bound to terms it tried to withdraw. Withdrawal is therefore advisory,
+working only where the counterparty voluntarily checks first — and not depending on that is
+the entire point of atomic settlement.
+
+A short `deadline` gives you everything withdrawal was for without the race, because the
+expiry travels *inside* the offer and the counterparty knows it the moment they read it.
+This is a product decision, not an MVP shortcut: shipping `withdrawn` would be advertising a
+guarantee the settlement layer cannot keep.
 
 ### Offer state machine
 
@@ -300,13 +363,20 @@ stateDiagram-v2
     accepted --> settled: proof verified
     proposed --> expired: deadline passed
     countered --> expired: deadline passed
-    proposed --> withdrawn: proposer withdraws
     settled --> [*]
     expired --> [*]
-    withdrawn --> [*]
 ```
 
 Note that `accepted` and `settled` are separated only for observability — on-chain they are one atomic transition. If the proof fails, the acceptance never happened.
+
+**Every transition here is enforced client-side and nowhere else.** The pool stores notes; it
+has no `status`, no `deadline` and no `replyTo`, so a settlement against a week-old offer
+proves and applies exactly as cleanly as one against a live offer. Unlike an index mistake,
+which reverts, there is no backstop under this diagram — implemented in
+`sdk/rs/src/negotiation.rs`, and a rule not in that file is not a rule.
+
+A countered offer stays acceptable. Countering proposes; it does not revoke. Revocation
+would be `withdrawn`, which is unrepresentable for the reason above.
 
 ---
 

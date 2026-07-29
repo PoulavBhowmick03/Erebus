@@ -90,12 +90,26 @@ Mainnet has no published deployment: upstream's `demo/.env.mainnet.example` is e
       screening access, or deploy our own pool instance with our own screener key
       (constructor is unpermissioned, class already declared). *Gates the shield only.*
 - [ ] Confirm which prover / discovery tags match the **deployed** class hash.
-- [ ] Pick the settlement ERC-20 on Sepolia and confirm you can obtain it.
+- [x] **Settlement ERC-20 — DECIDED 2026-07-30: deploy our own mintable test ERC-20.**
+      The pool has **no token allowlist** — `deposit` calls `TransferFrom` on whatever address
+      it is handed (`privacy.cairo:488-499`), so nothing about the architecture depends on
+      which token this is. That makes the choice purely about certainty, and a token we mint
+      cannot be rate-limited or drained by someone else on demo day. It is also what
+      StarkWare's own demo does: `demo/.env.example` ships placeholder addresses with
+      `mintEntrypoint` / `permissionedMint` rather than canonical tokens, which suggests they
+      hit the same problem.
+      *Product note:* because there is no allowlist, pointing this at USDC or STRK later is a
+      config change with zero code impact. Confirm with `balanceOf` non-zero over RPC and one
+      `approve` that lands.
 - [ ] Discovery service: not published either, but **optional** — `ContractDiscoveryProvider`
       reads the pool over plain RPC. Use that for the MVP; revisit only if too slow.
-- [ ] Paymaster: STRK20 ships none. The demo wires third-party **AVNU**, optional and unset
-      by default. ARCHITECTURE §8 Q4 rests on AVNU, not on anything STRK20 provides. Pool
-      fee is 0, so this is ordinary tx gas, not a pool fee.
+- [x] **Paymaster — DECIDED 2026-07-30: out of scope, post-MVP.** `get_fee_amount()` is 0,
+      so the pool charges nothing; `apply_actions` is an ordinary Starknet transaction and
+      funded demo accounts cover its gas. STRK20 ships no paymaster and the upstream demo
+      wires third-party **AVNU**, optional and unset by default.
+      *Why it matters later, not now:* "agents should not have to hold a gas token" is a real
+      product requirement and ARCHITECTURE §8 Q4 rests on AVNU to meet it. It changes nothing
+      about the protocol, so it is additive after the green light.
 
 **Acceptance:** you can shield a test amount and see the note appear via discovery.
 *(Blocked on the prover endpoint.)*
@@ -136,10 +150,23 @@ not, and that is the deliverable.
       forces no signature change, so her mock is not invalidated. What changes is what
       `readChannelState` reads from and what `reveal` can reconstruct. Do not let that
       become a silent divergence.
-- [ ] Confirm `memoHash` as a `felt252` hash works for both sides
-- [ ] Agree the `SettlementErrorCode` set — the draft is a guess, not a freeze. Includes
-      `SCREENING_REJECTED` / `SCREENING_UNAVAILABLE` on the deposit leg (see P1.1)
-- [ ] Freeze it
+- [x] **`memoHash` — RESOLVED 2026-07-30: it is 128-bit, not a `felt252`.** §4 declared a
+      felt; the wire has only ever carried 128 bits (`sdk/rs/src/wire.rs:156`). F19 was
+      entirely that gap — a SHA-256 digest is rejected by the Rust and silently truncated by
+      the TS, so the two clients disagree about what the same memo commits to. Declaring the
+      real width deletes the truncation step they could disagree about, and makes the 2^64
+      collision resistance a visible caller choice. **No Rust change needed; the code was
+      already right and the interface was wrong.** ARCHITECTURE §4 updated.
+- [x] **`SettlementErrorCode` — FROZEN 2026-07-30.** Grounded in the errors that now exist
+      rather than guessed, and grouped by what the caller should *do*, because an agent cannot
+      act on twelve distinct codes: do-not-retry (`OFFER_EXPIRED`, `OFFER_UNKNOWN`,
+      `ALREADY_SETTLED`, `NOT_YOUR_OFFER`, `AMOUNT_MISMATCH`, `INSUFFICIENT_NOTES`,
+      `INDEX_CONFLICT`), retry-may-work (`SCREENING_UNAVAILABLE`, `PROVER_UNAVAILABLE`,
+      `PROOF_EXPIRED`, `SUBMIT_FAILED`), terminal (`SCREENING_REJECTED`), and opaque
+      (`PROOF_FAILED` — the prover's `-32603` carries no reason, F20). Full list in
+      ARCHITECTURE §4.
+- [ ] **Walk it with Ishita and freeze.** The two open items above are now decided, so this is
+      confirmation rather than negotiation.
 
 Already true, so not a task: `OfferTerms` serialises to 5 felts against a 120-bit on-chain
 lane — encodable in Cairo, just does not fit in one note.
@@ -151,7 +178,13 @@ lane — encodable in Cairo, just does not fit in one note.
 Her MCP server is Python; your client is Rust. Something has to cross. Half yours and half
 hers, which is exactly why it will otherwise be nobody's until integration day breaks on it.
 
-- [ ] **Pick the mechanism.** Subprocess (`erebus-cli`, JSON over stdio) or PyO3/maturin.
+- [x] **Mechanism — DECIDED 2026-07-30: subprocess.** `erebus-cli`, JSON on stdin, JSON on
+      stdout. Reasoning in ARCHITECTURE §3; the deciding one is that the OS process boundary
+      keeps constraint 6 *structural*. In-process, "key material never leaves the SDK
+      boundary" degrades to "shares a heap with whatever agent code is loaded", and the
+      custody claim made to StarkWare acquires a footnote. Async staying inside Rust and
+      encoding failures being loud parse errors rather than silent felt corruption both point
+      the same way. Distribution is a wash — PyO3 needed per-platform wheels anyway.
       Costs are in ARCHITECTURE §3 — the tradeoff is yours to make. Bias worth naming:
       subprocess has no build matrix and puts an OS boundary around key material, which
       turns CLAUDE.md constraint 6 from a rule into a property.
@@ -377,7 +410,15 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       sorting creations ascending. Inferred from source, not yet observed on-chain — verify
       at P2.0. Written up as **F21**.
 
-- [ ] **DECISION NEEDED — one subchannel is currently one deal.** A message is 4 notes on a
+- [x] **DECIDED 2026-07-30: accept it — one channel is one deal, and it costs nothing.**
+      A second deal opens a new channel, and `OpenChannel`/`OpenSubchannel` are phases 1 and 2
+      while note creation is phase 5 — so **the setup rides in the same action set as the next
+      deal's first offer.** Zero extra proofs, zero extra latency. The alternatives were both
+      worse: padding the payment to a full 4-slot burns three permanently unspendable notes
+      per settlement forever, and dropping the fixed stride forces a framing search on every
+      read. Original analysis kept below.
+
+- [ ] ~~**DECISION NEEDED — one subchannel is currently one deal.**~~ A message is 4 notes on a
       `4k..4k+3` grid; a settlement's payment note is 1 note. So settling leaves the cursor
       at `4k+1`, off-grid, and nothing further can be written to that subchannel. Fine for
       the MVP. The alternatives if agent pairs are long-lived: pad the payment to a full
@@ -398,7 +439,18 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       *Boundary chosen: `now > deadline` expires, not `>=`.* An offer good "until 12:00" is
       good at 12:00. Pinned by a test because it is the kind of thing that silently flips.
 
-- [ ] **DECISION NEEDED (P0.3) — `withdrawn` is unreachable.** ARCHITECTURE §4 lists it as an
+- [x] **DECIDED 2026-07-30: `withdrawn` is cut from the interface, on product grounds.**
+      Not because it was unimplemented — because it cannot be made to work. Notes are
+      write-once, so an offer cannot be deleted; a retraction has to be a *new* message, and
+      that races with no ordering guarantee. A writes the retraction, B has already built a
+      settlement against the original, B's proof applies, and A is bound to terms it tried to
+      withdraw. Withdrawal is therefore advisory — it works only where the counterparty
+      voluntarily checks first, and not depending on that is the whole point of atomic
+      settlement. A short `deadline` gives the same capability with no race, because the expiry
+      travels inside the offer. Shipping `withdrawn` would advertise a guarantee the
+      settlement layer cannot keep. ARCHITECTURE §4 and the state machine updated.
+
+- [ ] ~~**DECISION NEEDED (P0.3) — `withdrawn` is unreachable.**~~ ARCHITECTURE §4 lists it as an
       `OfferStatus` with a `proposed --> withdrawn` transition, but `ErebusClient` has no
       `withdrawOffer` and `MessageType` is `Offer | Counter | Accept`. So it cannot happen in
       wire v1. Either the status comes out of §4, or a fourth message type goes in — and the
