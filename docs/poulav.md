@@ -363,17 +363,27 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       4-slot (3 filler notes, permanently unspendable, indices burned forever), or drop the
       fixed stride and give the reader a framing search. Both cost something real.
 
-- [ ] Enforce the state machine (ARCHITECTURE §4) — no accepting an expired offer.
-      **The pool cannot do this for us**; it has no `status`, `deadline` or `replyTo` field.
-      Enforcement is client-side, over the decoded notes.
+- [x] Enforce the state machine (ARCHITECTURE §4) — `OfferBook`
+      *(`sdk/rs/src/negotiation.rs`, 10 tests in `tests/negotiation_state.rs`, 3 mutations
+      checked)*. Enforces: expiry by deadline, settle-once, you cannot accept your own offer,
+      an `Accept` is not itself acceptable, and a `reply_to` pointing at a message that was
+      never seen is refused at record time. **Unreviewed — written by Claude.**
 
-      **Blocked in part, and it is an interface question, not a Rust one.** ARCHITECTURE §4
-      lists `withdrawn` as an `OfferStatus` with a `proposed --> withdrawn` transition, but
-      nothing can reach it: `ErebusClient` has no `withdrawOffer` method and `MessageType` is
-      `Offer | Counter | Accept` with no Withdraw variant. So withdrawal is unreachable in
+      **These rules have no backstop.** Everywhere else in the SDK a mistake reverts on-chain
+      — a bad index, a malformed set. Here the pool has no `status`, `deadline` or `replyTo`,
+      so a settlement against a week-old offer proves and applies exactly as cleanly as a live
+      one. A rule not in that file is not a rule. Worth weighting the review accordingly.
+
+      *Boundary chosen: `now > deadline` expires, not `>=`.* An offer good "until 12:00" is
+      good at 12:00. Pinned by a test because it is the kind of thing that silently flips.
+
+- [ ] **DECISION NEEDED (P0.3) — `withdrawn` is unreachable.** ARCHITECTURE §4 lists it as an
+      `OfferStatus` with a `proposed --> withdrawn` transition, but `ErebusClient` has no
+      `withdrawOffer` and `MessageType` is `Offer | Counter | Accept`. So it cannot happen in
       wire v1. Either the status comes out of §4, or a fourth message type goes in — and the
-      second breaks Ishita's mock. **Take it to P0.3 rather than deciding it in the SDK.**
-      Expiry and accept-once are unblocked and land independently.
+      second breaks Ishita's mock, which is exactly what the interface freeze exists to
+      prevent. `OfferStatus` in the Rust deliberately omits it rather than carrying a variant
+      nothing can construct. Ishita has been told not to mock it (`ishita.md`).
 
 **Known costs accepted**
 
