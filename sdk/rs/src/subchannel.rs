@@ -115,7 +115,7 @@ impl SubchannelCursor {
     /// index and hit `INDEX_NOT_SEQUENTIAL`; truncating would overwrite and hit
     /// `NON_ZERO_VALUE`. There is no safe repair, so the caller has to know.
     pub fn next_message_index(&self) -> Result<u32, IndexError> {
-        if self.next % NOTES_PER_MESSAGE as u32 != 0 {
+        if !self.next.is_multiple_of(NOTES_PER_MESSAGE as u32) {
             return Err(IndexError::Misaligned { next: self.next });
         }
         Ok(self.next / NOTES_PER_MESSAGE as u32)

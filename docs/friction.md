@@ -812,6 +812,42 @@ into a program, and that is worth one sentence.
 
 ---
 
+## F22 — Directional channels mean a message has no identifier (P1.3)
+
+`compute_channel_key` hashes the **sender's** private key, so A→B and B→A are two different
+channels with two different keys. That is well documented and we built on it correctly.
+
+What is not said anywhere is the consequence: **note indices are per-direction, so a message
+has no identifier.** Each side numbers its own subchannel from zero. A's opening offer is
+index 0 and B's first counter is *also* index 0, in a different subchannel that A cannot
+even derive.
+
+We built the offer state machine before the read path and keyed it on the bare index. Every
+test passed, because a single-direction fixture cannot expose the collision. The moment both
+directions were reconstructed into one book, "accept their counter" resolved to our own offer
+at the same index and came back `OwnOffer`. Fixed by keying on `OfferId { author, index }`.
+
+**Worth noting what nearly happened.** The failure mode if this had reached the chain is not
+an error. Both messages are real, both decode, and `check_acceptable` would have validated
+the wrong one — settling against terms the counterparty never sent, with a valid proof.
+There is no revert for this; the pool has no concept of an offer.
+
+**A second consequence in the same shape.** `reply_to` is a bare 32-bit index on the wire
+with no direction bit. It is only unambiguous because a reply always crosses the table, so
+it resolves against the *opposite* author. That is a real protocol rule that was implicit
+until this bug forced it to be written down. Anyone implementing a second client would have
+to rediscover it.
+
+**Worked around:** `OfferId` in `sdk/rs/src/negotiation.rs`; `reconstruct` in
+`sdk/rs/src/read.rs` interleaves both directions by `created_at`, which is the only ordering
+the two sides agree on. 9 tests in `tests/read_path.rs`, 4 mutations checked.
+
+**What would have made it easier.** One line in the channel docs saying indices are scoped
+to a direction and cross-channel correlation is the client's problem. It follows from the
+key derivation, but only once you have already been bitten.
+
+---
+
 ## F4 — Target network: Sepolia. Confirmed, not assumed. (P0.1)
 
 **Sepolia. The pool is live and callable; mainnet has no published deployment.**

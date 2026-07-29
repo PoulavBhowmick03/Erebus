@@ -81,7 +81,7 @@ const _: () = assert!(
 );
 
 /// Errors encoding or decoding a wire message.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum WireError {
     /// A field was wider than its allotted bits.
     #[error("{field} does not fit in {bits} bits")]

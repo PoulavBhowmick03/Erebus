@@ -271,7 +271,28 @@ directional.
       made a compile error rather than a comment. Channel-level `random`/`salt` are
       `felt252` with a non-zero requirement; note salts are 120-bit `u128`. Mixing them was
       the audit's flagged footgun and is now unrepresentable.
-- [ ] Counterparty reads it back — needs the `EncChannelInfo` decrypt path, which is
+- [x] **Read side implemented** — `sdk/rs/src/decrypt.rs` (5 decrypt functions, 12 KATs in
+      `tests/decrypt_conformance.rs`) and `sdk/rs/src/read.rs` (`ChannelReader`, transcript
+      walk, both-direction `reconstruct`, 9 tests in `tests/read_path.rs`). 4 mutations
+      checked. **Unreviewed — written by Claude.**
+
+      *Decision recorded: implemented rather than importing `discovery-core`.* It pins
+      `starknet-core`/`crypto`/`providers` to a `software-mansion/starknet-rust` fork by git
+      rev (`7caedfe`) and pulls in `futures`, `async-trait`, `url`. What it would have given
+      us is field subtraction plus one ECDH — the five Poseidon masks were already in our
+      `hashes.rs`, already pinned. Cairo is the source of truth for both, so this is not a
+      second authority.
+
+      *Found a real bug.* See **F22**: note indices are per-direction, so a message has no
+      identifier. The state machine was keyed on the bare index and passed every test until
+      both directions were reconstructed into one book. Would have settled against terms the
+      counterparty never sent, with a valid proof and no revert. Now keyed on
+      `OfferId { author, index }`.
+
+- [ ] Counterparty reads it back **on-chain** — the decrypt path exists and is pinned; what
+      remains is a real `NoteSource` over Sepolia storage or the Discovery Service. Blocked
+      with everything else behind screening.
+- [ ] ~~Counterparty reads it back — needs the `EncChannelInfo` decrypt path, which is~~
       `discovery-core`'s side of the fence; deferred rather than done
 - [ ] Static-static ECDH over the registered Stark-curve viewing keys, for the **off-chain
       transport**. A different secret from the pool's `channel_key` — do not conflate them.

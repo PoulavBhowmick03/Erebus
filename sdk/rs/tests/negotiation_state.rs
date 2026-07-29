@@ -5,11 +5,19 @@
 //! a settlement against a live one. So unlike the index tests, none of these have a contract
 //! backstop underneath them — a rule that is not in this file is not a rule.
 
-use erebus_sdk::negotiation::{Author, NegotiationError, OfferBook, OfferStatus};
+use erebus_sdk::negotiation::{Author, NegotiationError, OfferBook, OfferId, OfferStatus};
 use erebus_sdk::wire::{MessageType, WireMessage};
 
 const NOON: u64 = 1_753_699_200;
 const ONE_HOUR: u64 = 3_600;
+
+fn theirs(index: u32) -> OfferId {
+    OfferId::new(Author::Counterparty, index)
+}
+
+fn ours(index: u32) -> OfferId {
+    OfferId::new(Author::Us, index)
+}
 
 fn message(kind: MessageType, reply_to: Option<u32>, deadline: u64) -> WireMessage {
     WireMessage {
@@ -56,13 +64,13 @@ fn an_expired_offer_cannot_be_accepted() {
     let after = NOON + ONE_HOUR + 1;
 
     let error = book
-        .check_acceptable(2, after)
+        .check_acceptable(theirs(2), after)
         .expect_err("the deadline has passed");
     assert!(matches!(
         error,
         NegotiationError::Expired { index: 2, .. }
     ));
-    assert_eq!(book.status(2, after), Some(OfferStatus::Expired));
+    assert_eq!(book.status(theirs(2), after), Some(OfferStatus::Expired));
 }
 
 /// Exactly on the deadline is still live. `now > deadline` expires, not `>=` — an offer good
@@ -70,9 +78,9 @@ fn an_expired_offer_cannot_be_accepted() {
 #[test]
 fn the_deadline_second_is_still_live() {
     let book = negotiation();
-    book.check_acceptable(2, NOON + ONE_HOUR)
+    book.check_acceptable(theirs(2), NOON + ONE_HOUR)
         .expect("on the deadline is not past it");
-    book.check_acceptable(2, NOON + ONE_HOUR + 1)
+    book.check_acceptable(theirs(2), NOON + ONE_HOUR + 1)
         .expect_err("one second later is past it");
 }
 
@@ -82,7 +90,7 @@ fn the_deadline_second_is_still_live() {
 fn our_own_offer_is_not_ours_to_accept() {
     let book = negotiation();
     assert!(matches!(
-        book.check_acceptable(1, NOON).unwrap_err(),
+        book.check_acceptable(ours(1), NOON).unwrap_err(),
         NegotiationError::OwnOffer { index: 1 }
     ));
 }
@@ -91,7 +99,7 @@ fn our_own_offer_is_not_ours_to_accept() {
 fn an_unknown_index_is_rejected() {
     let book = negotiation();
     assert!(matches!(
-        book.check_acceptable(99, NOON).unwrap_err(),
+        book.check_acceptable(theirs(99), NOON).unwrap_err(),
         NegotiationError::UnknownOffer { index: 99 }
     ));
 }
@@ -101,8 +109,8 @@ fn an_unknown_index_is_rejected() {
 #[test]
 fn a_countered_offer_is_still_acceptable() {
     let book = negotiation();
-    assert_eq!(book.status(0, NOON), Some(OfferStatus::Countered));
-    book.check_acceptable(0, NOON)
+    assert_eq!(book.status(theirs(0), NOON), Some(OfferStatus::Countered));
+    book.check_acceptable(theirs(0), NOON)
         .expect("countering is a proposal, not a revocation");
 }
 
@@ -119,11 +127,11 @@ fn a_settled_channel_cannot_settle_again() {
     .expect("acceptance");
 
     assert!(matches!(
-        book.check_acceptable(2, NOON).unwrap_err(),
+        book.check_acceptable(theirs(2), NOON).unwrap_err(),
         NegotiationError::AlreadySettled { index: 3 }
     ));
-    assert_eq!(book.status(2, NOON), Some(OfferStatus::Settled));
-    assert_eq!(book.status(3, NOON), Some(OfferStatus::Settled));
+    assert_eq!(book.status(theirs(2), NOON), Some(OfferStatus::Settled));
+    assert_eq!(book.status(ours(3), NOON), Some(OfferStatus::Settled));
 }
 
 /// An acceptance is a record, not an offer. Accepting one would be settling against a
@@ -139,7 +147,7 @@ fn an_acceptance_is_not_itself_acceptable() {
     .expect("acceptance");
 
     assert!(matches!(
-        book.check_acceptable(0, NOON).unwrap_err(),
+        book.check_acceptable(theirs(0), NOON).unwrap_err(),
         NegotiationError::AlreadySettled { .. }
     ));
 }
@@ -173,8 +181,8 @@ fn a_reply_to_a_message_that_does_not_exist_is_rejected() {
 #[test]
 fn the_latest_live_counterparty_offer_is_what_gets_evaluated() {
     let book = negotiation();
-    let (index, message) = book.latest_acceptable(NOON).expect("something is live");
-    assert_eq!(index, 2, "the newest counterparty message, not ours at 1");
+    let (id, message) = book.latest_acceptable(NOON).expect("something is live");
+    assert_eq!(id, theirs(2), "the newest counterparty message, not ours at 1");
     assert_eq!(message.message_type, MessageType::Counter);
 }
 

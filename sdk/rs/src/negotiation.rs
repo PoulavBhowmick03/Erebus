@@ -94,7 +94,7 @@ pub enum NegotiationError {
 ///
 /// Channels are directional, so in practice these come from two different subchannels; the
 /// book is the place they are reconciled into one ordered negotiation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Author {
     /// Written by us.
     Us,
@@ -102,10 +102,43 @@ pub enum Author {
     Counterparty,
 }
 
+/// Identifies one message in a negotiation.
+///
+/// **A message index alone is not an identifier.** Channels are directional, so each side
+/// numbers its own messages from zero — A's first offer and B's first counter are both
+/// index 0, in different subchannels. Keying a book on the bare index conflates them, which
+/// silently turns "accept their counter" into "accept your own offer".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OfferId {
+    /// Which side wrote it, i.e. which of the two directional channels it lives in.
+    pub author: Author,
+    /// Its index within that side's subchannel.
+    pub index: u32,
+}
+
+impl OfferId {
+    /// An id for `index` in `author`'s direction.
+    pub fn new(author: Author, index: u32) -> Self {
+        Self { author, index }
+    }
+}
+
+impl Author {
+    /// The other side.
+    ///
+    /// A reply always crosses directions — you answer the counterparty, not yourself — so
+    /// this is how a `reply_to` index is resolved to a full [`OfferId`].
+    pub fn opposite(self) -> Self {
+        match self {
+            Author::Us => Author::Counterparty,
+            Author::Counterparty => Author::Us,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Entry {
-    index: u32,
-    author: Author,
+    id: OfferId,
     message: WireMessage,
 }
 
@@ -113,7 +146,7 @@ struct Entry {
 #[derive(Debug, Clone, Default)]
 pub struct OfferBook {
     entries: Vec<Entry>,
-    settled: Option<u32>,
+    settled: Option<OfferId>,
 }
 
 impl OfferBook {
@@ -127,6 +160,11 @@ impl OfferBook {
 
     /// Record a message, ours or theirs.
     ///
+    /// `message.reply_to` is an index in the **opposite** direction, because a reply always
+    /// crosses the table. Resolving it against the same author would make every reply
+    /// dangle, and resolving it against both would reintroduce the collision this type
+    /// exists to prevent.
+    ///
     /// Rejects a reply to a message that was never seen. That is a real failure mode rather
     /// than a hypothetical: notes are fetched by computed slot, so a reader that miscounts
     /// its indices gets a message whose `reply_to` points nowhere, and without this check it
@@ -137,53 +175,60 @@ impl OfferBook {
         author: Author,
         message: WireMessage,
     ) -> Result<(), NegotiationError> {
+        let id = OfferId::new(author, index);
+
         if let Some(reply_to) = message.reply_to {
-            if !self.entries.iter().any(|e| e.index == reply_to) {
+            let target = OfferId::new(author.opposite(), reply_to);
+            if !self.entries.iter().any(|e| e.id == target) {
                 return Err(NegotiationError::DanglingReply { index, reply_to });
             }
         }
         if message.message_type == MessageType::Accept {
-            self.settled = Some(index);
+            self.settled = Some(id);
         }
-        self.entries.push(Entry {
-            index,
-            author,
-            message,
-        });
+        self.entries.push(Entry { id, message });
         Ok(())
     }
 
     /// Status of one message at time `now` (unix seconds).
-    pub fn status(&self, index: u32, now: u64) -> Option<OfferStatus> {
-        let entry = self.entries.iter().find(|e| e.index == index)?;
+    pub fn status(&self, id: OfferId, now: u64) -> Option<OfferStatus> {
+        let entry = self.entries.iter().find(|e| e.id == id)?;
 
-        if self.settled == Some(index) {
+        if self.settled == Some(id) {
             return Some(OfferStatus::Settled);
         }
         // An accepted offer is settled with its acceptance — they are one transition.
         if let Some(settled_at) = self.settled {
-            if self
+            let accepted = self
                 .entries
                 .iter()
-                .any(|e| e.index == settled_at && e.message.reply_to == Some(index))
-            {
+                .find(|e| e.id == settled_at)
+                .and_then(|e| e.message.reply_to)
+                .map(|reply_to| OfferId::new(settled_at.author.opposite(), reply_to));
+            if accepted == Some(id) {
                 return Some(OfferStatus::Settled);
             }
         }
         if now > entry.message.deadline {
             return Some(OfferStatus::Expired);
         }
-        if self
-            .entries
-            .iter()
-            .any(|e| e.message.reply_to == Some(index))
-        {
+        if self.replies_to(id).is_some() {
             return Some(OfferStatus::Countered);
         }
         Some(OfferStatus::Proposed)
     }
 
-    /// Whether `index` may be accepted and settled right now.
+    /// The message replying to `id`, if any.
+    fn replies_to(&self, id: OfferId) -> Option<OfferId> {
+        self.entries
+            .iter()
+            .find(|e| {
+                e.id.author == id.author.opposite() && e.message.reply_to == Some(id.index)
+            })
+            .map(|e| e.id)
+    }
+
+    /// Whether `id` may be accepted and settled right now.
     ///
     /// Call this before building the settlement action set. Past this point the SDK will
     /// happily construct a valid, provable, on-chain-accepted settlement against a
@@ -192,27 +237,34 @@ impl OfferBook {
     /// A countered offer is still acceptable — §4 draws `countered --> accepted` — since
     /// countering is a proposal, not a revocation. Revocation would be `withdrawn`, which
     /// does not exist.
-    pub fn check_acceptable(&self, index: u32, now: u64) -> Result<(), NegotiationError> {
+    pub fn check_acceptable(&self, id: OfferId, now: u64) -> Result<(), NegotiationError> {
         if let Some(settled_at) = self.settled {
-            return Err(NegotiationError::AlreadySettled { index: settled_at });
+            return Err(NegotiationError::AlreadySettled {
+                index: settled_at.index,
+            });
         }
 
         let entry = self
             .entries
             .iter()
-            .find(|e| e.index == index)
-            .ok_or(NegotiationError::UnknownOffer { index })?;
+            .find(|e| e.id == id)
+            .ok_or(NegotiationError::UnknownOffer { index: id.index })?;
 
-        if entry.author == Author::Us {
-            return Err(NegotiationError::OwnOffer { index });
+        if id.author == Author::Us {
+            return Err(NegotiationError::OwnOffer { index: id.index });
         }
         match entry.message.message_type {
             MessageType::Offer | MessageType::Counter => {}
-            kind => return Err(NegotiationError::NotAnOffer { index, kind }),
+            kind => {
+                return Err(NegotiationError::NotAnOffer {
+                    index: id.index,
+                    kind,
+                })
+            }
         }
         if now > entry.message.deadline {
             return Err(NegotiationError::Expired {
-                index,
+                index: id.index,
                 deadline: entry.message.deadline,
                 now,
             });
@@ -220,14 +272,14 @@ impl OfferBook {
         Ok(())
     }
 
-    /// The most recent live offer from the counterparty, if any — what a policy engine
-    /// evaluates on its turn.
-    pub fn latest_acceptable(&self, now: u64) -> Option<(u32, WireMessage)> {
+    /// The most recent live offer from the counterparty — what a policy engine evaluates on
+    /// its turn.
+    pub fn latest_acceptable(&self, now: u64) -> Option<(OfferId, WireMessage)> {
         self.entries
             .iter()
             .rev()
-            .find(|e| self.check_acceptable(e.index, now).is_ok())
-            .map(|e| (e.index, e.message))
+            .find(|e| self.check_acceptable(e.id, now).is_ok())
+            .map(|e| (e.id, e.message))
     }
 
     /// Every message recorded, in the order it was recorded.

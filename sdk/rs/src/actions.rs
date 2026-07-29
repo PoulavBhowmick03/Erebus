@@ -23,7 +23,7 @@
 use starknet_types_core::felt::Felt;
 
 /// Errors from constructing an action or one of its constrained fields.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ActionError {
     /// A note salt was outside `(OPEN_NOTE_SALT, 2^120)`.
     #[error("note salt must be > {min} and < 2^120, got {0}", min = NoteSalt::OPEN_NOTE_SALT)]
