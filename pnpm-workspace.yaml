@@ -1,3 +1,4 @@
+# Only the differential-test oracle is a Node package. Everything above the SDK
+# boundary — mcp-server, agents — is Python (decided 2026-07-28, see CLAUDE.md).
 packages:
   - "sdk/ts"
-  - "mcp-server"
