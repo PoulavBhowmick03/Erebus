@@ -34,7 +34,7 @@ use starknet_types_core::felt::Felt;
 
 use crate::action_set::{ActionSet, ActionSetBuilder, ActionSetError};
 use crate::actions::{
-    ClientAction, CreateEncNoteInput, FeltEntropy, NoteSalt, OpenChannelInput,
+    ClientAction, CreateEncNoteInput, DepositInput, FeltEntropy, NoteSalt, OpenChannelInput,
     OpenSubchannelInput, RandomSalt, SetViewingKeyInput, UseNoteInput,
 };
 use crate::disclosure::ViewingGrant;
@@ -60,6 +60,9 @@ pub enum ChannelError {
     /// A settlement paid nothing.
     #[error("a settlement must move a non-zero amount")]
     ZeroPayment,
+    /// A shield operation deposited nothing.
+    #[error("a shield deposit must move a non-zero amount")]
+    ZeroDeposit,
     /// A settlement consumed no notes.
     #[error("a settlement must spend at least one note")]
     NothingToSpend,
@@ -99,7 +102,10 @@ pub struct PoolIdentity {
 impl PoolIdentity {
     /// Creates an identity from an address and its pool private key.
     pub fn new(address: Felt, private_key: Felt) -> Self {
-        Self { address, private_key }
+        Self {
+            address,
+            private_key,
+        }
     }
 
     /// The agent's Starknet address.
@@ -124,7 +130,9 @@ impl PoolIdentity {
     /// It is StarkWare's threshold-auditor design and a condition of using the pool at all,
     /// not something Erebus adds or can opt out of.
     pub fn register(&self, random: FeltEntropy) -> ClientAction {
-        ClientAction::SetViewingKey(SetViewingKeyInput { random: random.get() })
+        ClientAction::SetViewingKey(SetViewingKeyInput {
+            random: random.get(),
+        })
     }
 }
 
@@ -168,7 +176,10 @@ impl Channel {
             counterparty.address,
             counterparty.public_key,
         );
-        Self { channel_key, counterparty }
+        Self {
+            channel_key,
+            counterparty,
+        }
     }
 
     /// Reconstructs an *incoming* channel from a key learned out of band.
@@ -176,7 +187,10 @@ impl Channel {
     /// The recipient cannot derive this — it hashes the sender's private key — so it
     /// arrives encrypted in `EncChannelInfo` and is passed here.
     pub fn from_key(channel_key: Felt, counterparty: Counterparty) -> Self {
-        Self { channel_key, counterparty }
+        Self {
+            channel_key,
+            counterparty,
+        }
     }
 
     /// The channel key.
@@ -197,12 +211,7 @@ impl Channel {
     ///
     /// `random` encrypts the channel info so the recipient can learn the channel key they
     /// cannot derive themselves; `salt` guarantees one-time key usage for that encryption.
-    pub fn open_channel(
-        &self,
-        index: u32,
-        random: FeltEntropy,
-        salt: FeltEntropy,
-    ) -> ClientAction {
+    pub fn open_channel(&self, index: u32, random: FeltEntropy, salt: FeltEntropy) -> ClientAction {
         ClientAction::OpenChannel(OpenChannelInput {
             recipient_addr: self.counterparty.address,
             index,
@@ -216,12 +225,7 @@ impl Channel {
     /// A subchannel is *per token*, not per topic — one channel carries one subchannel for
     /// each token the parties transact in, and notes live in the subchannel. This is why
     /// the wire format can drop `token` from a message: the subchannel already says it.
-    pub fn open_subchannel(
-        &self,
-        index: u32,
-        token: Felt,
-        salt: FeltEntropy,
-    ) -> ClientAction {
+    pub fn open_subchannel(&self, index: u32, token: Felt, salt: FeltEntropy) -> ClientAction {
         ClientAction::OpenSubchannel(OpenSubchannelInput {
             recipient_addr: self.counterparty.address,
             recipient_public_key: self.counterparty.public_key,
@@ -260,6 +264,44 @@ impl Channel {
             params.token,
             params.subchannel_salt,
         ))?;
+        Ok(builder.build()?)
+    }
+
+    /// Registers if needed, opens a self-channel, deposits, and creates one encrypted note
+    /// in a single action set.
+    ///
+    /// This is the MVP funding primitive. A deposit by itself leaves a positive token
+    /// balance and has no replay protection; pairing it with the new value note is what
+    /// makes the action set both balanced and replay-safe.
+    pub fn shield(
+        &self,
+        identity: &PoolIdentity,
+        params: SetupParams,
+        amount: u128,
+        note_salt: RandomSalt,
+    ) -> Result<ActionSet, ChannelError> {
+        if amount == 0 {
+            return Err(ChannelError::ZeroDeposit);
+        }
+        let mut builder = ActionSetBuilder::new();
+        if let Some(random) = params.register {
+            builder.push(identity.register(random))?;
+        }
+        builder.push(self.open_channel(
+            params.channel_index,
+            params.channel_random,
+            params.channel_salt,
+        ))?;
+        builder.push(self.open_subchannel(
+            params.subchannel_index,
+            params.token,
+            params.subchannel_salt,
+        ))?;
+        builder.push(ClientAction::Deposit(DepositInput {
+            token: params.token,
+            amount,
+        }))?;
+        builder.push(self.value_note(params.token, 0, amount, note_salt))?;
         Ok(builder.build()?)
     }
 
@@ -332,7 +374,12 @@ impl Channel {
     /// message and decrypt every amount in this channel, and can do nothing anywhere else —
     /// spending needs a nullifier, which needs the owner's pool key, which no grant carries.
     /// See [`crate::disclosure`] for how this differs from the pool's own auditor escrow.
-    pub fn grant_viewing_key(&self, identity: &PoolIdentity, incoming_key: Felt, token: Felt) -> ViewingGrant {
+    pub fn grant_viewing_key(
+        &self,
+        identity: &PoolIdentity,
+        incoming_key: Felt,
+        token: Felt,
+    ) -> ViewingGrant {
         ViewingGrant::new(
             self.channel_key,
             incoming_key,
@@ -356,13 +403,7 @@ impl Channel {
 
     /// A value-bearing note. Requires a [`RandomSalt`] — a structured salt here would leak
     /// the amount under mask reuse, which is why the two salt types are distinct.
-    fn value_note(
-        &self,
-        token: Felt,
-        index: u32,
-        amount: u128,
-        salt: RandomSalt,
-    ) -> ClientAction {
+    fn value_note(&self, token: Felt, index: u32, amount: u128, salt: RandomSalt) -> ClientAction {
         ClientAction::CreateEncNote(CreateEncNoteInput {
             recipient_addr: self.counterparty.address,
             recipient_public_key: self.counterparty.public_key,
@@ -393,7 +434,9 @@ impl Channel {
         acceptance: Acceptance,
     ) -> Result<ActionSet, ChannelError> {
         if acceptance.message.message_type != MessageType::Accept {
-            return Err(ChannelError::NotAnAcceptance(acceptance.message.message_type));
+            return Err(ChannelError::NotAnAcceptance(
+                acceptance.message.message_type,
+            ));
         }
         if payment.amount == 0 {
             return Err(ChannelError::ZeroPayment);

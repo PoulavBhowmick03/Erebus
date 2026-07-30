@@ -1,22 +1,18 @@
 //! JSON-RPC client for the proving service.
 //!
-//! ## What this sends
+//! ## Private data
 //!
 //! The invocation handed to `starknet_proveTransaction` carries the pool private key in
-//! plaintext at `calldata[5]` — verified, not assumed (`tests/proof_invocation.rs`). The
-//! prover therefore sits **inside the trust boundary of whoever owns that key**. Pointing
-//! this client at a third-party endpoint hands that operator the ability to decrypt
-//! everything the key protects. See friction.md F14 and ARCHITECTURE §5.
-//!
-//! It is deliberately not this module's job to stop you doing that — but it is its job to
-//! say so where you would be typing the URL.
+//! plaintext at `calldata[5]` (`tests/proof_invocation.rs`). A prover operator can decrypt
+//! everything protected by that key. See friction.md F14 and ARCHITECTURE §5.
+//! The `compile_actions` preflight exposes the same key to its Starknet RPC endpoint, so
+//! both endpoints must be inside the operator trust boundary.
 //!
 //! ## Retries
 //!
-//! Only on transport failures and HTTP 503, with exponential backoff and a small cap.
-//! Proving is expensive and the shared dev endpoint is a courtesy; a tight retry loop
-//! against it is antisocial. JSON-RPC application errors are never retried — a rejected
-//! transaction is rejected however many times you ask.
+//! The client retries transport failures, HTTP 503, and the service's `-32005` busy response.
+//! It uses capped exponential backoff. It does not retry transaction or screening
+//! rejections.
 
 use std::time::Duration;
 
@@ -25,8 +21,7 @@ use serde_json::json;
 
 use crate::tx::SignedInvokeV3;
 
-/// Default per-request timeout. Proving is ~29 s per transaction (friction.md F7), so this
-/// has to be generous enough to cover a real proof plus queueing.
+/// Default timeout. A proof takes ~29 s (friction.md F7), plus queue time.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 /// Default retry budget for transient failures.
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
@@ -43,7 +38,7 @@ pub enum ProverError {
     #[error("proving service returned error {code}: {message}")]
     Rpc {
         /// JSON-RPC error code. `10000` is the screening interceptor's "transaction
-        /// rejected" — see friction.md F6.
+        /// rejected". See friction.md F6.
         code: i64,
         /// Human-readable message.
         message: String,
@@ -59,8 +54,7 @@ pub enum ProverError {
 impl ProverError {
     /// Whether this is the screening interceptor's rejection code.
     ///
-    /// The prover surfaces a blocked deposit as JSON-RPC `10000` rather than anything
-    /// structured, so this is the only handle on it.
+    /// The prover reports a blocked deposit only as JSON-RPC code `10000`.
     pub fn is_screening_rejection(&self) -> bool {
         matches!(self, Self::Rpc { code: 10000, .. })
     }
@@ -89,8 +83,8 @@ impl BlockId {
 
 /// An L2→L1 message emitted during the proven execution.
 ///
-/// The pool's own message carries `[class_hash, ...serialized_server_actions]`; the
-/// class-hash prefix is stripped before calling `apply_actions`.
+/// The pool message contains `[class_hash, ...serialized_server_actions]`. The caller
+/// removes the class hash before `apply_actions`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MessageToL1 {
     /// Emitting contract.
@@ -103,8 +97,8 @@ pub struct MessageToL1 {
 
 /// Screening attestation relayed by the prover for a deposit.
 ///
-/// Present only when the transaction contains a deposit and screening allowed it. The
-/// contract verifies it against the proven deposit's `from_addr`, fresh within 300 s.
+/// Present for an allowed deposit. The contract binds it to the proven `from_addr` and
+/// requires an age of less than 300 s.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ScreeningSignature {
     /// Unix seconds.
@@ -132,7 +126,7 @@ pub struct ProveTransactionResult {
     pub proof_facts: Vec<String>,
     /// Messages emitted during the proven execution.
     pub l2_to_l1_messages: Vec<MessageToL1>,
-    /// Optional side-channel; carries the screening signature for deposits.
+    /// Optional screening signature for deposits.
     #[serde(default)]
     pub additional_data: Option<AdditionalData>,
 }
@@ -149,9 +143,11 @@ pub struct ProvingService {
 impl ProvingService {
     /// Creates a client for `base_url`.
     ///
-    /// Remember what this URL is trusted with — see the module docs.
+    /// The endpoint receives the pool private key. See the module docs.
     pub fn new(base_url: impl Into<String>) -> Result<Self, ProverError> {
-        let client = reqwest::Client::builder().timeout(DEFAULT_TIMEOUT).build()?;
+        let client = reqwest::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()?;
         Ok(Self {
             base_url: base_url.into(),
             client,
@@ -168,8 +164,7 @@ impl ProvingService {
 
     /// The JSON-RPC spec version the service speaks.
     ///
-    /// Also serves as a health check, and is worth asserting against the deployed pool's
-    /// expected prover tag before trusting anything else.
+    /// Also provides a health check against the deployed pool's expected prover tag.
     pub async fn spec_version(&self) -> Result<String, ProverError> {
         let value = self.call_once("starknet_specVersion", json!([])).await?;
         value
@@ -191,7 +186,10 @@ impl ProvingService {
 
         let mut attempt = 0;
         loop {
-            match self.call_once("starknet_proveTransaction", params.clone()).await {
+            match self
+                .call_once("starknet_proveTransaction", params.clone())
+                .await
+            {
                 Ok(value) => {
                     return serde_json::from_value(value.clone()).map_err(|e| {
                         ProverError::Malformed(format!(
@@ -218,13 +216,22 @@ impl ProvingService {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProverError> {
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        let response = self.client.post(&self.base_url).json(&body).send().await?;
+        let response = self
+            .client
+            .post(&self.base_url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
         let status = response.status();
         let value: serde_json::Value = response.json().await?;
 
         if let Some(error) = value.get("error") {
             return Err(ProverError::Rpc {
-                code: error.get("code").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                code: error
+                    .get("code")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0),
                 message: error
                     .get("message")
                     .and_then(serde_json::Value::as_str)
@@ -242,13 +249,18 @@ impl ProvingService {
     }
 }
 
-/// Transport failures and 503 are worth retrying; a rejected transaction is not.
+/// Returns true for transport failures, HTTP 503, and the prover busy code.
 fn is_transient(error: &ProverError) -> bool {
     match error {
         ProverError::Transport(e) => {
-            e.is_timeout() || e.is_connect() || e.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)
+            e.is_timeout()
+                || e.is_connect()
+                || e.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)
         }
-        _ => false,
+        ProverError::Rpc { code: -32005, .. } => true,
+        ProverError::Rpc { .. } | ProverError::Malformed(_) | ProverError::RetriesExhausted(_) => {
+            false
+        }
     }
 }
 
@@ -257,5 +269,22 @@ fn truncate(text: &str, limit: usize) -> String {
         text.to_owned()
     } else {
         format!("{}…", &text[..limit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_service_busy_rpc_errors_are_transient() {
+        assert!(is_transient(&ProverError::Rpc {
+            code: -32005,
+            message: "busy".to_owned(),
+        }));
+        assert!(!is_transient(&ProverError::Rpc {
+            code: 10000,
+            message: "screening rejected".to_owned(),
+        }));
     }
 }

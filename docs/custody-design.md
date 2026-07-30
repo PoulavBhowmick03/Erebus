@@ -14,10 +14,13 @@ keys". Separating those two meanings resolves most of the question.
 
 | | What it is | Who must have it |
 |---|---|---|
-| **Account signing key** | Ordinary Starknet account key. Signs the tx hash; `assert_valid_signature` (`utils.cairo:383`) calls `is_valid_signature` on the agent's own account contract. | The agent's wallet. **Erebus never needs it** — verified: it does not appear in prover-bound calldata (`tests/proof_invocation.rs`). |
+| **Account signing key** | Ordinary Starknet account key. Signs the proof invocation and final `apply_actions` transaction; `assert_valid_signature` (`utils.cairo:383`) calls `is_valid_signature` on the agent's own account contract. | The operator's local Rust process for the MVP, supplied by file path. It never enters proof calldata and is never persisted in channel state. A wallet/session signer should replace the raw file in production. |
 | **Pool identity key** | `user_private_key`. Derives the pool identity, decrypts notes, produces nullifiers, derives channel keys. | Whoever builds the action set. This is the contested one. |
 
-The account key is already fine under any design. Everything below is about the pool key.
+The account key and pool key are distinct, but the complete Rust MVP handles both locally:
+the proof invocation needs an account-valid signature, and the final invoke must also be
+signed. “Does not appear in prover calldata” means the prover cannot steal it; it does not
+mean the client can execute without a signer.
 
 ## 2. Why the pool key cannot simply stay in the agent's wallet
 
@@ -127,8 +130,9 @@ by itself rule out handling.
 
 ### Option A — Erebus ships a library, operates nothing
 
-`/sdk/rs` is embedded in the agent's own process. The agent operator supplies their pool key
-to their own instance. Erebus-the-project runs no service and never sees a key.
+`erebus-cli` runs as a subprocess of the agent stack. The operator supplies paths to its pool
+and account keys; only the Rust subprocess opens them. Erebus-the-project runs no custody
+service and never sees either key.
 
 - Erebus is a protocol + library + MCP server, all running agent-side.
 - Full `ClientAction` control, so the salt lane works as designed.
@@ -136,8 +140,10 @@ to their own instance. Erebus-the-project runs no service and never sees a key.
   constructor dependency rather than a per-call argument, which also keeps Ishita's mock intact.
 - **Cost:** each agent operator needs prover access. A shared prover sees pool keys (F14), so
   either they run their own (Pathfinder + prover) or accept that exposure.
-- **Cost:** "agents use whatever Starknet wallet they have" holds for the *account* key only.
-  The pool key is separate and Erebus's library manages it.
+- **Cost:** the MVP uses a local account-key file because no wallet/session signer is wired
+  yet. “Agents use whatever Starknet wallet they have” is post-MVP work, not a current
+  property. The pool key remains separate and Erebus's local state manages channel secrets
+  derived from it.
 
 ### Option B — Push for a wallet-API extension
 

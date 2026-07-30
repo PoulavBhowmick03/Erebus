@@ -20,7 +20,10 @@ These come from the OpenZeppelin audit of `starkware-libs/starknet-privacy`. Get
 
 2. **Always: simulate locally → generate proof → submit via `apply_actions`.** There is no fast path. If a code path skips proof generation, it is wrong.
 
-3. **Never write chain-scanning code for note retrieval.** Use the Discovery Service. Notes live at locations derived from a per-pair shared secret; the recipient already knows where to look. Scanning defeats the design and does not work.
+3. **Never write world/event-scanning code for note retrieval.** Use keyed discovery:
+   either the Discovery Service or, for the MVP, upstream's contract provider pattern that
+   queries only secret-derived channel/subchannel/note ids over RPC. Scanning public events
+   or global storage defeats the design and does not work.
 
 4. **Sequential indexing has no gaps.** Note indices within a channel/subchannel must be contiguous. Do not write code that skips or reorders indices.
 
@@ -87,10 +90,11 @@ Ownership: `/sdk/rs` and `/contracts` are Poulav's. `/agents`, `/mcp-server` are
   salt encoder, or anything that could disagree with `/sdk/rs`, that is a bug** — every
   failure mode in this protocol is silent, and a third implementation is a third place for
   a wrong preimage to hide. It marshals arguments and returns results. Nothing else.
-- **The seam mechanism is undecided** — subprocess (`erebus-cli`, JSON over stdio) or
-  PyO3/maturin. Costs are in ARCHITECTURE.md §3. It belongs to both tracks, which means by
-  default it belongs to neither; it is the likeliest thing to be discovered broken on
-  integration day.
+- **The seam is a subprocess** — `erebus-cli`, one JSON request on stdin and one envelope on
+  stdout. Async stays in Rust. Key *paths* cross the request; key values do not. Protocol 2
+  uses opaque random channel handles backed by locked, mode-`0600` Rust state files. The
+  Python binding remains on protocol 1 until the shared integration pass; do not add
+  protocol logic there to bridge the gap.
 - **This is not for x402/ERC-8004 reuse.** That was checked and it does not transfer as
   code: ERC-8004 is EVM-only, and while x402 has an official Python SDK, x402-on-Starknet
   exists only in TypeScript (`NethermindEth/x402-starknet`). Do not reintroduce a

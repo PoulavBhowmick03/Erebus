@@ -23,14 +23,19 @@
 
 pub mod action_set;
 pub mod actions;
+pub mod calldata;
 pub mod channel;
+pub mod client;
 pub mod decrypt;
 pub mod disclosure;
+pub mod execution;
 pub mod hashes;
 pub mod negotiation;
 pub mod prover;
 pub mod read;
+pub mod rpc;
 pub mod signing;
+pub mod state;
 pub mod subchannel;
 pub mod tx;
 pub mod wire;

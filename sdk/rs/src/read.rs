@@ -25,20 +25,21 @@
 
 use starknet_types_core::felt::Felt;
 
+use crate::actions::NoteSalt;
 use crate::decrypt;
 use crate::hashes;
 use crate::negotiation::{Author, NegotiationError, OfferBook};
-use crate::actions::NoteSalt;
 use crate::wire::{decode_message, WireError, WireMessage, NOTES_PER_MESSAGE};
 
 /// Errors from reading.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReadError {
+    /// The serialized viewing grant was corrupted or edited.
+    #[error("viewing grant integrity check failed")]
+    InvalidViewingGrant,
     /// A message was partly present. Under the contiguity rule this cannot happen on-chain,
     /// so it means the source is inconsistent — a partial fetch, or the wrong channel key.
-    #[error(
-        "message {message_index} is incomplete: {found} of {NOTES_PER_MESSAGE} notes present"
-    )]
+    #[error("message {message_index} is incomplete: {found} of {NOTES_PER_MESSAGE} notes present")]
     PartialMessage {
         /// The message that was torn.
         message_index: u32,
@@ -124,9 +125,14 @@ impl ChannelReader {
         })
     }
 
+    /// Storage id for one note index.
+    pub fn note_id(&self, index: u64) -> Felt {
+        hashes::compute_note_id(self.channel_key, self.token, index)
+    }
+
     /// Reads one note, decrypting its amount.
     pub fn note(&self, index: u64, source: &impl NoteSource) -> Option<decrypt::NoteView> {
-        let note_id = hashes::compute_note_id(self.channel_key, self.token, index);
+        let note_id = self.note_id(index);
         let packed = source.packed_value(note_id)?;
         Some(decrypt::packed_value(
             packed,
@@ -163,7 +169,10 @@ impl ChannelReader {
             }
         }
 
-        let found: Vec<Felt> = ids.iter().filter_map(|id| source.packed_value(*id)).collect();
+        let found: Vec<Felt> = ids
+            .iter()
+            .filter_map(|id| source.packed_value(*id))
+            .collect();
 
         if found.is_empty() {
             return Ok(None);
@@ -181,8 +190,12 @@ impl ChannelReader {
         // is where that surfaces as an error rather than as a decoded-looking message.
         let mut salts = [NoteSalt::new(2).expect("2 is in range"); NOTES_PER_MESSAGE];
         for (slot, packed) in found.iter().enumerate() {
-            salts[slot] = NoteSalt::new(decrypt::unpack_note(*packed).0)
-                .map_err(|_| ReadError::NotAnErebusNote { message_index, slot })?;
+            salts[slot] = NoteSalt::new(decrypt::unpack_note(*packed).0).map_err(|_| {
+                ReadError::NotAnErebusNote {
+                    message_index,
+                    slot,
+                }
+            })?;
         }
         Ok(Some(decode_message(&salts)?))
     }
@@ -216,7 +229,8 @@ impl ChannelReader {
         source: &impl NoteSource,
     ) -> Option<decrypt::NoteView> {
         let index = u64::from(acceptance_index + 1) * NOTES_PER_MESSAGE as u64;
-        self.note(index, source).filter(decrypt::NoteView::is_value_note)
+        self.note(index, source)
+            .filter(decrypt::NoteView::is_value_note)
     }
 }
 

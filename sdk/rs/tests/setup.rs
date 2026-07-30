@@ -5,7 +5,7 @@
 //! ~29 s each, three separate transactions would be a minute and a half of dead air before
 //! the first offer.
 
-use erebus_sdk::actions::{ActionError, ClientAction, FeltEntropy};
+use erebus_sdk::actions::{ActionError, ClientAction, FeltEntropy, RandomSalt};
 use erebus_sdk::channel::{Channel, Counterparty, PoolIdentity, SetupParams};
 use starknet_types_core::felt::Felt;
 
@@ -139,14 +139,10 @@ fn the_subchannel_action_carries_this_channels_key() {
 fn two_tokens_need_two_subchannels_on_the_same_channel() {
     let channel = Channel::derive(&alice(), bob());
     let first = channel.open_subchannel(0, token(), entropy(0xcc));
-    let second = channel.open_subchannel(
-        1,
-        Felt::from_hex("0x9999").expect("token"),
-        entropy(0xdd),
-    );
+    let second =
+        channel.open_subchannel(1, Felt::from_hex("0x9999").expect("token"), entropy(0xdd));
 
-    let (ClientAction::OpenSubchannel(a), ClientAction::OpenSubchannel(b)) = (first, second)
-    else {
+    let (ClientAction::OpenSubchannel(a), ClientAction::OpenSubchannel(b)) = (first, second) else {
         panic!("expected OpenSubchannel");
     };
     assert_eq!(a.channel_key, b.channel_key, "same channel");
@@ -177,11 +173,48 @@ fn setup_and_the_first_message_agree_on_the_channel() {
         deadline: 1_753_702_800,
         memo_hash: 1,
     };
-    let message = channel.write_message(token(), 0, &offer).expect("valid message");
+    let message = channel
+        .write_message(token(), 0, &offer)
+        .expect("valid message");
 
     let ClientAction::CreateEncNote(note) = &message.actions()[0] else {
         panic!("expected CreateEncNote");
     };
     assert_eq!(subchannel.token, note.token, "same subchannel token");
-    assert_eq!(subchannel.recipient_addr, note.recipient_addr, "same recipient");
+    assert_eq!(
+        subchannel.recipient_addr, note.recipient_addr,
+        "same recipient"
+    );
+}
+
+#[test]
+fn shield_is_one_balanced_replay_protected_action_set() {
+    let identity = alice();
+    let self_counterparty = Counterparty {
+        address: identity.address(),
+        public_key: identity.public_key(),
+    };
+    let channel = Channel::derive(&identity, self_counterparty);
+    let set = channel
+        .shield(
+            &identity,
+            params(true),
+            1_000,
+            RandomSalt::from_entropy([0x42; 16]),
+        )
+        .expect("shield");
+
+    assert_eq!(set.actions().len(), 5);
+    assert!(matches!(set.actions()[0], ClientAction::SetViewingKey(_)));
+    assert!(matches!(set.actions()[1], ClientAction::OpenChannel(_)));
+    assert!(matches!(set.actions()[2], ClientAction::OpenSubchannel(_)));
+    let ClientAction::Deposit(deposit) = &set.actions()[3] else {
+        panic!("expected Deposit");
+    };
+    let ClientAction::CreateEncNote(note) = &set.actions()[4] else {
+        panic!("expected CreateEncNote");
+    };
+    assert_eq!(deposit.amount, note.amount);
+    assert_eq!(note.recipient_addr, identity.address());
+    assert_eq!(note.index, 0);
 }

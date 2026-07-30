@@ -18,7 +18,27 @@ the TS byte-for-byte. That is why it is still referenced below — as the thing 
 
 ---
 
-## Status — 2026-07-28
+## Status — 2026-07-30
+
+**Rust protocol 2 is complete as an implementation, not yet as live evidence.** The crate
+now has the high-level `ErebusClient` trait and all seven methods, Rust-owned opaque-handle
+state, keyed RPC discovery, the full preflight → prove → estimate → `apply_actions` →
+receipt path, exact-note atomic settlement, and self-contained disclosure grants. The full
+offline suite is green: **172 passed, 2 deliberately ignored live-prover probes**.
+
+What that sentence does **not** mean:
+
+- no successful proof-carrying transaction has landed on Sepolia from this path yet;
+- the shield still needs a real screening attestation;
+- writes require an operator-controlled RPC/Pathfinder as well as prover, because the
+  `compile_actions` preflight also carries the pool key;
+- the Python/TypeScript protocol-1 mirrors were not changed during the Rust-only pass, so
+  integration with Ishita is deliberately still P2.3;
+- settlement currently selects notes whose values sum exactly to the offer. It refuses to
+  burn surplus; general change-note construction remains post-MVP.
+- protocol-2 calls have no idempotency token. Chain-derived cursor recovery prevents index
+  reuse, but a crash after inclusion and before the response can orphan an open handle or
+  cause a retried proposal to become a second proposal.
 
 **Answered, with evidence in [friction.md](./friction.md):**
 
@@ -41,21 +61,42 @@ the TS byte-for-byte. That is why it is still referenced below — as the thing 
   the Rust client on the demo's critical path rather than beside it, and it adds P0.4 to
   your track.
 
-**Blocking, and neither is yours to fix alone:**
+**Blocking. Corrected 2026-07-30 — the prover is no longer one of these:**
 
-1. **No prover endpoint — answered 2026-07-28, and the answer is "self-host".** Akash has
-   asked his team; no ETA. His recommendation meanwhile is to run our own prover. So Phase 2
-   is no longer waiting on anyone — it is Pathfinder v0.22.7 + `transaction-prover` on our
-   own hardware, and the work can start now.
-   **But it does not unblock the shield.** Self-hosting gets private transfers, channel
-   writes, settlement and reveal. It does not get deposits: `proof-interceptor` holds no
-   screener key, and the live pool's `screener_public_key` is StarkWare's. See blocker 3.
+1. ~~**No prover endpoint.**~~ **Resolved.** Akash supplied a Sepolia
+   `transaction-prover` endpoint after the 2026-07-28 "self-host" answer was written, and
+   F20 is the receipt: a live `starknet_proveTransaction` from this crate reached it and
+   failed at *execution* (`-32603`), not at parsing, which means the service accepted our
+   `INVOKE_TXN_V3` whole. Keep the URL in the gitignored `.env` — he asked that it not be
+   shared.
+
+   **So self-hosting is a product decision, not an MVP unblocker,** and the earlier text
+   here had that backwards. It is what makes poc.md's "the operator runs their own prover"
+   claim literally true, and it removes the fact that the `compile_actions` preflight and
+   the prove call both carry the pool private key in the clear to a third party. On testnet
+   that is a demo convenience worth *stating* rather than hiding. Doing it is Pathfinder
+   v0.22.7 (`PATHFINDER_STORAGE_STATE_TRIES=10000`) + `transaction-prover` on our own box;
+   the Pathfinder sync is the long pole, so start it early if we want it.
 2. **Which prover / discovery tags match the deployed class hash.** The README matrix pins
-   RC.0 → `0x52107f…633`, which is not what is live.
-3. **How we get a screening attestation.** Either StarkWare give us screening access, or we
-   deploy our own pool instance with a screener key we hold. This is now the only hard
-   dependency on someone else, and it gates one leg — the shield — not the whole demo.
-   Mechanism and both options: friction.md F6.
+   RC.0 → `0x52107f…633`, which is not what is live. Still open, and now testable directly
+   against Akash's endpoint rather than by reading the matrix.
+3. **How we get a screening attestation.** Still the only hard dependency on someone else,
+   and it gates one leg — the shield — not the whole demo.
+
+   **Correcting the framing, because it changes what to do next:** the attestation is not a
+   credential we obtain and then present. The prover's `proof-interceptor` sidecar produces
+   it — one `starknet_checkTransaction` per client `starknet_proveTransaction`, screened via
+   HMAC-signed `POST /screen` to elliptic-proxy, whose allow response *is* the STARK-curve
+   signature over the depositor; the prover attaches it under `additional_data.signature`
+   for us to pack into the deposit's `apply_actions` calldata (proof-interceptor README).
+
+   That inverts blocker 1's old conclusion. If Akash's prover has `SCREENING_URL`
+   configured, deposits already work and we need nothing; self-hosting would *lose* us the
+   shield, since our own interceptor has no Elliptic partner secret and with `SCREENING_URL`
+   unset degrades to a pass-through that returns `allowed: true` **with no signature**.
+   **One test deposit against his endpoint settles it** — an attestation comes back, or
+   `10000` does. Fallback if it does not: deploy our own pool instance and hold the screener
+   key ourselves (constructor is unpermissioned, class already declared; friction.md F6).
 
 ---
 
@@ -82,13 +123,22 @@ Mainnet has no published deployment: upstream's `demo/.env.mainnet.example` is e
 
 - [x] Sepolia or mainnet? Confirmed on-chain.
 - [x] Post the answer to Ishita — chain id `SN_SEPOLIA`, pool address above.
-- [x] **Get a Sepolia proving-service endpoint from StarkWare** — asked, and the answer is
-      that none exists yet. Team notified, no ETA. **Self-host instead**, which is Akash's
-      own recommendation: `transaction-prover` + Pathfinder v0.22.7
-      (`PATHFINDER_STORAGE_STATE_TRIES=10000`). Now a Phase-2 task, not a Phase-2 blocker.
-- [ ] **Resolve screening.** Self-hosting does not cover the deposit leg. Ask Akash for
-      screening access, or deploy our own pool instance with our own screener key
-      (constructor is unpermissioned, class already declared). *Gates the shield only.*
+- [x] **Get a Sepolia proving-service endpoint from StarkWare — GOT ONE 2026-07-30.** The
+      first answer was "none exists, self-host"; Akash then supplied one, and F20 shows it
+      parsing our `INVOKE_TXN_V3`. It lives in the gitignored `.env` and is not to be shared.
+      Self-hosting (`transaction-prover` + Pathfinder v0.22.7,
+      `PATHFINDER_STORAGE_STATE_TRIES=10000`) is now a *product* task — it is what makes the
+      no-third-party-sees-your-key claim true — not a Phase-2 blocker.
+- [ ] **Resolve screening — one experiment, do this before anything else in Phase 2.** Send a
+      real deposit prove request to Akash's endpoint and look at the response: an
+      `additional_data.signature` means screening is configured and the shield is already
+      unblocked; JSON-RPC `10000` means it rejected us. Only if it fails do we need the
+      fallback — our own pool instance with our own screener key (constructor is
+      unpermissioned, class already declared). *Gates the shield only.* Cheapest possible
+      way to close the last open blocker, so it should not wait behind the ERC-20.
+- [ ] **Ask Akash directly, in parallel with the above:** is screening enabled on the prover
+      you gave me — will a deposit come back with an attestation, or do I need something from
+      your side? One question, saves a day whichever way it goes.
 - [ ] Confirm which prover / discovery tags match the **deployed** class hash.
 - [x] **Settlement ERC-20 — DECIDED 2026-07-30: deploy our own mintable test ERC-20.**
       The pool has **no token allowlist** — `deposit` calls `TransferFrom` on whatever address
@@ -167,6 +217,11 @@ not, and that is the deliverable.
       ARCHITECTURE §4.
 - [ ] **Walk it with Ishita and freeze.** The two open items above are now decided, so this is
       confirmation rather than negotiation.
+- [ ] **Protocol-2 disclosure correction needs shared sign-off.** Rust now returns a
+      self-contained `ViewingKeyGrant` and `reveal` consumes it without a local handle.
+      The previous `Promise<void>`/`reveal(handle, key)` pair could not deliver a key or work
+      on an auditor's machine. ARCHITECTURE §4 records the correction; Ishita's files were
+      deliberately not edited in the Rust-only pass.
 
 Already true, so not a task: `OfferTerms` serialises to 5 felts against a 120-bit on-chain
 lane — encodable in Cairo, just does not fit in one note.
@@ -188,23 +243,18 @@ hers, which is exactly why it will otherwise be nobody's until integration day b
       Costs are in ARCHITECTURE §3 — the tradeoff is yours to make. Bias worth naming:
       subprocess has no build matrix and puts an OS boundary around key material, which
       turns CLAUDE.md constraint 6 from a rule into a property.
-- [x] **Landed `openChannel` end-to-end 2026-07-30.** Not stubbed — it derives a real channel
-      and builds the real setup action set; only submission is missing, and that is blocked on
-      screening like everything else. `sdk/rs/src/bin/erebus_cli.rs`, `sdk/py/src/erebus/_seam.py`,
-      8 Rust tests (`tests/cli_seam.rs`) and 10 Python tests. **Unreviewed — written by Claude.**
+- [x] **Rust protocol-2 seam landed 2026-07-30.** `erebus-cli` exposes all seven methods plus
+      the administrative `shield` helper. `open_channel` now submits the real setup and
+      returns an opaque random handle rather than leaking the channel key. The handle maps
+      to a locked, atomic, mode-`0600` Rust state record containing directional keys and the
+      note cursor (`sdk/rs/src/state.rs`).
 
-      The test that matters is `the_cli_derives_the_same_channel_key_as_the_library`: a seam
-      that computes something *plausible but different* writes every note where nobody reads,
-      and nothing errors.
+      Both pool and account keys are supplied as file paths and read only inside Rust.
+      Entropy is generated inside the binary. The sole intentional secret export is
+      `grant_viewing_key`, which returns a self-contained bearer grant for an auditor.
 
-      **Custody got stronger, not just preserved.** The request carries a *path* to a key
-      file, never a key, so the binary opens it and the Python process never holds a pool
-      private key at all — not in a request body, not on argv (which `/proc/<pid>/cmdline`
-      publishes), not in transit. A Python test asserts this on the actual request bytes
-      rather than in prose.
-
-      Entropy is generated inside the binary via `rand`. Had Python supplied it, `sdk/py`
-      would be making a cryptographic decision, which is exactly what the tripwire forbids.
+      **Integration is intentionally not ticked:** `sdk/py` still speaks protocol 1. It and
+      Ishita's callers were left untouched in this Rust-only pass.
 - [x] **`SettlementError` crossing — DONE.** A JSON envelope carries `code`, `message` and
       `retryable`; `ErebusError` on the Python side is a frozen dataclass with those fields.
       `retryable` is the only field agent logic should branch on — an agent cannot act on
@@ -217,7 +267,9 @@ hers, which is exactly why it will otherwise be nobody's until integration day b
 - [ ] Keep `/sdk/py` free of protocol logic. A hash, a felt conversion, or a salt encoder
       there is the bug this architecture is arranged to prevent.
 
-**Acceptance:** Python calls one real Rust method and gets a typed result and a typed error.
+**Acceptance:** protocol 1 met this once; protocol 2 intentionally reopens the shared half.
+Rust returns typed results/errors for the complete surface, but Python does not yet marshal
+the new config, opaque state, or self-contained viewing grant.
 
 **Why now, not later:** everything else on both tracks is mocked. This is the only place two
 people's code physically meets, and the plan currently has it meeting for the first time
@@ -255,17 +307,17 @@ derives a slot nobody wrote to and the note is simply "not found", with no error
       RFC-6979 derivation matches `@scure/starknet` exactly, so signatures are byte-identical
       to starknet.js, not merely valid. Both directions pinned: ours verify under their keys,
       theirs verify under our code.
-- [x] **End-to-end composition pinned** — `tests/proof_invocation.rs` rebuilds a proof
-      invocation captured from upstream's own `ProofInvocationFactory` and **reproduces its
-      signature byte-for-byte**. Actions → `compile_actions` calldata → `__execute__` wrapper
-      → v3 hash → signature, all at once. This is the test that catches pieces being correct
-      but wired together wrongly. 36/36 across the crate. **Unreviewed.**
+- [x] **End-to-end composition pinned** — the upstream fixture still pins signature bytes,
+      and `calldata.rs` / `execution.rs` now start from an actual `ActionSet`. This closes
+      the old fixture gap where the test accepted prebuilt calldata and therefore did not
+      exercise `ActionSet → compile_actions → __execute__`.
 - [ ] **Which `assert_valid_signature` route the pool actually takes** — `utils.cairo:383`
       tries three (custom validation, tx hash, SNIP-12 `CallSet` hash) and which one succeeds
       depends on the agent's account contract, not on us. Untestable offline; needs a real
       account on Sepolia.
 - [x] **`starknet_proveTransaction` client** — async on reqwest/rustls, retries only on
-      transport failures and 503 *(`sdk/rs/src/prover.rs`)*. **Verified live against Sepolia:**
+      transport failures, HTTP 503 and the service's `-32005` busy response
+      *(`sdk/rs/src/prover.rs`)*. **Verified live against Sepolia:**
       `spec_version` returns `0.10.3-rc.2`, and a `prove_transaction` call reaches execution
       (`-32603`) rather than being rejected as malformed (`-32602`), which live-validates the
       whole `INVOKE_TXN_V3` serialization. Error shape is opaque though — friction.md **F20**.
@@ -274,8 +326,11 @@ derives a slot nobody wrote to and the note is simply "not found", with no error
       resource prices. 14 tests. Each corresponds to a revert that would otherwise cost a
       proof (~29 s) to discover. *Notable: a deposit alone reverts with `NO_REPLAY_PROTECTION`
       because `Deposit` emits no `WriteOnce` — you cannot shield without also creating a note.*
-- [ ] **`apply_actions` submission** — needs a funded Sepolia account and the screening
-      decision, so blocked rather than unstarted
+- [x] **`apply_actions` submission implemented** — proof output extraction, screening
+      `Option` suffix, account `Array<Call>`, query-version fee estimation with a 50% bound
+      buffer, proof/proof-facts wire fields, custom facts-aware signature, submission and
+      accepted/reverted receipt polling. `tests/execution_pipeline.rs` pins the complete
+      request sequence against local JSON-RPC fixtures. **Still unverified live.**
 - [x] Newtypes for the invariants that must be unrepresentable rather than remembered:
       structured salts only on zero-amount notes (`RandomSalt` vs the wire salt), phase
       ordering (`ActionSet`), `tip == 0` (`PoolInvocation`). Plus `FeltEntropy` for
@@ -286,11 +341,19 @@ oracle agrees with byte-for-byte.
 
 ### P1.1 — Shield → private transfer
 
-- [ ] Shield an ERC-20 into the pool
-- [ ] Private transfer between two test accounts
-- [ ] Recipient finds and decrypts the note — keyed read via `ContractDiscoveryProvider`,
-      never a scan
-- [ ] Follow simulate → prove → `apply_actions` strictly
+- [x] **Shield action construction** — `Channel::shield` creates register (when needed) +
+      self-channel + token subchannel + deposit + exact-value encrypted note in one balanced,
+      replay-protected `ActionSet`. `Client::shield` runs it through the common executor.
+      Live success remains screening-blocked.
+- [ ] **Standalone private transfer between test accounts.** The settlement value leg is
+      implemented: it consumes discovered notes and creates the counterparty payment note.
+      There is no separate transfer helper/script, and no live transfer has landed. The MVP
+      selector finds an exact subset and refuses surplus rather than destroying it.
+- [x] **Recipient keyed discovery** — `client.rs` reads `get_num_of_channels`,
+      `get_channel_info`, `get_subchannel_info`, exact computed note ids, and nullifier
+      existence. No event/world scan.
+- [x] **One mandatory executor** — same historical block for `compile_actions` preflight and
+      proof, then `apply_actions`; no public path submits `__execute__`.
 
 *Phase 2 bullets, blocked on the prover:*
 
@@ -298,8 +361,11 @@ oracle agrees with byte-for-byte.
       screener-signed attestation fresh within 300 s or reverts with `SCREENING_REQUIRED`.
       Rides along in the proving response's `additionalData`; self-hosting means the
       proof-interceptor sidecar too. Deposit leg only — note-to-note transfers are not gated.
-- [ ] Set `provingBlockId = currentBlock - 10` (notes mature 10 blocks; head-based proofs die
-      to reorgs). Proofs stay valid 450 blocks on this pool.
+- [x] Set `provingBlockId = currentBlock - 10` (notes mature 10 blocks; head-based proofs die
+      to reorgs). Proofs stay valid 450 blocks on this pool. Each channel record persists the
+      block of its last accepted write; dependent writes wait until that block is visible at
+      `head - 10`, and settlement discovers spendable notes at that historical anchor rather
+      than selecting fresh notes the proof cannot see.
 
 **Acceptance:** a script that runs the full shield-and-transfer and prints the receipt.
 
@@ -343,9 +409,15 @@ directional.
       counterparty never sent, with a valid proof and no revert. Now keyed on
       `OfferId { author, index }`.
 
-- [ ] Counterparty reads it back **on-chain** — the decrypt path exists and is pinned; what
-      remains is a real `NoteSource` over Sepolia storage or the Discovery Service. Blocked
-      with everything else behind screening.
+- [x] Counterparty read path is wired to pool views — incoming `EncChannelInfo` is decrypted,
+      the token subchannel is verified, and notes are fetched only at derived ids through
+      `get_note`. This is implemented in `client.rs`; a live two-account read remains part
+      of Phase 2 evidence.
+- [x] Reverse-direction pairing is explicit local state. The Rust store excludes incoming
+      keys already claimed by other handles and accepts exactly one remaining channel for
+      the same counterparty/token. Zero means `ChannelNotReady`; more than one fails
+      ambiguous instead of guessing. Concurrent first-time pairing across two handles is
+      not yet serialized by a global identity lock.
 - [ ] ~~Counterparty reads it back — needs the `EncChannelInfo` decrypt path, which is~~
       `discovery-core`'s side of the fence; deferred rather than done
 - [ ] Static-static ECDH over the registered Stark-curve viewing keys, for the **off-chain
@@ -479,6 +551,12 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       prevent. `OfferStatus` in the Rust deliberately omits it rather than carrying a variant
       nothing can construct. Ishita has been told not to mock it (`ishita.md`).
 
+- [x] **High-level methods now use the state machine** — `propose_offer`, `counter_offer`
+      and `read_channel_state` are implemented on `Client`, exposed by the Rust trait and
+      protocol-2 CLI, and recover their outgoing cursor from chain state before writing.
+      Offer ids include handle + direction + index, so an id from another handle or the
+      wrong direction fails before proving.
+
 **Known costs accepted**
 
 - Every data note is permanently unspendable (`use_note` rejects zero amounts) and burns a
@@ -508,19 +586,33 @@ edit, or is honest about the wait.
 
 ## Phase 2 — on-chain
 
-**No longer gated on anyone else — as of 2026-07-28 this phase is ours to start.** There is
-no hosted prover and there may never be one in our timeframe, so the entry cost is standing
-up the stack:
+**Not gated on anyone else, and — corrected 2026-07-30 — not gated on standing up our own
+stack either.** The 2026-07-28 version of this section said there was no hosted prover, so
+the entry cost was a Pathfinder sync. Akash then gave us an endpoint (blocker 1), which
+means Phase 2 starts with an HTTP call, not a week of syncing.
+
+The ordering that falls out, cheapest-first:
+
+- [ ] One deposit prove request against Akash's endpoint — settles screening (blocker 3) and
+      exercises the RC-version question (blocker 2) in the same round trip
+- [ ] Fund a Sepolia account with STRK for gas
+- [ ] Deploy the mintable test ERC-20 (P0.1)
+- [ ] First genuine end-to-end `simulate → prove → apply_actions`
+
+Self-hosting stays on the list, but as its own track rather than a prerequisite, and its
+justification is custody rather than availability — the preflight and the prove call both
+hand the pool private key to whoever runs the prover:
 
 - [ ] Pathfinder v0.22.7 synced on Sepolia, `PATHFINDER_STORAGE_STATE_TRIES=10000`
-- [ ] `transaction-prover:PRIVACY-0.14.3-RC.2` pointed at it
-- [ ] Confirm the RC.2 prover actually matches the deployed pool class (blocker 2)
-- [ ] Then resolve screening one way or the other (blocker 3) before the shield can run
+- [ ] `transaction-prover:PRIVACY-0.14.3-RC.2` pointed at it — confirm the tag against the
+      deployed class hash first (blocker 2)
 
-The sync is the long pole and nothing about it is intellectually interesting, so start it
-early and in the background — it is the one cost here that cannot be compressed by working
-harder. *Pushing work into Phase 1 is still right, but the reason has changed: not "Phase 2
-may never start" but "Phase 2 now has a setup cost in front of it".*
+The sync is the long pole and nothing about it is intellectually interesting, so if we want
+it for the demo, start it early and in the background — it is the one cost here that cannot
+be compressed by working harder. **But note it does not get us the shield**: our own
+interceptor has no screener key (blocker 3), so a self-hosted prover is strictly worse for
+deposits than Akash's. *Pushing work into Phase 1 is still right, and the reason is now
+simply that on-chain iteration is slow at ~29 s a proof.*
 
 Beyond that, this phase is the Phase-1 tasks re-run for real: the bullets marked *Phase 2*
 under P1.1 and P1.2, plus the first genuine end-to-end `simulate → prove → apply_actions`.
@@ -546,7 +638,10 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
       `value_note` will not accept a wire salt. Mutation-tested.
 - [ ] If the proof fails, the acceptance must not have happened — *holds by construction
       (one action set, one proof), but unverified on-chain until the shield works*
-- [ ] Return a `SettlementReceipt` matching the frozen interface — waits on P0.3
+- [x] Return a `SettlementReceipt` with offer id, transaction hash, spent nullifiers and
+      proving block. State is committed only after an accepted successful receipt; a failed
+      preflight/proof/submission does not advance the local cursor or mark the handle settled.
+      The accepted block is committed too, so the next dependent proof waits for maturity.
 
 **Acceptance:** accept-and-settle succeeds atomically; a deliberately invalid proof leaves
 state untouched.
@@ -555,8 +650,10 @@ state untouched.
 - [x] Grant a viewing key to a third party — `Channel::grant_viewing_key` produces a
       `ViewingGrant` carrying the **two channel keys**, never a pool private key. Serializable
       because granting means handing it over; redacting `Debug` so it cannot land in a log.
+      The protocol-2 return is self-contained (`channel_id`, grantee metadata, versioned
+      checksummed bearer key), so the auditor needs no grantor-local state directory.
 - [x] Reconstruct the full record: participants, all offers, settlement —
-      `disclosure::reveal` *(`sdk/rs/src/disclosure.rs`, 11 tests in `tests/disclosure.rs`)*.
+      `disclosure::reveal` *(`sdk/rs/src/disclosure.rs`, 12 tests in `tests/disclosure.rs`)*.
       Attributes every message to an address, and keeps `agreed_amount` and `paid_amount`
       separate so an auditor can check they match. **Unreviewed — written by Claude.**
 - [x] Verify no leakage about unrelated users or channels — pinned three ways: a grant for
@@ -570,12 +667,13 @@ state untouched.
       Disclosure paragraph currently claims "nobody else learns anything", which is not true
       of the pool auditor.
 
-- [ ] **A half grant is rejected, not partially disclosed.** Granting only the direction you
+- [x] **A half grant is rejected, not partially disclosed.** Granting only the direction you
       derived yourself leaves the acceptance replying to an invisible counter, and
       `reveal` errors rather than returning a plausible-looking partial record. Recorded as a
       deliberate choice: for a compliance path, a record that quietly omits what the
-      counterparty said is worse than no record. Revisit if an auditor ever legitimately
-      holds one direction only.
+      counterparty said is worse than no record. Serialized-field corruption is also caught
+      by the grant checksum before reading. Revisit if an auditor ever legitimately holds one
+      direction only.
 
 **Acceptance:** a Kleidouchos account reveals the complete negotiation and payment; a
 different account with a different key sees nothing. *(This is DoD #3.)*

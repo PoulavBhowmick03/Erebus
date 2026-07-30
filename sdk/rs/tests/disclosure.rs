@@ -29,8 +29,7 @@ impl Storage {
         for action in set.actions() {
             if let ClientAction::CreateEncNote(note) = action {
                 let index = u64::from(note.index);
-                let note_id =
-                    erebus_sdk::hashes::compute_note_id(channel_key, note.token, index);
+                let note_id = erebus_sdk::hashes::compute_note_id(channel_key, note.token, index);
                 let hash = erebus_sdk::hashes::compute_enc_amount_hash(
                     channel_key,
                     note.token,
@@ -57,8 +56,7 @@ impl Storage {
         salt: u128,
     ) {
         let note_id = erebus_sdk::hashes::compute_note_id(channel_key, token, index);
-        let hash =
-            erebus_sdk::hashes::compute_enc_amount_hash(channel_key, token, index, salt);
+        let hash = erebus_sdk::hashes::compute_enc_amount_hash(channel_key, token, index, salt);
         let d = hash.to_le_digits();
         let mask = u128::from(d[0]) | (u128::from(d[1]) << 64);
         let packed = Felt::from(salt) * (Felt::from(u128::MAX) + Felt::ONE)
@@ -118,8 +116,8 @@ fn message(kind: MessageType, reply_to: Option<u32>, amount: u128, at: u64) -> W
 
 fn salt() -> RandomSalt {
     RandomSalt::from_entropy([
-        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94,
-        0xcc, 0x58,
+        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
+        0x58,
     ])
 }
 
@@ -181,10 +179,18 @@ fn the_holder_reconstructs_the_whole_negotiation() {
     assert_eq!(record.token, token());
     assert_eq!(record.messages.len(), 3, "offer, counter, acceptance");
 
-    let kinds: Vec<MessageType> = record.messages.iter().map(|m| m.message.message_type).collect();
+    let kinds: Vec<MessageType> = record
+        .messages
+        .iter()
+        .map(|m| m.message.message_type)
+        .collect();
     assert_eq!(
         kinds,
-        vec![MessageType::Offer, MessageType::Counter, MessageType::Accept]
+        vec![
+            MessageType::Offer,
+            MessageType::Counter,
+            MessageType::Accept
+        ]
     );
 }
 
@@ -195,9 +201,21 @@ fn every_message_is_attributed_to_an_address() {
     let (storage, grant) = settled_negotiation();
     let record = reveal(&grant, &storage.source(), NOON + 200).expect("reveals");
 
-    assert_eq!(record.messages[0].author_addr, alice().address(), "A offered");
-    assert_eq!(record.messages[1].author_addr, bob().address(), "B countered");
-    assert_eq!(record.messages[2].author_addr, alice().address(), "A accepted");
+    assert_eq!(
+        record.messages[0].author_addr,
+        alice().address(),
+        "A offered"
+    );
+    assert_eq!(
+        record.messages[1].author_addr,
+        bob().address(),
+        "B countered"
+    );
+    assert_eq!(
+        record.messages[2].author_addr,
+        alice().address(),
+        "A accepted"
+    );
     assert_eq!(record.messages[1].id.author, Author::Counterparty);
 }
 
@@ -215,7 +233,10 @@ fn the_record_shows_what_was_agreed_and_what_was_actually_paid() {
     assert_eq!(settlement.is_consistent(), Some(true));
     assert_eq!(
         settlement.accepted_offer,
-        Some(erebus_sdk::negotiation::OfferId::new(Author::Counterparty, 0)),
+        Some(erebus_sdk::negotiation::OfferId::new(
+            Author::Counterparty,
+            0
+        )),
         "A accepted B's counter"
     );
 }
@@ -246,7 +267,13 @@ fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
     // ...next to a payment note carrying 100, written directly the way a hostile client
     // would rather than through `settle_next`, which now refuses to build this.
     let payment_index = (acceptance_index + 1) * 4;
-    storage.put_value_note(a_to_b.key(), token(), u64::from(payment_index), 100, salt().salt().get());
+    storage.put_value_note(
+        a_to_b.key(),
+        token(),
+        u64::from(payment_index),
+        100,
+        salt().salt().get(),
+    );
 
     let grant = a_to_b.grant_viewing_key(&alice(), b_to_a.key(), token());
     let record = reveal(&grant, &storage.source(), NOON + 10).expect("reveals");
@@ -417,5 +444,18 @@ fn a_grant_round_trips_through_serialization() {
     assert_eq!(
         original.settlement.map(|s| s.paid_amount),
         after.settlement.map(|s| s.paid_amount)
+    );
+}
+
+#[test]
+fn a_corrupted_serialized_grant_fails_integrity() {
+    let (storage, grant) = settled_negotiation();
+    let mut json = serde_json::to_value(grant).expect("serializes");
+    json["token"] = serde_json::json!("0x1234");
+    let corrupted: ViewingGrant = serde_json::from_value(json).expect("shape still parses");
+
+    assert_eq!(
+        reveal(&corrupted, &storage.source(), NOON).unwrap_err(),
+        erebus_sdk::read::ReadError::InvalidViewingGrant
     );
 }

@@ -49,6 +49,8 @@ use crate::wire::{MessageType, WireMessage};
 /// confers reading and never spending.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ViewingGrant {
+    /// Export format version.
+    version: u8,
     /// Channel key for granter → counterparty.
     outgoing_key: Felt,
     /// Channel key for counterparty → granter.
@@ -59,6 +61,8 @@ pub struct ViewingGrant {
     pub granter: Felt,
     /// The counterparty's address.
     pub counterparty: Felt,
+    /// Poseidon integrity checksum over the complete scope and both keys.
+    checksum: Felt,
 }
 
 /// Redacts both keys. A grant in a log line is a disclosed channel.
@@ -88,16 +92,30 @@ impl ViewingGrant {
         counterparty: Felt,
     ) -> Self {
         Self {
+            version: 1,
             outgoing_key,
             incoming_key,
             token,
             granter,
             counterparty,
+            checksum: grant_checksum(outgoing_key, incoming_key, token, granter, counterparty),
         }
     }
 
+    fn is_valid(&self) -> bool {
+        self.version == 1
+            && self.checksum
+                == grant_checksum(
+                    self.outgoing_key,
+                    self.incoming_key,
+                    self.token,
+                    self.granter,
+                    self.counterparty,
+                )
+    }
+
     /// Readers for the two directions, from the granter's point of view.
-    fn readers(&self) -> (ChannelReader, ChannelReader) {
+    pub(crate) fn readers(&self) -> (ChannelReader, ChannelReader) {
         (
             ChannelReader::new(self.outgoing_key, self.token),
             ChannelReader::new(self.incoming_key, self.token),
@@ -173,6 +191,9 @@ pub fn reveal(
     source: &impl NoteSource,
     now: u64,
 ) -> Result<DisclosedRecord, ReadError> {
+    if !grant.is_valid() {
+        return Err(ReadError::InvalidViewingGrant);
+    }
     let (ours, theirs) = grant.readers();
     let book = reconstruct(&ours, &theirs, source)?;
 
@@ -197,6 +218,24 @@ pub fn reveal(
         messages,
         settlement,
     })
+}
+
+fn grant_checksum(
+    outgoing_key: Felt,
+    incoming_key: Felt,
+    token: Felt,
+    granter: Felt,
+    counterparty: Felt,
+) -> Felt {
+    let tag = Felt::from_bytes_be_slice(b"EREBUS_VIEW_GRANT_V1");
+    crate::hashes::hash(&[
+        tag,
+        outgoing_key,
+        incoming_key,
+        token,
+        granter,
+        counterparty,
+    ])
 }
 
 /// Finds the acceptance and matches it against the payment note actually written.

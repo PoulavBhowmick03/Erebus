@@ -32,7 +32,7 @@ flowchart TB
     end
 
     subgraph offchain["Off-Chain Services"]
-        DISC["Discovery Service<br/>indexes encrypted on-chain data"]
+        DISC["Keyed discovery provider<br/>indexer service or direct contract reads"]
         PM["Paymaster<br/>sponsored gas"]
     end
 
@@ -54,7 +54,10 @@ flowchart TB
     K["Kleidouchos<br/>auditor / counterparty"] -.reveal.-> VK
 ```
 
-**Reading it:** agents never touch the chain directly. They call tools. The SDK owns the simulate → prove → submit pipeline and all key handling. The channel layer and the pool are both on Starknet; the discovery service is the off-chain index that lets a client find its own notes without scanning the world.
+**Reading it:** agents never touch the chain directly. They call tools. The SDK owns the
+simulate → prove → submit pipeline and all key handling. The channel layer and the pool are
+both on Starknet; a keyed discovery provider lets the SDK find only its own secret-derived
+locations. Production uses the off-chain indexer; the Rust MVP uses direct contract reads.
 
 **On the language boundary** — everything above `sdk/py` is Python, everything below it is
 Rust. `sdk/py` carries no protocol logic: it marshals arguments across and returns results.
@@ -94,7 +97,7 @@ sequenceDiagram
     Note over CH: location derived from shared secret<br/>observers see nothing
 
     B->>SDK: read_channel_state(handle)
-    SDK->>CH: fetch via Discovery Service
+    SDK->>CH: fetch via keyed discovery provider
     CH-->>B: decrypted Offer
 
     B->>SDK: counter_offer(handle, revised)
@@ -217,9 +220,37 @@ The surface is small either way — the seven `ErebusClient` methods in §4.
 Cost accepted: a per-platform binary to ship alongside the Python package. Not a saving over
 PyO3 — that needed per-platform wheels anyway — so distribution is a wash.
 
-**This seam is the highest-risk item in the plan** and it belongs to neither track by
-default, which is exactly why it gets missed. Build one method end-to-end early, with a
-stub underneath, so the marshalling is proven before there is anything real to marshal.
+#### State across one-shot processes — decided 2026-07-30
+
+`ChannelHandle` is a random opaque identifier (`ch_` plus 256 random bits), never a channel
+key encoded as a string. `erebus-cli` resolves it inside a Rust-owned state directory. Each
+record holds the two directional channel keys, public counterparty/token metadata, and the
+outgoing note cursor.
+
+- The state directory is mode `0700`; records and locks are `0600`.
+- Per-handle advisory locks serialize concurrent CLI calls, and state updates use atomic
+  replacement.
+- `Debug` redacts both directional keys.
+- The local OS user is the MVP trust boundary. These files are not encrypted from the
+  operator running the agent.
+- Pool and account private keys are not persisted in channel state. The CLI receives paths
+  and reads both inside Rust for the duration of an operation.
+
+The write-path `rpc_url` is also inside the trust boundary: the preflight is a
+`starknet_call(compile_actions)` and therefore sends the pool key in calldata, just like the
+proving request. Public RPC is suitable for read-only discovery, not for writes.
+
+This is why a process-per-call seam remains usable without turning the Python heap into a
+key store. Losing this directory loses local handle/cursor recovery; losing a pool key still
+loses the pool identity.
+
+#### Disclosure is the intentional exception
+
+Ordinary methods never return a channel key. `grantViewingKey`, however, exists specifically
+to release both directional channel keys. It returns a self-contained, checksummed bearer
+grant for out-of-band delivery. `grantee` is metadata in MVP v1, not encryption or access
+control: whoever holds the serialized grant can read that relationship. `reveal` therefore
+consumes the grant on any machine and requires no grantor state directory or private key.
 
 ---
 
@@ -242,7 +273,8 @@ type OfferId = string;
 
 interface ErebusClient {
   // Establish a private channel with a counterparty.
-  // Derives channel_key via ECDH; nothing observable on-chain links the parties.
+  // The sender hashes its pool key into channel_key. The recipient recovers that key from
+  // EncChannelInfo using ephemeral-static ECDH.
   openChannel(counterparty: AgentId): Promise<ChannelHandle>;
 
   // Write a structured offer into the channel.
@@ -257,11 +289,11 @@ interface ErebusClient {
   // Accept an offer AND settle atomically. One state transition.
   acceptAndSettle(handle: ChannelHandle, offerId: OfferId): Promise<SettlementReceipt>;
 
-  // Grant a viewing key to a third party (the Kleidouchos).
-  grantViewingKey(handle: ChannelHandle, grantee: PublicKey): Promise<void>;
+  // Export a self-contained bearer viewing grant for a third party (the Kleidouchos).
+  grantViewingKey(handle: ChannelHandle, grantee: PublicKey): Promise<ViewingKeyGrant>;
 
-  // Reconstruct the scoped record using a viewing key.
-  reveal(handle: ChannelHandle, viewingKey: ViewingKey): Promise<DisclosedRecord>;
+  // Reconstruct from chain data. No grantor-local handle state is needed.
+  reveal(viewingKey: ViewingKeyGrant): Promise<DisclosedRecord>;
 }
 ```
 
@@ -273,13 +305,11 @@ interface OfferTerms {
   token: ContractAddress;    // ERC-20 address
   deadline: number;          // unix seconds
   memoHash: bigint;          // 128-bit — hash of off-chain detail, not the detail itself
-  nonce: number;             // replay protection
 }
 
 type OfferStatus =
   | "proposed"
   | "countered"
-  | "accepted"
   | "expired"
   | "settled";
 
@@ -294,17 +324,28 @@ interface Offer {
 }
 
 interface SettlementReceipt {
-  offerId: OfferId;
+  offerId?: OfferId;         // absent only for the administrative shield helper
   txHash: string;
   nullifiers: string[];
   provedAt: number;
+}
+
+interface ViewingKeyGrant {
+  channelId: ChannelHandle;
+  grantee: PublicKey;        // metadata in MVP v1; the grant remains a bearer secret
+  viewingKey: ViewingKey;    // versioned and checksummed
 }
 
 interface DisclosedRecord {
   channelId: ChannelHandle;
   participants: AgentId[];
   offers: Offer[];
-  settlement: SettlementReceipt;
+  settlement?: {
+    acceptance: OfferId;
+    acceptedOffer?: OfferId;
+    agreedAmount: bigint;
+    paidAmount?: bigint;
+  };
 }
 
 // Frozen 2026-07-30. Grouped by what the caller should do about it, which is the only
@@ -334,6 +375,18 @@ type SettlementErrorCode =
   | "INVALID_REQUEST"        // malformed call: bad JSON, unknown method, a field that is not a felt
   | "IDENTITY_UNAVAILABLE";  // the key file could not be read
 ```
+
+Wire v1 has no separate nonce field. The write-once directional note index is the replay
+identifier, and serializing another nonce in the language-neutral model would promise data
+the four-note wire does not carry.
+
+There is also no observable `accepted`-but-not-`settled` state. Acceptance and payment are
+one `ActionSet`, one proof, and one `apply_actions` transition, so the public state moves
+directly to `settled`.
+
+The Rust protocol-2 CLI implements this corrected disclosure shape. The Python/TypeScript
+mirrors remain on protocol 1 until the shared integration pass; they were intentionally not
+edited as part of the Rust-only completion.
 
 **`memoHash` is 128-bit, not a `felt252`.** It was declared as a felt and the wire has only
 ever carried 128 bits (`sdk/rs/src/wire.rs:156`). That gap is friction **F19**: pass a
@@ -393,7 +446,11 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 2. **The flow is always: simulate locally → generate proof → submit via `apply_actions`.** There is no shortcut.
 
-3. **Note retrieval goes through the Discovery Service.** Do not write chain-scanning code. Notes live at shared-secret-derived locations; the whole point is that you find yours without scanning and nobody else can find them at all.
+3. **Note retrieval uses keyed discovery, never world/event scanning.** The hosted/indexer
+   Discovery Service is the production provider. For the MVP, upstream's
+   `ContractDiscoveryProvider` pattern is allowed: query only channel, subchannel and note
+   locations derived from the pool/channel keys over RPC. This is slower but preserves the
+   privacy property; iterating public events or global storage does not.
 
 4. **Sequential indexing is enforced — no gaps.** Channel/subchannel note indices must be contiguous. This is what makes auditor tracing complete and prevents hidden transactions.
 
@@ -411,7 +468,9 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 **Trust assumptions:**
 - The threshold auditor system holds the encrypted viewing keys. This is a deliberate compliance tradeoff, not a bug — but it is a trust assumption and should be stated plainly.
-- The Discovery Service is an availability dependency. It cannot read note contents, but if it is down, clients cannot find their notes.
+- The production Discovery Service is an availability dependency. It cannot read note
+  contents. The Rust MVP can fall back to slower keyed contract reads, so an indexer outage
+  costs latency and RPC load rather than making note discovery cryptographically impossible.
 - **The proving service sees the viewing key.** The transaction it proves carries
   `[user_addr, viewing_key, ...actions]` as calldata, so the operator can decrypt that
   user's note amounts and see their channel structure. It *cannot* spend — the invocation

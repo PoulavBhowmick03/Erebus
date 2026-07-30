@@ -487,6 +487,12 @@ field on the invocation, derived from a different key that is never placed in th
 — which is the concrete demonstration that confidentiality and custody separate here
 exactly as §5 claims.
 
+**The prover is not the only recipient.** The mandatory preflight calls
+`compile_actions(user_addr, user_private_key, actions)` through Starknet JSON-RPC, so that
+RPC endpoint receives the pool key too. “Self-host the prover” is incomplete unless the
+write path also uses an operator-controlled Pathfinder/RPC. Public RPC remains fine for
+keyed discovery reads, which carry derived ids rather than the private key.
+
 The pool's own interface (`packages/privacy/src/interface.cairo:370-375`):
 
 ```cairo
@@ -883,6 +889,46 @@ one, and an auditor has to be able to detect what our SDK refuses to produce.
 
 ---
 
+## F24 — A one-shot CLI still needs a secret state owner (P0.4)
+
+The first subprocess seam returned `channel_key` as `channel_handle`. That made repeated
+calls easy, but it erased the security boundary the subprocess was chosen to create: every
+ordinary Python call received the locator and amount-decryption secret for the whole
+direction.
+
+The opposite shortcut — a random handle with no persistence — is also not an implementation.
+The next process has no channel key, incoming reverse key, or sequential note cursor, so it
+cannot propose, read, or settle.
+
+**Resolution:** protocol 2 uses a random 256-bit opaque handle into a Rust-owned filesystem
+store. Records are mode `0600` under a `0700` directory; per-handle advisory locks serialize
+writes and atomic replacement keeps a failed write from truncating the record. Pool/account
+keys remain separate operator files and are never persisted into channel state.
+
+**Boundary stated honestly:** this protects secrets from Python/framework code and other OS
+users. It does not protect them from the operator account running the agent. Encrypting the
+state with a key available to that same unattended process would only move the secret.
+
+---
+
+## F25 — A local handle cannot be an auditor credential (P2.2)
+
+`reveal(handle, viewingKey)` looked natural while both calls happened in one test process.
+It fails the actual product boundary: a Kleidouchos on another machine does not have the
+grantor's state directory, so the opaque handle resolves to nothing.
+
+**Resolution:** `grantViewingKey` returns a self-contained bearer package containing the
+opaque record id, intended-grantee metadata, and the scoped two-direction viewing secret.
+`reveal` consumes that package and chain RPC only. A versioned Poseidon checksum catches
+serialization damage before a corrupted grant can produce a plausible empty record.
+
+**Limitation:** `grantee` is metadata, not encryption or authorization, in MVP v1. Anyone
+who obtains the serialized grant can read that one relationship and token. Secure
+out-of-band delivery is the operator's responsibility; claiming cryptographic binding to
+the grantee would be false.
+
+---
+
 ## F4 — Target network: Sepolia. Confirmed, not assumed. (P0.1)
 
 **Sepolia. The pool is live and callable; mainnet has no published deployment.**
@@ -1034,6 +1080,9 @@ a live 2–3 minute recording cannot show many negotiation rounds in real time.
 
 Also relevant: `provingBlockId` must be `currentBlock - 10`, because notes mature 10
 blocks after creation and a head-based proof can be invalidated by an L2 reorg. Proofs
-stay valid for 450 blocks on this pool.
+stay valid for 450 blocks on this pool. The Rust client now persists the block of its last
+accepted channel write and waits until it is visible at that historical anchor before a
+dependent write. Settlement note discovery is also anchored there; reading candidate notes
+from `latest` would otherwise select funds that `compile_actions` and the proof cannot see.
 
 ---

@@ -1,24 +1,22 @@
 //! `INVOKE_TXN_V3` construction and transaction hashing.
 //!
-//! This is a **Starknet protocol** hash, not a privacy-pool hash, so the Cairo contract
-//! emits no reference vector for it. The oracle is starknet.js — the same library the
-//! upstream SDK signs with — and the KATs live in
+//! This is a Starknet protocol hash, not a privacy-pool hash. The Cairo contract does not
+//! emit a vector for it. The oracle is starknet.js, which the upstream SDK also uses. The
+//! known-answer tests use
 //! `tests/fixtures/starknetjs-invoke-v3-txhash.json`.
 //!
 //! ## Why this matters here
 //!
-//! Two different transactions are hashed in the Erebus flow, and both go through this:
+//! The Erebus flow hashes two transaction types here:
 //!
-//! 1. The **proof invocation** sent to `starknet_proveTransaction`. Its signature is what
+//! 1. The proof invocation sent to `starknet_proveTransaction`. Its signature is what
 //!    `assert_valid_signature` checks inside the prover's virtual `__execute__`
-//!    (`privacy.cairo:207`), so a wrong hash here means a valid-looking proof request
-//!    that the virtual execution rejects.
-//! 2. The **`apply_actions` submission** to the real chain, which carries `proof_facts`.
+//!    (`privacy.cairo:207`). An incorrect hash makes virtual execution reject the request.
+//! 2. The `apply_actions` submission to the chain, which carries `proof_facts`.
 //!
-//! Case 2 is the reason this cannot just be borrowed from a generic Starknet crate:
-//! `proof_facts` is a privacy-specific extension to the v3 hash preimage, appended as one
-//! extra `poseidon_hash_many` term *only when non-empty*. Hash a proof-carrying
-//! transaction without it and the signature is silently wrong.
+//! `proof_facts` is a privacy-specific extension to the v3 hash preimage. A non-empty value
+//! adds one `poseidon_hash_many` term. A generic v3 hash omits it and produces an invalid
+//! signature for a proof-carrying transaction.
 
 use serde::Serialize;
 use starknet_crypto::{poseidon_hash_many, Signature};
@@ -38,18 +36,18 @@ const L2_GAS_NAME: Felt = Felt::from_hex_unchecked("0x4c325f474153");
 /// `encodeShortString("L1_DATA")`.
 const L1_DATA_GAS_NAME: Felt = Felt::from_hex_unchecked("0x4c315f44415441");
 
-/// `2^128` — the shift applied to `max_amount` when packing a resource bound.
-const TWO_POW_128: Felt =
-    Felt::from_hex_unchecked("0x100000000000000000000000000000000");
-/// `2^192` — `MAX_AMOUNT_BITS + MAX_PRICE_PER_UNIT_BITS`, the shift applied to the
-/// resource name.
+/// `2^128`, the shift for `max_amount` in a packed resource bound.
+const TWO_POW_128: Felt = Felt::from_hex_unchecked("0x100000000000000000000000000000000");
+/// `2^192`, the shift for a resource name.
 const TWO_POW_192: Felt =
     Felt::from_hex_unchecked("0x1000000000000000000000000000000000000000000000000");
-/// `2^32` — the shift applied to the nonce DA mode.
+/// `2^32`, the shift for the nonce DA mode.
 const TWO_POW_32: Felt = Felt::from_hex_unchecked("0x100000000");
 
 /// Transaction version 3.
 pub const VERSION_3: Felt = Felt::THREE;
+/// Query transaction version `2^128 + 3`, used only for fee estimation.
+pub const QUERY_VERSION_3: Felt = Felt::from_hex_unchecked("0x100000000000000000000000000000003");
 
 /// Where a transaction's data is made available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,7 +80,8 @@ pub struct ResourceBound {
 impl ResourceBound {
     /// Packs as `(name << 192) + (max_amount << 128) + max_price_per_unit`.
     fn encode(self, name: Felt) -> Felt {
-        name * TWO_POW_192 + Felt::from(self.max_amount) * TWO_POW_128
+        name * TWO_POW_192
+            + Felt::from(self.max_amount) * TWO_POW_128
             + Felt::from(self.max_price_per_unit)
     }
 }
@@ -101,14 +100,22 @@ pub struct ResourceBounds {
 impl ResourceBounds {
     /// The bounds a proof invocation uses: zero prices, so the effective fee is zero.
     ///
-    /// `__validate__` asserts both a zero tip and zero `max_price_per_unit` on every
-    /// resource (`privacy.cairo:183-189`), so these are not arbitrary defaults — a
-    /// non-zero price here is rejected with `NON_ZERO_RESOURCE_PRICE`.
+    /// `__validate__` requires a zero tip and zero `max_price_per_unit` for each resource
+    /// (`privacy.cairo:183-189`). A non-zero price returns `NON_ZERO_RESOURCE_PRICE`.
     pub fn for_proof_invocation() -> Self {
         Self {
-            l1_gas: ResourceBound { max_amount: 1, max_price_per_unit: 0 },
-            l2_gas: ResourceBound { max_amount: 100_000_000, max_price_per_unit: 0 },
-            l1_data_gas: ResourceBound { max_amount: 1, max_price_per_unit: 0 },
+            l1_gas: ResourceBound {
+                max_amount: 1,
+                max_price_per_unit: 0,
+            },
+            l2_gas: ResourceBound {
+                max_amount: 100_000_000,
+                max_price_per_unit: 0,
+            },
+            l1_data_gas: ResourceBound {
+                max_amount: 1,
+                max_price_per_unit: 0,
+            },
         }
     }
 }
@@ -116,8 +123,7 @@ impl ResourceBounds {
 /// An `INVOKE_TXN_V3` transaction, as hashed for signing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeV3 {
-    /// The account sending the transaction. For a proof invocation this is the pool
-    /// itself — the pool *is* an account contract.
+    /// Sending account. A proof invocation uses the pool account contract.
     pub sender_address: Felt,
     /// Serialized `Array<Call>` calldata for `__execute__`.
     pub calldata: Vec<Felt>,
@@ -172,9 +178,8 @@ impl InvokeV3 {
             poseidon_hash_many(&self.account_deployment_data),
             poseidon_hash_many(&self.calldata),
         ];
-        // Appended only when non-empty. An empty vector must NOT contribute
-        // `poseidon_hash_many(&[])` — that would change the hash of every ordinary
-        // transaction.
+        // An empty vector must not add `poseidon_hash_many(&[])`. That term changes every
+        // ordinary transaction hash.
         if !self.proof_facts.is_empty() {
             preimage.push(poseidon_hash_many(&self.proof_facts));
         }
@@ -183,7 +188,11 @@ impl InvokeV3 {
 
     /// Pairs this transaction with a signature, ready to send to the proving service.
     pub fn with_signature(self, signature: Signature) -> SignedInvokeV3 {
-        SignedInvokeV3 { invoke: self, signature }
+        SignedInvokeV3 {
+            invoke: self,
+            signature,
+            proof: None,
+        }
     }
 }
 
@@ -205,12 +214,8 @@ pub enum PoolInvocationError {
 
 /// An [`InvokeV3`] that satisfies the pool's `__validate__` preconditions.
 ///
-/// The pool is an account contract, and its `__validate__` (`privacy.cairo:177-191`)
-/// rejects any transaction with a non-zero tip or a non-zero `max_price_per_unit` on any
-/// resource. Both make the effective fee non-zero, which the pool does not permit.
-///
-/// Holding this type is evidence those checks pass. Constructing it is the only way to get
-/// one, so "tip must be zero" stops being something to remember at each call site.
+/// The pool's `__validate__` rejects a non-zero tip or resource price
+/// (`privacy.cairo:177-191`). Construction checks both conditions.
 #[derive(Debug)]
 pub struct PoolInvocation(InvokeV3);
 
@@ -246,18 +251,21 @@ impl PoolInvocation {
     }
 }
 
-/// An `INVOKE_TXN_V3` plus its signature — the `transaction` parameter of
+/// An `INVOKE_TXN_V3` plus its signature, used as the `transaction` parameter of
 /// `starknet_proveTransaction`.
 ///
-/// Only `Debug` is derived: `starknet_crypto::Signature` implements neither `Clone` nor
-/// `Eq`, and wrapping it to add them would invite comparing signatures, which is not a
-/// meaningful operation here.
+/// `starknet_crypto::Signature` does not implement `Clone` or `Eq`, so this type only derives
+/// `Debug`.
 #[derive(Debug)]
 pub struct SignedInvokeV3 {
     /// The transaction.
     pub invoke: InvokeV3,
     /// Signature over [`InvokeV3::transaction_hash`].
     pub signature: Signature,
+    /// Opaque proof blob on the final `apply_actions` transaction.
+    ///
+    /// `None` for the proof invocation because that request produces the proof.
+    pub proof: Option<String>,
 }
 
 /// A resource bound on the wire.
@@ -277,9 +285,8 @@ struct WireBounds {
 
 /// `INVOKE_TXN_V3` in RPC wire form.
 ///
-/// Field order matches the RPC spec and upstream's serialization. JSON objects are
-/// unordered so this is cosmetic — but keeping it aligned makes a diff against a captured
-/// SDK payload readable, which is how the KAT is written.
+/// Field order matches the RPC specification and upstream serialization. This makes captured
+/// SDK payloads easy to compare even though JSON object order has no meaning.
 #[derive(Debug, Serialize)]
 pub struct WireInvokeV3 {
     #[serde(rename = "type")]
@@ -295,6 +302,10 @@ pub struct WireInvokeV3 {
     nonce_data_availability_mode: &'static str,
     fee_data_availability_mode: &'static str,
     version: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    proof_facts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof: Option<String>,
 }
 
 impl DataAvailabilityMode {
@@ -307,12 +318,23 @@ impl DataAvailabilityMode {
 }
 
 impl SignedInvokeV3 {
+    /// Attaches the proof returned by `starknet_proveTransaction`.
+    pub fn with_proof(mut self, proof: String) -> Self {
+        self.proof = Some(proof);
+        self
+    }
+
     /// Converts to the RPC wire representation.
     ///
-    /// Note what is absent: `proof_facts` is part of the *hash preimage* but not of the
-    /// invocation sent to the prover — the prover is what produces them. They travel back
-    /// in the response and go out again on the `apply_actions` transaction.
     pub fn to_wire(&self) -> WireInvokeV3 {
+        self.to_wire_with_version(VERSION_3)
+    }
+
+    /// Converts to wire form with an explicit version.
+    ///
+    /// Fee estimation uses query version `2^128 + 3`. The final transaction uses version 3.
+    /// This override changes only the JSON request and never the signature hash.
+    pub fn to_wire_with_version(&self, version: Felt) -> WireInvokeV3 {
         let bound = |b: &ResourceBound| WireBound {
             max_amount: format!("{:#x}", b.max_amount),
             max_price_per_unit: format!("{:#x}", b.max_price_per_unit),
@@ -338,7 +360,9 @@ impl SignedInvokeV3 {
                 .collect(),
             nonce_data_availability_mode: self.invoke.nonce_da_mode.as_wire(),
             fee_data_availability_mode: self.invoke.fee_da_mode.as_wire(),
-            version: hex(&VERSION_3),
+            version: hex(&version),
+            proof_facts: self.invoke.proof_facts.iter().map(hex).collect(),
+            proof: self.proof.clone(),
         }
     }
 }
