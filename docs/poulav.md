@@ -188,11 +188,32 @@ hers, which is exactly why it will otherwise be nobody's until integration day b
       Costs are in ARCHITECTURE §3 — the tradeoff is yours to make. Bias worth naming:
       subprocess has no build matrix and puts an OS boundary around key material, which
       turns CLAUDE.md constraint 6 from a rule into a property.
-- [ ] **Land one method end-to-end before the rest exist.** `openChannel`, stubbed in Rust,
-      called from Python, asserted in a test. The point is to prove the marshalling and the
-      error mapping, not the protocol.
-- [ ] Decide how a `SettlementError` crosses — an error that loses its `SettlementErrorCode`
-      on the way up makes her failure handling untestable.
+- [x] **Landed `openChannel` end-to-end 2026-07-30.** Not stubbed — it derives a real channel
+      and builds the real setup action set; only submission is missing, and that is blocked on
+      screening like everything else. `sdk/rs/src/bin/erebus_cli.rs`, `sdk/py/src/erebus/_seam.py`,
+      8 Rust tests (`tests/cli_seam.rs`) and 10 Python tests. **Unreviewed — written by Claude.**
+
+      The test that matters is `the_cli_derives_the_same_channel_key_as_the_library`: a seam
+      that computes something *plausible but different* writes every note where nobody reads,
+      and nothing errors.
+
+      **Custody got stronger, not just preserved.** The request carries a *path* to a key
+      file, never a key, so the binary opens it and the Python process never holds a pool
+      private key at all — not in a request body, not on argv (which `/proc/<pid>/cmdline`
+      publishes), not in transit. A Python test asserts this on the actual request bytes
+      rather than in prose.
+
+      Entropy is generated inside the binary via `rand`. Had Python supplied it, `sdk/py`
+      would be making a cryptographic decision, which is exactly what the tripwire forbids.
+- [x] **`SettlementError` crossing — DONE.** A JSON envelope carries `code`, `message` and
+      `retryable`; `ErebusError` on the Python side is a frozen dataclass with those fields.
+      `retryable` is the only field agent logic should branch on — an agent cannot act on
+      twelve distinct codes but can always act on "is another attempt worth making".
+      A broken install raises `SeamUnavailable` instead, deliberately a *different* exception
+      type: agent code that treated "wrong binary" as an ordinary protocol failure would
+      retry it forever.
+      Two codes were added to §4 rather than fudged into existing ones: `INVALID_REQUEST`
+      and `IDENTITY_UNAVAILABLE`, both seam-level and both non-retryable.
 - [ ] Keep `/sdk/py` free of protocol logic. A hash, a felt conversion, or a salt encoder
       there is the bug this architecture is arranged to prevent.
 

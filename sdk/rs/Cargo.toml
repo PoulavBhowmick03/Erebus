@@ -19,6 +19,14 @@ serde_json = "1"
 # and any future PyO3 wheel tractable.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["time"] }
+# Entropy for channel randoms and note salts. Deliberately generated in Rust: if the
+# Python binding supplied it, sdk/py would be making a cryptographic decision, which is
+# exactly what it is forbidden to do.
+rand = "0.8"
+
+[[bin]]
+name = "erebus-cli"
+path = "src/bin/erebus_cli.rs"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -327,7 +327,12 @@ type SettlementErrorCode =
   | "SCREENING_REJECTED"
   // The prover refused and told us nothing. JSON-RPC -32603 carries no reason at all,
   // so this is genuinely opaque rather than lazily mapped — see friction F20.
-  | "PROOF_FAILED";
+  | "PROOF_FAILED"
+  // Seam-level, added 2026-07-30 when erebus-cli was built. These fail before any
+  // protocol code runs, so they are not settlement failures — but they arrive through the
+  // same envelope and agent code must handle them, so they live in the same union.
+  | "INVALID_REQUEST"        // malformed call: bad JSON, unknown method, a field that is not a felt
+  | "IDENTITY_UNAVAILABLE";  // the key file could not be read
 ```
 
 **`memoHash` is 128-bit, not a `felt252`.** It was declared as a felt and the wire has only
