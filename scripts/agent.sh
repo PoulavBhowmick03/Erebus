@@ -56,6 +56,11 @@ summarise() { python3 "$REPO/scripts/summarise.py"; }
 # downstream, and the resulting JSON traceback buries the error that actually mattered.
 field() { python3 -c 'import sys,json; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
+# An offer id is <handle>:<author>:<index>, but `status` prints only the tail because the
+# handle is 67 identical characters on every line. Accept either form here so an agent can
+# copy what it just read instead of reassembling it.
+offer_ref() { case "$1" in ch_*) printf '%s' "$1" ;; *) printf '%s:%s' "$2" "$1" ;; esac; }
+
 case "$VERB" in
 whoami)
     grep '^AGENT_ADDRESS=' "$ENV_FILE" | cut -d= -f2
@@ -72,14 +77,14 @@ offer)
     field offer_id <<<"$out"
     ;;
 counter)
-    handle="${1:?handle}"; reply="${2:?offer_id being countered}"; amount="${3:?amount in wei}"; memo="${4:-0x5678}"
+    handle="${1:?handle}"; reply=$(offer_ref "${2:?offer_id being countered}" "${1}"); amount="${3:?amount in wei}"; memo="${4:-0x5678}"
     token=$(grep '^TOKEN_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
     out=$(call counter_offer "$(printf '{"handle":"%s","reply_to":"%s","terms":{"amount":"%s","token":"%s","deadline":%s,"memo_hash":"%s"}}' \
         "$handle" "$reply" "$amount" "$token" "$(deadline)" "$memo")")
     field offer_id <<<"$out"
     ;;
 accept)
-    out=$(call accept_and_settle "{\"handle\":\"${1:?handle}\",\"offer_id\":\"${2:?offer_id}\"}")
+    out=$(call accept_and_settle "{\"handle\":\"${1:?handle}\",\"offer_id\":\"$(offer_ref "${2:?offer_id}" "${1}")\"}")
     field tx_hash <<<"$out"
     ;;
 status)

@@ -23,10 +23,11 @@ then needs fresh identities (F29).
 
 ## The seller's brief
 
-Paste this into the first instance, substituting the env path and the counterparty address.
+Paste this verbatim into the first instance. Addresses are the live Sepolia identities
+B and C, both funded and registered as of 2026-08-01.
 
 > You are a supplier agent negotiating the price of a data feed. Your identity lives in
-> `~/.erebus-b/env`. Your counterparty is `<BUYER_ADDRESS>`.
+> `~/.erebus-b/env`. Your counterparty is `0x73dde9582bb68e9a917b01792aaf1daa62e26cc1bd7bfacb0c16ab504445b8b`.
 >
 > Drive everything through `scripts/agent.sh ~/.erebus-b/env <verb>`. Run it with no verb to
 > see the list. Never read the files named by `POOL_KEY_FILE` or `ACCOUNT_KEY_FILE`, and
@@ -45,10 +46,10 @@ Paste this into the first instance, substituting the env path and the counterpar
 
 ## The buyer's brief
 
-Paste this into the second instance.
+Paste this verbatim into the second instance.
 
 > You are a procurement agent buying a data feed. Your identity lives in `~/.erebus-c/env`.
-> Your counterparty is `<SELLER_ADDRESS>`.
+> Your counterparty is `0xe67a39573b40297a5cbedab4cc2a80eb7689e1e0e03f410f63e2ebb2bfdda7`.
 >
 > Drive everything through `scripts/agent.sh ~/.erebus-c/env <verb>`. Run it with no verb to
 > see the list. Never read the files named by `POOL_KEY_FILE` or `ACCOUNT_KEY_FILE`, and
