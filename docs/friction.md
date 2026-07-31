@@ -976,6 +976,19 @@ fixture built notes the way our writer builds them. The oracle for "what does th
 actually store" is the pool. No amount of TS/Rust differential testing would have caught it:
 both implementations would have agreed with each other and disagreed with the chain.
 
+**And the uncomfortable part, which is the actual lesson.** We already knew this. F1 in this
+same file, written during P0.2, quotes `privacy.cairo:664-666` *verbatim* — "Only
+`packed_value` needs to be written to storage, `token` is initialized to zero" — and even
+reproduces the `Note` struct with the comment "(zero for encrypted notes)" attached to the
+field. The fact was read, understood well enough to quote, written down in our own log, and
+then contradicted by code written days later.
+
+So the failure was not missing documentation or missing diligence at read time. It was that
+a fact recorded in prose has no mechanism to reach the code that violates it. A friction log
+is a record, not a constraint. The only thing that would have caught this earlier is a test
+against real chain state — which is an argument for shortening the distance to first
+on-chain contact, not for reading more carefully next time.
+
 ---
 
 ## F27 — A proof-carrying `apply_actions` costs ~3 STRK in gas, and the salt lane pays it per message (P1.1)
