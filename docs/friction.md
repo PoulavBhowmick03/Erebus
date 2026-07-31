@@ -929,6 +929,43 @@ the grantee would be false.
 
 ---
 
+## F27 — A proof-carrying `apply_actions` costs ~3 STRK in gas, and the salt lane pays it per message (P1.1)
+
+First real shield, 2026-07-31 (tx `0x5f57eb…b9e2`). It worked, and the number that came
+back with it is a cost-model problem nobody had priced:
+
+```
+actual_fee                 3.039864 STRK
+pool get_fee_amount()      0
+```
+
+So the pool takes no protocol fee on Sepolia — the whole 3 STRK is Starknet gas for
+verifying a STARK proof on-chain. That is roughly 30–60x an ordinary transfer.
+
+**Why this lands on the salt lane specifically.** A negotiation message is 4 zero-amount
+notes in one action set, which is one `apply_actions`, which is one proof. So the unit of
+cost is not the byte or the note — it is the message. A three-round negotiation plus
+settlement is offer + counter + accept + settle ≈ 4 proofs ≈ **12 STRK**, before anyone has
+transferred anything of value. Compressing the payload harder buys nothing; only sending
+*fewer messages* does.
+
+That reframes a design choice we had already made for a different reason. Batching several
+state transitions into one action set was previously an emission-order correctness question
+(F21). It is now also the only lever on cost.
+
+**Worth cross-checking against StarkWare's own number.** Their internal Private
+Sub-Accounts write-up quotes “a fee of 4 STRK per tx” through the privacy pool — close
+enough to what we measured that they are probably describing the same thing, gas rather
+than a pool fee, which the phrase “fee … through the privacy pool” obscures. If so, this
+cost is inherent to the primitive rather than to Erebus.
+
+**Unknown, and it matters more than the number does:** whether mainnet is comparable.
+`get_fee_amount()` is 0 on Sepolia but is an admin-settable value, so a mainnet pool can
+charge a protocol fee on top of gas. Nothing should be claimed about production economics
+until that is read off mainnet.
+
+---
+
 ## F26 — “Two keys” is not enough setup guidance (P0.4)
 
 The protocol needs two unrelated secrets for one identity. The account key belongs to a
@@ -1051,6 +1088,23 @@ real. And it still does not buy the deposit leg — see F6.
 ---
 
 ## F6 — The live pool is screening-enabled: shielding needs an attestation (P0.1 → P1.1)
+
+> **RESOLVED 2026-07-31 — and the resolution is the friction, not the mechanism.** A 1 STRK
+> shield (`0x5f57eb…b9e2`) was accepted on the first attempt. StarkWare's prover runs a
+> `proof-interceptor` with `SCREENING_URL` configured, so the attestation was minted,
+> relayed and packed without us doing anything or asking anyone.
+>
+> Everything below is still technically accurate. What was wrong was the *conclusion* — for
+> six days the plan of record was to obtain screening access or deploy our own pool, and
+> neither was ever needed. The analysis reasoned from what the documentation said could
+> fail, and documentation is written about failure modes, so it reads pessimistic by
+> construction. **The one-`approve`-and-one-call experiment that settled it was available
+> from the day we had the prover URL.** Where a blocker is a question about somebody else's
+> running system, ask the system.
+>
+> The fallback below is kept deliberately: `get_screener_public_key()` is admin-settable and
+> mainnet may be configured differently, so the argument survives even though the blocker
+> did not.
 
 `get_screener_public_key()` on the Sepolia pool is non-zero, and the code path is
 unconditional: if an action set contains a `TransferFrom` — i.e. any deposit —

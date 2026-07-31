@@ -26,12 +26,32 @@ state, keyed RPC discovery, the full preflight → prove → estimate → `apply
 receipt path, exact-note atomic settlement, and self-contained disclosure grants. The full
 offline suite is green: **172 passed, 2 deliberately ignored live-prover probes**.
 
-What that sentence does **not** mean:
+**FIRST PROOF-CARRYING TRANSACTION LANDED — 2026-07-31.** A 1 STRK shield went through the
+whole pipeline for real: preflight → prove → estimate → signed `apply_actions` → accepted
+receipt.
 
-- no successful proof-carrying transaction has landed on Sepolia from this path yet;
-- the shield still needs a real screening attestation;
-- writes require an operator-controlled RPC/Pathfinder as well as prover, because the
-  `compile_actions` preflight also carries the pool key;
+```
+tx        0x5f57eb0751c44f0695dde18d4276030d1bb2b4b2d4a04f55cbe8aa98ccab9e2
+block     12715064   SUCCEEDED / ACCEPTED_ON_L2
+fee       3.04 STRK  (pool get_fee_amount() is 0; this is Starknet gas)
+proved at 12715045   (client picks head - 10)
+identity  pool get_public_key(agent) == the key generate_pool_key produced locally
+```
+
+**This closed two of the three blockers below at once, and neither closed the way the
+research predicted.** Screening was never blocking us — see blocker 3. And the prover
+version does match the deployed class hash, which no amount of reading the compatibility
+matrix would have established.
+
+What the milestone does **not** cover:
+
+- only the *deposit* leg is proven. `open_channel`, the salt lane, settlement and `reveal`
+  have still never run against a real chain, and they are where the interesting failures
+  live — every one of them is silent;
+- a second identity does not exist yet, so nothing two-sided has been exercised;
+- writes still send the pool key to whoever runs the RPC, because the `compile_actions`
+  preflight carries it. A public RPC was fine for this throwaway testnet identity and is
+  not fine for the product;
 - the Python/TypeScript protocol-1 mirrors were not changed during the Rust-only pass, so
   integration with Ishita is deliberately still P2.3;
 - settlement currently selects notes whose values sum exactly to the offer. It refuses to
@@ -77,26 +97,35 @@ What that sentence does **not** mean:
    that is a demo convenience worth *stating* rather than hiding. Doing it is Pathfinder
    v0.22.7 (`PATHFINDER_STORAGE_STATE_TRIES=10000`) + `transaction-prover` on our own box;
    the Pathfinder sync is the long pole, so start it early if we want it.
-2. **Which prover / discovery tags match the deployed class hash.** The README matrix pins
-   RC.0 → `0x52107f…633`, which is not what is live. Still open, and now testable directly
-   against Akash's endpoint rather than by reading the matrix.
-3. **How we get a screening attestation.** Still the only hard dependency on someone else,
-   and it gates one leg — the shield — not the whole demo.
+2. ~~**Which prover / discovery tags match the deployed class hash.**~~ **CLOSED
+   2026-07-31.** The shield's proof validated on-chain against the live pool, which is a
+   stronger answer than the matrix could give — the matrix pins RC.0 → `0x52107f…633`,
+   which is not what is live, and chasing that discrepancy would have been wasted effort.
+   *Lesson worth keeping: for a version-compatibility question, one transaction beats any
+   amount of documentation archaeology.*
+3. ~~**How we get a screening attestation.**~~ **CLOSED 2026-07-31 — we never needed one.**
 
-   **Correcting the framing, because it changes what to do next:** the attestation is not a
-   credential we obtain and then present. The prover's `proof-interceptor` sidecar produces
-   it — one `starknet_checkTransaction` per client `starknet_proveTransaction`, screened via
-   HMAC-signed `POST /screen` to elliptic-proxy, whose allow response *is* the STARK-curve
-   signature over the depositor; the prover attaches it under `additional_data.signature`
-   for us to pack into the deposit's `apply_actions` calldata (proof-interceptor README).
+   The attestation is not a credential we obtain and present. The prover's
+   `proof-interceptor` sidecar produces it — one `starknet_checkTransaction` per client
+   `starknet_proveTransaction`, screened via HMAC-signed `POST /screen` to elliptic-proxy,
+   whose allow response *is* the STARK-curve signature over the depositor; the prover
+   attaches it under `additional_data.signature` and the SDK packs it into the deposit's
+   `apply_actions` calldata. Akash's endpoint has `SCREENING_URL` configured, so this all
+   happened invisibly on the first attempt and the deposit was accepted.
 
-   That inverts blocker 1's old conclusion. If Akash's prover has `SCREENING_URL`
-   configured, deposits already work and we need nothing; self-hosting would *lose* us the
-   shield, since our own interceptor has no Elliptic partner secret and with `SCREENING_URL`
-   unset degrades to a pass-through that returns `allowed: true` **with no signature**.
-   **One test deposit against his endpoint settles it** — an attestation comes back, or
-   `10000` does. Fallback if it does not: deploy our own pool instance and hold the screener
-   key ourselves (constructor is unpermissioned, class already declared; friction.md F6).
+   **How much this cost us is the part worth remembering.** F6 was opened 2026-07-25, and
+   for six days the plan of record was either to obtain screening access from StarkWare or
+   to deploy our own pool instance — real work, scoped and estimated, both unnecessary. The
+   evidence was never ambiguous; it was just never tested. The experiment that settled it
+   was one `approve` and one CLI call, available from the day we had the prover URL.
+
+   *The generalisable version, and it is not about screening:* when a blocker is a question
+   about someone else's live system, the cost of asking the system is almost always lower
+   than the cost of reasoning about it from documentation — and the reasoning is
+   systematically biased pessimistic, because docs describe what can go wrong. Prefer the
+   experiment while the alternative is still cheap. **Fallback if it had failed**, kept
+   because the argument stays valid for mainnet: deploy our own pool instance and hold the
+   screener key (constructor is unpermissioned, class already declared; friction.md F6).
 
 ---
 
