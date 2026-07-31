@@ -32,8 +32,8 @@ fn token() -> Felt {
 
 fn salt() -> RandomSalt {
     RandomSalt::from_entropy([
-        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94,
-        0xcc, 0x58,
+        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
+        0x58,
     ])
 }
 
@@ -56,12 +56,23 @@ fn inputs() -> Vec<OwnedNote> {
     }]
 }
 
-fn settle(channel: &Channel, payment_index: u32, message_index: u32) -> Result<erebus_sdk::action_set::ActionSet, ChannelError> {
+fn settle(
+    channel: &Channel,
+    payment_index: u32,
+    message_index: u32,
+) -> Result<erebus_sdk::action_set::ActionSet, ChannelError> {
     channel.accept_and_settle(
         token(),
         &inputs(),
-        Payment { amount: 950_000, index: payment_index, salt: salt() },
-        Acceptance { message_index, message: accept_message() },
+        Payment {
+            amount: 950_000,
+            index: payment_index,
+            salt: salt(),
+        },
+        Acceptance {
+            message_index,
+            message: accept_message(),
+        },
     )
 }
 
@@ -126,13 +137,23 @@ fn multiple_inputs_are_all_consumed() {
         .accept_and_settle(
             token(),
             &many,
-            Payment { amount: 950_000, index: 4, salt: salt() },
-            Acceptance { message_index: 2, message: accept_message() },
+            Payment {
+                amount: 950_000,
+                index: 4,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 2,
+                message: accept_message(),
+            },
         )
         .expect("valid");
 
     assert_eq!(
-        set.actions().iter().filter(|a| matches!(a, ClientAction::UseNote(_))).count(),
+        set.actions()
+            .iter()
+            .filter(|a| matches!(a, ClientAction::UseNote(_)))
+            .count(),
         3
     );
 }
@@ -155,8 +176,15 @@ fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
         })
         .collect();
 
-    let payment = notes.iter().find(|n| n.amount > 0).expect("a payment note exists");
-    assert_eq!(payment.salt, salt().salt(), "payment must use the supplied random salt");
+    let payment = notes
+        .iter()
+        .find(|n| n.amount > 0)
+        .expect("a payment note exists");
+    assert_eq!(
+        payment.salt,
+        salt().salt(),
+        "payment must use the supplied random salt"
+    );
     assert_eq!(payment.index, 4);
 
     let records: Vec<_> = notes.iter().filter(|n| n.amount == 0).collect();
@@ -185,7 +213,11 @@ fn exactly_one_note_carries_value() {
 #[test]
 fn random_salts_stay_inside_the_contract_bound() {
     // Including the degenerate inputs, which must be nudged rather than rejected.
-    for bytes in [[0u8; 16], [0xff; 16], [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
+    for bytes in [
+        [0u8; 16],
+        [0xff; 16],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ] {
         let salt = RandomSalt::from_entropy(bytes).salt();
         assert!(salt.get() > 1, "salt {} is reserved", salt.get());
         assert!(salt.get() < erebus_sdk::actions::NoteSalt::TWO_POW_120);
@@ -204,11 +236,21 @@ fn a_non_acceptance_message_is_rejected() {
         .accept_and_settle(
             token(),
             &inputs(),
-            Payment { amount: 1, index: 4, salt: salt() },
-            Acceptance { message_index: 2, message },
+            Payment {
+                amount: 1,
+                index: 4,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 2,
+                message,
+            },
         )
         .expect_err("a counter is not a settlement record");
-    assert!(matches!(error, ChannelError::NotAnAcceptance(MessageType::Counter)));
+    assert!(matches!(
+        error,
+        ChannelError::NotAnAcceptance(MessageType::Counter)
+    ));
 }
 
 /// Atomicity puts the acceptance and the payment in one proof, so both land or neither
@@ -222,8 +264,15 @@ fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
         .accept_and_settle(
             token(),
             &inputs(),
-            Payment { amount: 1, index: 4, salt: salt() },
-            Acceptance { message_index: 2, message: accept_message() },
+            Payment {
+                amount: 1,
+                index: 4,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 2,
+                message: accept_message(),
+            },
         )
         .expect_err("the record says 950000 and the note carries 1");
     assert!(matches!(
@@ -242,8 +291,15 @@ fn a_zero_payment_is_rejected() {
         .accept_and_settle(
             token(),
             &inputs(),
-            Payment { amount: 0, index: 4, salt: salt() },
-            Acceptance { message_index: 2, message: accept_message() },
+            Payment {
+                amount: 0,
+                index: 4,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 2,
+                message: accept_message(),
+            },
         )
         .expect_err("settling nothing is not settling");
     assert!(matches!(error, ChannelError::ZeroPayment));
@@ -256,8 +312,15 @@ fn settling_without_inputs_is_rejected() {
         .accept_and_settle(
             token(),
             &[],
-            Payment { amount: 1, index: 4, salt: salt() },
-            Acceptance { message_index: 2, message: accept_message() },
+            Payment {
+                amount: 1,
+                index: 4,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 2,
+                message: accept_message(),
+            },
         )
         .expect_err("payment must be funded by a spend");
     assert!(matches!(error, ChannelError::NothingToSpend));

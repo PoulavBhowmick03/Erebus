@@ -11,8 +11,7 @@
 use erebus_sdk::actions::NoteSalt;
 use erebus_sdk::wire::{
     decode_message, encode_message, note_index_for_message, truncate_memo_hash, MessageType,
-    WireError, WireMessage, CAPACITY_BITS, MESSAGE_BITS, NOTES_PER_MESSAGE,
-    PAYLOAD_BITS_PER_NOTE,
+    WireError, WireMessage, CAPACITY_BITS, MESSAGE_BITS, NOTES_PER_MESSAGE, PAYLOAD_BITS_PER_NOTE,
 };
 use serde::Deserialize;
 use starknet_types_core::felt::Felt;
@@ -124,7 +123,12 @@ fn round_trip_is_identity() {
     for v in &load().vectors {
         let original = build(&v.message);
         let salts = encode_message(&original).expect("encoding succeeds");
-        assert_eq!(decode_message(&salts).expect("decoding succeeds"), original, "{}", v.name);
+        assert_eq!(
+            decode_message(&salts).expect("decoding succeeds"),
+            original,
+            "{}",
+            v.name
+        );
     }
 }
 
@@ -178,7 +182,10 @@ fn an_oversized_created_at_is_rejected() {
     };
     assert!(matches!(
         encode_message(&message),
-        Err(WireError::FieldTooWide { field: "createdAt", .. })
+        Err(WireError::FieldTooWide {
+            field: "createdAt",
+            ..
+        })
     ));
 }
 

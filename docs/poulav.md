@@ -20,11 +20,25 @@ the TS byte-for-byte. That is why it is still referenced below — as the thing 
 
 ## Status — 2026-07-31
 
-**Rust protocol 2 is complete as an implementation, not yet as live evidence.** The crate
+**Rust protocol 2 is complete as an implementation and the full Rust happy path has now run
+live, but the current wire is not confidential.** The crate
 now has the high-level `ErebusClient` trait and all seven methods, Rust-owned opaque-handle
 state, keyed RPC discovery, the full preflight → prove → estimate → `apply_actions` →
 receipt path, exact-note atomic settlement, and self-contained disclosure grants. The full
-offline suite is green: **172 passed, 2 deliberately ignored live-prover probes**.
+committed offline suite is green: **180 passed, 2 deliberately ignored live-prover probes**.
+
+**FULL RUST HAPPY PATH LANDED — 2026-07-31.** Two registered identities opened both
+directions, A proposed, B read and countered, A read and atomically accepted/settled 1 STRK,
+and a fresh client with nonexistent account/pool key paths reconstructed the complete record
+from the bearer disclosure grant. Settlement transaction
+`0x44289c4cacce0d07f45a6a788313ad341f44f40fd905c181a1e525050384bb7`
+is `SUCCEEDED / ACCEPTED_ON_L2`; its spent nullifier exists on-chain.
+
+**This also disproved the central privacy claim.** A salt is the public high half of
+`packed_value`; all four acceptance salts derived from the disclosed plaintext occur
+verbatim in that settlement transaction's calldata. The salt lane is mechanically valid
+and publicly decodable. DoD #1 is therefore not closed as a *private* negotiation until the
+wire encrypts and authenticates the 400-bit message before fragmenting it. See F30.
 
 **FIRST PROOF-CARRYING TRANSACTION LANDED — 2026-07-31.** A 1 STRK shield went through the
 whole pipeline for real: preflight → prove → estimate → signed `apply_actions` → accepted
@@ -43,12 +57,9 @@ research predicted.** Screening was never blocking us — see blocker 3. And the
 version does match the deployed class hash, which no amount of reading the compatibility
 matrix would have established.
 
-What the milestone does **not** cover:
+What the live Rust milestone does **not** cover:
 
-- only the *deposit* leg is proven. `open_channel`, the salt lane, settlement and `reveal`
-  have still never run against a real chain, and they are where the interesting failures
-  live — every one of them is silent;
-- a second identity does not exist yet, so nothing two-sided has been exercised;
+- negotiation confidentiality: the current structured salts are public;
 - writes still send the pool key to whoever runs the RPC, because the `compile_actions`
   preflight carries it. A public RPC was fine for this throwaway testnet identity and is
   not fine for the product;
@@ -379,11 +390,11 @@ oracle agrees with byte-for-byte.
 - [x] **Shield action construction** — `Channel::shield` creates register (when needed) +
       self-channel + token subchannel + deposit + exact-value encrypted note in one balanced,
       replay-protected `ActionSet`. `Client::shield` runs it through the common executor.
-      Live success remains screening-blocked.
+      Verified live twice; StarkWare's proof-interceptor supplied screening automatically.
 - [ ] **Standalone private transfer between test accounts.** The settlement value leg is
-      implemented: it consumes discovered notes and creates the counterparty payment note.
-      There is no separate transfer helper/script, and no live transfer has landed. The MVP
-      selector finds an exact subset and refuses surplus rather than destroying it.
+      implemented and landed live inside `accept_and_settle`: it consumed A's exact 1 STRK
+      note and created B's payment note. There is still no separate transfer helper/script.
+      The MVP selector finds an exact subset and refuses surplus rather than destroying it.
 - [x] **Recipient keyed discovery** — `client.rs` reads `get_num_of_channels`,
       `get_channel_info`, `get_subchannel_info`, exact computed note ids, and nullifier
       existence. No event/world scan.
@@ -600,6 +611,9 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
 
 **Acceptance:** A writes an offer, B reads it, B counters, A reads the counter.
 
+**Live 2026-07-31:** all four steps passed against Sepolia. Mechanical acceptance is closed;
+privacy is reopened by F30 because the raw structured salts are public calldata.
+
 ### P1.4 — Measure proof time
 
 StarkWare publish **~29 s** (12-core / 46 GiB; machine-dependent) for Stwo proof generation.
@@ -636,11 +650,11 @@ The ordering that falls out, cheapest-first:
 - [x] Pool-key generator and path-only environment placeholders
 - [x] `.env` chain id corrected from the human label `SN_SEPOLIA` to its felt encoding
       `0x534e5f5345504f4c4941`, which is the shape `erebus-cli` actually parses
-- [ ] One deposit prove request against Akash's endpoint — settles screening (blocker 3) and
+- [x] One deposit prove request against Akash's endpoint — settled screening (blocker 3) and
       exercises the RC-version question (blocker 2) in the same round trip
-- [ ] Fund a Sepolia account with STRK for gas
-- [ ] Deploy the mintable test ERC-20 (P0.1)
-- [ ] First genuine end-to-end `simulate → prove → apply_actions`
+- [x] Fund two Sepolia accounts with STRK for gas
+- [x] Use Sepolia STRK for the live MVP run; the planned mintable test ERC-20 was unnecessary
+- [x] First genuine end-to-end `simulate → prove → apply_actions`
 
 Self-hosting stays on the list, but as its own track rather than a prerequisite, and its
 justification is custody rather than availability — the preflight and the prove call both
@@ -679,8 +693,10 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
       Settlement is the first action set mixing value-bearing and data notes, so "structured
       salts only on zero-amount notes" had to stop being a rule and become a signature —
       `value_note` will not accept a wire salt. Mutation-tested.
-- [ ] If the proof fails, the acceptance must not have happened — *holds by construction
-      (one action set, one proof), but unverified on-chain until the shield works*
+- [x] **Live atomic success:** acceptance record, exact 1 STRK payment note and spent
+      nullifier landed through one proof in transaction `0x44289c…84bb7`. Both identities
+      reconstruct the same settled book. A deliberately invalid proof remains an offline
+      negative test rather than a live transaction.
 - [x] Return a `SettlementReceipt` with offer id, transaction hash, spent nullifiers and
       proving block. State is committed only after an accepted successful receipt; a failed
       preflight/proof/submission does not advance the local cursor or mark the handle settled.
@@ -688,6 +704,8 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
 
 **Acceptance:** accept-and-settle succeeds atomically; a deliberately invalid proof leaves
 state untouched.
+
+**Live status:** successful atomic branch closed; deliberate-invalid branch remains offline.
 
 ### P2.2 — Viewing key disclosure
 - [x] Grant a viewing key to a third party — `Channel::grant_viewing_key` produces a
@@ -720,6 +738,11 @@ state untouched.
 
 **Acceptance:** a Kleidouchos account reveals the complete negotiation and payment; a
 different account with a different key sees nothing. *(This is DoD #3.)*
+
+**Live 2026-07-31:** a fresh client configured with nonexistent pool/account key paths
+successfully reconstructed both offers, the acceptance, `agreed_amount == paid_amount ==
+1 STRK`, and both participants from the streamed bearer grant. No grant value was printed,
+persisted, or passed through argv.
 
 ---
 

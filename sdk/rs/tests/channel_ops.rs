@@ -87,8 +87,10 @@ fn the_channel_key_matches_the_pinned_derivation() {
 fn the_reverse_channel_has_a_different_key() {
     let a_to_b = Channel::derive(&alice(), bob());
 
-    let bob_identity =
-        PoolIdentity::new(bob().address, Felt::from_hex("0xfedcba0987654321").expect("key"));
+    let bob_identity = PoolIdentity::new(
+        bob().address,
+        Felt::from_hex("0xfedcba0987654321").expect("key"),
+    );
     let alice_as_counterparty = Counterparty {
         address: alice().address(),
         public_key: alice().public_key(),
@@ -110,7 +112,9 @@ fn a_received_channel_key_reconstructs_the_same_channel() {
 #[test]
 fn a_message_becomes_four_zero_amount_notes() {
     let channel = Channel::derive(&alice(), bob());
-    let set = channel.write_message(token(), 0, &offer()).expect("valid message");
+    let set = channel
+        .write_message(token(), 0, &offer())
+        .expect("valid message");
 
     assert_eq!(set.actions().len(), NOTES_PER_MESSAGE);
     for action in set.actions() {
@@ -130,7 +134,9 @@ fn a_message_becomes_four_zero_amount_notes() {
 fn notes_carry_the_wire_salts_in_index_order() {
     let channel = Channel::derive(&alice(), bob());
     let expected = encode_message(&offer()).expect("encodes");
-    let set = channel.write_message(token(), 3, &offer()).expect("valid message");
+    let set = channel
+        .write_message(token(), 3, &offer())
+        .expect("valid message");
 
     for (slot, action) in set.actions().iter().enumerate() {
         let ClientAction::CreateEncNote(note) = action else {
@@ -138,7 +144,11 @@ fn notes_carry_the_wire_salts_in_index_order() {
         };
         assert_eq!(note.salt, expected[slot], "salt mismatch at slot {slot}");
         // Message 3 occupies indices 12..15.
-        assert_eq!(note.index, 12 + slot as u32, "index mismatch at slot {slot}");
+        assert_eq!(
+            note.index,
+            12 + slot as u32,
+            "index mismatch at slot {slot}"
+        );
     }
 }
 
@@ -170,8 +180,7 @@ fn note_ids_match_the_pinned_derivation() {
     let ids = channel.note_ids_for_message(token(), 2);
 
     for (slot, id) in ids.iter().enumerate() {
-        let expected =
-            hashes::compute_note_id(channel.key(), token(), 8 + slot as u64);
+        let expected = hashes::compute_note_id(channel.key(), token(), 8 + slot as u64);
         assert_eq!(*id, expected, "note id mismatch at slot {slot}");
     }
 }
@@ -183,16 +192,20 @@ fn note_ids_match_the_pinned_derivation() {
 fn the_reader_and_writer_agree_on_where_notes_live() {
     let channel = Channel::derive(&alice(), bob());
     let message_index = 5;
-    let set = channel.write_message(token(), message_index, &offer()).expect("valid");
+    let set = channel
+        .write_message(token(), message_index, &offer())
+        .expect("valid");
     let ids = channel.note_ids_for_message(token(), message_index);
 
     for (slot, action) in set.actions().iter().enumerate() {
         let ClientAction::CreateEncNote(note) = action else {
             panic!("expected CreateEncNote");
         };
-        let written_to =
-            hashes::compute_note_id(channel.key(), note.token, u64::from(note.index));
-        assert_eq!(written_to, ids[slot], "writer and reader disagree at slot {slot}");
+        let written_to = hashes::compute_note_id(channel.key(), note.token, u64::from(note.index));
+        assert_eq!(
+            written_to, ids[slot],
+            "writer and reader disagree at slot {slot}"
+        );
     }
 }
 

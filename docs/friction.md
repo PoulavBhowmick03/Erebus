@@ -206,6 +206,9 @@ accepted offer is bound on-chain at settlement, via A's salt lane or B's calldat
 
 ### Resolution — decided 2026-07-25: the salt lane
 
+> **Invalidated as a privacy resolution on 2026-07-31.** The lane carries data, but the
+> salts are public in `packed_value`. See F30.
+
 We took workaround A. Negotiation payload rides in the salts of zero-amount data notes,
 written into the counterparty's subchannel on-chain.
 
@@ -632,10 +635,9 @@ ServerActions are the *public* argument to `apply_actions`. Anything in that cal
 world-readable. The invoke lane exists for AMM swaps, where public swap parameters are fine
 and only identity needs hiding — the opposite of what Erebus needs.
 
-That contrast is the sharpest statement of why the salt lane matters: a salt is consumed by
-hash derivations and recoverable only through the pair's shared secret, so it is private at
-rest; invoke calldata is published verbatim. Two payload-shaped fields, one private, one
-not, and nothing labels which is which.
+**Correction 2026-07-31:** that contrast is false. Invoke calldata is public, and raw salts
+are also public in `packed_value`. Keyed discovery hid where a wallet should look, not what a
+global transaction observer can read. See F30.
 
 That salt is our entire payload mechanism (F1: 119 bits per note, four notes per message).
 A wallet exposing `transfer(recipient, token, amount)` picks the salt itself; there is no
@@ -926,6 +928,117 @@ serialization damage before a corrupted grant can produce a plausible empty reco
 who obtains the serialized grant can read that one relationship and token. Secure
 out-of-band delivery is the operator's responsibility; claiming cryptographic binding to
 the grantee would be false.
+
+---
+
+## F29 — There is exactly one channel per pair, forever, and re-opening costs a proof to learn (P1.1)
+
+Re-running the demo against the same counterparty failed at submission:
+
+```
+SUBMIT_FAILED: Starknet RPC error 40: Contract error
+```
+
+after the preflight had run, the proof had been generated, and the fee had been paid.
+
+**Why.** `compute_channel_key` takes **no index** (`hashes.cairo:119-124`):
+
+```cairo
+compute_channel_key(sender_addr, sender_private_key, recipient_addr, recipient_public_key)
+```
+
+`compute_channel_marker` derives from that key plus the same three identity values
+(`hashes.cairo:155-167`), and `open_channel` writes the marker through `WriteOnce`, which
+asserts the slot is zero. So the marker for a given (sender, recipient) pair is a constant,
+and the second `open_channel` between any two parties always reverts.
+
+The `index` argument is misleading here. It exists, it is validated as sequential
+(`privacy.cairo:381-394`), and it positions the channel in the sender's enumerable
+`outgoing_channels` list — but it is **not part of the channel's identity**. Reading the
+signature suggests indices allocate channels the way they allocate notes. They do not.
+
+**The friction is the cost of finding out.** The revert arrives as bare `Contract error`
+with no reason string (the same opacity as F20), *after* a ~30 s proof and ~3 STRK of gas
+(F27). Nothing in the write path could have failed cheaply, because the client had no reason
+to believe the operation was impossible.
+
+**Fixed on our side** by making `open_channel` idempotent: `StateStore::find_channel` looks
+for an existing record for (owner, counterparty, token) and returns that handle without
+touching the chain. That is also the behaviour a retrying agent needs, so it is not purely
+defensive.
+
+**The gap it leaves, and it is a product question rather than a bug.** The local check only
+helps while local state survives. If the state directory is lost but the chain still holds
+the channel, the client will still submit and still pay to learn. Recovering the handle from
+chain state is possible — the channel key is derivable from material we hold — and is the
+honest fix; it is not in the MVP.
+
+**Where this bites the product.** One channel per pair is a protocol constraint. One deal per
+channel is *our* decision. Composed, they mean **two agents can transact exactly once, ever**,
+which is not a property anyone would choose deliberately. The protocol does not require it —
+notes can keep being appended to a live channel — so the constraint is entirely in our
+terminal-`settled` rule and is the first thing to revisit after the MVP.
+
+---
+
+## F30 — The salt lane is public calldata, not a private payload lane (P1.3)
+
+Found only after the full live settlement succeeded on 2026-07-31. This invalidates the
+privacy interpretation of F1/F17 while leaving their mechanical observations intact.
+
+The source already states the fact in three places:
+
+- `wire.rs:10-11`: the contract stores the salt verbatim in the high bits of `packed_value`;
+- `decrypt.rs:103-107`: salt is the high half and *"no decryption is needed to get it"*;
+- `privacy.cairo:658-667`: `packed_value` is emitted in `EmitEncNoteCreated` and written by
+  a public `ServerAction`.
+
+The live settlement makes it undeniable. For transaction
+`0x44289c4cacce0d07f45a6a788313ad341f44f40fd905c181a1e525050384bb7`,
+the disclosed acceptance was:
+
+```
+type       Accept (3)
+reply_to   0
+created_at 1785480617
+amount     1000000000000000000
+deadline   1785566954
+memo_hash  0x5678
+```
+
+Running the public wire encoder over those fields produces four salts. Without any pool,
+account or channel key, each one is present as the high half of public calldata:
+
+| slot | salt | calldata positions |
+|---|---|---|
+| 0 | `0x800000000000000000000000005678` | 14, 17 |
+| 1 | `0xed674ec8000000000000d4db2dd400` | 21, 24 |
+| 2 | `0x81a9b116a400000000000000003782` | 28, 31 |
+| 3 | `0x800000000000000000001800000000` | 35, 38 |
+
+The duplicate positions are the write and event server actions. Anyone can group the four
+notes from one transaction, strip bit 119, and run `decode_message`. A channel key is needed
+to locate historical notes by secret-derived storage id, but it is not needed to read a
+transaction or its emitted `packed_value`s. Keyed discovery is an efficient wallet read
+strategy, not a confidentiality boundary against a chain observer.
+
+**Impact:** the Rust client now has live evidence for two-sided negotiation, atomic
+settlement, nullifier consumption and scoped disclosure, but DoD #1 still says *private
+channel*. The current wire does not meet it, and the runbook must not say the terms were
+absent from calldata.
+
+**No replacement chosen yet.** The design space to evaluate is:
+
+- encrypt the 400 message bits under the directional channel key, use the remaining 76 bits
+  for versioning/authentication, accepting a truncated authenticator;
+- move to five notes and use a conventional authenticated-encryption construction with a
+  nonce derived from `(channel_key, token, message_index)`;
+- abandon on-chain negotiation payloads and keep only a commitment on-chain, accepting that
+  disclosure then needs the off-chain transcript.
+
+This is a wire-format and product-claim decision, not a local decoder fix. It changes KATs,
+the TypeScript oracle, existing live-message compatibility and the cost per negotiation
+round. Make that decision explicitly before more implementation.
 
 ---
 

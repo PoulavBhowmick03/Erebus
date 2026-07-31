@@ -261,6 +261,61 @@ impl StateStore {
         })
     }
 
+    /// Finds an existing channel to `counterparty` for `token`, if this identity has one.
+    ///
+    /// **There can only ever be one.** The pool's `compute_channel_key` takes no index
+    /// (`hashes.cairo:119-124`) and the marker derived from it is written `WriteOnce`, so a
+    /// second `open_channel` between the same pair reverts with a bare `Contract error`
+    /// after the proof has already been generated and the gas already spent. Callers use
+    /// this to make opening idempotent rather than to discover that the hard way. F29.
+    pub fn find_channel(
+        &self,
+        owner: Felt,
+        counterparty: Felt,
+        token: Felt,
+    ) -> Result<Option<ChannelHandle>, StateError> {
+        for state in self.records()? {
+            if state.owner == owner
+                && state.counterparty_address == counterparty
+                && state.token == token
+            {
+                return Ok(Some(state.handle));
+            }
+        }
+        Ok(None)
+    }
+
+    fn records(&self) -> Result<Vec<StoredChannel>, StateError> {
+        let mut records = Vec::new();
+        let entries = std::fs::read_dir(&self.root).map_err(|source| StateError::Io {
+            path: self.root.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| StateError::Io {
+                path: self.root.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let file = File::open(&path).map_err(|source| StateError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            records.push(
+                serde_json::from_reader(BufReader::new(file)).map_err(|source| {
+                    StateError::Json {
+                        path: path.clone(),
+                        source,
+                    }
+                })?,
+            );
+        }
+        Ok(records)
+    }
+
     /// Incoming channel keys already paired with local handles.
     ///
     /// Reverse channels have no on-chain pair identifier. Excluding keys already claimed

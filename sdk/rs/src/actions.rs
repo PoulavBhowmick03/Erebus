@@ -1,24 +1,23 @@
 //! `ClientAction` and its Cairo Serde encoding.
 //!
-//! Mirrors `packages/privacy/src/actions.cairo` in
-//! `starkware-libs/starknet-privacy`. The variant order below **is** the wire format —
-//! Cairo serialises an enum as `[variant_index, ...payload]`, so reordering these
-//! variants silently changes what every action means on-chain.
+//! This module mirrors `packages/privacy/src/actions.cairo` in
+//! `starkware-libs/starknet-privacy`. Cairo serializes an enum as
+//! `[variant_index, ...payload]`. Reordering [`ClientAction`] variants changes their
+//! on-chain meaning without an encoding error.
 //!
 //! ## Encoding rules
 //!
-//! Derived from the TS oracle, not from memory (`tests/fixtures/ts-clientaction-serde.json`):
+//! `tests/fixtures/ts-clientaction-serde.json` provides the encoding oracle:
 //!
 //! | Cairo type | Felts |
 //! |---|---|
 //! | `felt252`, `ContractAddress` | 1 |
 //! | `usize` (u32) | 1 |
-//! | `u128` | 1 — *not* the two-limb `u256` encoding |
+//! | `u128` | 1, not the two-limb `u256` encoding |
 //! | `Span<felt252>` | `[len, ...items]` |
 //!
-//! The `u128` row is the one worth double-checking against upstream if a note ever fails
-//! to decrypt: `u256` in Cairo Serde is two felts, and an `amount` encoded that way would
-//! shift every subsequent field by one without erroring anywhere.
+//! Check the `u128` encoding first when a note fails to decrypt. Cairo Serde uses two felts
+//! for `u256`. That encoding shifts every field after `amount` without returning an error.
 
 use starknet_types_core::felt::Felt;
 
@@ -57,14 +56,12 @@ pub mod phase {
 
 /// Salt of an encrypted note, constrained to `(1, 2^120)`.
 ///
-/// A newtype rather than a bare `u128` because the bound is not checkable after the fact:
-/// an out-of-range salt is rejected by the contract, but a salt that is merely *wrong*
-/// derives a storage slot nobody wrote to and the note is silently "not found".
+/// The type checks the contract bound before submission. An incorrect in-range salt derives
+/// an unused storage slot, so the note appears absent without an error.
 /// `salt == 0` means the note does not exist; `salt == 1` is reserved for open notes.
 ///
-/// Erebus's negotiation payload rides in these salts with bit 119 pinned to 1, so a
-/// well-formed payload salt is always in `[2^119, 2^120)` — a strict subset of what this
-/// type permits. See ARCHITECTURE §7.
+/// A negotiation payload always sets bit 119, so its salt is in `[2^119, 2^120)`. This is
+/// a strict subset of the accepted range. See ARCHITECTURE §7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NoteSalt(u128);
 
@@ -88,19 +85,15 @@ impl NoteSalt {
     }
 }
 
-/// Caller-supplied entropy for a channel-level field: a `random` or a `salt` on
+/// Caller-supplied entropy for a channel field: a `random` or a `salt` on
 /// `SetViewingKey`, `OpenChannel`, `OpenSubchannel` or `CreateOpenNote`.
 ///
-/// **Deliberately a different type from [`NoteSalt`].** The contract's salts are not
-/// uniform: a note salt is a `u128` bounded to 120 bits, while these are full `felt252`
-/// values with only a non-zero requirement. The OpenZeppelin audit flagged that
-/// inconsistency and StarkWare acknowledged it without changing it, so it is a permanent
-/// feature of the surface. Two types make a mix-up a compile error instead of a note that
-/// silently fails to decrypt.
+/// The contract uses different salt types. A note salt is a 120-bit `u128`. These fields
+/// accept any non-zero `felt252`. The OpenZeppelin audit reported this difference, and
+/// StarkWare kept it. Separate Rust types turn a mix-up into a compile error.
 ///
-/// The contract only checks non-zero. Unpredictability is the caller's responsibility, and
-/// it matters: these are one-time key nonces, and a repeat leaks the relationship they were
-/// meant to hide.
+/// The contract only checks for zero. The caller must provide an unpredictable value.
+/// Reusing these one-time key nonces reveals the relationship that they mask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeltEntropy(Felt);
 
@@ -119,35 +112,31 @@ impl FeltEntropy {
     }
 }
 
-/// A salt for a **value-bearing** note, which must be unpredictable.
+/// Unpredictable salt for a value note.
 ///
-/// A separate type from a structured salt, because the two are not interchangeable and
-/// swapping them is a confidentiality bug rather than a compile error otherwise.
+/// The salt is the one-time-pad nonce for the encrypted amount. If two amounts reuse a mask,
+/// an observer can subtract their ciphertexts and recover the difference. A structured salt
+/// has a predictable layout and is invalid for a value note. Zero-amount notes have no
+/// amount difference to expose.
 ///
-/// The salt is the one-time-pad nonce masking a note's encrypted amount. Reuse a mask
-/// across two notes with different amounts and an observer can subtract the ciphertexts to
-/// recover the difference — so a salt carrying *structure* (an offer, a counter, anything
-/// with a predictable field layout) must never sit on a note that carries value.
-/// Zero-amount notes have no amount variance and are immune, which is what makes the salt
-/// lane safe.
-///
-/// This type does not generate entropy itself: the crate stays RNG-free so every test is
-/// deterministic. The caller supplies 16 bytes from a CSPRNG.
+/// This type does not generate entropy. The caller supplies 16 bytes from a CSPRNG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RandomSalt(NoteSalt);
 
 impl RandomSalt {
     /// Builds a salt from 16 bytes of entropy.
     ///
-    /// The top byte is masked to keep the value inside the contract's 120-bit bound, and
-    /// the result is forced above `OPEN_NOTE_SALT`, so any input produces a valid salt.
-    /// **The bytes must come from a cryptographically secure source** — a predictable salt
-    /// defeats the amount masking exactly as reuse does.
+    /// The function masks the top byte to meet the 120-bit bound. It also moves reserved
+    /// values into the accepted range. The input must come from a CSPRNG. A predictable
+    /// salt exposes amount differences in the same way as salt reuse.
     pub fn from_entropy(bytes: [u8; 16]) -> Self {
         let raw = u128::from_le_bytes(bytes) & (NoteSalt::TWO_POW_120 - 1);
-        // 0 and 1 are reserved; nudge into range rather than rejecting, so a caller
-        // cannot end up retrying entropy.
-        let value = if raw <= NoteSalt::OPEN_NOTE_SALT { raw + 2 } else { raw };
+        // Move 0 and 1 into range so the caller does not need to retry the CSPRNG.
+        let value = if raw <= NoteSalt::OPEN_NOTE_SALT {
+            raw + 2
+        } else {
+            raw
+        };
         Self(NoteSalt::new(value).expect("masked into range by construction"))
     }
 
@@ -203,8 +192,7 @@ pub struct CreateEncNoteInput {
     pub recipient_public_key: Felt,
     /// The token's address.
     pub token: Felt,
-    /// The amount the note represents. Zero is permitted — that is what carries a
-    /// structured salt without moving value.
+    /// Note amount. Zero carries a structured salt without moving value.
     pub amount: u128,
     /// Index of the note within the channel. Indices must be contiguous.
     pub index: u32,
@@ -333,9 +321,8 @@ impl ClientAction {
 
     /// The execution phase this action belongs to.
     ///
-    /// Note this is *not* the variant index: `CreateEncNote` and `CreateOpenNote` share a
-    /// phase, as do the two invoke variants, and `UseNote` runs before note creation
-    /// despite having a higher variant index.
+    /// This differs from the variant index. The note-creation variants share a phase, as do
+    /// the invoke variants. `UseNote` runs before note creation despite its higher index.
     pub fn phase(&self) -> u8 {
         match self {
             Self::SetViewingKey(_) => phase::ACCOUNT,

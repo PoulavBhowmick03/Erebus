@@ -1,9 +1,8 @@
-//! Tests for the offer state machine — P1.3.
+//! Tests for the offer state machine: P1.3.
 //!
 //! Everything here is enforced *only* here. The pool has no `deadline`, no `status` and no
 //! `replyTo`: a settlement against a week-old offer proves and applies exactly as cleanly as
-//! a settlement against a live one. So unlike the index tests, none of these have a contract
-//! backstop underneath them — a rule that is not in this file is not a rule.
+//! a settlement against a live one. The contract does not enforce these rules.
 
 use erebus_sdk::negotiation::{Author, NegotiationError, OfferBook, OfferId, OfferStatus};
 use erebus_sdk::wire::{MessageType, WireMessage};
@@ -30,7 +29,7 @@ fn message(kind: MessageType, reply_to: Option<u32>, deadline: u64) -> WireMessa
     }
 }
 
-/// Their offer at 0, our counter at 1, their counter at 2 — all live for an hour.
+/// Builds three offers that remain live for one hour.
 fn negotiation() -> OfferBook {
     let mut book = OfferBook::new();
     book.record(
@@ -66,15 +65,11 @@ fn an_expired_offer_cannot_be_accepted() {
     let error = book
         .check_acceptable(theirs(2), after)
         .expect_err("the deadline has passed");
-    assert!(matches!(
-        error,
-        NegotiationError::Expired { index: 2, .. }
-    ));
+    assert!(matches!(error, NegotiationError::Expired { index: 2, .. }));
     assert_eq!(book.status(theirs(2), after), Some(OfferStatus::Expired));
 }
 
-/// Exactly on the deadline is still live. `now > deadline` expires, not `>=` — an offer good
-/// "until 12:00" is good at 12:00.
+/// The deadline second remains live because expiry uses `now > deadline`.
 #[test]
 fn the_deadline_second_is_still_live() {
     let book = negotiation();
@@ -104,8 +99,8 @@ fn an_unknown_index_is_rejected() {
     ));
 }
 
-/// A counter is acceptable — §4 draws `countered --> accepted`, because countering proposes,
-/// it does not revoke. Revocation would be `withdrawn`, which does not exist.
+/// A counter remains acceptable under §4. A counter proposes new terms but does not revoke
+/// the earlier offer. The wire has no `withdrawn` state.
 #[test]
 fn a_countered_offer_is_still_acceptable() {
     let book = negotiation();
@@ -182,7 +177,11 @@ fn a_reply_to_a_message_that_does_not_exist_is_rejected() {
 fn the_latest_live_counterparty_offer_is_what_gets_evaluated() {
     let book = negotiation();
     let (id, message) = book.latest_acceptable(NOON).expect("something is live");
-    assert_eq!(id, theirs(2), "the newest counterparty message, not ours at 1");
+    assert_eq!(
+        id,
+        theirs(2),
+        "the newest counterparty message, not ours at 1"
+    );
     assert_eq!(message.message_type, MessageType::Counter);
 }
 

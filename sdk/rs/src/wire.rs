@@ -181,7 +181,9 @@ struct Bits {
 
 impl Bits {
     fn new() -> Self {
-        Self { bits: Vec::with_capacity(MESSAGE_BITS as usize) }
+        Self {
+            bits: Vec::with_capacity(MESSAGE_BITS as usize),
+        }
     }
 
     fn push(&mut self, value: u128, width: u32) {
@@ -262,9 +264,7 @@ pub fn encode_message(message: &WireMessage) -> Result<[NoteSalt; NOTES_PER_MESS
 }
 
 /// Inverse of [`encode_message`]. Salts must be in note-index order.
-pub fn decode_message(
-    salts: &[NoteSalt; NOTES_PER_MESSAGE],
-) -> Result<WireMessage, WireError> {
+pub fn decode_message(salts: &[NoteSalt; NOTES_PER_MESSAGE]) -> Result<WireMessage, WireError> {
     let mut chunks = [0u128; NOTES_PER_MESSAGE];
     for (slot, salt) in salts.iter().enumerate() {
         let value = salt.get();

@@ -3,8 +3,10 @@
 
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
-Erebus is the third option. Two agents open a private channel on STRK20, negotiate as
-structured state transitions, and settle atomically inside the pool. Afterwards either side can hand an auditor a viewing key and the whole record reconstructs from chain data.
+Erebus is attempting a third option. Two agents open a channel on STRK20, negotiate as
+structured state transitions, and settle atomically inside the pool. Atomic settlement and
+scoped reconstruction now work live. The current salt wire is publicly decodable, so the
+private-channel claim remains unfulfilled until wire v2.
 
 ---
 
@@ -22,7 +24,8 @@ stack supports.
 
 Every encrypted note carries a client-chosen salt. The contract constrains it to
 `2 <= salt < 2^120` and stores it in the high 120 bits of `packed_value`. It is
-written by us, stored by the pool, and recoverable by the counterparty. That is a payload channel, 120 bits wide, hiding in plain sight.
+written by us, stored by the pool, and recoverable by the counterparty. It is a payload
+channel, but not a confidential one: `packed_value` exposes the salt publicly.
 
 We use 119 of them. A chunk that happened to come out as 0 or 1 would be rejected with
 `ZERO_SALT` or `SALT_TOO_SMALL`, which is rare enough to survive testing and horrible to
@@ -48,15 +51,15 @@ because the salt is the one-time-pad nonce for the encrypted amount. Reuse a mas
 ## Workflow
 
 *Setup, once per agent*: The operator has a Starknet account and generates a
-separate pool key. Registering publishes the public half so other agents can send to them. Getting money in is two transactions: an ERC-20 approve, then a deposit that turns public funds into a private note. The deposit leg is public by construction, amounts included, but nothing after this step is.
+separate pool key. Registering publishes the public half so other agents can send to them. Getting money in is two transactions: an ERC-20 approve, then a deposit that turns public funds into a private note. The deposit leg is public by construction. Wire-v1 negotiation terms are also public because their salts appear in `packed_value`.
 
 *Opening a channel*: Agent A derives a shared location from its own pool key plus B's
 address and public key, then writes an encrypted note telling B where that is. From then on both sides go straight to the right storage slots. An observer sees writes to storage that looks unrelated.
 
-*Negotiating*: A's policy engine produces terms, Erebus packs them into four salts, and
-one transaction writes them into B's subchannel. B reads the location it already knows,
-reassembles the offer, and decides: accept, counter, or walk. A counter is the same
-mechanism pointing the other way.
+*Negotiating, wire v1*: A's policy engine produces terms, Erebus packs them into four salts,
+and one transaction writes them into B's subchannel. B reassembles the offer and decides:
+accept, counter, or walk. A public observer can currently reassemble the same salts from the
+transaction. Confidential encoding is the remaining protocol blocker.
 
 Each round costs one proof, ~29 seconds on published figure. Three rounds is
 about 90 seconds before settlement starts.

@@ -68,10 +68,10 @@ commercially real one.
 *Contractor and payroll flows.* Amounts private between the two parties, disclosable to a tax
 authority or an auditor on demand without exposing them to everyone else.
 
-*Any two-party protocol that needs a confidential channel.* The salt lane is not an Erebus
-feature. It is a property of the pool that was already there. Any project on Starknet that
-needs two known parties to exchange structured state privately on-chain can use it, whether
-or not there is an agent anywhere near it.
+*Any two-party protocol that needs a confidential channel — target only.* The salt lane can
+carry structured state, but raw salts are public in `packed_value`. No project should use
+wire v1 as a confidential data channel. This use case becomes valid only after the payload
+is encrypted and authenticated before fragmentation.
 
 ---
 

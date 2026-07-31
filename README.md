@@ -1,18 +1,25 @@
 # Erebus
 
-**Negotiate in darkness. Settle in silence.**
+**Target: negotiate in darkness, settle in silence.**
 
-Erebus is the private coordination and settlement layer for AI agents.
+Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
-Agents open an **Eleusis** — an encrypted channel that hides not just the content of a negotiation but the fact that the relationship exists at all. They agree terms inside it. Settlement happens atomically through the STRK20 privacy pool on Starknet. Afterwards, only a designated **Kleidouchos** (key-bearer) can unlock the record.
+The target is an **Eleusis** — an encrypted channel that hides the negotiation and its
+relationship graph. Atomic shielded settlement and scoped reconstruction now work live;
+the current negotiation wire does **not** yet meet that privacy target.
 
 ---
 
 ## Status
 
-**Pre-MVP.** This repo is being built to validate the core loop end-to-end on Starknet testnet. Nothing here is production-ready. Do not put real value through it.
+**Pre-MVP.** The complete Rust happy path has run on Sepolia: two-sided negotiation, atomic
+settlement and bearer-grant disclosure. Nothing here is production-ready. Do not put real
+value through it.
 
-Current milestone: prove `open channel → structured negotiation → atomic shielded settlement → selective disclosure` works on live STRK20 primitives.
+Current blocker: negotiation messages are encoded directly into note salts, and the pool
+stores those salts verbatim in public `packed_value` calldata/events. The live transaction
+proved the terms are publicly decodable. The wire must encrypt and authenticate the message
+before fragmentation; see [F30](./docs/friction.md).
 
 Target is **Starknet Sepolia** — privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
 Mainnet has no STRK20 deployment yet. Where the stack has fought us is logged honestly in
@@ -43,7 +50,7 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Relationship privacy** | The channel's existence, participants, and cadence are hidden — not just the message contents. Notes live at storage locations derived from a secret shared only between the two parties. |
+| **Relationship privacy — target, not current** | Keyed storage locations hide efficient lookup, but the current structured salts are public in transaction calldata. Message and relationship privacy are not yet demonstrated. |
 | **Atomic negotiate → settle** | The accepted offer and the shielded payment are one proven state transition. No "agreed but never paid" gap, no separate payment hop. |
 | **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record — terms and payment — to a specific counterparty without exposing anything to the public or leaking data about unrelated users. |
 | **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end — STRK20 ships no paymaster of its own, so this rides on a third party. |
@@ -52,7 +59,10 @@ It provides four things existing rails do not:
 
 - **Native in-protocol proof verification** (v0.14.2 / SNIP-36) is what made a note-based privacy pool viable here at all.
 - **STRK20 is a shared note-based pool, not a mixer.** Shielded assets become encrypted notes; a private transfer spends notes and creates new ones, with a ZK proof that the notes exist, belong to the spender, are unspent, and conserve value.
-- **The channel primitive already exists and is audited.** A per-pair `channel_key` is derived from both parties' addresses and viewing keys via ECDH over the Stark curve, splitting into subchannels that carry notes. We are composing audited primitives, not inventing cryptography.
+- **The channel primitive already exists and is audited.** A directional `channel_key` is
+  derived from the sender's pool key and both addresses/public identity data, then encrypted
+  to the recipient through the pool's channel-info flow. Encrypting Erebus's salt payload is
+  still our own wire-design responsibility.
 - **Compliance is native.** Viewing keys are registered encrypted on-chain under a threshold auditor system — the path Tornado Cash never had.
 - **Account abstraction is native**, which is what makes agents first-class actors rather than bolted-on EOAs.
 
@@ -105,7 +115,7 @@ Used in docs, marketing, and conversation. **Not** in the API surface — see [C
 | Term | Meaning |
 |---|---|
 | **Erebus** | The protocol as a whole |
-| **Eleusis** | A private channel between two agents |
+| **Eleusis** | The intended private channel between two agents; current wire still leaks its payload |
 | **Kleidouchos** | A holder of a viewing key (auditor, operator, counterparty) |
 | Enter Erebus | Start using the protocol |
 | Open an Eleusis | Create a private agent channel |

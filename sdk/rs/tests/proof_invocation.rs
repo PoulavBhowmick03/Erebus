@@ -1,16 +1,16 @@
 //! End-to-end known-answer test: does the Rust build the same signed proof invocation the
 //! TypeScript SDK builds?
 //!
-//! Fixture `fixtures/sdk-proof-invocation.json` is captured from upstream's own
-//! `ProofInvocationFactory` — the code path the SDK runs when it calls the prover.
+//! Fixture `fixtures/sdk-proof-invocation.json` comes from the upstream
+//! `ProofInvocationFactory` used for prover calls.
 //!
 //! The other KATs each pin one function against one oracle function. This one pins the
 //! *composition*: `__execute__` calldata layout, the v3 hash preimage, and the signature,
 //! all at once. Unit tests can all pass while the pieces are wired together wrongly; this
 //! is the test that catches that.
 //!
-//! It is also the fixture that documents the F14 exposure concretely — `calldata[5]` is
-//! the pool private key, in the clear, in the payload sent to `starknet_proveTransaction`.
+//! The fixture also documents F14: `calldata[5]` contains the plaintext pool private key
+//! sent to `starknet_proveTransaction`.
 
 use erebus_sdk::signing::{public_key, sign, verify};
 use erebus_sdk::tx::{DataAvailabilityMode, InvokeV3, ResourceBound, ResourceBounds};
@@ -88,7 +88,7 @@ fn invocation(f: &Fixture) -> InvokeV3 {
         },
         tip: u64_of(&f.tip),
         paymaster_data: f.paymaster_data.iter().map(|p| felt(p)).collect(),
-        // A proof invocation carries no proof facts — it is what produces them.
+        // The proof invocation produces proof facts, so its input contains none.
         proof_facts: Vec::new(),
     }
 }
@@ -112,7 +112,10 @@ fn we_reproduce_the_sdk_signature_exactly() {
 fn the_sdk_signature_verifies_against_our_hash() {
     let f = load();
     let hash = invocation(&f).transaction_hash();
-    let sdk = Signature { r: felt(&f.signature[0]), s: felt(&f.signature[1]) };
+    let sdk = Signature {
+        r: felt(&f.signature[0]),
+        s: felt(&f.signature[1]),
+    };
     let pk = public_key(&felt(&f.account_signing_key));
 
     assert!(
@@ -149,7 +152,7 @@ fn the_pool_private_key_is_in_the_clear_at_index_five() {
     let occurrences = c.iter().filter(|x| **x == key).count();
     assert_eq!(occurrences, 1, "the key appears exactly once, at index 5");
 
-    // And it is genuinely distinct from the signing key, which never enters the calldata.
+    // The signing key never enters this calldata.
     let signing = felt(&f.account_signing_key);
     assert!(
         !c.contains(&signing),

@@ -434,6 +434,18 @@ impl ErebusClient for Client {
             return Err(ClientError::CounterpartyUnregistered(counterparty_address));
         }
 
+        // One channel per pair, forever: the pool's channel key takes no index
+        // (`hashes.cairo:119-124`) and its marker is WriteOnce, so re-opening reverts —
+        // but only after the preflight, the proof and the fee have all been paid for, and
+        // it surfaces as a bare `Contract error`. Returning the existing handle makes this
+        // idempotent, which is also what a retrying agent needs. See friction.md F29.
+        if let Some(existing) =
+            self.state
+                .find_channel(identity.address(), counterparty_address, self.config.token)?
+        {
+            return Ok(existing);
+        }
+
         let channel_index = self.outgoing_channel_count(&identity, pool_key).await?;
         let counterparty = Counterparty {
             address: counterparty_address,

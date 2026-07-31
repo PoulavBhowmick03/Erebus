@@ -6,9 +6,8 @@
 //! `serializeClientActions` + `CallData.compile("compile_actions", …)` and stripping the
 //! two leading scalars and the span length.
 //!
-//! This is the ratchet for the wire format. A wrong variant index or a field in the wrong
-//! order does not error anywhere — it produces a well-formed action that means something
-//! else, and the failure surfaces as a note that cannot be found.
+//! These tests pin the action wire format. A wrong variant index or field order produces a
+//! valid encoding with different on-chain meaning. The note then appears absent.
 
 use erebus_sdk::actions::{
     ClientAction, ComputeAndInvokeInput, CreateEncNoteInput, CreateOpenNoteInput, DepositInput,
@@ -42,7 +41,9 @@ fn salt(hex: &str) -> NoteSalt {
 /// The values in the fixture, rebuilt as Rust actions. Kept in fixture order.
 fn cases() -> Vec<ClientAction> {
     vec![
-        ClientAction::SetViewingKey(SetViewingKeyInput { random: felt("0x5a13d") }),
+        ClientAction::SetViewingKey(SetViewingKeyInput {
+            random: felt("0x5a13d"),
+        }),
         ClientAction::OpenChannel(OpenChannelInput {
             recipient_addr: felt("0xb0b"),
             index: 3,
@@ -72,7 +73,10 @@ fn cases() -> Vec<ClientAction> {
             index: 4,
             random: felt("0x5a13d"),
         }),
-        ClientAction::Deposit(DepositInput { token: felt("0x7042"), amount: 500 }),
+        ClientAction::Deposit(DepositInput {
+            token: felt("0x7042"),
+            amount: 500,
+        }),
         ClientAction::UseNote(UseNoteInput {
             channel_key: felt("0xc4a11e"),
             token: felt("0x7042"),
@@ -146,7 +150,10 @@ fn action_span_is_length_prefixed() {
 
 #[test]
 fn empty_action_span_encodes_as_a_single_zero() {
-    assert_eq!(erebus_sdk::actions::serialize_actions(&[]), vec![Felt::ZERO]);
+    assert_eq!(
+        erebus_sdk::actions::serialize_actions(&[]),
+        vec![Felt::ZERO]
+    );
 }
 
 // --- NoteSalt bounds -------------------------------------------------------------
@@ -157,7 +164,10 @@ fn empty_action_span_encodes_as_a_single_zero() {
 fn note_salt_rejects_reserved_and_out_of_range_values() {
     assert!(NoteSalt::new(0).is_err(), "0 means the note does not exist");
     assert!(NoteSalt::new(1).is_err(), "1 is reserved for open notes");
-    assert!(NoteSalt::new(NoteSalt::TWO_POW_120).is_err(), "salts are 120-bit");
+    assert!(
+        NoteSalt::new(NoteSalt::TWO_POW_120).is_err(),
+        "salts are 120-bit"
+    );
     assert!(NoteSalt::new(u128::MAX).is_err());
 }
 

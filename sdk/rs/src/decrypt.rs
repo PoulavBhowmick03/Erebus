@@ -1,37 +1,31 @@
-//! The read side: recovering plaintext from what the pool stores.
+//! Recovers plaintext from pool storage.
 //!
-//! Every write path in this crate has a mirror here. A note is written as
-//! `packed_value = salt · 2^128 + (amount + mask)`; this module takes that felt back apart.
+//! A note uses `packed_value = salt · 2^128 + (amount + mask)`. This module splits that felt
+//! into its fields.
 //!
 //! ## Why this is implemented rather than imported
 //!
-//! `starkware-libs` ships `discovery-core`, which has exactly these five functions. It was
-//! not used, for a reason worth recording: it pins `starknet-core`, `starknet-crypto` and
+//! `starkware-libs` ships these functions in `discovery-core`. That crate pins
+//! `starknet-core`, `starknet-crypto` and
 //! `starknet-providers` to a **`software-mansion/starknet-rust` fork by git rev**
-//! (`7caedfe`), and pulls in `starknet-providers`, `futures`, `async-trait` and `url` along
-//! with them. The write side already declined that fork — see the note in `Cargo.toml`.
+//! (`7caedfe`). It also adds `starknet-providers`, `futures`, `async-trait` and `url`.
+//! `Cargo.toml` explains why this crate does not use that fork.
 //!
-//! What we would be importing is small. The masks are Poseidon hashes, and this crate
-//! already computes all five of them in [`crate::hashes`], already pinned to the Cairo
-//! reference vectors. What remains is field subtraction, one `u128` wrapping subtraction,
-//! and one ECDH point recovery. Reimplementing that against the *same* Cairo vectors
-//! discovery-core is tested against is not a second source of truth — Cairo is the source
-//! of truth, and both implementations answer to it.
+//! [`crate::hashes`] implements the five Poseidon masks and pins them to Cairo vectors. The
+//! remaining work is field subtraction, `u128` wrapping subtraction, and ECDH point
+//! recovery. Cairo remains the reference for both implementations.
 //!
 //! ## Encryption is additive, decryption is subtractive
 //!
-//! Every scheme here is `ciphertext = plaintext + mask` over the field, or
-//! `wrapping_add` over `u128` for amounts. So decryption is the same mask, subtracted.
-//! There is no authentication anywhere: a wrong key does not fail, it returns a different
-//! plaintext. Nothing in this module can tell you the key was wrong, which is why the
-//! callers above it check what they decoded rather than trusting it.
+//! Each scheme uses `ciphertext = plaintext + mask` over the field. Amounts use
+//! `wrapping_add` over `u128`. Decryption subtracts the same mask. A wrong key returns a
+//! different plaintext instead of an authentication error. Callers must check decoded data.
 //!
 //! ## Scoped disclosure lives here
 //!
-//! [`crate::hashes::compute_enc_amount_hash`] takes the **channel key**, not the pool
-//! private key. So handing a third party one channel key discloses exactly one channel and
-//! nothing else — the basis for P2.2, and a stronger property than the pool's own auditor
-//! escrow, which is all-or-nothing over an identity's entire history
+//! [`crate::hashes::compute_enc_amount_hash`] takes the channel key instead of the pool
+//! private key. A third party with one channel key can read only that channel. P2.2 uses
+//! this boundary. The pool auditor escrow covers an identity's full history
 //! (`privacy.cairo:329-334`).
 
 use starknet_types_core::curve::AffinePoint;
@@ -50,9 +44,8 @@ pub const OPEN_NOTE_SALT: u128 = 1;
 pub enum DecryptError {
     /// The stored ephemeral public key is not a valid x-coordinate on the Stark curve.
     ///
-    /// This means the slot held something that was not an `EncChannelInfo` — an empty slot,
-    /// or a misderived location. It does **not** mean the key was wrong; a wrong key
-    /// decrypts successfully to garbage.
+    /// The slot is empty or does not contain `EncChannelInfo`. A wrong key does not cause
+    /// this error; it decrypts to another value.
     #[error("ephemeral public key is not a point on the curve; the slot is not channel info")]
     InvalidEphemeralPubkey,
 }
@@ -83,8 +76,7 @@ pub struct ChannelInfo {
     pub sender_addr: Felt,
 }
 
-/// Redacts the channel key: it is the scoped disclosure secret, and a `Debug` that printed
-/// it would leak a whole channel into any log line that happened to include one.
+/// Redacts the channel key because it gives read access to the full channel.
 impl core::fmt::Debug for ChannelInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ChannelInfo")
@@ -102,9 +94,8 @@ fn low_u128(value: Felt) -> u128 {
 
 /// Splits a stored `packed_value` into its salt and its encrypted amount.
 ///
-/// The layout is `packed = salt · 2^128 + enc_amount`, so the salt is simply the high half.
-/// This is also the salt-lane read: for a data note the returned salt *is* the payload
-/// chunk, and no decryption is needed to get it.
+/// The layout is `packed = salt · 2^128 + enc_amount`. The high half is the salt. For a data
+/// note, this salt is the payload chunk and needs no decryption.
 pub fn unpack_note(packed: Felt) -> (u128, u128) {
     let digits = packed.to_le_digits();
     let enc_amount = u128::from(digits[0]) | (u128::from(digits[1]) << 64);
@@ -117,11 +108,21 @@ pub fn unpack_note(packed: Felt) -> (u128, u128) {
 /// `amount = enc_amount - low128(h(ENC_AMOUNT_TAG, channel_key, token, index, 0, salt))`,
 /// wrapping at 2^128.
 ///
-/// The mask is keyed on the salt, which is why a structured salt must never appear on a
-/// value note: two notes sharing a mask let an observer subtract the ciphertexts and read
-/// the difference of the amounts.
-pub fn note_amount(enc_amount: u128, salt: u128, channel_key: Felt, token: Felt, index: u64) -> u128 {
-    let mask = low_u128(hashes::compute_enc_amount_hash(channel_key, token, index, salt));
+/// The salt keys the mask. Two value notes with the same mask expose their amount difference
+/// when an observer subtracts their ciphertexts. Structured salts are invalid on value notes.
+pub fn note_amount(
+    enc_amount: u128,
+    salt: u128,
+    channel_key: Felt,
+    token: Felt,
+    index: u64,
+) -> u128 {
+    let mask = low_u128(hashes::compute_enc_amount_hash(
+        channel_key,
+        token,
+        index,
+        salt,
+    ));
     enc_amount.wrapping_sub(mask)
 }
 
@@ -145,17 +146,16 @@ pub fn packed_value(packed: Felt, channel_key: Felt, token: Felt, index: u64) ->
 /// publishes `x(ephemeral · G)`, and masks with `h(tag, x(ephemeral · recipient_pubkey))`.
 /// The recipient recomputes the same x as `x(ephemeral_pubkey · private_key)`.
 ///
-/// Only the x-coordinate is used, which is what makes the `false` y-parity below
-/// irrelevant: recovering the other root gives `-P`, and `x(k · -P) == x(k · P)`. Both
-/// parties agree regardless of which root either recovered.
+/// Only the x-coordinate is used. The `false` y parity below can select `-P`, but
+/// `x(k · -P) == x(k · P)`. Both roots produce the same shared x-coordinate.
 pub fn channel_info(
     ephemeral_pubkey: Felt,
     enc_channel_key: Felt,
     enc_sender_addr: Felt,
     private_key: &Felt,
 ) -> Result<ChannelInfo, DecryptError> {
-    let point =
-        AffinePoint::new_from_x(&ephemeral_pubkey, false).ok_or(DecryptError::InvalidEphemeralPubkey)?;
+    let point = AffinePoint::new_from_x(&ephemeral_pubkey, false)
+        .ok_or(DecryptError::InvalidEphemeralPubkey)?;
     let shared_x = (&point * *private_key).x();
 
     Ok(ChannelInfo {
@@ -174,9 +174,8 @@ pub fn subchannel_token(enc_token: Felt, salt: Felt, channel_key: Felt, index: u
 
 /// Recovers the recipient of one of *our own* outgoing channels.
 ///
-/// The sender cannot derive this from the channel key — outgoing channel records are keyed
-/// on the sender's own private key, so this is how an agent enumerates who it has open
-/// channels with after losing local state.
+/// Outgoing channel records use the sender's private key, not the channel key. This lets an
+/// agent recover outgoing recipients after it loses local state.
 pub fn outgoing_recipient_addr(
     enc_recipient_addr: Felt,
     sender_addr: Felt,

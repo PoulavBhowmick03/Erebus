@@ -75,9 +75,10 @@ ServerActions are the *public* half of the design — they are the argument to
 `apply_actions`, in an ordinary Starknet transaction, in the clear. Anything put in that
 calldata is world-readable on Sepolia.
 
-That is the difference between the two lanes, and it is the whole reason the salt lane was
-chosen: a salt is consumed by hash derivations and recoverable only via the pair's shared
-secret, so it is private at rest. Invoke calldata is published verbatim.
+That distinction was wrong. Invoke calldata is public, but so is the salt: it is stored
+verbatim in the high bits of `packed_value`, which appears in `apply_actions` calldata and
+events. The keyed channel location is not a confidentiality boundary for a global observer.
+See friction.md F30. A replacement wire must encrypt/authenticate before using the salt lane.
 
 The invoke path is built for AMM swaps, where the swap parameters being public is fine and
 only the *identity* needs hiding. Erebus needs the opposite.

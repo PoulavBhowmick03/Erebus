@@ -35,8 +35,8 @@ fn token() -> Felt {
 
 fn salt() -> RandomSalt {
     RandomSalt::from_entropy([
-        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94,
-        0xcc, 0x58,
+        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
+        0x58,
     ])
 }
 
@@ -96,7 +96,9 @@ fn rewriting_a_written_index_is_rejected() {
             "index {written} was already written and must not be reusable"
         );
     }
-    cursor.check(NOTES_PER_MESSAGE as u32).expect("the next index is free");
+    cursor
+        .check(NOTES_PER_MESSAGE as u32)
+        .expect("the next index is free");
 }
 
 /// A rejected message must not consume indices. If it did, the retry would leave a gap and

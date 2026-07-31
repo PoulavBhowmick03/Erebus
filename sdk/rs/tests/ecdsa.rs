@@ -2,9 +2,9 @@
 //!
 //! Fixture: `fixtures/starknetjs-ecdsa.json`.
 //!
-//! Two separate claims are tested, and the weaker one is the one the protocol actually
-//! needs. Keeping them apart matters: if RFC-6979 derivation ever diverges between the
-//! two libraries, `signatures_verify_under_starknetjs_public_keys` must still pass, and
+//! The protocol requires valid signatures. A separate byte-equality check pins RFC-6979
+//! derivation. If the two libraries diverge, `signatures_verify_under_starknetjs_public_keys`
+//! must still pass, and
 //! only `signatures_match_starknetjs_byte_for_byte` should fail. That failure would be
 //! informative, not fatal.
 
@@ -32,8 +32,7 @@ fn felt(hex: &str) -> Felt {
 }
 
 fn load() -> Fixture {
-    serde_json::from_str(include_str!("fixtures/starknetjs-ecdsa.json"))
-        .expect("fixture parses")
+    serde_json::from_str(include_str!("fixtures/starknetjs-ecdsa.json")).expect("fixture parses")
 }
 
 #[test]
@@ -68,7 +67,10 @@ fn our_signatures_verify_under_the_matching_public_key() {
 #[test]
 fn starknetjs_signatures_verify_under_our_code() {
     for v in &load().vectors {
-        let sig = Signature { r: felt(&v.r), s: felt(&v.s) };
+        let sig = Signature {
+            r: felt(&v.r),
+            s: felt(&v.s),
+        };
         assert!(
             verify(&felt(&v.public_key), &felt(&v.message_hash), &sig).expect("verification runs"),
             "starknet.js signature rejected for hash {}",

@@ -1,24 +1,18 @@
-//! Client-side enforcement of the offer state machine (ARCHITECTURE §4).
+//! Client-side offer state machine (ARCHITECTURE §4).
 //!
 //! ## Why this is client-side
 //!
-//! The pool has no `status`, no `deadline`, and no `replyTo`. It stores notes. Nothing
-//! on-chain stops an agent from settling against an offer that expired an hour ago, or from
-//! paying twice for the same acceptance. Every rule in this module is a rule *only* because
-//! this module enforces it — there is no second line of defence underneath.
+//! The pool stores notes but has no `status`, `deadline`, or `replyTo`. The contract does not
+//! reject an expired offer or a second payment for one acceptance. Only this module enforces
+//! those rules.
 //!
-//! That is worth being blunt about, because the rest of the SDK has the opposite property.
-//! A wrong note index or a malformed action set reverts on-chain; the contract is a backstop
-//! for those. Here, a missing check is simply a missing check.
-//!
-//! ## `withdrawn` is not implemented, on purpose
+//! ## Missing `withdrawn` state
 //!
 //! ARCHITECTURE §4 lists `withdrawn` as an `OfferStatus` and draws a
-//! `proposed --> withdrawn` transition. Nothing can reach it: `ErebusClient` exposes no
+//! `proposed --> withdrawn` transition. Nothing can reach it. `ErebusClient` exposes no
 //! `withdrawOffer`, and the wire format's [`MessageType`] is `Offer | Counter | Accept` with
-//! no Withdraw variant. Adding one is not an SDK decision — it changes the frozen interface
-//! and breaks the mock the agent track builds against (CLAUDE.md). Recorded as a P0.3 item;
-//! until it is settled, withdrawal is unrepresentable rather than silently unenforced.
+//! no Withdraw variant. Adding one changes the frozen interface and breaks the agent-track
+//! mock (CLAUDE.md). P0.3 tracks this gap. The current wire cannot represent withdrawal.
 //!
 //! Expiry, by contrast, is fully expressible: `deadline` is on the wire already.
 
@@ -26,16 +20,14 @@ use crate::wire::{MessageType, WireMessage};
 
 /// Where an offer sits in the state machine.
 ///
-/// Deliberately missing `Withdrawn` — see the module docs.
+/// `Withdrawn` is absent because the wire cannot represent it. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OfferStatus {
     /// Written, live, nothing replying to it.
     Proposed,
     /// A later message replies to this one.
     Countered,
-    /// Accepted and settled. On-chain these are one atomic transition; §4 separates them
-    /// only for observability, and the SDK has no way to observe the gap, so it does not
-    /// pretend to.
+    /// Accepted and settled in one on-chain transition.
     Settled,
     /// Its deadline has passed.
     Expired,
@@ -71,11 +63,13 @@ pub enum NegotiationError {
     NotAnOffer {
         /// The index asked for.
         index: u32,
-        /// What was actually there.
+        /// Message type at that index.
         kind: MessageType,
     },
     /// This negotiation already settled.
-    #[error("this channel already settled at message {index}; a second settlement would pay twice")]
+    #[error(
+        "this channel already settled at message {index}; a second settlement would pay twice"
+    )]
     AlreadySettled {
         /// The index of the acceptance that settled it.
         index: u32,
@@ -92,8 +86,7 @@ pub enum NegotiationError {
 
 /// Which side wrote a message.
 ///
-/// Channels are directional, so in practice these come from two different subchannels; the
-/// book is the place they are reconciled into one ordered negotiation.
+/// A book combines the two directional subchannels into one negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Author {
     /// Written by us.
@@ -104,13 +97,11 @@ pub enum Author {
 
 /// Identifies one message in a negotiation.
 ///
-/// **A message index alone is not an identifier.** Channels are directional, so each side
-/// numbers its own messages from zero — A's first offer and B's first counter are both
-/// index 0, in different subchannels. Keying a book on the bare index conflates them, which
-/// silently turns "accept their counter" into "accept your own offer".
+/// Each direction starts its indices at zero. An index without its author can identify two
+/// messages. That collision can turn a counterparty acceptance into an own-offer acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OfferId {
-    /// Which side wrote it, i.e. which of the two directional channels it lives in.
+    /// Side and directional channel that contain the message.
     pub author: Author,
     /// Its index within that side's subchannel.
     pub index: u32,
@@ -126,8 +117,7 @@ impl OfferId {
 impl Author {
     /// The other side.
     ///
-    /// A reply always crosses directions — you answer the counterparty, not yourself — so
-    /// this is how a `reply_to` index is resolved to a full [`OfferId`].
+    /// A reply crosses directions, so this resolves a `reply_to` index to an [`OfferId`].
     pub fn opposite(self) -> Self {
         match self {
             Author::Us => Author::Counterparty,
@@ -160,15 +150,12 @@ impl OfferBook {
 
     /// Record a message, ours or theirs.
     ///
-    /// `message.reply_to` is an index in the **opposite** direction, because a reply always
-    /// crosses the table. Resolving it against the same author would make every reply
-    /// dangle, and resolving it against both would reintroduce the collision this type
-    /// exists to prevent.
+    /// `message.reply_to` is an index in the opposite direction. Resolving it in the same
+    /// direction makes the reply dangle. Searching both directions reintroduces index
+    /// collisions.
     ///
-    /// Rejects a reply to a message that was never seen. That is a real failure mode rather
-    /// than a hypothetical: notes are fetched by computed slot, so a reader that miscounts
-    /// its indices gets a message whose `reply_to` points nowhere, and without this check it
-    /// would negotiate against a phantom.
+    /// Rejects a reply to an unseen message. A reader with an incorrect computed slot can
+    /// otherwise negotiate against a message that does not exist.
     pub fn record(
         &mut self,
         index: u32,
@@ -197,7 +184,7 @@ impl OfferBook {
         if self.settled == Some(id) {
             return Some(OfferStatus::Settled);
         }
-        // An accepted offer is settled with its acceptance — they are one transition.
+        // Acceptance and settlement form one transition.
         if let Some(settled_at) = self.settled {
             let accepted = self
                 .entries
@@ -222,21 +209,17 @@ impl OfferBook {
     fn replies_to(&self, id: OfferId) -> Option<OfferId> {
         self.entries
             .iter()
-            .find(|e| {
-                e.id.author == id.author.opposite() && e.message.reply_to == Some(id.index)
-            })
+            .find(|e| e.id.author == id.author.opposite() && e.message.reply_to == Some(id.index))
             .map(|e| e.id)
     }
 
     /// Whether `id` may be accepted and settled right now.
     ///
-    /// Call this before building the settlement action set. Past this point the SDK will
-    /// happily construct a valid, provable, on-chain-accepted settlement against a
-    /// three-day-old offer, because nothing underneath knows what a deadline is.
+    /// Call this before building the settlement action set. Later layers do not check the
+    /// deadline and can submit a settlement for an expired offer.
     ///
-    /// A countered offer is still acceptable — §4 draws `countered --> accepted` — since
-    /// countering is a proposal, not a revocation. Revocation would be `withdrawn`, which
-    /// does not exist.
+    /// A countered offer remains acceptable under §4. A counter is a proposal, not a
+    /// revocation. The wire has no `withdrawn` state.
     pub fn check_acceptable(&self, id: OfferId, now: u64) -> Result<(), NegotiationError> {
         if let Some(settled_at) = self.settled {
             return Err(NegotiationError::AlreadySettled {
@@ -272,8 +255,7 @@ impl OfferBook {
         Ok(())
     }
 
-    /// The most recent live offer from the counterparty — what a policy engine evaluates on
-    /// its turn.
+    /// Most recent live counterparty offer for policy evaluation.
     pub fn latest_acceptable(&self, now: u64) -> Option<(OfferId, WireMessage)> {
         self.entries
             .iter()
@@ -284,8 +266,8 @@ impl OfferBook {
 
     /// Every message, in the order it was recorded.
     ///
-    /// [`crate::read::reconstruct`] records in `created_at` order, so for a reconstructed
-    /// book this is the order the negotiation actually happened in.
+    /// [`crate::read::reconstruct`] records by `created_at`, so reconstructed entries use
+    /// negotiation order.
     pub fn entries(&self) -> impl Iterator<Item = (OfferId, WireMessage)> + '_ {
         self.entries.iter().map(|e| (e.id, e.message))
     }

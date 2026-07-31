@@ -489,7 +489,14 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 The channel primitive is designed to carry **notes** — encrypted transaction state — not arbitrary free-text messages.
 
-In the MVP, "negotiation" means **structured state transitions** (`Offer`, `Counter`, `Accept`) written into subchannels. That is sufficient for commercial negotiation and is genuinely novel as agent infrastructure.
+**Live correction 2026-07-31:** the four-note mechanism below works mechanically but is
+not confidential. The pool stores each client-chosen salt verbatim in the public high bits
+of `packed_value`, and the settlement transaction exposed all four encoded acceptance
+chunks. Until wire v2 encrypts/authenticates the message before fragmentation, “private
+negotiation” is a target rather than a property. See friction.md F30.
+
+In the current MVP, "negotiation" means structured state transitions (`Offer`, `Counter`,
+`Accept`) written into subchannels. They are publicly decodable in wire v1.
 
 **How, concretely** — this is narrower than the sentence above implies, and the detail
 matters. A note has no payload field. Its only client-writable space is the salt, capped
@@ -560,7 +567,8 @@ Answered 2026-07-25 — evidence in [docs/friction.md](./docs/friction.md).
   and `ClientAction` has no payload variant. But the note salt is client-chosen and
   round-trips verbatim, giving 119 usable bits per note, and notes are unbounded in count.
   So arbitrary payloads *are* carryable by fragmentation, at one permanently-burned
-  storage slot per 15 bytes. We use 4 notes per offer; see §7. (F1)
+  storage slot per 15 bytes. Wire v1 uses 4 notes per offer, but those fragments are public;
+  carrying data is proven, carrying it confidentially is reopened. See §7 and F30. (F1)
 - [ ] Does the paymaster path work for an agent with zero public balance end-to-end?
   STRK20 ships no paymaster; the demo wires third-party AVNU. Pool fee is 0, so this is
   ordinary tx gas. (F4)

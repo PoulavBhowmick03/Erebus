@@ -1,8 +1,7 @@
 //! Tests for the ordering and replay rules the pool enforces on an action set.
 //!
-//! Every case here corresponds to a revert in `privacy.cairo`. The point of the builder is
-//! that these fail before a proof is generated rather than after — each one otherwise costs
-//! a prover round-trip and roughly 29 seconds to discover.
+//! Each case corresponds to a revert in `privacy.cairo`. The builder catches it before
+//! proving. A contract revert costs a prover round-trip and roughly 29 seconds.
 
 use erebus_sdk::action_set::{ActionSetBuilder, ActionSetError};
 use erebus_sdk::actions::{
@@ -35,11 +34,18 @@ fn open_subchannel() -> ClientAction {
 }
 
 fn deposit() -> ClientAction {
-    ClientAction::Deposit(DepositInput { token: one(), amount: 100 })
+    ClientAction::Deposit(DepositInput {
+        token: one(),
+        amount: 100,
+    })
 }
 
 fn use_note(index: u32) -> ClientAction {
-    ClientAction::UseNote(UseNoteInput { channel_key: one(), token: one(), index })
+    ClientAction::UseNote(UseNoteInput {
+        channel_key: one(),
+        token: one(),
+        index,
+    })
 }
 
 fn data_note(index: u32, salt: u128) -> ClientAction {
@@ -93,12 +99,19 @@ fn a_correctly_ordered_set_builds() {
 #[test]
 fn creating_a_note_before_spending_one_is_rejected() {
     let mut builder = ActionSetBuilder::new();
-    builder.push(data_note(0, 1 << 119)).expect("first action always fits");
-    let error = builder.push(use_note(0)).expect_err("UseNote is an earlier phase");
+    builder
+        .push(data_note(0, 1 << 119))
+        .expect("first action always fits");
+    let error = builder
+        .push(use_note(0))
+        .expect_err("UseNote is an earlier phase");
 
     assert!(matches!(
         error,
-        ActionSetError::OutOfOrder { action: "UseNote", .. }
+        ActionSetError::OutOfOrder {
+            action: "UseNote",
+            ..
+        }
     ));
 }
 
@@ -107,7 +120,10 @@ fn a_second_invoke_is_rejected() {
     let mut builder = ActionSetBuilder::new();
     builder.push(data_note(0, 1 << 119)).expect("fits");
     builder.push(invoke()).expect("first invoke fits");
-    assert_eq!(builder.push(invoke()).unwrap_err(), ActionSetError::SecondInvoke);
+    assert_eq!(
+        builder.push(invoke()).unwrap_err(),
+        ActionSetError::SecondInvoke
+    );
 }
 
 #[test]
@@ -117,7 +133,10 @@ fn nothing_may_follow_an_invoke() {
     let mut builder = ActionSetBuilder::new();
     builder.push(data_note(0, 1 << 119)).expect("fits");
     builder.push(invoke()).expect("fits");
-    assert_eq!(builder.push(withdraw()).unwrap_err(), ActionSetError::SecondInvoke);
+    assert_eq!(
+        builder.push(withdraw()).unwrap_err(),
+        ActionSetError::SecondInvoke
+    );
 }
 
 #[test]
@@ -222,10 +241,16 @@ fn a_non_zero_tip_is_rejected() {
 #[test]
 fn a_non_zero_resource_price_is_rejected() {
     let mut bounds = ResourceBounds::for_proof_invocation();
-    bounds.l2_gas = ResourceBound { max_amount: 100, max_price_per_unit: 7 };
+    bounds.l2_gas = ResourceBound {
+        max_amount: 100,
+        max_price_per_unit: 7,
+    };
     assert_eq!(
         PoolInvocation::new(invocation(0, bounds)).unwrap_err(),
-        PoolInvocationError::NonZeroResourcePrice { resource: "l2_gas", price: 7 }
+        PoolInvocationError::NonZeroResourcePrice {
+            resource: "l2_gas",
+            price: 7
+        }
     );
 }
 

@@ -192,7 +192,10 @@ fn an_empty_subchannel_reads_as_no_messages() {
     let reader = ChannelReader::new(channel.key(), token());
     let storage = Storage::default();
 
-    assert!(reader.transcript(&storage.source()).expect("reads").is_empty());
+    assert!(reader
+        .transcript(&storage.source())
+        .expect("reads")
+        .is_empty());
     assert_eq!(reader.message(0, &storage.source()).expect("reads"), None);
 }
 
@@ -217,7 +220,10 @@ fn the_wrong_channel_key_reads_as_an_empty_channel() {
 
     let wrong = ChannelReader::new(Felt::from_hex("0xbadbad").expect("felt"), token());
     assert!(
-        wrong.transcript(&storage.source()).expect("reads").is_empty(),
+        wrong
+            .transcript(&storage.source())
+            .expect("reads")
+            .is_empty(),
         "a wrong key must not find anything — and must not error either"
     );
 }
@@ -273,8 +279,8 @@ fn the_settlement_payment_note_is_found_and_decrypts() {
     storage.apply(&channel, &offer);
 
     let salt = RandomSalt::from_entropy([
-        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94,
-        0xcc, 0x58,
+        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
+        0x58,
     ]);
     let inputs = vec![OwnedNote {
         channel_key: Felt::from_hex("0xc0ffee").expect("incoming"),

@@ -1,12 +1,15 @@
 # Runbook — reproducing the on-chain demonstration
 
 What this gets you: two registered identities on Sepolia, each holding a shielded note, a
-private channel between them, and one negotiation offer written into note salts and read
-back with every field intact.
+directional channel pair between them, negotiation state written into note salts and read
+back with every field intact, an atomic settlement, and an independently reconstructed
+disclosure record.
 
-**What it does not get you yet:** counter-offer, settlement, or viewing-key disclosure.
-Those methods exist and pass offline tests; they have never run against a chain. See
-`poulav.md` for the current line between proven and implemented.
+**Security stop — 2026-07-31:** this demonstrates the mechanics, not private negotiation.
+The pool stores each salt verbatim in the public high bits of `packed_value`; the live
+settlement transaction contains all four acceptance chunks in `apply_actions` calldata.
+The wire needs a confidential authenticated encoding before this can be called a private
+channel. See friction.md F30.
 
 First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on blocks.
 
@@ -191,8 +194,11 @@ python3 ~/.erebus/req.py ~/Developer/erebus/.env read_channel_state "{\"handle\"
 ```
 
 **What success looks like.** The final read returns one offer whose `amount`, `deadline`,
-`memo_hash` and `token` match exactly what was sent. Those values were never in calldata —
-they were reassembled from the salts of four zero-amount notes.
+`memo_hash` and `token` match exactly what was sent.
+
+**What this no longer claims.** The terms are reassembled from four zero-amount-note salts,
+but those salts are public inside `packed_value`. Round-trip success proves the storage and
+read path agree; it does not prove confidentiality.
 
 **What failure looks like, and why it is worth naming.** A wrong derivation does not raise.
 `open_channel` still succeeds, `propose_offer` still succeeds, and `read_channel_state`
@@ -211,6 +217,10 @@ storage slot nobody wrote to.
 | A `open_channel` → B | — | `ch_a8f81fdc…2d59` |
 | A `propose_offer` | — | `ch_a8f81fdc…2d59:us:0` |
 | `read_channel_state` | — | offer returned, all fields exact |
+| B `open_channel` → A | — | `ch_c4d09ef1…5aab` |
+| B `counter_offer` | — | 1 STRK counter returned and A read it |
+| A `accept_and_settle` | `0x44289c…84bb7` | accepted on L2; nullifier exists |
+| independent `reveal` | read-only | full offers, acceptance and exact payment reconstructed |
 
 Screening never came up. StarkWare's prover mints the attestation via its
 `proof-interceptor` sidecar and packs it automatically — see F6, which was open for six days

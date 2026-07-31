@@ -1,16 +1,11 @@
 //! Stark ECDSA signing over a transaction hash.
 //!
-//! What the pool actually requires is narrower than it looks. `assert_valid_signature`
-//! (`utils.cairo:383`) does not verify a signature itself — it calls
-//! `is_valid_signature` on the *user's own account contract*, trying three encodings in
-//! turn (custom validation, the tx hash, the SNIP-12 `CallSet` hash). So what has to hold
-//! is that the signature verifies under the account's own rules, not that it matches any
-//! particular library's bytes.
+//! `assert_valid_signature` (`utils.cairo:383`) calls `is_valid_signature` on the user's
+//! account contract. It tries custom validation, the transaction hash, and the SNIP-12
+//! `CallSet` hash. The signature must satisfy that account's rules.
 //!
-//! That distinction matters for the KATs: byte-for-byte agreement with starknet.js is an
-//! *additional* property, requiring identical RFC-6979 deterministic-`k` derivation.
-//! Nothing in the protocol needs it. It is pinned anyway because it is a far sharper
-//! ratchet than "some valid signature came out" — see `tests/ecdsa.rs`.
+//! `tests/ecdsa.rs` also requires byte-for-byte agreement with starknet.js. This pins the
+//! RFC-6979 deterministic-`k` derivation, although the protocol only requires validity.
 
 use starknet_crypto::{
     get_public_key, rfc6979_generate_k, sign as ecdsa_sign, verify as ecdsa_verify, Signature,
@@ -23,8 +18,7 @@ pub enum SigningError {
     /// The message hash is not a valid field element for signing.
     #[error("invalid message hash")]
     InvalidMessageHash,
-    /// No valid `k` was found within the retry budget. Cryptographically implausible;
-    /// a bound exists so a bad input cannot spin forever.
+    /// No valid `k` was found before the retry limit.
     #[error("no valid k after {0} attempts")]
     KExhausted(u32),
     /// The public key is not on the curve.
@@ -37,20 +31,21 @@ const MAX_K_ATTEMPTS: u32 = 32;
 
 /// Signs `message_hash` with `private_key`, deriving `k` per RFC 6979.
 ///
-/// RFC 6979 makes signing deterministic: the same key and hash always produce the same
-/// signature, with no RNG involved. That is why this is reproducible against a fixture at
-/// all — and it is also why a repeated nonce cannot leak the key here the way it can with
-/// a badly seeded random `k`.
+/// RFC 6979 derives the same signature from the same key and hash without an RNG. This makes
+/// known-answer tests reproducible and avoids random-`k` nonce reuse.
 ///
-/// On the rare `k` that yields an invalid signature, RFC 6979 says to re-derive with an
-/// incremented seed rather than perturbing the key or the hash.
+/// If `k` produces an invalid signature, RFC 6979 derives another value with an incremented
+/// seed.
 pub fn sign(private_key: &Felt, message_hash: &Felt) -> Result<Signature, SigningError> {
     let mut seed: Option<Felt> = None;
     for _ in 0..MAX_K_ATTEMPTS {
         let k = rfc6979_generate_k(message_hash, private_key, seed.as_ref());
         match ecdsa_sign(private_key, message_hash, &k) {
             Ok(extended) => {
-                return Ok(Signature { r: extended.r, s: extended.s });
+                return Ok(Signature {
+                    r: extended.r,
+                    s: extended.s,
+                });
             }
             Err(_) => {
                 seed = Some(match seed {
@@ -73,9 +68,9 @@ pub fn verify(
         .map_err(|_| SigningError::InvalidPublicKey)
 }
 
-/// The Stark public key for a private key. This is the account's *signing* key, distinct
-/// from the pool `user_private_key` that rides in the proof invocation's calldata — the
-/// separation is what keeps a hostile prover unable to spend. See friction.md F14.
+/// Stark public key for an account signing key. This differs from the pool
+/// `user_private_key` in proof calldata, so a hostile prover cannot spend. See friction.md
+/// F14.
 pub fn public_key(private_key: &Felt) -> Felt {
     get_public_key(private_key)
 }
