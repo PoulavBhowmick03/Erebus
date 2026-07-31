@@ -929,6 +929,55 @@ the grantee would be false.
 
 ---
 
+## F28 — `Note.token` is meaningful for one note kind and always zero for the other (P1.3)
+
+Found by the first live `read_channel_state`, 2026-07-31, immediately after the first
+on-chain `propose_offer` succeeded:
+
+```
+INVALID_REQUEST: privacy-pool protocol mismatch: get_note returned token 0x0,
+                 expected 0x4718f5a…938d
+```
+
+The write had worked. The read rejected it.
+
+**What is actually true.** `get_note` returns `(packed_value, token)`, and `token` is only
+written for *open* notes. For encrypted notes — which is every channel note, so every
+salt-lane data note and every private transfer — the pool leaves it zero:
+
+```cairo
+// privacy.cairo:664
+// Only `packed_value` needs to be written to storage, `token` is initialized to zero.
+```
+
+restated on the struct in `objects.cairo:98` as *"the token address of the note (zero for
+encrypted notes)"*. A channel note's token is implied by the subchannel it was found in and
+is not recoverable from the note itself.
+
+We were asserting `note.token == expected` for every note, which rejected the entire
+transcript.
+
+**Why this is friction and not just our bug.** One struct field carries a real value for one
+note kind and a structural zero for the other, and nothing in the type says so — `Note.token`
+is a `ContractAddress` in both cases. The discriminator is not the field, it is the *salt*:
+`salt == OPEN_NOTE_SALT (1)` means open note, `salt >= 2` means encrypted. So reading a note
+correctly requires knowing that a sentinel in one field determines the meaning of another,
+and that rule lives only in a doc comment. This is the same shape as F5's salt-type
+inconsistency: a value whose interpretation depends on context the type does not carry.
+
+**The fix keeps both halves rather than dropping the check** (`client.rs::check_note_token`,
+pinned by three tests). An open note must carry the token we asked for; an encrypted note
+must carry zero. The second is not ceremony — a non-zero token on a note we derived as
+encrypted means the id landed on an open note, which would otherwise decrypt to garbage and
+be reported as a corrupt message rather than a bad derivation.
+
+**What this says about the offline suite.** 177 tests passed against this bug, because every
+fixture built notes the way our writer builds them. The oracle for "what does the pool
+actually store" is the pool. No amount of TS/Rust differential testing would have caught it:
+both implementations would have agreed with each other and disagreed with the chain.
+
+---
+
 ## F27 — A proof-carrying `apply_actions` costs ~3 STRK in gas, and the salt lane pays it per message (P1.1)
 
 First real shield, 2026-07-31 (tx `0x5f57eb…b9e2`). It worked, and the number that came

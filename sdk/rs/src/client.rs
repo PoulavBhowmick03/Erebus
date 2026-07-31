@@ -218,12 +218,7 @@ impl Client {
                 return u32::try_from(index)
                     .map_err(|_| ClientError::Protocol("note index exceeds u32".to_owned()));
             }
-            if result[1] != token {
-                return Err(ClientError::Protocol(format!(
-                    "get_note returned token {:#x}, expected {:#x}",
-                    result[1], token
-                )));
-            }
+            check_note_token(result[0], result[1], token)?;
             source.insert(id, result[0]);
         }
         Err(ClientError::DiscoveryLimit("notes"))
@@ -349,12 +344,7 @@ impl Client {
                     if stored[0] == Felt::ZERO {
                         break;
                     }
-                    if stored[1] != token {
-                        return Err(ClientError::Protocol(format!(
-                            "get_note returned token {:#x}, expected {token:#x}",
-                            stored[1]
-                        )));
-                    }
+                    check_note_token(stored[0], stored[1], token)?;
                     let note =
                         decrypt::packed_value(stored[0], channel.channel_key, token, note_index);
                     if note.amount == 0 {
@@ -1094,6 +1084,38 @@ fn validate_token(state: &StoredChannel, token: Felt) -> Result<(), ClientError>
     Ok(())
 }
 
+/// Validates the `token` field the pool returns alongside a stored note.
+///
+/// **The field is only meaningful for open notes.** For encrypted notes the pool never
+/// writes it — `privacy.cairo:664`, *"Only `packed_value` needs to be written to storage,
+/// `token` is initialized to zero"*, restated on the struct itself in `objects.cairo:98`
+/// as *"the token address of the note (zero for encrypted notes)"*. A channel note's token
+/// is implied by the subchannel it was found in and cannot be recovered from the note.
+///
+/// So the two kinds get opposite checks, and neither is dead weight: an open note must
+/// carry the token we asked for, and an encrypted note must carry zero. A non-zero token
+/// on an encrypted note would mean the id we derived landed on an open note — a real
+/// anomaly, and one that would otherwise decrypt to garbage rather than fail.
+///
+/// Getting this wrong was a live bug, not a hypothetical: asserting equality for every note
+/// rejected every valid message note with a protocol-mismatch error. See friction.md F28.
+fn check_note_token(packed: Felt, stored: Felt, expected: Felt) -> Result<(), ClientError> {
+    let (salt, _) = decrypt::unpack_note(packed);
+    if salt == decrypt::OPEN_NOTE_SALT {
+        if stored != expected {
+            return Err(ClientError::Protocol(format!(
+                "open note carries token {stored:#x}, expected {expected:#x}"
+            )));
+        }
+    } else if stored != Felt::ZERO {
+        return Err(ClientError::Protocol(format!(
+            "encrypted note carries token {stored:#x}, expected zero — \
+             the derived note id landed on an open note"
+        )));
+    }
+    Ok(())
+}
+
 fn read_key(path: &PathBuf, kind: &'static str) -> Result<Felt, ClientError> {
     let text = std::fs::read_to_string(path).map_err(|source| ClientError::KeyFile {
         kind,
@@ -1341,5 +1363,48 @@ mod tests {
         .expect("acceptance");
 
         assert!(channel_state(&handle, &state, &book, 20).settled);
+    }
+
+    /// Packs a note the way the pool stores it: salt in the high 128 bits, encrypted amount
+    /// in the low 128.
+    fn packed_note(salt: u128, enc_amount: u128) -> Felt {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&salt.to_be_bytes());
+        bytes[16..].copy_from_slice(&enc_amount.to_be_bytes());
+        Felt::from_bytes_be(&bytes)
+    }
+
+    /// The bug that reached Sepolia: every salt-lane data note is an *encrypted* note, and
+    /// the pool leaves `token` zero on those (`privacy.cairo:664`). Asserting equality
+    /// rejected the entire transcript with a protocol-mismatch error.
+    #[test]
+    fn an_encrypted_note_carries_no_token_and_that_is_not_an_error() {
+        let token = Felt::from_hex("0x4718f5a").expect("token");
+        let data_note = packed_note(0x5eed, 0);
+
+        assert!(check_note_token(data_note, Felt::ZERO, token).is_ok());
+    }
+
+    /// The opposite check still has to bite, or a misderived id that lands on an open note
+    /// would decrypt to garbage instead of failing.
+    #[test]
+    fn an_encrypted_note_with_a_token_is_rejected() {
+        let token = Felt::from_hex("0x4718f5a").expect("token");
+        let data_note = packed_note(0x5eed, 0);
+
+        assert!(check_note_token(data_note, token, token).is_err());
+    }
+
+    /// Open notes do store their token, so equality is the right check there — this is the
+    /// half of the original assertion that was correct and must not be lost.
+    #[test]
+    fn an_open_note_must_match_the_token_we_asked_for() {
+        let token = Felt::from_hex("0x4718f5a").expect("token");
+        let other = Felt::from_hex("0xdead").expect("token");
+        let open = packed_note(decrypt::OPEN_NOTE_SALT, 1_000);
+
+        assert!(check_note_token(open, token, token).is_ok());
+        assert!(check_note_token(open, other, token).is_err());
+        assert!(check_note_token(open, Felt::ZERO, token).is_err());
     }
 }
