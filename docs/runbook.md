@@ -5,13 +5,38 @@ directional channel pair between them, negotiation state written into note salts
 back with every field intact, an atomic settlement, and an independently reconstructed
 disclosure record.
 
-**Security stop — 2026-07-31:** this demonstrates the mechanics, not private negotiation.
-The pool stores each salt verbatim in the public high bits of `packed_value`; the live
-settlement transaction contains all four acceptance chunks in `apply_actions` calldata.
-The wire needs a confidential authenticated encoding before this can be called a private
-channel. See friction.md F30.
+**Evidence boundary — 2026-07-31:** the recorded live transaction used public wire v1 and
+demonstrates mechanics, not private negotiation. New channels now use five-note wire v2:
+AES-256-GCM-SIV ciphertext plus a 128-bit tag. Wire v2 is verified offline but has not yet
+completed this live run. See friction.md F30/F31.
 
 First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on blocks.
+
+---
+
+## Local wire-v2 verification (no network, no keys)
+
+Run the focused codec and end-to-end Rust paths first:
+
+```bash
+cd ~/Developer/erebus/sdk/rs
+cargo test --test wire_codec
+cargo test --test channel_ops --test read_path --test index_contiguity \
+  --test settlement --test disclosure
+```
+
+Then run the complete quality gate:
+
+```bash
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
+```
+
+Expected as of 2026-07-31: 190 passed and two deliberately ignored live-prover probes.
+The focused codec suite has 17 tests: the pinned five-salt known answer, round trips,
+single-bit tamper rejection, chain/pool/channel/token/index binding, canonical padding,
+same-index retry safety, and wire-v1 compatibility.
 
 ---
 
@@ -175,6 +200,22 @@ curl -s -X POST $RPC -H 'content-type: application/json' \
 
 ## 3. The demonstration
 
+Use a fresh A/B pair and fresh state directories. A settled pair is terminal because the
+pool permits only one directional channel per sender/recipient pair. The script captures
+every handle and offer id, keeps the bearer grant in a mode-`0600` temporary file, and runs
+offer → counter → atomic settlement → reveal:
+
+```bash
+cd ~/Developer/erebus
+./scripts/demo.sh 1000000000000000000
+```
+
+The amount must exactly match A's unspent private notes; the command above matches the
+runbook's 1 STRK shield. It spends that private note and several STRK of Sepolia gas. Do not
+rerun it against the already-settled wire-v1 identities from the reference run.
+
+The commands below show the first offer/read portion manually for debugging:
+
 ```bash
 B=$(grep '^AGENT_ADDRESS=' ~/.erebus-b/env | cut -d= -f2)
 
@@ -193,12 +234,15 @@ python3 ~/.erebus/req.py ~/Developer/erebus/.env propose_offer \
 python3 ~/.erebus/req.py ~/Developer/erebus/.env read_channel_state "{\"handle\":\"$H\"}" | $CLI | python3 -m json.tool
 ```
 
-**What success looks like.** The final read returns one offer whose `amount`, `deadline`,
-`memo_hash` and `token` match exactly what was sent.
+**What success looks like.** The script first returns an offer whose `amount`, `deadline`,
+`memo_hash` and `token` match exactly what was sent. Its final reveal contains three records
+(offer, counter, acceptance), and `agreed_amount == paid_amount` for the atomic settlement.
 
-**What this no longer claims.** The terms are reassembled from four zero-amount-note salts,
-but those salts are public inside `packed_value`. Round-trip success proves the storage and
-read path agree; it does not prove confidentiality.
+**What wire v2 claims.** The five salts remain public inside `packed_value`, but they now
+contain authenticated ciphertext rather than plaintext terms. Round-trip success proves the
+storage/read path and v2 authentication agree. It does not hide the five-note traffic shape,
+prove relationship anonymity, replace independent cryptographic review, or constitute live
+v2 evidence until this exact run succeeds with fresh v2 state.
 
 **What failure looks like, and why it is worth naming.** A wrong derivation does not raise.
 `open_channel` still succeeds, `propose_offer` still succeeds, and `read_channel_state`

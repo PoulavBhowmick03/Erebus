@@ -1,14 +1,13 @@
 //! Tests for the composed channel operations.
 //!
-//! The pieces below are each pinned elsewhere — hashes against Cairo vectors, salts against
-//! the TypeScript oracle, ordering against the contract's revert conditions. What this file
-//! checks is that they are wired together correctly: the right salt on the right note at
+//! Other tests pin hashes to Cairo vectors, salts to the TypeScript oracle, and ordering to
+//! contract reverts. This file checks their composition: the right salt on the right note at
 //! the right index, addressed to the right party.
 
 use erebus_sdk::actions::ClientAction;
 use erebus_sdk::channel::{Channel, Counterparty, PoolIdentity};
 use erebus_sdk::hashes;
-use erebus_sdk::wire::{encode_message, MessageType, WireMessage, NOTES_PER_MESSAGE};
+use erebus_sdk::wire::{encode_message, MessageType, WireContext, WireMessage, NOTES_PER_MESSAGE};
 use starknet_types_core::felt::Felt;
 
 fn alice() -> PoolIdentity {
@@ -38,6 +37,14 @@ fn offer() -> WireMessage {
 
 fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
+}
+
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
 }
 
 // --- Key containment ------------------------------------------------------------
@@ -70,7 +77,7 @@ fn the_public_key_is_derived_not_stored() {
 
 #[test]
 fn the_channel_key_matches_the_pinned_derivation() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let expected = hashes::compute_channel_key(
         Felt::from_hex("0xa11ce").expect("addr"),
         Felt::from_hex("0x1234567890abcdef").expect("key"),
@@ -85,7 +92,7 @@ fn the_channel_key_matches_the_pinned_derivation() {
 /// place and break the whole addressing scheme.
 #[test]
 fn the_reverse_channel_has_a_different_key() {
-    let a_to_b = Channel::derive(&alice(), bob());
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), bob());
 
     let bob_identity = PoolIdentity::new(
         bob().address,
@@ -95,23 +102,23 @@ fn the_reverse_channel_has_a_different_key() {
         address: alice().address(),
         public_key: alice().public_key(),
     };
-    let b_to_a = Channel::derive(&bob_identity, alice_as_counterparty);
+    let b_to_a = Channel::derive(chain(), pool(), &bob_identity, alice_as_counterparty);
 
     assert_ne!(a_to_b.key(), b_to_a.key());
 }
 
 #[test]
 fn a_received_channel_key_reconstructs_the_same_channel() {
-    let derived = Channel::derive(&alice(), bob());
-    let received = Channel::from_key(derived.key(), bob());
+    let derived = Channel::derive(chain(), pool(), &alice(), bob());
+    let received = Channel::from_key(chain(), pool(), derived.key(), bob());
     assert_eq!(derived, received);
 }
 
 // --- Writing a message ----------------------------------------------------------
 
 #[test]
-fn a_message_becomes_four_zero_amount_notes() {
-    let channel = Channel::derive(&alice(), bob());
+fn a_message_becomes_five_zero_amount_notes() {
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = channel
         .write_message(token(), 0, &offer())
         .expect("valid message");
@@ -132,8 +139,18 @@ fn a_message_becomes_four_zero_amount_notes() {
 
 #[test]
 fn notes_carry_the_wire_salts_in_index_order() {
-    let channel = Channel::derive(&alice(), bob());
-    let expected = encode_message(&offer()).expect("encodes");
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let expected = encode_message(
+        &WireContext {
+            chain_id: chain(),
+            pool_address: pool(),
+            channel_key: channel.key(),
+            token: token(),
+            message_index: 3,
+        },
+        &offer(),
+    )
+    .expect("encodes");
     let set = channel
         .write_message(token(), 3, &offer())
         .expect("valid message");
@@ -143,10 +160,10 @@ fn notes_carry_the_wire_salts_in_index_order() {
             panic!("expected CreateEncNote");
         };
         assert_eq!(note.salt, expected[slot], "salt mismatch at slot {slot}");
-        // Message 3 occupies indices 12..15.
+        // Message 3 starts at 3 * the versioned stride.
         assert_eq!(
             note.index,
-            12 + slot as u32,
+            3 * NOTES_PER_MESSAGE as u32 + slot as u32,
             "index mismatch at slot {slot}"
         );
     }
@@ -154,7 +171,7 @@ fn notes_carry_the_wire_salts_in_index_order() {
 
 #[test]
 fn message_indices_do_not_overlap() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let first = channel.write_message(token(), 0, &offer()).expect("valid");
     let second = channel.write_message(token(), 1, &offer()).expect("valid");
 
@@ -168,29 +185,32 @@ fn message_indices_do_not_overlap() {
             .collect()
     };
 
-    assert_eq!(indices(&first), vec![0, 1, 2, 3]);
-    assert_eq!(indices(&second), vec![4, 5, 6, 7]);
+    assert_eq!(indices(&first), vec![0, 1, 2, 3, 4]);
+    assert_eq!(indices(&second), vec![5, 6, 7, 8, 9]);
 }
 
 // --- Keyed reads ----------------------------------------------------------------
 
 #[test]
 fn note_ids_match_the_pinned_derivation() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let ids = channel.note_ids_for_message(token(), 2);
 
     for (slot, id) in ids.iter().enumerate() {
-        let expected = hashes::compute_note_id(channel.key(), token(), 8 + slot as u64);
+        let expected = hashes::compute_note_id(
+            channel.key(),
+            token(),
+            2 * NOTES_PER_MESSAGE as u64 + slot as u64,
+        );
         assert_eq!(*id, expected, "note id mismatch at slot {slot}");
     }
 }
 
 /// The reader's ids must land on the notes the writer created. If these ever diverge the
-/// counterparty finds nothing, with no error anywhere — the silent failure this whole
-/// codebase is built to avoid.
+/// counterparty finds nothing and gets no error.
 #[test]
 fn the_reader_and_writer_agree_on_where_notes_live() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let message_index = 5;
     let set = channel
         .write_message(token(), message_index, &offer())
@@ -211,7 +231,7 @@ fn the_reader_and_writer_agree_on_where_notes_live() {
 
 #[test]
 fn different_tokens_give_different_locations() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let a = channel.note_ids_for_message(token(), 0);
     let b = channel.note_ids_for_message(Felt::from_hex("0x9999").expect("token"), 0);
     assert_ne!(a, b, "a subchannel is per-token; locations must differ");

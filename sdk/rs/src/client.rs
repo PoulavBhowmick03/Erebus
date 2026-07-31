@@ -26,7 +26,7 @@ use crate::read::{reconstruct, ChannelReader, ReadError};
 use crate::rpc::{RpcError, StarknetRpc};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
 use crate::subchannel::SubchannelCursor;
-use crate::wire::{MessageType, WireMessage};
+use crate::wire::{MessageType, WireMessage, WireVersion};
 
 const MAX_DISCOVERY_ITEMS: u64 = 4096;
 const MAX_EXACT_SELECTION_NOTES: usize = 256;
@@ -85,7 +85,7 @@ impl Client {
     ///
     /// This administrative MVP helper sits outside the seven negotiation methods. Exact
     /// notes are useful because settlement deliberately refuses to destroy surplus value;
-    /// general change-note construction is not yet part of wire v1.
+    /// general change-note construction is not yet part of the MVP.
     pub async fn shield(&self, amount: u128) -> Result<SettlementReceipt, ClientError> {
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
@@ -100,7 +100,12 @@ impl Client {
             address: identity.address(),
             public_key: identity.public_key(),
         };
-        let channel = Channel::derive(&identity, counterparty);
+        let channel = Channel::derive(
+            self.config.chain_id,
+            self.config.pool_address,
+            &identity,
+            counterparty,
+        );
         let actions = channel.shield(
             &identity,
             SetupParams {
@@ -187,14 +192,36 @@ impl Client {
         &self,
         state: &StoredChannel,
     ) -> Result<(OfferBook, HashMap<Felt, Felt>, u32), ClientError> {
-        let outgoing = ChannelReader::new(state.outgoing_key, state.token);
+        let outgoing = ChannelReader::with_version(
+            self.config.chain_id,
+            self.config.pool_address,
+            state.outgoing_key,
+            state.token,
+            state.wire_version,
+        );
         let mut source = HashMap::new();
         let outgoing_next = self.fetch_notes(outgoing, state.token, &mut source).await?;
 
         let incoming_reader = state
             .incoming_key
-            .map(|key| ChannelReader::new(key, state.token))
-            .unwrap_or_else(|| ChannelReader::new(Felt::ZERO, state.token));
+            .map(|key| {
+                ChannelReader::with_version(
+                    self.config.chain_id,
+                    self.config.pool_address,
+                    key,
+                    state.token,
+                    state.wire_version,
+                )
+            })
+            .unwrap_or_else(|| {
+                ChannelReader::with_version(
+                    self.config.chain_id,
+                    self.config.pool_address,
+                    Felt::ZERO,
+                    state.token,
+                    state.wire_version,
+                )
+            });
         if state.incoming_key.is_some() {
             self.fetch_notes(incoming_reader, state.token, &mut source)
                 .await?;
@@ -439,10 +466,13 @@ impl ErebusClient for Client {
         // but only after the preflight, the proof and the fee have all been paid for, and
         // it surfaces as a bare `Contract error`. Returning the existing handle makes this
         // idempotent, which is also what a retrying agent needs. See friction.md F29.
-        if let Some(existing) =
-            self.state
-                .find_channel(identity.address(), counterparty_address, self.config.token)?
-        {
+        if let Some(existing) = self.state.find_channel(
+            self.config.chain_id,
+            self.config.pool_address,
+            identity.address(),
+            counterparty_address,
+            self.config.token,
+        )? {
             return Ok(existing);
         }
 
@@ -451,7 +481,12 @@ impl ErebusClient for Client {
             address: counterparty_address,
             public_key: counterparty_public_key,
         };
-        let channel = Channel::derive(&identity, counterparty);
+        let channel = Channel::derive(
+            self.config.chain_id,
+            self.config.pool_address,
+            &identity,
+            counterparty,
+        );
         let actions = channel.setup(
             &identity,
             SetupParams {
@@ -473,6 +508,8 @@ impl ErebusClient for Client {
         let handle = self.state.create(|handle| {
             StoredChannel::new(
                 handle,
+                self.config.chain_id,
+                self.config.pool_address,
                 identity.address(),
                 counterparty_address,
                 counterparty_public_key,
@@ -496,6 +533,7 @@ impl ErebusClient for Client {
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
         validate_token(lease.state(), terms.token)?;
         if lease.state().settled {
             return Err(ClientError::AlreadySettled);
@@ -507,12 +545,15 @@ impl ErebusClient for Client {
         let (_, _, chain_next) = self.sync_book(lease.state()).await?;
         let mut cursor = SubchannelCursor::resume_at(chain_next);
         let state = lease.state();
-        let channel = Channel::from_key(
+        let channel = Channel::from_key_with_version(
+            self.config.chain_id,
+            self.config.pool_address,
             state.outgoing_key,
             Counterparty {
                 address: state.counterparty_address,
                 public_key: state.counterparty_public_key,
             },
+            state.wire_version,
         );
         let message = WireMessage {
             message_type: MessageType::Offer,
@@ -547,6 +588,7 @@ impl ErebusClient for Client {
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
         validate_token(lease.state(), terms.token)?;
         self.attach_reverse_channel(lease.state_mut(), pool_key)
             .await?;
@@ -569,12 +611,15 @@ impl ErebusClient for Client {
         }
 
         let state = lease.state();
-        let channel = Channel::from_key(
+        let channel = Channel::from_key_with_version(
+            self.config.chain_id,
+            self.config.pool_address,
             state.outgoing_key,
             Counterparty {
                 address: state.counterparty_address,
                 public_key: state.counterparty_public_key,
             },
+            state.wire_version,
         );
         let mut cursor = SubchannelCursor::resume_at(chain_next);
         let message = WireMessage {
@@ -601,6 +646,7 @@ impl ErebusClient for Client {
         let (identity, pool_key) = self.pool_identity()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
         // A one-sided channel is still readable before the counterparty opens their reverse
         // direction. Only suppress the ordinary not-ready result; ambiguity is actionable.
         if let Err(error) = self
@@ -628,6 +674,7 @@ impl ErebusClient for Client {
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
         if lease.state().settled {
             return Err(ClientError::AlreadySettled);
         }
@@ -658,12 +705,15 @@ impl ErebusClient for Client {
         let spend: Vec<OwnedNote> = selected.iter().map(|note| note.note).collect();
 
         let state = lease.state();
-        let channel = Channel::from_key(
+        let channel = Channel::from_key_with_version(
+            self.config.chain_id,
+            self.config.pool_address,
             state.outgoing_key,
             Counterparty {
                 address: state.counterparty_address,
                 public_key: state.counterparty_public_key,
             },
+            state.wire_version,
         );
         let mut cursor = SubchannelCursor::resume_at(chain_next);
         let acceptance = WireMessage {
@@ -712,15 +762,19 @@ impl ErebusClient for Client {
         let (identity, pool_key) = self.pool_identity()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
         self.attach_reverse_channel(lease.state_mut(), pool_key)
             .await?;
         let state = lease.state();
-        let channel = Channel::from_key(
+        let channel = Channel::from_key_with_version(
+            self.config.chain_id,
+            self.config.pool_address,
             state.outgoing_key,
             Counterparty {
                 address: state.counterparty_address,
                 public_key: state.counterparty_public_key,
             },
+            state.wire_version,
         );
         let viewing_key = channel.grant_viewing_key(
             &identity,
@@ -736,6 +790,13 @@ impl ErebusClient for Client {
     }
 
     async fn reveal(&self, grant: ViewingKeyGrant) -> Result<DisclosedRecord, ClientError> {
+        if let Some((chain_id, pool_address)) = grant.viewing_key.authenticated_scope() {
+            if chain_id != self.config.chain_id || pool_address != self.config.pool_address {
+                return Err(ClientError::InvalidRequest(
+                    "viewing grant chain/pool does not match client config".to_owned(),
+                ));
+            }
+        }
         let (outgoing, incoming) = grant.viewing_key.readers();
         let mut source = HashMap::new();
         self.fetch_notes(outgoing, grant.viewing_key.token, &mut source)
@@ -748,7 +809,7 @@ impl ErebusClient for Client {
     }
 }
 
-/// Offer terms represented on wire v1.
+/// Offer terms represented by the canonical negotiation wire.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OfferTerms {
     /// Token base units.
@@ -1096,6 +1157,17 @@ fn validate_token(state: &StoredChannel, token: Felt) -> Result<(), ClientError>
     Ok(())
 }
 
+fn validate_scope(state: &StoredChannel, config: &ClientConfig) -> Result<(), ClientError> {
+    if state.wire_version == WireVersion::V2
+        && (state.chain_id != config.chain_id || state.pool_address != config.pool_address)
+    {
+        return Err(ClientError::InvalidRequest(
+            "channel state chain/pool does not match client config".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validates the `token` field the pool returns alongside a stored note.
 ///
 /// **The field is only meaningful for open notes.** For encrypted notes the pool never
@@ -1343,6 +1415,8 @@ mod tests {
         let handle = handle();
         let state = StoredChannel::new(
             handle.clone(),
+            Felt::from_hex("0x534e5f5345504f4c4941").expect("chain"),
+            Felt::from_hex("0x9001").expect("pool"),
             Felt::ONE,
             Felt::TWO,
             Felt::THREE,
@@ -1375,6 +1449,52 @@ mod tests {
         .expect("acceptance");
 
         assert!(channel_state(&handle, &state, &book, 20).settled);
+    }
+
+    #[test]
+    fn wire_v2_state_cannot_be_reused_under_another_chain_or_pool() {
+        let chain = Felt::from_hex("0x534e5f5345504f4c4941").expect("chain");
+        let pool = Felt::from_hex("0x9001").expect("pool");
+        let mut state = StoredChannel::new(
+            handle(),
+            chain,
+            pool,
+            Felt::ONE,
+            Felt::TWO,
+            Felt::THREE,
+            Felt::from(4u8),
+            Felt::from(5u8),
+            0,
+            0,
+            Felt::from(6u8),
+            7,
+        );
+        let mut config = ClientConfig {
+            rpc_url: String::new(),
+            prover_url: String::new(),
+            pool_address: pool,
+            chain_id: chain,
+            account_address: Felt::ONE,
+            pool_key_file: PathBuf::new(),
+            account_key_file: PathBuf::new(),
+            state_dir: PathBuf::new(),
+            token: Felt::from(4u8),
+        };
+
+        assert!(validate_scope(&state, &config).is_ok());
+        config.pool_address += Felt::ONE;
+        assert!(validate_scope(&state, &config).is_err());
+        config.pool_address = pool;
+        config.chain_id += Felt::ONE;
+        assert!(validate_scope(&state, &config).is_err());
+
+        state.wire_version = WireVersion::V1;
+        state.chain_id = Felt::ZERO;
+        state.pool_address = Felt::ZERO;
+        assert!(
+            validate_scope(&state, &config).is_ok(),
+            "historical v1 state had no authenticated chain/pool scope"
+        );
     }
 
     /// Packs a note the way the pool stores it: salt in the high 128 bits, encrypted amount

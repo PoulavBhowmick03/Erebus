@@ -27,6 +27,14 @@ fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
 }
 
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
+}
+
 fn entropy(value: u64) -> FeltEntropy {
     FeltEntropy::new(Felt::from(value)).expect("non-zero")
 }
@@ -66,7 +74,7 @@ fn entropy_round_trips() {
 
 #[test]
 fn full_setup_is_three_actions_in_one_set() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = channel.setup(&alice(), params(true)).expect("valid setup");
 
     assert_eq!(set.actions().len(), 3);
@@ -79,7 +87,7 @@ fn full_setup_is_three_actions_in_one_set() {
 /// second `SetViewingKey` reverts on the WriteOnce.
 #[test]
 fn setup_without_registration_omits_it() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = channel.setup(&alice(), params(false)).expect("valid setup");
 
     assert_eq!(set.actions().len(), 2);
@@ -93,7 +101,7 @@ fn setup_without_registration_omits_it() {
 /// reordering would be caught here rather than reverting after a proof.
 #[test]
 fn setup_actions_are_in_ascending_phase_order() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = channel.setup(&alice(), params(true)).expect("valid setup");
 
     let phases: Vec<u8> = set.actions().iter().map(|a| a.phase()).collect();
@@ -105,7 +113,7 @@ fn setup_actions_are_in_ascending_phase_order() {
 
 #[test]
 fn the_channel_action_addresses_the_counterparty() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let action = channel.open_channel(3, entropy(0xaa), entropy(0xbb));
 
     let ClientAction::OpenChannel(input) = action else {
@@ -121,7 +129,7 @@ fn the_channel_action_addresses_the_counterparty() {
 /// this were ever the wrong key, every note would land somewhere neither party reads.
 #[test]
 fn the_subchannel_action_carries_this_channels_key() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let action = channel.open_subchannel(0, token(), entropy(0xcc));
 
     let ClientAction::OpenSubchannel(input) = action else {
@@ -137,7 +145,7 @@ fn the_subchannel_action_carries_this_channels_key() {
 /// is why the wire format can leave `token` out of a message.
 #[test]
 fn two_tokens_need_two_subchannels_on_the_same_channel() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let first = channel.open_subchannel(0, token(), entropy(0xcc));
     let second =
         channel.open_subchannel(1, Felt::from_hex("0x9999").expect("token"), entropy(0xdd));
@@ -158,7 +166,7 @@ fn two_tokens_need_two_subchannels_on_the_same_channel() {
 fn setup_and_the_first_message_agree_on_the_channel() {
     use erebus_sdk::wire::{MessageType, WireMessage};
 
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let setup = channel.setup(&alice(), params(true)).expect("valid setup");
 
     let ClientAction::OpenSubchannel(subchannel) = &setup.actions()[2] else {
@@ -194,7 +202,7 @@ fn shield_is_one_balanced_replay_protected_action_set() {
         address: identity.address(),
         public_key: identity.public_key(),
     };
-    let channel = Channel::derive(&identity, self_counterparty);
+    let channel = Channel::derive(chain(), pool(), &identity, self_counterparty);
     let set = channel
         .shield(
             &identity,

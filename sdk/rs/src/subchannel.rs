@@ -1,35 +1,22 @@
 //! Note-index allocation within a subchannel.
 //!
-//! ## Why this exists
+//! The pool checks two index rules after proof generation. A failure costs ~29 s and a
+//! proving fee, so this module checks them first.
 //!
-//! The pool enforces two rules on every note index, at three call sites each for channels,
-//! subchannels and notes. Both are checked *after* a proof has been generated and paid for,
-//! so getting either wrong costs ~29 s and a proving fee to learn something the client
-//! already had enough information to know.
+//! 1. `privacy.cairo:737-746` requires `index == 0 || note[index - 1] exists`. A missing
+//!    predecessor returns `INDEX_NOT_SEQUENTIAL`. Checking only the immediate predecessor is
+//!    enough because each earlier index passed the same check.
+//! 2. `_apply_write_once` (`privacy.cairo:932-946`) requires a zero target slot. Reusing an
+//!    index returns `NON_ZERO_VALUE`, including reuse by the original writer.
 //!
-//! 1. **Contiguity.** `privacy.cairo:737-746` asserts `index == 0 || note[index - 1] exists`,
-//!    reverting with `INDEX_NOT_SEQUENTIAL`. Note that it checks *only the immediate
-//!    predecessor* — it is a predecessor-exists test, not a scan of the whole run. That is
-//!    enough to make gaps unreachable, because every index had to pass the same test on the
-//!    way up.
-//! 2. **Write-once.** `_apply_write_once` (`privacy.cairo:932-946`) reads each target slot
-//!    and asserts it is zero before writing, reverting with `NON_ZERO_VALUE`. So an index
-//!    cannot be reused, even by its original writer.
+//! [`SubchannelCursor`] allocates contiguous indices once for each `(channel_key, token)`
+//! pair. Each token subchannel has its own index space.
 //!
-//! Together those make the index space an **allocator**: hand out contiguously, never twice.
-//! Nothing in the SDK was doing that. Both `write_message` and `accept_and_settle` took a
-//! caller-supplied index and trusted it, which means every caller was independently
-//! responsible for reproducing two contract invariants from memory.
+//! ## Chain state
 //!
-//! [`SubchannelCursor`] is that allocator. One per `(channel_key, token)` pair, because a
-//! subchannel *is* a token and the index space is per subchannel.
-//!
-//! ## What this deliberately does not do
-//!
-//! It does not talk to the chain. A cursor is a local model of what this agent believes it
-//! has written; [`SubchannelCursor::resume_at`] is how a returning agent reseats it from
-//! observed state. If the local model and the chain disagree, the chain wins and the revert
-//! is the symptom — this type narrows the window, it does not close it.
+//! A cursor is a local model and does not read the chain. A returning agent uses
+//! [`SubchannelCursor::resume_at`] with observed state. An incorrect local cursor can still
+//! cause a contract revert.
 
 use core::ops::Range;
 
@@ -37,8 +24,7 @@ use crate::wire::NOTES_PER_MESSAGE;
 
 /// Errors from index allocation.
 ///
-/// Both variants name the contract error they prevent, so a failure here reads as "this
-/// would have reverted with X" rather than as an SDK-internal complaint.
+/// Each failure names the corresponding contract error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum IndexError {
     /// Writing here would leave a gap. On-chain this is `INDEX_NOT_SEQUENTIAL`.
@@ -64,11 +50,10 @@ pub enum IndexError {
         /// The index that overflowed.
         index: u32,
     },
-    /// A message was requested at an index that is not on the four-note grid.
+    /// A message was requested at an index that is not on the wire-v2 five-note grid.
     ///
-    /// The wire format puts message `k` at notes `4k..4k+3` so a reader can seek without a
-    /// framing search. Once an allocation lands off that grid, every later message is
-    /// misaligned and the reader silently reassembles garbage.
+    /// Message `k` uses notes `5k..5k+4`. An off-grid allocation misaligns every later
+    /// message and makes the reader assemble incorrect data.
     #[error(
         "next free index {next} is not on the {NOTES_PER_MESSAGE}-note message grid; \
          a message cannot start here without breaking reader alignment"
@@ -81,8 +66,7 @@ pub enum IndexError {
 
 /// The index allocator for one subchannel.
 ///
-/// Tracks the next free note index. Every write goes through it, so contiguity and
-/// single-use hold by construction rather than by each call site remembering to check.
+/// Tracks the next free note index and enforces contiguous, single-use allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SubchannelCursor {
     next: u32,
@@ -96,10 +80,8 @@ impl SubchannelCursor {
 
     /// Reseat a cursor from observed chain state.
     ///
-    /// `next` is the first index the agent believes is unwritten. A returning agent gets
-    /// this by reading its own subchannel; there is no way to derive it locally, because
-    /// the counterparty cannot write here but this agent may have written from another
-    /// process or a previous run.
+    /// `next` is the first index that the agent believes is unwritten. Recover it from the
+    /// agent's subchannel after another process or earlier run changes chain state.
     pub fn resume_at(next: u32) -> Self {
         Self { next }
     }
@@ -109,11 +91,10 @@ impl SubchannelCursor {
         self.next
     }
 
-    /// The message index a new message would occupy, if the cursor is on the grid.
+    /// Index a new message would occupy. Requires the cursor on a message boundary.
     ///
-    /// Errors with [`IndexError::Misaligned`] rather than rounding. Rounding would skip an
-    /// index and hit `INDEX_NOT_SEQUENTIAL`; truncating would overwrite and hit
-    /// `NON_ZERO_VALUE`. There is no safe repair, so the caller has to know.
+    /// Returns [`IndexError::Misaligned`] instead of rounding. Rounding up skips an index and
+    /// hits `INDEX_NOT_SEQUENTIAL`. Rounding down overwrites and hits `NON_ZERO_VALUE`.
     pub fn next_message_index(&self) -> Result<u32, IndexError> {
         if !self.next.is_multiple_of(NOTES_PER_MESSAGE as u32) {
             return Err(IndexError::Misaligned { next: self.next });
@@ -121,10 +102,9 @@ impl SubchannelCursor {
         Ok(self.next / NOTES_PER_MESSAGE as u32)
     }
 
-    /// Check that `index` is exactly the next free one, without consuming it.
+    /// Checks that `index` is the next free index without consuming it.
     ///
-    /// This is the client-side mirror of both contract rules: anything below `next` is a
-    /// write-once violation, anything above leaves a gap.
+    /// An index below `next` violates write-once. An index above `next` leaves a gap.
     pub fn check(&self, index: u32) -> Result<(), IndexError> {
         match index.cmp(&self.next) {
             core::cmp::Ordering::Less => Err(IndexError::AlreadyWritten { index }),
@@ -150,14 +130,14 @@ impl SubchannelCursor {
 
     /// Reserve one full message: [`NOTES_PER_MESSAGE`] indices on the grid.
     ///
-    /// Returns the *message* index, which is what the wire format and the reader speak in.
+    /// Returns the message index used by the wire format and reader.
     pub fn reserve_message(&mut self) -> Result<u32, IndexError> {
         let message_index = self.next_message_index()?;
         self.reserve(NOTES_PER_MESSAGE as u32)?;
         Ok(message_index)
     }
 
-    /// Reserve a single note index — the settlement payment note.
+    /// Reserves one note index for a settlement payment.
     pub fn reserve_note(&mut self) -> Result<u32, IndexError> {
         Ok(self.reserve(1)?.start)
     }
@@ -190,15 +170,22 @@ mod tests {
 
         assert_eq!(
             cursor.reserve_message().unwrap_err(),
-            IndexError::Misaligned { next: 5 }
+            IndexError::Misaligned {
+                next: NOTES_PER_MESSAGE as u32 + 1,
+            }
         );
     }
 
     #[test]
     fn a_failed_reservation_leaves_the_cursor_where_it_was() {
-        let mut cursor = SubchannelCursor::resume_at(5);
+        let start = NOTES_PER_MESSAGE as u32 + 1;
+        let mut cursor = SubchannelCursor::resume_at(start);
         assert!(cursor.reserve_message().is_err());
-        assert_eq!(cursor.next_index(), 5, "cursor moved on a failed reserve");
+        assert_eq!(
+            cursor.next_index(),
+            start,
+            "cursor moved on a failed reserve"
+        );
     }
 
     #[test]

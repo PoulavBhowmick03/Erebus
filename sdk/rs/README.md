@@ -52,7 +52,7 @@ already registered.
 
 Methods:
 
-- `generate_pool_key` — local provisioning utility; no network or Python key value involved
+- `generate_pool_key`, local provisioning utility; no network or Python key value involved
 - `open_channel`
 - `propose_offer`
 - `counter_offer`
@@ -60,7 +60,19 @@ Methods:
 - `accept_and_settle`
 - `grant_viewing_key`
 - `reveal`
-- `shield` — administrative funding helper, outside the seven-method negotiation surface
+- `shield`, administrative funding helper, outside the seven-method negotiation surface
+
+## Negotiation wire v2
+
+New channels encrypt/authenticate the canonical 400-bit negotiation record with
+AES-256-GCM-SIV, then fragment the 50-byte ciphertext plus 16-byte tag across five public
+note salts. HKDF-SHA-256 binds key/nonce derivation to the chain, pool, directional channel
+key, token and message index; chain/pool/token/index are authenticated data.
+
+State created before this change has no `wire_version` and loads as public wire v1. It
+remains readable for disclosure, but every v1 write fails with `LegacyReadOnly`. Viewing
+grant v1 remains readable; new grants include the chain, pool scope and wire version in
+their checksum.
 
 Build and check:
 
@@ -86,7 +98,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   it to sign the proof invocation and final account transaction.
 - `grant_viewing_key` is the intentional exception: it exports a self-contained bearer
   secret covering both directions of one counterparty relationship and one token. Its
-  `grantee` field is metadata in MVP v1; secure delivery is the operator's responsibility.
+  `grantee` field is metadata; secure delivery is the operator's responsibility.
 
 ## Current MVP limits
 
@@ -102,8 +114,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   but before the response can orphan an `open_channel` handle or make a caller retry an
   already-written offer as a second offer. Cursor recovery prevents index reuse; it does not
   recover the lost application result.
-- The complete pipeline is pinned against local JSON-RPC fixtures, and the proof wire was
-  probed against Sepolia. A successful protocol-2 shield/settlement has not yet landed on
-  Sepolia; shielding remains gated by the deployed pool's screening attestation.
+- Shield, two-direction wire-v1 negotiation, atomic settlement and independent disclosure
+  have landed on Sepolia. Wire v2 is verified offline and still needs a fresh live run,
+  fee measurement and independent cryptographic review.
 - `sdk/py` still speaks protocol 1. Updating the shared Python/MCP integration is P2.3 and
   was intentionally left out of this Rust-only pass.

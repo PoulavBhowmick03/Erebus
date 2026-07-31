@@ -6,7 +6,8 @@ Erebus is experimental coordination and shielded-settlement infrastructure for A
 
 The target is an **Eleusis** — an encrypted channel that hides the negotiation and its
 relationship graph. Atomic shielded settlement and scoped reconstruction now work live;
-the current negotiation wire does **not** yet meet that privacy target.
+the Rust SDK now encrypts/authenticates negotiation payloads in wire v2, but that new wire
+has not yet been exercised on-chain or independently reviewed.
 
 ---
 
@@ -16,10 +17,11 @@ the current negotiation wire does **not** yet meet that privacy target.
 settlement and bearer-grant disclosure. Nothing here is production-ready. Do not put real
 value through it.
 
-Current blocker: negotiation messages are encoded directly into note salts, and the pool
-stores those salts verbatim in public `packed_value` calldata/events. The live transaction
-proved the terms are publicly decodable. The wire must encrypt and authenticate the message
-before fragmentation; see [F30](./docs/friction.md).
+The first live transaction exposed wire-v1 terms because salts are public. Wire v2 replaces
+that format with AES-256-GCM-SIV ciphertext and a 128-bit authentication tag, fragmented
+across five salt chunks.
+Its Rust KATs, tamper tests, legacy reads and full offline suite pass; a fresh live v2 run,
+cross-language peer implementation and security review remain. See [F30](./docs/friction.md).
 
 Target is **Starknet Sepolia** — privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
 Mainnet has no STRK20 deployment yet. Where the stack has fought us is logged honestly in

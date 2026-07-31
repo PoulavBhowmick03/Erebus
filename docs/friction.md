@@ -218,7 +218,9 @@ self-identifying and the anonymity set collapses from "pool users" to "Erebus us
 Off-chain transport moves the negotiation graph to whoever runs the transport — which is
 precisely the leak the README says the project exists to fix — and it breaks `reveal`,
 because a viewing key is pool key material and cannot reconstruct off-chain offers.
-The salt lane keeps both properties.
+We believed the salt lane kept both properties. F30 disproved the confidentiality half:
+the chain still reconstructs the transcript because the salts themselves are public.
+Self-contained `reveal` survives.
 
 **One earlier objection of ours turned out to be wrong.** We flagged salt-reuse as a
 reason not to touch the salt at all. It only bites on notes whose amount varies:
@@ -237,6 +239,9 @@ payload), all in one action set, one proof per round.
 **Costs accepted.** ~4 notes per message. Every data note is permanently unspendable and
 burns a subchannel index forever. We bypass the SDK builder and construct
 `ClientAction[]` directly, because the salt is hardcoded on write and discarded on read.
+
+**Superseded for new writes by F31.** This remains the wire-v1 record and compatibility
+contract; wire v2 uses five encrypted/authenticated notes.
 
 ### What would have made it easier
 
@@ -639,7 +644,8 @@ and only identity needs hiding — the opposite of what Erebus needs.
 are also public in `packed_value`. Keyed discovery hid where a wallet should look, not what a
 global transaction observer can read. See F30.
 
-That salt is our entire payload mechanism (F1: 119 bits per note, four notes per message).
+That salt is our entire payload mechanism (F31: 119 bits per note, five encrypted chunks
+per wire-v2 message).
 A wallet exposing `transfer(recipient, token, amount)` picks the salt itself; there is no
 seam to hand it an `OfferTerms`.
 
@@ -807,12 +813,12 @@ the fix (sort creates ascending) is free and correct either way. Verify at P2.0.
 allocator per subchannel, and `accept_and_settle` sorts its creations by index before
 emitting. Nine tests in `tests/index_contiguity.rs`, three mutations checked.
 
-**A design consequence, not a bug.** A negotiation message occupies four notes on a
-`4k..4k+3` grid so the reader needs no framing search. A settlement's payment note is one
-note wide. So settling leaves the cursor at `4k+1`, off the grid, and no further message can
+**A design consequence, not a bug.** Wire v2 occupies five notes on a `5k..5k+4` grid so
+the reader needs no framing search. A settlement's payment note is one note wide. So
+settling leaves the cursor at `5k+1`, off the grid, and no further message can
 be written to that subchannel. One subchannel is currently one deal. Fine for the MVP;
 a real constraint on long-lived agent pairs, and there is no cheap fix — padding to the
-grid means writing filler notes that are permanently unspendable and burn indices forever.
+next grid boundary means four filler notes that are permanently unspendable.
 
 **What would have made it easier.** Saying in the `apply_actions` docs that actions are
 applied sequentially and observe each other's writes. It changes an action set from a set
@@ -981,6 +987,40 @@ terminal-`settled` rule and is the first thing to revisit after the MVP.
 
 ---
 
+## F31 — Wire v2 hides what was negotiated, not that a negotiation happened (P1.3)
+
+Wire v2 closed F30 by encrypting the message under AES-256-GCM-SIV before fragmentation.
+Content confidentiality holds. Traffic confidentiality does not.
+
+The envelope is 536 bits (1 marker byte, 50 ciphertext, 16 tag) fragmented into five notes
+of 119 payload bits, which is 595 bits of capacity. The 59 spare bits are zero filled, so
+the fifth salt of every message has bits 60 through 118 clear and bit 119 pinned, whatever
+the message contains. Verified in `tests/wire_v2_fingerprint.rs`. A random 120-bit salt
+matches that shape with probability 2^-59, so the fifth salt identifies an Erebus message
+essentially every time.
+
+An observer reading pool calldata can therefore still enumerate negotiation messages, count
+rounds, time them, and attribute them to the submitting account, which is public. Deal
+cadence and counterparty timing are commercially useful on their own. A competitor watching
+a supplier does not need the prices to learn when that supplier is closing business.
+
+The marker byte is the same problem in smaller form. It sits outside the ciphertext at a
+fixed offset, and the legitimate reader does not need it because `StoredChannel` already
+carries `wire_version`.
+
+Filling the spare bits with random padding makes the fifth salt uniform over its range. An
+Erebus salt is then distinguishable only by the pinned bit 119, which roughly half of all
+ordinary random pool salts also carry, so messages sit inside a large anonymity set instead
+of standing alone. `every_salt_should_be_indistinguishable_from_a_random_one` is the target,
+kept ignored until then.
+
+The general shape of this is worth keeping. Encrypting a payload is the obvious half of
+confidentiality and the easy half to verify. Padding, framing and length are where the
+information leaks after the cryptography is correct, and none of it shows up in a test that
+only checks that plaintext round-trips.
+
+---
+
 ## F30 — The salt lane is public calldata, not a private payload lane (P1.3)
 
 Found only after the full live settlement succeeded on 2026-07-31. This invalidates the
@@ -1027,7 +1067,8 @@ settlement, nullifier consumption and scoped disclosure, but DoD #1 still says *
 channel*. The current wire does not meet it, and the runbook must not say the terms were
 absent from calldata.
 
-**No replacement chosen yet.** The design space to evaluate is:
+**Resolved by F31.** Five-note authenticated encryption was selected. The rejected space
+was:
 
 - encrypt the 400 message bits under the directional channel key, use the remaining 76 bits
   for versioning/authentication, accepting a truncated authenticator;
@@ -1036,9 +1077,49 @@ absent from calldata.
 - abandon on-chain negotiation payloads and keep only a commitment on-chain, accepting that
   disclosure then needs the off-chain transcript.
 
-This is a wire-format and product-claim decision, not a local decoder fix. It changes KATs,
-the TypeScript oracle, existing live-message compatibility and the cost per negotiation
-round. Make that decision explicitly before more implementation.
+The decision changes KATs, existing live-message compatibility and the cost per negotiation
+round. The TypeScript peer remains intentionally untouched until the shared integration
+pass.
+
+---
+
+## F31 — Five notes fit standard authentication; retry semantics require nonce-misuse resistance (P1.3)
+
+**Decision and Rust implementation, 2026-07-31.** New channels use wire v2:
+
+- canonical plaintext: 400 bits / 50 bytes;
+- AES-256-GCM-SIV ciphertext: 50 bytes plus a 16-byte authentication tag = 528 bits;
+- public envelope: 8-bit v2 marker plus 59 required-zero padding bits;
+- fragmentation: five 119-bit chunks, each with the contract-valid bit 119 pinned.
+
+The key and 96-bit nonce are derived with HKDF-SHA-256 from the directional channel key and
+scoped by chain, pool, token and message index. Chain, pool, token and index are also authenticated data,
+so copying ciphertext across any of those boundaries fails authentication. AES-GCM-SIV is
+the nonce-misuse-resistant construction standardized by RFC 8452:
+https://www.rfc-editor.org/rfc/rfc8452.html.
+
+**The important correction happened during implementation.** The first draft used
+XChaCha20-Poly1305 with a nonce derived from the note index. WriteOnce makes an index unique
+only after inclusion. A preflight/proof/submission can fail, then the caller can retry
+different terms at the same still-free index; both ciphertexts have already reached the RPC
+and prover. Ordinary ChaCha20-Poly1305 would then reuse a nonce under different plaintexts
+and fail catastrophically. AES-GCM-SIV makes that failure mode non-catastrophic while
+preserving deterministic retries of the same action set. It is a safety net, not permission
+to reuse indices deliberately.
+
+**Migration is explicit.** State records without `wire_version` deserialize as v1. Viewing
+grant v1 remains checksummed and readable. New state/grants are v2 and include the chain and
+pool scope. Any attempt to write through v1 returns `LegacyReadOnly`; silently publishing another
+plaintext offer is not a compatibility feature.
+
+**Pinned offline:** a five-salt known answer, message round trips, single-bit tamper failure,
+wrong chain/pool/channel/token/index failure, canonical-padding rejection, changed-term same-index
+retry, old TypeScript v1 vectors, legacy state migration, legacy transcript reading and
+legacy grant reading, and state/config scope mismatch rejection. Full Rust suite: 190
+passed, 2 deliberately ignored live-prover tests.
+
+**Still open:** fresh Sepolia v2 offer/counter/settlement/reveal; measure the fifth note's
+actual fee delta; independent cryptographic review; cross-language peer implementation.
 
 ---
 
@@ -1117,7 +1198,7 @@ pool get_fee_amount()      0
 So the pool takes no protocol fee on Sepolia — the whole 3 STRK is Starknet gas for
 verifying a STARK proof on-chain. That is roughly 30–60x an ordinary transfer.
 
-**Why this lands on the salt lane specifically.** A negotiation message is 4 zero-amount
+**Why this lands on the salt lane specifically.** Wire v2 is 5 zero-amount
 notes in one action set, which is one `apply_actions`, which is one proof. So the unit of
 cost is not the byte or the note — it is the message. A three-round negotiation plus
 settlement is offer + counter + accept + settle ≈ 4 proofs ≈ **12 STRK**, before anyone has

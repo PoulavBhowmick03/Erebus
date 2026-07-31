@@ -1,12 +1,12 @@
-//! Tests for note-index allocation — P1.3, contiguity and single-use.
+//! Tests for note-index allocation: P1.3, contiguity and single-use.
 //!
 //! The pool enforces two index rules and enforces them *after* the proof:
 //! `INDEX_NOT_SEQUENTIAL` if a write leaves a gap (`privacy.cairo:737-746`) and
 //! `NON_ZERO_VALUE` if it overwrites (`privacy.cairo:932-946`). Both are ~29 s and a proving
 //! fee to learn. Everything here is about catching them at the point of the mistake instead.
 //!
-//! The property that actually matters is at the bottom: across a whole negotiation, the note
-//! indices emitted by every action set form one contiguous run from zero with no repeats.
+//! Across a negotiation, all emitted note indices must form one contiguous run from zero
+//! without repeats.
 //! Any weaker check passes on layouts the chain rejects.
 
 use erebus_sdk::actions::{ClientAction, RandomSalt};
@@ -31,6 +31,14 @@ fn bob() -> Counterparty {
 
 fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
+}
+
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
 }
 
 fn salt() -> RandomSalt {
@@ -105,11 +113,11 @@ fn rewriting_a_written_index_is_rejected() {
 /// the subchannel would be permanently unusable.
 #[test]
 fn a_rejected_message_does_not_burn_indices() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
 
     let mut bad = message(MessageType::Offer, 1);
-    bad.created_at = u64::MAX; // rejected by the wire encoder — 40-bit field
+    bad.created_at = u64::MAX; // The wire encoder rejects this 40-bit field.
 
     channel
         .write_next_message(token(), &mut cursor, &bad)
@@ -126,7 +134,7 @@ fn a_rejected_message_does_not_burn_indices() {
 
 #[test]
 fn consecutive_messages_take_consecutive_grid_slots() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
 
     for expected in 0..3u32 {
@@ -141,20 +149,20 @@ fn consecutive_messages_take_consecutive_grid_slots() {
     }
 }
 
-/// The reader seeks `4k..4k+3` with no framing search, so a message that starts off the grid
-/// silently misframes every message after it. Refusing is the only safe answer — rounding up
-/// leaves a gap, rounding down overwrites.
+/// The reader seeks `5k..5k+4` without a framing search. An off-grid start misframes later
+/// messages. Rounding up leaves a gap, and rounding down overwrites a note.
 #[test]
 fn a_message_cannot_start_off_the_grid() {
-    let channel = Channel::derive(&alice(), bob());
-    let mut cursor = SubchannelCursor::resume_at(5);
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let off_grid = NOTES_PER_MESSAGE as u32 + 1;
+    let mut cursor = SubchannelCursor::resume_at(off_grid);
 
     let error = channel
         .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1))
-        .expect_err("index 5 is not a message boundary");
+        .expect_err("index after the first payment slot is not a message boundary");
     assert!(matches!(
         error,
-        ChannelError::Index(IndexError::Misaligned { next: 5 })
+        ChannelError::Index(IndexError::Misaligned { next }) if next == off_grid
     ));
 }
 
@@ -167,7 +175,7 @@ fn a_message_cannot_start_off_the_grid() {
 /// was about to fill.
 #[test]
 fn settlement_emits_its_notes_in_ascending_index_order() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     channel
         .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1_000))
@@ -193,7 +201,7 @@ fn settlement_emits_its_notes_in_ascending_index_order() {
 
 #[test]
 fn settlement_puts_the_record_on_the_grid_and_the_payment_after_it() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     channel
         .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1_000))
@@ -211,16 +219,16 @@ fn settlement_puts_the_record_on_the_grid_and_the_payment_after_it() {
         .expect("valid settlement");
 
     assert_eq!(message_index, 1, "the acceptance is message 1");
-    // Record at 4..7 on the grid, payment at 8 directly after.
-    assert_eq!(created_indices(&set), vec![4, 5, 6, 7, 8]);
+    // Record at 5..9 on the grid, payment at 10 directly after.
+    assert_eq!(created_indices(&set), vec![5, 6, 7, 8, 9, 10]);
 }
 
-/// The payment note is one index wide, so settling leaves the cursor at `4k+1`. A second
+/// The payment note is one index wide, so settling leaves the cursor at `5k+1`. A second
 /// negotiation in the same subchannel therefore cannot start. Pinned here because it is a
 /// real constraint on multi-deal subchannels, not because it is desirable.
 #[test]
 fn settling_ends_the_subchannel_for_further_messages() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     channel
         .settle_next(
@@ -250,7 +258,7 @@ fn settling_ends_the_subchannel_for_further_messages() {
 /// diagnostics for when this one fails.
 #[test]
 fn a_whole_negotiation_writes_one_contiguous_run() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut written: Vec<u32> = Vec::new();
 

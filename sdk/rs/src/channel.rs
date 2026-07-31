@@ -37,10 +37,13 @@ use crate::actions::{
     ClientAction, CreateEncNoteInput, DepositInput, FeltEntropy, NoteSalt, OpenChannelInput,
     OpenSubchannelInput, RandomSalt, SetViewingKeyInput, UseNoteInput,
 };
-use crate::disclosure::ViewingGrant;
+use crate::disclosure::{ViewingGrant, ViewingGrantFields};
 use crate::hashes;
 use crate::subchannel::{IndexError, SubchannelCursor};
-use crate::wire::{encode_message, MessageType, WireError, WireMessage, NOTES_PER_MESSAGE};
+use crate::wire::{
+    encode_message, MessageType, WireContext, WireError, WireMessage, WireVersion,
+    NOTES_PER_MESSAGE,
+};
 
 /// Errors from channel operations.
 #[derive(Debug, thiserror::Error)]
@@ -79,14 +82,16 @@ pub enum ChannelError {
     },
     /// The payment note index falls inside the acceptance record's range.
     #[error(
-        "payment note index {payment} collides with the acceptance record at {acceptance_first}..{}",
-        acceptance_first + 4
+        "payment note index {payment} collides with the acceptance record at \
+         {acceptance_first}..{acceptance_end}"
     )]
     IndexCollision {
         /// The payment note's index.
         payment: u32,
         /// First index of the acceptance record.
         acceptance_first: u32,
+        /// Exclusive end of the acceptance record.
+        acceptance_end: u32,
     },
 }
 
@@ -163,13 +168,21 @@ pub struct Counterparty {
 /// is not public either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Channel {
+    chain_id: Felt,
+    pool_address: Felt,
     channel_key: Felt,
     counterparty: Counterparty,
+    wire_version: WireVersion,
 }
 
 impl Channel {
     /// Derives the channel from us to `counterparty`. Only the sender can do this.
-    pub fn derive(identity: &PoolIdentity, counterparty: Counterparty) -> Self {
+    pub fn derive(
+        chain_id: Felt,
+        pool_address: Felt,
+        identity: &PoolIdentity,
+        counterparty: Counterparty,
+    ) -> Self {
         let channel_key = hashes::compute_channel_key(
             identity.address,
             identity.private_key,
@@ -177,8 +190,11 @@ impl Channel {
             counterparty.public_key,
         );
         Self {
+            chain_id,
+            pool_address,
             channel_key,
             counterparty,
+            wire_version: WireVersion::V2,
         }
     }
 
@@ -186,10 +202,38 @@ impl Channel {
     ///
     /// The recipient cannot derive this — it hashes the sender's private key — so it
     /// arrives encrypted in `EncChannelInfo` and is passed here.
-    pub fn from_key(channel_key: Felt, counterparty: Counterparty) -> Self {
-        Self {
+    pub fn from_key(
+        chain_id: Felt,
+        pool_address: Felt,
+        channel_key: Felt,
+        counterparty: Counterparty,
+    ) -> Self {
+        Self::from_key_with_version(
+            chain_id,
+            pool_address,
             channel_key,
             counterparty,
+            WireVersion::V2,
+        )
+    }
+
+    /// Reconstructs a channel stored under an explicit wire generation.
+    ///
+    /// Wire v1 remains readable so existing grants do not become useless, but attempts to
+    /// write through it fail with [`WireError::LegacyReadOnly`].
+    pub fn from_key_with_version(
+        chain_id: Felt,
+        pool_address: Felt,
+        channel_key: Felt,
+        counterparty: Counterparty,
+        wire_version: WireVersion,
+    ) -> Self {
+        Self {
+            chain_id,
+            pool_address,
+            channel_key,
+            counterparty,
+            wire_version,
         }
     }
 
@@ -201,6 +245,21 @@ impl Channel {
     /// The other party.
     pub fn counterparty(&self) -> Counterparty {
         self.counterparty
+    }
+
+    /// Wire generation used by this channel.
+    pub fn wire_version(&self) -> WireVersion {
+        self.wire_version
+    }
+
+    fn wire_context(&self, token: Felt, message_index: u32) -> WireContext {
+        WireContext {
+            chain_id: self.chain_id,
+            pool_address: self.pool_address,
+            channel_key: self.channel_key,
+            token,
+            message_index,
+        }
     }
 
     /// The action that opens this channel to the counterparty.
@@ -321,7 +380,7 @@ impl Channel {
 
     /// Builds the action set that writes one negotiation message into this channel.
     ///
-    /// Four zero-amount notes at consecutive indices, one action set, one proof.
+    /// Five zero-amount notes at consecutive indices, one action set, one proof.
     ///
     /// The notes carry **zero value on purpose**. A structured salt on a value-bearing note
     /// would reuse the one-time-pad nonce that masks the amount, letting an observer
@@ -333,7 +392,10 @@ impl Channel {
         message_index: u32,
         message: &WireMessage,
     ) -> Result<ActionSet, ChannelError> {
-        let salts = encode_message(message)?;
+        if self.wire_version == WireVersion::V1 {
+            return Err(WireError::LegacyReadOnly.into());
+        }
+        let salts = encode_message(&self.wire_context(token, message_index), message)?;
         let first = message_index * NOTES_PER_MESSAGE as u32;
 
         let mut builder = ActionSetBuilder::new();
@@ -380,13 +442,16 @@ impl Channel {
         incoming_key: Felt,
         token: Felt,
     ) -> ViewingGrant {
-        ViewingGrant::new(
-            self.channel_key,
+        ViewingGrant::new(ViewingGrantFields {
+            chain_id: self.chain_id,
+            pool_address: self.pool_address,
+            wire_version: self.wire_version,
+            outgoing_key: self.channel_key,
             incoming_key,
             token,
-            identity.address(),
-            self.counterparty.address,
-        )
+            granter: identity.address(),
+            counterparty: self.counterparty.address,
+        })
     }
 
     /// A single zero-amount note carrying a structured salt.
@@ -463,10 +528,17 @@ impl Channel {
             return Err(ChannelError::IndexCollision {
                 payment: payment.index,
                 acceptance_first,
+                acceptance_end: acceptance_range.end,
             });
         }
 
-        let salts = encode_message(&acceptance.message)?;
+        if self.wire_version == WireVersion::V1 {
+            return Err(WireError::LegacyReadOnly.into());
+        }
+        let salts = encode_message(
+            &self.wire_context(token, acceptance.message_index),
+            &acceptance.message,
+        )?;
         let mut builder = ActionSetBuilder::new();
 
         // Phase 4: consume the inputs.
@@ -508,7 +580,7 @@ impl Channel {
     /// Accepts and settles using the next free indices, allocated from `cursor`.
     ///
     /// Layout is the acceptance record on the message grid, then the payment note directly
-    /// after it. That ordering is forced: the record has to stay on the `4k..4k+3` grid or
+    /// after it. That ordering is forced: the record has to stay on the `5k..5k+4` grid or
     /// the counterparty's reader misframes every later message, so the odd-sized payment
     /// note can only go after it.
     ///

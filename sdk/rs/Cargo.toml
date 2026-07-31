@@ -25,6 +25,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 rand = "0.8"
 # Starknet entrypoint selectors are Starknet-keccak(name).
 sha3 = "0.10"
+# Wire v2 encrypts the 400-bit negotiation record before it enters public note salts.
+# AES-GCM-SIV is nonce-misuse resistant: a failed attempt may be rebuilt with different
+# terms at the same note index before the chain's WriteOnce rule has taken effect.
+aes-gcm-siv = "0.11"
+hkdf = "0.12"
+sha2 = "0.10"
 # A one-shot CLI can have concurrent callers. Advisory locks keep a channel's cursor
 # single-writer across processes.
 fs2 = "0.4"

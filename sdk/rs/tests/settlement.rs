@@ -1,4 +1,4 @@
-//! Tests for atomic accept-and-settle — P2.1, the operation the design exists for.
+//! Tests for P2.1 atomic accept-and-settle.
 //!
 //! The property under test is that acceptance and payment cannot be separated. They go
 //! into one action set, which becomes one proof, so the chain either applies both or
@@ -28,6 +28,14 @@ fn bob() -> Counterparty {
 
 fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
+}
+
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
 }
 
 fn salt() -> RandomSalt {
@@ -81,11 +89,11 @@ fn settle(
 /// The whole point: one action set, so one proof, so both legs or neither.
 #[test]
 fn acceptance_and_payment_land_in_one_action_set() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
-    // 1 spend + 1 payment + 4 acceptance notes.
-    assert_eq!(set.actions().len(), 6);
+    // 1 spend + 1 payment + 5 encrypted acceptance notes.
+    assert_eq!(set.actions().len(), 7);
 
     let spends = set
         .actions()
@@ -98,14 +106,14 @@ fn acceptance_and_payment_land_in_one_action_set() {
         .filter(|a| matches!(a, ClientAction::CreateEncNote(_)))
         .count();
     assert_eq!(spends, 1, "the input note must be consumed in this set");
-    assert_eq!(notes, 5, "payment plus the four-note acceptance record");
+    assert_eq!(notes, 6, "payment plus the five-note acceptance record");
 }
 
 /// Spends must precede creations, or the contract rejects with ACTIONS_OUT_OF_ORDER after
 /// a proof has already been paid for.
 #[test]
 fn spends_come_before_creations() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
     let first_create = set
@@ -124,7 +132,7 @@ fn spends_come_before_creations() {
 
 #[test]
 fn multiple_inputs_are_all_consumed() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let many: Vec<OwnedNote> = (0..3)
         .map(|index| OwnedNote {
             channel_key: Felt::from_hex("0xc0ffee").expect("channel"),
@@ -164,7 +172,7 @@ fn multiple_inputs_are_all_consumed() {
 /// different salt types precisely so this cannot be got wrong by accident.
 #[test]
 fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
     let notes: Vec<_> = set
@@ -188,7 +196,7 @@ fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
     assert_eq!(payment.index, 4);
 
     let records: Vec<_> = notes.iter().filter(|n| n.amount == 0).collect();
-    assert_eq!(records.len(), 4, "the acceptance record is four notes");
+    assert_eq!(records.len(), 5, "the acceptance record is five notes");
     for record in records {
         assert_ne!(
             record.salt,
@@ -200,7 +208,7 @@ fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
 
 #[test]
 fn exactly_one_note_carries_value() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let set = settle(&channel, 4, 2).expect("valid settlement");
     let valued = set
         .actions()
@@ -228,7 +236,7 @@ fn random_salts_stay_inside_the_contract_bound() {
 
 #[test]
 fn a_non_acceptance_message_is_rejected() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut message = accept_message();
     message.message_type = MessageType::Counter;
 
@@ -255,11 +263,11 @@ fn a_non_acceptance_message_is_rejected() {
 
 /// Atomicity puts the acceptance and the payment in one proof, so both land or neither
 /// does. That says nothing about them *agreeing*. An acceptance recording 950,000 next to a
-/// note carrying 1 is atomic and also a robbery — the counterparty ends up underpaid holding
-/// a valid on-chain acceptance, which is the exact failure Erebus claims to remove.
+/// note carrying 1 is atomic but underpays the counterparty. The counterparty still holds a
+/// valid on-chain acceptance.
 #[test]
 fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let error = channel
         .accept_and_settle(
             token(),
@@ -286,7 +294,7 @@ fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
 
 #[test]
 fn a_zero_payment_is_rejected() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let error = channel
         .accept_and_settle(
             token(),
@@ -307,7 +315,7 @@ fn a_zero_payment_is_rejected() {
 
 #[test]
 fn settling_without_inputs_is_rejected() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let error = channel
         .accept_and_settle(
             token(),
@@ -330,9 +338,9 @@ fn settling_without_inputs_is_rejected() {
 /// overlap would silently overwrite part of the record.
 #[test]
 fn a_payment_index_inside_the_record_range_is_rejected() {
-    let channel = Channel::derive(&alice(), bob());
-    // Message 2 occupies 8..11.
-    for colliding in 8..12 {
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    // Message 2 occupies 10..14.
+    for colliding in 10..15 {
         let error = settle(&channel, colliding, 2)
             .expect_err("payment index {colliding} overlaps the record");
         assert!(
@@ -344,7 +352,7 @@ fn a_payment_index_inside_the_record_range_is_rejected() {
 
 #[test]
 fn an_index_just_outside_the_record_range_is_allowed() {
-    let channel = Channel::derive(&alice(), bob());
-    settle(&channel, 7, 2).expect("index 7 is below the 8..11 record");
-    settle(&channel, 12, 2).expect("index 12 is above the 8..11 record");
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    settle(&channel, 9, 2).expect("index 9 is below the 10..14 record");
+    settle(&channel, 15, 2).expect("index 15 is above the 10..14 record");
 }

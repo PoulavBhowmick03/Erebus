@@ -1,13 +1,12 @@
 //! Rust-owned persistent state for the one-shot CLI.
 //!
-//! A [`ChannelHandle`] is a random identifier, not a channel key in disguise. The channel
-//! keys and note cursor remain in a file readable only by the local operator. This is what
-//! lets Python retain a harmless handle across CLI invocations without ever receiving the
-//! locator/decryption secret.
+//! A [`ChannelHandle`] is a random identifier. Channel keys and the note cursor remain in a
+//! local operator file. Python retains the handle across CLI calls without receiving a
+//! locator or decryption key.
 //!
 //! State files are protected from other OS users (directory mode `0700`, file mode `0600`)
-//! and updates use a locked, atomic replace. They are not encrypted from the operator who
-//! runs the process; the local OS account is the MVP trust boundary.
+//! and updates use a locked atomic replacement. The files are not encrypted from the local
+//! operator. The local OS account is the MVP trust boundary.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
@@ -18,10 +17,12 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
+use crate::wire::WireVersion;
+
 /// Current on-disk record version.
 const STATE_VERSION: u32 = 1;
 
-/// Opaque identifier exposed across the Python ↔ Rust seam.
+/// Opaque identifier exposed across the Python-to-Rust seam.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ChannelHandle(String);
@@ -67,6 +68,15 @@ impl core::fmt::Display for ChannelHandle {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredChannel {
     version: u32,
+    /// Negotiation wire generation. Missing means legacy v1 when loading old records.
+    #[serde(default)]
+    pub wire_version: WireVersion,
+    /// Starknet chain bound into wire-v2 authentication. Zero for migrated v1 records.
+    #[serde(default)]
+    pub chain_id: Felt,
+    /// Privacy pool bound into wire-v2 authentication. Zero for migrated v1 records.
+    #[serde(default)]
+    pub pool_address: Felt,
     /// Public handle, repeated inside the record to detect a misplaced file.
     pub handle: ChannelHandle,
     /// Local pool identity address.
@@ -77,9 +87,9 @@ pub struct StoredChannel {
     pub counterparty_public_key: Felt,
     /// Token subchannel.
     pub token: Felt,
-    /// Local → counterparty locator/decryption key.
+    /// Local-to-counterparty locator and decryption key.
     pub outgoing_key: Felt,
-    /// Counterparty → local key, populated after reverse-channel discovery.
+    /// Counterparty-to-local key set after reverse-channel discovery.
     pub incoming_key: Option<Felt>,
     /// Next free note index in the outgoing token subchannel.
     pub outgoing_next_note: u32,
@@ -100,6 +110,8 @@ impl StoredChannel {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         handle: ChannelHandle,
+        chain_id: Felt,
+        pool_address: Felt,
         owner: Felt,
         counterparty_address: Felt,
         counterparty_public_key: Felt,
@@ -112,6 +124,9 @@ impl StoredChannel {
     ) -> Self {
         Self {
             version: STATE_VERSION,
+            wire_version: WireVersion::V2,
+            chain_id,
+            pool_address,
             handle,
             owner,
             counterparty_address,
@@ -135,6 +150,9 @@ impl core::fmt::Debug for StoredChannel {
         formatter
             .debug_struct("StoredChannel")
             .field("version", &self.version)
+            .field("wire_version", &self.wire_version)
+            .field("chain_id", &self.chain_id)
+            .field("pool_address", &self.pool_address)
             .field("handle", &self.handle)
             .field("owner", &self.owner)
             .field("counterparty_address", &self.counterparty_address)
@@ -175,8 +193,7 @@ impl StateStore {
         &self,
         build: impl FnOnce(ChannelHandle) -> StoredChannel,
     ) -> Result<ChannelHandle, StateError> {
-        // Collision probability is negligible, but create-new semantics make the guarantee
-        // structural rather than probabilistic.
+        // create_new prevents overwrite if a random handle collides.
         for _ in 0..16 {
             let handle = ChannelHandle::random();
             let lock_path = self.lock_path(&handle);
@@ -263,13 +280,14 @@ impl StateStore {
 
     /// Finds an existing channel to `counterparty` for `token`, if this identity has one.
     ///
-    /// **There can only ever be one.** The pool's `compute_channel_key` takes no index
-    /// (`hashes.cairo:119-124`) and the marker derived from it is written `WriteOnce`, so a
-    /// second `open_channel` between the same pair reverts with a bare `Contract error`
-    /// after the proof has already been generated and the gas already spent. Callers use
-    /// this to make opening idempotent rather than to discover that the hard way. F29.
+    /// Only one can exist. `compute_channel_key` has no index (`hashes.cairo:119-124`), and
+    /// its marker is `WriteOnce`. A second `open_channel` for the pair returns
+    /// `Contract error` after proof generation and gas spending. This lookup makes channel
+    /// opening idempotent. See F29.
     pub fn find_channel(
         &self,
+        chain_id: Felt,
+        pool_address: Felt,
         owner: Felt,
         counterparty: Felt,
         token: Felt,
@@ -278,6 +296,8 @@ impl StateStore {
             if state.owner == owner
                 && state.counterparty_address == counterparty
                 && state.token == token
+                && (state.wire_version == WireVersion::V1
+                    || (state.chain_id == chain_id && state.pool_address == pool_address))
             {
                 return Ok(Some(state.handle));
             }
@@ -318,9 +338,8 @@ impl StateStore {
 
     /// Incoming channel keys already paired with local handles.
     ///
-    /// Reverse channels have no on-chain pair identifier. Excluding keys already claimed
-    /// by other records makes a newly opened reverse channel unambiguous without exposing
-    /// any key outside Rust.
+    /// Reverse channels have no on-chain pair identifier. Excluding claimed keys identifies
+    /// a new reverse channel without exposing a key outside Rust.
     pub fn claimed_incoming_keys(&self) -> Result<Vec<Felt>, StateError> {
         let mut claimed = Vec::new();
         let entries = std::fs::read_dir(&self.root).map_err(|source| StateError::Io {
@@ -525,6 +544,8 @@ mod tests {
             .create(|handle| {
                 StoredChannel::new(
                     handle,
+                    Felt::from(0xaau8),
+                    Felt::from(0xbbu8),
                     Felt::from(1u8),
                     Felt::from(2u8),
                     Felt::from(3u8),
@@ -561,5 +582,44 @@ mod tests {
     fn malformed_handle_cannot_become_a_path() {
         assert!(ChannelHandle::parse("../../pool-key").is_err());
         assert!(ChannelHandle::parse("ch_1234").is_err());
+    }
+
+    #[test]
+    fn a_record_without_wire_version_loads_as_legacy_v1() {
+        let handle = ChannelHandle::parse(format!("ch_{}", "11".repeat(32))).expect("handle");
+        let current = StoredChannel::new(
+            handle,
+            Felt::from(0xaau8),
+            Felt::from(0xbbu8),
+            Felt::from(1u8),
+            Felt::from(2u8),
+            Felt::from(3u8),
+            Felt::from(4u8),
+            Felt::from(5u8),
+            0,
+            0,
+            Felt::from(6u8),
+            7,
+        );
+        assert_eq!(current.wire_version, WireVersion::V2);
+
+        let mut serialized = serde_json::to_value(current).expect("serialize");
+        serialized
+            .as_object_mut()
+            .expect("record object")
+            .remove("wire_version");
+        serialized
+            .as_object_mut()
+            .expect("record object")
+            .remove("chain_id");
+        serialized
+            .as_object_mut()
+            .expect("record object")
+            .remove("pool_address");
+        let migrated: StoredChannel = serde_json::from_value(serialized).expect("legacy loads");
+
+        assert_eq!(migrated.wire_version, WireVersion::V1);
+        assert_eq!(migrated.chain_id, Felt::ZERO);
+        assert_eq!(migrated.pool_address, Felt::ZERO);
     }
 }

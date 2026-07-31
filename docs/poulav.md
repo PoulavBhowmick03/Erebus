@@ -20,12 +20,12 @@ the TS byte-for-byte. That is why it is still referenced below — as the thing 
 
 ## Status — 2026-07-31
 
-**Rust protocol 2 is complete as an implementation and the full Rust happy path has now run
-live, but the current wire is not confidential.** The crate
+**Rust protocol 2 is complete as an implementation; the full wire-v1 happy path ran live,
+and confidential wire v2 is now complete offline.** The crate
 now has the high-level `ErebusClient` trait and all seven methods, Rust-owned opaque-handle
 state, keyed RPC discovery, the full preflight → prove → estimate → `apply_actions` →
 receipt path, exact-note atomic settlement, and self-contained disclosure grants. The full
-committed offline suite is green: **180 passed, 2 deliberately ignored live-prover probes**.
+offline suite is green: **190 passed, 2 deliberately ignored live-prover probes**.
 
 **FULL RUST HAPPY PATH LANDED — 2026-07-31.** Two registered identities opened both
 directions, A proposed, B read and countered, A read and atomically accepted/settled 1 STRK,
@@ -34,11 +34,12 @@ from the bearer disclosure grant. Settlement transaction
 `0x44289c4cacce0d07f45a6a788313ad341f44f40fd905c181a1e525050384bb7`
 is `SUCCEEDED / ACCEPTED_ON_L2`; its spent nullifier exists on-chain.
 
-**This also disproved the central privacy claim.** A salt is the public high half of
+**That live run also disproved wire v1's central privacy claim.** A salt is the public high half of
 `packed_value`; all four acceptance salts derived from the disclosed plaintext occur
 verbatim in that settlement transaction's calldata. The salt lane is mechanically valid
-and publicly decodable. DoD #1 is therefore not closed as a *private* negotiation until the
-wire encrypts and authenticates the 400-bit message before fragmenting it. See F30.
+and wire v1 is publicly decodable. Wire v2 now encrypts/authenticates the 400-bit message
+with AES-256-GCM-SIV and splits it across five notes. DoD #1 remains open until that new
+wire completes a fresh live observer test and independent review. See F30/F31.
 
 **FIRST PROOF-CARRYING TRANSACTION LANDED — 2026-07-31.** A 1 STRK shield went through the
 whole pipeline for real: preflight → prove → estimate → signed `apply_actions` → accepted
@@ -57,9 +58,9 @@ research predicted.** Screening was never blocking us — see blocker 3. And the
 version does match the deployed class hash, which no amount of reading the compatibility
 matrix would have established.
 
-What the live Rust milestone does **not** cover:
+What the Rust milestone does **not** cover:
 
-- negotiation confidentiality: the current structured salts are public;
+- live wire-v2 evidence or an independent cryptographic review;
 - writes still send the pool key to whoever runs the RPC, because the `compile_actions`
   preflight carries it. A public RPC was fine for this throwaway testnet identity and is
   not fine for the product;
@@ -76,7 +77,7 @@ What the live Rust milestone does **not** cover:
 | | Answer | Consequence |
 |---|---|---|
 | **P0.1** network | **Sepolia.** Pool v2.0 at `0x0254a6…0d91`, verified on-chain. Mainnet has no deployment at all. | Not a preference — the only option. |
-| **P0.2** payload | **No payload field.** A note is `(packed_value: felt252, token: ContractAddress)`. The salt is client-chosen and round-trips, so payloads fit by fragmentation — 119 bits per note, one permanently-burned storage slot each. | P1.3 is the salt lane: 4 notes per message. |
+| **P0.2** payload | **No payload field.** A note is `(packed_value: felt252, token: ContractAddress)`. The salt is public and carries 119 client-chosen bits. | Wire v2: 5 authenticated-encryption chunks per message. |
 
 **Decided:**
 
@@ -84,7 +85,10 @@ What the live Rust milestone does **not** cover:
   data notes, on-chain, in the counterparty's subchannel. Rejected `InvokeExternal` (public
   calldata makes every Erebus tx self-identifying) and off-chain transport (moves the
   negotiation graph to the transport — the exact leak we exist to fix — and breaks
-  `reveal`). Costs accepted: an SDK bypass, ~4 notes per message, unspendable data notes.
+  `reveal`). Costs accepted: an SDK bypass and unspendable data notes.
+- **2026-07-31 — five-note wire v2.** AES-256-GCM-SIV encrypts/authenticates the canonical
+  message before fragmentation. Five notes provide 595 bits: 528 ciphertext+tag, 8 version,
+  59 zero padding. Four-note wire v1 is read-only compatibility data.
 - **2026-07-26 — the client is Rust** (`sdk/rs`). No Rust write side exists anywhere;
   `discovery-core` covers reads only. Nothing builds `ClientAction`s, serialises calldata,
   signs, or calls the prover. Confirmed with the Starknet group that nobody is building one.
@@ -224,12 +228,14 @@ trace, capacity table, and three costed workarounds: [friction.md](./friction.md
 - [x] Smallest possible test — `contracts/probes/p0_2_subchannel_payload.cairo`,
       passing 3/3 under snforge (friction.md F3)
 - [x] Determine the workarounds and their costs — friction.md F1
-- [x] Decide — the salt lane. See Status above and friction.md F1 "Resolution".
-- [ ] **Tell Akash the answer changed.** The message sent 2026-07-25 described the
-      off-chain-transport option; we picked the salt lane instead. Short correction — it is
-      the better story anyway, since relationship privacy and `reveal` both survive.
+- [x] Decide the first experiment — the salt lane. It proved the mechanics but not
+      confidentiality.
+- [x] Decide the production wire — five-note AES-256-GCM-SIV wire v2. See F31.
+- [ ] **Tell Akash the result changed.** The salt lane carries and reconstructs the
+      transcript; wire v1 exposed it publicly, and wire v2 now encrypts/authenticates five
+      chunks. `reveal` survives. Live v2 relationship-privacy evidence remains open.
 
-**Acceptance:** met — written answer in `docs/friction.md`.
+**Acceptance:** implemented offline; live wire-v2 validation remains in Phase 2.
 
 ### P0.3 — Freeze the interface with Ishita
 
@@ -468,15 +474,19 @@ directional.
       `discovery-core`'s side of the fence; deferred rather than done
 - [ ] Static-static ECDH over the registered Stark-curve viewing keys, for the **off-chain
       transport**. A different secret from the pool's `channel_key` — do not conflate them.
-      Now off the critical path, since the salt lane keeps negotiation on-chain.
+      This becomes relevant again if the F30 replacement moves negotiation off-chain.
 
-*Phase 2, blocked on the prover:*
+*Phase 2 evidence:*
 
-- [ ] Register the channel on Sepolia
-- [ ] Verify a third party observing the chain cannot detect the channel exists. **Untestable
-      offline** — needs a real chain and a real observer.
+- [x] Register both channel directions on Sepolia.
+- [x] Inspect the live transaction as a public observer. It disproved the privacy claim:
+      all four wire salts are present in calldata and reconstruct the transcript without a
+      channel key (F30).
+- [ ] Repeat with a fresh wire-v2 channel and show the five public salts authenticate only
+      with the scoped channel key and do not contain the canonical plaintext chunks.
 
-**Acceptance:** two accounts share a channel; a third account scanning sees nothing.
+**Acceptance:** mechanics met for wire v1; privacy failed for v1. Wire-v2 privacy is green
+offline and still needs live evidence.
 
 ### P1.3 — Negotiation state via the salt lane
 
@@ -489,7 +499,7 @@ The payload rides in note **salts**. Each zero-amount data note carries 119 usab
 message is a fixed run of notes at consecutive indices in the counterparty's subchannel. No
 Cairo is written for this — SDK-side encoding plus direct `ClientAction` construction.
 
-**Wire format (v1)**
+**Wire format (v2)**
 
 - Framed message is **400 bits**: `type` 8 + `replyTo` 32 + `createdAt` 40 + `amount` 128 +
   `deadline` 64 + `memoHash` 128. `token` is dropped — the subchannel *is* the token.
@@ -497,9 +507,15 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
 - **119 bits per note, not 120.** The contract requires `2 ≤ salt < 2^120`, so a chunk
   landing on 0 or 1 would be rejected. Bit 119 is pinned to 1; payload occupies bits 0–118.
   Salt is then always in `[2^119, 2^120)` and always valid.
-- Fixed width: **4 notes per message**. Message *k* is indices `4k .. 4k+3`, so the reader
-  needs no framing search.
-- All 4 notes go in **one action set** → one proof (~29 s) per negotiation round.
+- AES-256-GCM-SIV encrypts/authenticates the 400-bit plaintext. HKDF scopes the key and
+  derived nonce to chain, pool, directional channel key, token and message index.
+  Chain/pool/token/index are authenticated context.
+- Fixed width: **5 notes per message**. Message *k* is indices `5k .. 5k+4`, so the reader
+  needs no framing search. Capacity is 595 bits: 528 ciphertext+tag, 8 version marker and
+  59 required-zero padding bits.
+- All 5 notes go in **one action set** → one proof per negotiation round.
+- Wire v1 remains readable through versioned state/grants, but writes fail with
+  `LegacyReadOnly` instead of publishing new plaintext.
 
 **Rules**
 
@@ -511,8 +527,10 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
 
 **Tasks**
 
-- [x] Encoder/decoder for the wire format, ported to Rust — 11 differential tests against
-      the TS oracle *(`sdk/rs/src/wire.rs`, vectors in `tests/fixtures/ts-wire-salts.json`,
+- [x] Encoder/decoder for wire v2 — 17 tests covering a pinned v2 KAT, round trips, tamper
+      rejection, chain/pool/channel/token/index binding, canonical padding, safe changed-term
+      retries and frozen wire-v1 compatibility vectors against the TS oracle
+      *(`sdk/rs/src/wire.rs`, vectors in `tests/fixtures/ts-wire-salts.json`,
       regenerate with `cd sdk/ts && pnpm vitest run tests/gen-wire-vectors.test.ts`)*.
       Mutation-tested: reversing chunk order and dropping the pinned flag both fail loudly.
       Caught a real disagreement on the first run — friction.md **F19**, the TS accepts memo
@@ -522,8 +540,8 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       *Also: the ASCII layout table in `wire.ts` module docs is wrong — it puts the header
       in note 0, but the packing puts it in note 3. The Rust module docs carry the corrected
       table and a test pins it.*
-- [x] Direct `ClientAction[]` construction — `Channel::write_message` emits the four
-      zero-amount notes at `4k..4k+3` as a validated `ActionSet` *(`sdk/rs/src/channel.rs`)*
+- [x] Direct `ClientAction[]` construction — `Channel::write_message` emits five encrypted
+      zero-amount notes at `5k..5k+4` as a validated `ActionSet` *(`sdk/rs/src/channel.rs`)*
 - [x] Counterparty read via keyed lookup — `Channel::note_ids_for_message`, computing
       `h(NOTE_ID_TAG, channel_key, token, index, 0)` directly. No scan anywhere in the crate.
       A test asserts the writer's slots and the reader's slots are the same felts, because a
@@ -549,19 +567,17 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
       sorting creations ascending. Inferred from source, not yet observed on-chain — verify
       at P2.0. Written up as **F21**.
 
-- [x] **DECIDED 2026-07-30: accept it — one channel is one deal, and it costs nothing.**
-      A second deal opens a new channel, and `OpenChannel`/`OpenSubchannel` are phases 1 and 2
-      while note creation is phase 5 — so **the setup rides in the same action set as the next
-      deal's first offer.** Zero extra proofs, zero extra latency. The alternatives were both
-      worse: padding the payment to a full 4-slot burns three permanently unspendable notes
-      per settlement forever, and dropping the fixed stride forces a framing search on every
-      read. Original analysis kept below.
+- [ ] **INVALIDATED BY F29: “a second deal opens a new channel” is impossible.** The pool's
+      channel key has no index and its marker is WriteOnce, so a pair has one directional
+      channel forever. Combined with Erebus's terminal settlement rule, the current client
+      lets a pair trade exactly once. This does not block the one-deal MVP, but it is the
+      first post-MVP protocol decision.
 
-- [ ] ~~**DECISION NEEDED — one subchannel is currently one deal.**~~ A message is 4 notes on a
-      `4k..4k+3` grid; a settlement's payment note is 1 note. So settling leaves the cursor
-      at `4k+1`, off-grid, and nothing further can be written to that subchannel. Fine for
-      the MVP. The alternatives if agent pairs are long-lived: pad the payment to a full
-      4-slot (3 filler notes, permanently unspendable, indices burned forever), or drop the
+- [ ] ~~**DECISION NEEDED — one subchannel is currently one deal.**~~ A message is 5 notes on a
+      `5k..5k+4` grid; a settlement's payment note is 1 note. So settling leaves the cursor
+      at `5k+1`, off-grid, and nothing further can be written to that subchannel. Fine for
+      the MVP. The alternatives if agent pairs are long-lived: pad after the payment to the
+      next 5-slot boundary (4 filler notes, permanently unspendable), or drop the
       fixed stride and give the reader a framing search. Both cost something real.
 
 - [x] Enforce the state machine (ARCHITECTURE §4) — `OfferBook`
@@ -611,8 +627,8 @@ Cairo is written for this — SDK-side encoding plus direct `ClientAction` const
 
 **Acceptance:** A writes an offer, B reads it, B counters, A reads the counter.
 
-**Live 2026-07-31:** all four steps passed against Sepolia. Mechanical acceptance is closed;
-privacy is reopened by F30 because the raw structured salts are public calldata.
+**Live 2026-07-31:** all four steps passed against Sepolia on wire v1. Mechanical acceptance
+is closed; wire-v2 confidentiality is implemented offline and awaits the fresh live run.
 
 ### P1.4 — Measure proof time
 
@@ -624,7 +640,7 @@ Three rounds ≈ 90 s of proving before settlement even starts.
 
 - [x] Ballpark from the vendor — friction.md F7
 - [ ] Measure it on our hardware. Theirs is a 12-core/46 GiB box; ours is not.
-- [ ] Measure whether it scales with action count — matters for the 4-note message
+- [ ] Measure whether it scales with action count — matters for the 5-note wire-v2 message
 - [ ] Record the real number in `friction.md` and revise the demo script around it
 
 **Why it matters:** a 2–3 minute recording cannot show several rounds in real time at ~29 s
@@ -685,7 +701,7 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
 
 - [x] Bind the accepted offer to the private transfer, same action set —
       `Channel::accept_and_settle` *(`sdk/rs/src/channel.rs`)*. Spends, then the payment
-      note, then the four-note acceptance record, in one `ActionSet` → one proof. 11 tests.
+      note, then the five-note acceptance record, in one `ActionSet` → one proof. 12 tests.
       Rejects a non-`Accept` record, a zero payment, an unfunded settlement, and a payment
       index colliding with the record's range (they share one subchannel index space).
       **Unreviewed — written by Claude.**

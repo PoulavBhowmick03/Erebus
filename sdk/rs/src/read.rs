@@ -1,27 +1,25 @@
-//! Reading a negotiation back out of the pool.
+//! Reads a negotiation from the pool.
 //!
-//! The write side turns a [`WireMessage`] into four zero-amount notes. This turns four
-//! notes back into a message, and a run of messages back into a transcript.
+//! The write side stores a [`WireMessage`] in five encrypted zero-amount notes. This module
+//! authenticates and decrypts them. An explicit wire version supports legacy four-note
+//! transcripts.
 //!
 //! ## Reads are keyed, never scanned
 //!
-//! Every note's location is computed: `h(NOTE_ID_TAG, channel_key, token, index)`. The
-//! reader knows the channel key and the index, so it seeks the exact slot. Nothing here
-//! enumerates, filters, or searches — scanning defeats the discovery design and does not
-//! work at any real pool size (CLAUDE.md constraint 3).
+//! Each note uses `h(NOTE_ID_TAG, channel_key, token, index)` as its location. The reader
+//! computes the exact slot from the key and index. It never scans pool storage
+//! (CLAUDE.md constraint 3).
 //!
 //! ## Where the chain would go
 //!
-//! [`NoteSource`] is the seam. It answers "what is stored at this note id", and that is the
-//! *only* thing the read path needs from the outside world. Offline it is a map; against
-//! Sepolia it is a storage read or the Discovery Service. Keeping it a trait means the
-//! whole transcript path is testable today, with the chain still unreachable.
+//! [`NoteSource`] supplies the value for one note id. An offline source can use a map.
+//! Sepolia can use a storage read or the Discovery Service. The trait supports offline
+//! transcript tests.
 //!
 //! ## Termination
 //!
-//! A transcript ends at the first missing note, which is sound precisely because of the
-//! contiguity rule (`INDEX_NOT_SEQUENTIAL`, see [`crate::subchannel`]): the pool cannot
-//! contain a gap, so a missing note means the end and never a hole in the middle.
+//! A transcript ends at the first missing note. `INDEX_NOT_SEQUENTIAL` prevents gaps, so a
+//! missing note marks the end. See [`crate::subchannel`].
 
 use starknet_types_core::felt::Felt;
 
@@ -29,7 +27,10 @@ use crate::actions::NoteSalt;
 use crate::decrypt;
 use crate::hashes;
 use crate::negotiation::{Author, NegotiationError, OfferBook};
-use crate::wire::{decode_message, WireError, WireMessage, NOTES_PER_MESSAGE};
+use crate::wire::{
+    decode_legacy_message, decode_message, WireContext, WireError, WireMessage, WireVersion,
+    LEGACY_NOTES_PER_MESSAGE, NOTES_PER_MESSAGE,
+};
 
 /// Errors from reading.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -37,20 +38,20 @@ pub enum ReadError {
     /// The serialized viewing grant was corrupted or edited.
     #[error("viewing grant integrity check failed")]
     InvalidViewingGrant,
-    /// A message was partly present. Under the contiguity rule this cannot happen on-chain,
-    /// so it means the source is inconsistent — a partial fetch, or the wrong channel key.
-    #[error("message {message_index} is incomplete: {found} of {NOTES_PER_MESSAGE} notes present")]
+    /// A partly present message, caused by an incomplete source or an incorrect channel key.
+    #[error("message {message_index} is incomplete: {found} of {expected} notes present")]
     PartialMessage {
         /// The message that was torn.
         message_index: u32,
         /// How many of its notes were found.
         found: usize,
+        /// Number required by this channel's wire generation.
+        expected: usize,
     },
     /// The notes were found but did not decode.
     #[error(transparent)]
     Wire(#[from] WireError),
-    /// A note in the run carried a salt outside the structured range, so it is not part of
-    /// an Erebus message — most likely a value note, or the wrong channel key.
+    /// A note with a salt outside the message range, usually a value note or wrong key.
     #[error("note {slot} of message {message_index} is not an Erebus data note")]
     NotAnErebusNote {
         /// The message being read.
@@ -65,8 +66,7 @@ pub enum ReadError {
 
 /// Where stored note values come from.
 ///
-/// The single dependency the read path has on the outside world. Implement it over a
-/// storage read, the Discovery Service, or a map in a test.
+/// Implement this source with a storage read, the Discovery Service, or a test map.
 pub trait NoteSource {
     /// The `packed_value` stored at `note_id`, or `None` if the slot is empty.
     fn packed_value(&self, note_id: Felt) -> Option<Felt>;
@@ -92,37 +92,60 @@ pub struct ReadMessage {
 
 /// A reader for one direction of one subchannel.
 ///
-/// Holds a channel key and nothing else — no pool private key. That is the whole basis of
-/// scoped disclosure: everything below can be done by anyone handed this one secret, and
-/// it reveals this channel and no other.
+/// Holds one channel key and no pool private key. A holder can read this channel but cannot
+/// derive another channel.
 #[derive(Clone, Copy)]
 pub struct ChannelReader {
+    chain_id: Felt,
+    pool_address: Felt,
     channel_key: Felt,
     token: Felt,
+    wire_version: WireVersion,
 }
 
-/// Redacts the channel key — it is the disclosure secret for an entire channel.
+/// Redacts the key because it gives read access to the full channel.
 impl core::fmt::Debug for ChannelReader {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ChannelReader")
+            .field("chain_id", &self.chain_id)
+            .field("pool_address", &self.pool_address)
             .field("channel_key", &"<redacted>")
             .field("token", &self.token)
+            .field("wire_version", &self.wire_version)
             .finish()
     }
 }
 
 impl ChannelReader {
     /// A reader for `channel_key`'s subchannel on `token`.
-    pub fn new(channel_key: Felt, token: Felt) -> Self {
-        Self { channel_key, token }
+    pub fn new(chain_id: Felt, pool_address: Felt, channel_key: Felt, token: Felt) -> Self {
+        Self::with_version(chain_id, pool_address, channel_key, token, WireVersion::V2)
     }
 
-    /// Note ids for the four notes of `message_index`.
-    pub fn note_ids(&self, message_index: u32) -> [Felt; NOTES_PER_MESSAGE] {
-        let first = u64::from(message_index) * NOTES_PER_MESSAGE as u64;
-        core::array::from_fn(|slot| {
-            hashes::compute_note_id(self.channel_key, self.token, first + slot as u64)
-        })
+    /// A reader for an explicitly versioned historical channel.
+    pub fn with_version(
+        chain_id: Felt,
+        pool_address: Felt,
+        channel_key: Felt,
+        token: Felt,
+        wire_version: WireVersion,
+    ) -> Self {
+        Self {
+            chain_id,
+            pool_address,
+            channel_key,
+            token,
+            wire_version,
+        }
+    }
+
+    /// Note ids for one versioned message.
+    pub fn note_ids(&self, message_index: u32) -> Vec<Felt> {
+        let width = self.wire_version.notes_per_message();
+        let first = u64::from(message_index) * width as u64;
+        (0..width)
+            .map(|slot| hashes::compute_note_id(self.channel_key, self.token, first + slot as u64))
+            .collect()
     }
 
     /// Storage id for one note index.
@@ -144,9 +167,8 @@ impl ChannelReader {
 
     /// Reads one negotiation message.
     ///
-    /// Returns `Ok(None)` when the message is simply not there yet, which is the ordinary
-    /// "nothing new" answer a polling agent gets. A *partly* present message is an error,
-    /// not a `None` — contiguity means the pool cannot hold one.
+    /// Returns `Ok(None)` when no message exists. A partial message is an error because the
+    /// pool cannot contain a gap.
     pub fn message(
         &self,
         message_index: u32,
@@ -154,15 +176,10 @@ impl ChannelReader {
     ) -> Result<Option<WireMessage>, ReadError> {
         let ids = self.note_ids(message_index);
 
-        // A settlement's payment note lands at index 4k+4 — exactly where this message's
-        // first note would be, because a message is 4 notes wide and a payment is 1. So the
-        // walk reaches it and would otherwise report a torn message.
-        //
-        // A value note is never part of a message: every negotiation note is zero-amount by
-        // construction, which is the same rule that keeps structured salts off value notes.
-        // So finding value here means the negotiation ended in a settlement, and that is the
-        // end of the transcript rather than an error.
-        let first = u64::from(message_index) * NOTES_PER_MESSAGE as u64;
+        // A settlement payment follows its acceptance where the next message would start.
+        // Treat the value note as the end of the transcript, not a partial message.
+        let width = self.wire_version.notes_per_message();
+        let first = u64::from(message_index) * width as u64;
         if let Some(note) = self.note(first, source) {
             if note.is_value_note() {
                 return Ok(None);
@@ -177,27 +194,53 @@ impl ChannelReader {
         if found.is_empty() {
             return Ok(None);
         }
-        if found.len() != NOTES_PER_MESSAGE {
+        if found.len() != width {
             return Err(ReadError::PartialMessage {
                 message_index,
                 found: found.len(),
+                expected: width,
             });
         }
 
-        // The salt is the high half of the packed value — the payload needs no decryption,
-        // only the location did. Range-checking through `NoteSalt` is not ceremony here: a
-        // reader aimed at the wrong slots picks up random salts from value notes, and this
-        // is where that surfaces as an error rather than as a decoded-looking message.
-        let mut salts = [NoteSalt::new(2).expect("2 is in range"); NOTES_PER_MESSAGE];
-        for (slot, packed) in found.iter().enumerate() {
-            salts[slot] = NoteSalt::new(decrypt::unpack_note(*packed).0).map_err(|_| {
-                ReadError::NotAnErebusNote {
-                    message_index,
-                    slot,
-                }
-            })?;
-        }
-        Ok(Some(decode_message(&salts)?))
+        // The salt is the public high half of `packed_value`. The range check rejects value
+        // notes before wire v2 authenticates and decrypts the message.
+        let salts: Vec<NoteSalt> = found
+            .iter()
+            .enumerate()
+            .map(|(slot, packed)| {
+                NoteSalt::new(decrypt::unpack_note(*packed).0).map_err(|_| {
+                    ReadError::NotAnErebusNote {
+                        message_index,
+                        slot,
+                    }
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        let message = match self.wire_version {
+            WireVersion::V1 => {
+                let salts: [NoteSalt; LEGACY_NOTES_PER_MESSAGE] = salts
+                    .try_into()
+                    .expect("wire-v1 width checked before conversion");
+                decode_legacy_message(&salts)?
+            }
+            WireVersion::V2 => {
+                let salts: [NoteSalt; NOTES_PER_MESSAGE] = salts
+                    .try_into()
+                    .expect("wire-v2 width checked before conversion");
+                decode_message(
+                    &WireContext {
+                        chain_id: self.chain_id,
+                        pool_address: self.pool_address,
+                        channel_key: self.channel_key,
+                        token: self.token,
+                        message_index,
+                    },
+                    &salts,
+                )?
+            }
+        };
+        Ok(Some(message))
     }
 
     /// Reads every message in this direction, stopping at the first absent one.
@@ -220,15 +263,14 @@ impl ChannelReader {
 
     /// The settlement payment note, if this channel was settled.
     ///
-    /// Lives at the index directly after the acceptance record, which is the only place it
-    /// can be — see `Channel::settle_next`. Identified by carrying value; every negotiation
-    /// note is zero-amount by construction.
+    /// The payment follows the acceptance record. See `Channel::settle_next`. A value
+    /// distinguishes it from zero-amount negotiation notes.
     pub fn settlement_note(
         &self,
         acceptance_index: u32,
         source: &impl NoteSource,
     ) -> Option<decrypt::NoteView> {
-        let index = u64::from(acceptance_index + 1) * NOTES_PER_MESSAGE as u64;
+        let index = u64::from(acceptance_index + 1) * self.wire_version.notes_per_message() as u64;
         self.note(index, source)
             .filter(decrypt::NoteView::is_value_note)
     }
@@ -236,10 +278,8 @@ impl ChannelReader {
 
 /// Reconstructs both directions of a negotiation into one ordered [`OfferBook`].
 ///
-/// Channels are directional, so a negotiation is two subchannels: what we wrote and what
-/// they wrote. Neither alone is the conversation. Messages are interleaved by `created_at`,
-/// which is the only ordering both sides agree on — note indices are per-direction and say
-/// nothing about cross-direction order.
+/// A negotiation uses one subchannel per direction. This function combines messages by
+/// `created_at`. Per-direction note indices do not define cross-direction order.
 pub fn reconstruct(
     ours: &ChannelReader,
     theirs: &ChannelReader,

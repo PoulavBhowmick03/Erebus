@@ -1,4 +1,4 @@
-# Where the keys live — design options
+# Where the keys live: design options
 
 **Written 2026-07-28, for Poulav to decide.** Prompted by the decision that *Erebus should
 not hold agent keys*, and by Akash's suggestion to use the Starknet Wallet API (Xverse,
@@ -36,10 +36,10 @@ channel_key = h(TAG, sender_addr, sender_privkey, recipient_addr, recipient_pubk
 ```
 
 Anything that computes where a note lives needs the sender's pool private key. So "Erebus
-computes the actions, the wallet signs them" does not decompose — Erebus cannot compute a
+computes the actions, the wallet signs them" does not decompose. Erebus cannot compute a
 channel key, a note id, or a storage slot without the key.
 
-## 3. The wallet API cannot carry a salt — read, not inferred
+## 3. The wallet API cannot carry a salt: read, not inferred
 
 `STRK20_ACTION` is a union of exactly four variants. Full definitions, from
 `@starknet-io/starknet-types-0103/dist/types/wallet-api/components.d.ts:187-227` (the
@@ -54,7 +54,7 @@ STRK20_INVOKE_ACTION   = { type: 'invoke',   contract, calldata: STRK20_CALLDATA
 
 **No salt field. No index field. No note-level control of any kind.** `ClientAction` has
 ten variants; the six absent here include every one that touches a note or channel directly
-— `SetViewingKey`, `OpenChannel`, `OpenSubchannel`, `CreateEncNote`, `CreateOpenNote`,
+- `SetViewingKey`, `OpenChannel`, `OpenSubchannel`, `CreateEncNote`, `CreateOpenNote`,
 `UseNote`.
 
 `CreateEncNote` is the one that matters: it is the only action carrying a client-chosen
@@ -66,24 +66,25 @@ expressible through the wallet API, and no amount of cleverness changes that.**
 
 `STRK20_INVOKE_ACTION` takes arbitrary calldata, and its placeholders
 (`${openNoteIds[N]}`, `${poolAddress}`) let it reference open notes created in the same
-transaction. That is the "invoke anonymizer" pattern — the obvious place to try putting an
+transaction. That is the "invoke anonymizer" pattern, the obvious place to try putting an
 `OfferTerms`.
 
 It leaks. A client `InvokeExternal` compiles to `ServerAction::Invoke`
 (`actions.cairo:392`), carrying `InvokeInput { contract_address, calldata: Span<felt252> }`.
-ServerActions are the *public* half of the design — they are the argument to
+ServerActions are the *public* half of the design, they are the argument to
 `apply_actions`, in an ordinary Starknet transaction, in the clear. Anything put in that
 calldata is world-readable on Sepolia.
 
 That distinction was wrong. Invoke calldata is public, but so is the salt: it is stored
 verbatim in the high bits of `packed_value`, which appears in `apply_actions` calldata and
 events. The keyed channel location is not a confidentiality boundary for a global observer.
-See friction.md F30. A replacement wire must encrypt/authenticate before using the salt lane.
+See friction.md F30/F31. Wire v2 encrypts/authenticates before using the salt lane; live
+validation and review remain.
 
 The invoke path is built for AMM swaps, where the swap parameters being public is fine and
 only the *identity* needs hiding. Erebus needs the opposite.
 
-The anonymizer route — the documented escape hatch for anything beyond the four actions —
+The anonymizer route is the documented escape hatch for anything beyond the four actions.
 does not change this. Its own summary: *"What this hides: the user's address behind the
 DeFi action. What may stay public: the amounts and the app activity itself."* Identity
 hiding, not data transport.
@@ -95,10 +96,10 @@ type definitions:
 
 > *"No note or proof management. The wallet discovers notes, builds the transaction,
 > generates the proof, and submits it."*
-> — strk20-by-example.org, Starknet Wallet API overview
+>, strk20-by-example.org, Starknet Wallet API overview
 
 > *"What the dapp **cannot** do: hold the viewing key, manage notes, or generate proofs."*
-> — `starkience/strk20-agent-skills`, wallet-api route
+>. `starkience/strk20-agent-skills`, wallet-api route
 
 Abstracting notes away is not an omission in the wallet API. It is the product.
 
@@ -107,11 +108,11 @@ Abstracting notes away is not an omission in the wallet API. It is the product.
 The same skill states the intended division:
 
 > *"in dev the **team** controls the account and keys, so the SDK is appropriate there.
-> Production user flows still go through the Privacy Wallet API — end users never expose
+> Production user flows still go through the Privacy Wallet API, end users never expose
 > viewing keys."*
 
 The rule is: **SDK when you control the keys, Wallet API when an end user does.** Erebus's
-end user is an agent, and no agent wallet exists — wallet support is Ready plus an
+end user is an agent, and no agent wallet exists, wallet support is Ready plus an
 in-progress Xverse, both browser extensions (F18). So Erebus falls on the SDK side by their
 own framing, not by working around it. That is Option A, and it is the documented position
 for this case rather than a workaround.
@@ -120,9 +121,9 @@ for this case rather than a workaround.
 
 Worth separating before choosing, because the decision reads differently under each:
 
-- **Custody** — Erebus-the-project operates a service that holds many agents' keys. One
+- **Custody**. Erebus-the-project operates a service that holds many agents' keys. One
   breach, everyone's funds. This is what should be refused, and every option below refuses it.
-- **Handling** — key material passes through Erebus *code* running inside the agent's own
+- **Handling**, key material passes through Erebus *code* running inside the agent's own
   process, under the agent operator's control. This is what any wallet library does, and
   CLAUDE.md constraint 6 already assumes it: *"key material never leaves the SDK boundary"*
   presumes the SDK has a boundary that keys are inside.
@@ -134,14 +135,15 @@ by itself rule out handling.
 
 ## The options
 
-### Option A — Erebus ships a library, operates nothing
+### Option A: Erebus ships a library, operates nothing
 
 `erebus-cli` runs as a subprocess of the agent stack. The operator supplies paths to its pool
 and account keys; only the Rust subprocess opens them. Erebus-the-project runs no custody
 service and never sees either key.
 
 - Erebus is a protocol + library + MCP server, all running agent-side.
-- Full `ClientAction` control, so the salt lane works as designed.
+- Full `ClientAction` control, so the existing salt-lane mechanics can be exercised.
+  Rust wire v2 supplies the encrypted/authenticated format described in friction.md F31.
 - Nothing built so far is wasted; the interface in §4 survives if the wallet is a
   constructor dependency rather than a per-call argument, which also keeps Ishita's mock intact.
 - **Cost:** each agent operator needs prover access. A shared prover sees pool keys (F14), so
@@ -151,26 +153,26 @@ service and never sees either key.
   property. The pool key remains separate and Erebus's local state manages channel secrets
   derived from it.
 
-### Option B — Push for a wallet-API extension
+### Option B: Push for a wallet-API extension
 
-Get a salt-carrying note action into `STRK20_ACTION`, then agents genuinely delegate
+Get a salt-carrying note action into `STRK20_ACTION`, then agents delegate
 everything to a wallet.
 
 - Cleanest end state: Erebus touches no key of any kind.
 - **Cost:** it is StarkWare's roadmap, not ours, on nobody's committed timeline.
 - **Cost:** browser wallets still do not serve headless agents, so a headless
-  `PrivacyWallet` implementation is needed regardless — which is Option A's library wearing
+  `PrivacyWallet` implementation is needed regardless, which is Option A's library wearing
   a different name.
 
-### Option C — Off-chain negotiation, on-chain commitment *(the wallet-API-compatible one)*
+### Option C: Off-chain negotiation, on-chain commitment *(the wallet-API-compatible one)*
 
 This is the design Poulav originally proposed to Akash, before the salt lane was found. It
-is worth reconsidering — not because the salt lane failed, but because this is the only
-option that works through the wallet API as it exists.
+is worth reconsidering because the current salt wire does not provide confidentiality and
+this is the only option that works through the wallet API as it exists.
 
 - Agents negotiate over an encrypted off-chain transport keyed by the same ECDH-derived
-  channel secret. No notes, no proofs, no 29 s per round — negotiation becomes fast.
-- The agreed terms are bound on-chain by a **commitment** — `STRK20_INVOKE_ACTION` to a
+  channel secret. No notes, no proofs, no 29 s per round, negotiation becomes fast.
+- The agreed terms are bound on-chain by a **commitment**. `STRK20_INVOKE_ACTION` to a
   small Erebus contract, calldata = `h(terms, nonce)`.
 - Settlement is `STRK20_TRANSFER_ACTION` in the same action set, so acceptance and payment
   stay atomic.
@@ -179,28 +181,28 @@ option that works through the wallet API as it exists.
 it reveals nothing about the terms given sufficient entropy in the nonce. Section 3a kills
 putting *terms* in invoke calldata; it does not touch putting a *commitment* there.
 
-- Agents genuinely bring their own wallet. Erebus holds no key of any kind.
+- Agents bring their own wallet. Erebus holds no key of any kind.
 - Negotiation rounds cost nothing and are not rate-limited by proving.
 - **Cost:** the record is no longer reconstructible from chain state alone. A viewing-key
   holder gets the settlement and the commitment on-chain, but needs the off-chain transcript
-  to verify what was agreed. Auditable, but not self-contained — and that difference is
+  to verify what was agreed. Auditable, but not self-contained, and that difference is
   exactly what ARCHITECTURE §7 weighed.
 - **Cost:** needs an Erebus contract, contradicting the current "`/contracts` is nearly
   empty and that is correct" note in CLAUDE.md. A commitment store is small, but it is a
   contract to write, audit and deploy.
-- **Cost:** off-chain transport is now ours to build and operate — availability, delivery,
-  replay. The salt lane got that from the chain for free.
+- **Cost:** off-chain transport is now ours to build and operate, availability, delivery,
+  replay. The salt lane gets persistence and ordering from the chain for free.
 
-### Option D — Ask for a salt-carrying wallet action
+### Option D: Ask for a salt-carrying wallet action
 
 Upstream's own `client/src/interfaces.ts:19` already carries a local
 `STRK20_COMPUTE_AND_INVOKE_ACTION` shim, annotated "a real strk20 wallet gains it
-upstream" — so the union is known-incomplete and actively being extended. A note action
+upstream", so the union is known-incomplete and actively being extended. A note action
 with a caller-supplied salt is a plausible addition.
 
-- Best end state: the salt lane *and* zero key handling.
+- Target end state: an encrypted/authenticated salt wire *and* zero key handling.
 - **Cost:** StarkWare's roadmap, no timeline, and browser wallets still do not serve
-  headless agents — so a headless `PrivacyWallet` is needed regardless, which is Option A's
+  headless agents, so a headless `PrivacyWallet` is needed regardless, which is Option A's
   library under another name.
 
 ---
@@ -213,15 +215,15 @@ The four options are not four points on one axis. They trade two different thing
 
 | | Erebus touches a key? | Payload on-chain? | Works today? |
 |---|---|---|---|
-| **A** — embedded library | yes, in the agent's own process | yes, salt lane | yes |
-| **C** — off-chain + commitment | no | no, only a commitment | yes |
-| **D** — extended wallet API | no | yes, salt lane | no |
-| **B** — wait for wallet API | no | n/a | no |
+| **A**: embedded library | yes, in the agent's own process | yes, encrypted wire v2 | offline; live v2 pending |
+| **C**: off-chain + commitment | no | no, only a commitment | no; transport and contract unbuilt |
+| **D**: extended wallet API | no | yes, wire v2 | no caller-supplied-salt action |
+| **B**: wait for wallet API | no | n/a | no |
 
-**A and C are the only two that ship.** A keeps the on-chain payload and pays for it by
-having Erebus code handle a key inside the agent's process. C keeps Erebus completely out
-of key material and pays for it by moving the negotiation off-chain, which is the property
-§7 spent the most effort defending.
+**A is the only executable custody shape today.** Its encrypted wire is verified offline;
+fresh live validation and review remain. C is a design option, not an implementation: it
+would keep Erebus completely out of key material and move negotiation off-chain, which is
+the property §7 spent the most effort defending.
 
 D is what you want; it is not yours to schedule.
 
@@ -237,5 +239,5 @@ D is what you want; it is not yours to schedule.
    answer collapses D into "wait" or "never".
 
 **None of this blocks the MVP.** The demo provisions both agents, so the keys are ours under
-every option, and every client primitive built so far — hashes, action encoding, transaction
-hashing, signing — is identical under all four.
+every option, and every client primitive built so far, hashes, action encoding, transaction
+hashing, signing, is identical under all four.

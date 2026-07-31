@@ -92,9 +92,9 @@ sequenceDiagram
     CH-->>SDK: channel_handle
 
     A->>SDK: propose_offer(handle, terms)
-    SDK->>SDK: encode terms into 119-bit chunks
-    SDK->>CH: 4 zero-amount notes, salts carry payload
-    Note over CH: location derived from shared secret<br/>observers see nothing
+    SDK->>SDK: AEAD terms, split into 119-bit chunks
+    SDK->>CH: 5 zero-amount notes, salts carry ciphertext
+    Note over CH: location is keyed and public salts<br/>reveal only authenticated ciphertext
 
     B->>SDK: read_channel_state(handle)
     SDK->>CH: fetch via keyed discovery provider
@@ -272,7 +272,8 @@ type ChannelHandle = string;
 type OfferId = string;
 
 interface ErebusClient {
-  // Establish a private channel with a counterparty.
+  // Establish a pool channel with a counterparty.
+  // The current wire does not make negotiation payloads confidential; see §7.
   // The sender hashes its pool key into channel_key. The recipient recovers that key from
   // EncChannelInfo using ephemeral-static ECDH.
   openChannel(counterparty: AgentId): Promise<ChannelHandle>;
@@ -376,9 +377,10 @@ type SettlementErrorCode =
   | "IDENTITY_UNAVAILABLE";  // the key file could not be read
 ```
 
-Wire v1 has no separate nonce field. The write-once directional note index is the replay
-identifier, and serializing another nonce in the language-neutral model would promise data
-the four-note wire does not carry.
+Wire v2 has no serialized nonce field. HKDF derives the AES-GCM-SIV nonce from the chain,
+pool, directional channel key, token and message index. AES-GCM-SIV was chosen because an attempt
+may fail before WriteOnce applies and then be rebuilt with different terms at the same index;
+ordinary nonce-fragile AEAD would fail catastrophically in that retry case.
 
 There is also no observable `accepted`-but-not-`settled` state. Acceptance and payment are
 one `ActionSet`, one proof, and one `apply_actions` transition, so the public state moves
@@ -489,14 +491,17 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 The channel primitive is designed to carry **notes** — encrypted transaction state — not arbitrary free-text messages.
 
-**Live correction 2026-07-31:** the four-note mechanism below works mechanically but is
+**Live correction 2026-07-31:** the original four-note mechanism works mechanically but is
 not confidential. The pool stores each client-chosen salt verbatim in the public high bits
 of `packed_value`, and the settlement transaction exposed all four encoded acceptance
-chunks. Until wire v2 encrypts/authenticates the message before fragmentation, “private
-negotiation” is a target rather than a property. See friction.md F30.
+chunks. See friction.md F30.
 
-In the current MVP, "negotiation" means structured state transitions (`Offer`, `Counter`,
-`Accept`) written into subchannels. They are publicly decodable in wire v1.
+**Wire-v2 correction 2026-07-31:** new Rust channels encrypt and authenticate the canonical
+400-bit message before fragmentation. Five notes provide 595 payload bits: 528 for the
+50-byte ciphertext plus 128-bit tag, 8 for the version marker, and 59 canonical zero bits.
+Existing wire-v1 channels remain readable but are deliberately read-only. Wire v2 is green
+offline and still needs a fresh live run and independent review before the privacy target is
+claimed as production evidence.
 
 **How, concretely** — this is narrower than the sentence above implies, and the detail
 matters. A note has no payload field. Its only client-writable space is the salt, capped
@@ -507,9 +512,10 @@ at `2 ≤ salt < 2^120`. We therefore:
 - compress `OfferTerms` to **320 bits** (`token` is implied by the subchannel, `nonce` by
   the note index, `memoHash` truncated to 128 bits) — **400 bits** with framing (type 8,
   `replyTo` 32, `createdAt` 40);
-- write each message as a fixed run of **4 zero-amount notes** at consecutive indices, all
-  in **one action set and one proof**. 400 bits against 4 × 119 = 476 capacity; 3 notes
-  would be 357 and does not fit.
+- encrypt with AES-256-GCM-SIV under an HKDF-derived directional key, authenticating the
+  chain, pool, token and message index as context;
+- write each ciphertext as **5 zero-amount notes** at consecutive indices, all in **one
+  action set and one proof**. Message `k` occupies `5k..5k+4`.
 
 Zero-amount notes move no value and need no deposit, so they are pure data carriers. They
 are also permanently unspendable, so each burns a subchannel index for good.
@@ -567,8 +573,8 @@ Answered 2026-07-25 — evidence in [docs/friction.md](./docs/friction.md).
   and `ClientAction` has no payload variant. But the note salt is client-chosen and
   round-trips verbatim, giving 119 usable bits per note, and notes are unbounded in count.
   So arbitrary payloads *are* carryable by fragmentation, at one permanently-burned
-  storage slot per 15 bytes. Wire v1 uses 4 notes per offer, but those fragments are public;
-  carrying data is proven, carrying it confidentially is reopened. See §7 and F30. (F1)
+  storage slot per 15 bytes. Wire v2 uses 5 notes per offer and authenticates encrypted
+  fragments; its live-chain confidentiality evidence remains open. See §7 and F30. (F1)
 - [ ] Does the paymaster path work for an agent with zero public balance end-to-end?
   STRK20 ships no paymaster; the demo wires third-party AVNU. Pool fee is 0, so this is
   ordinary tx gas. (F4)

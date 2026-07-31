@@ -1,58 +1,57 @@
-//! Wire format v1 — negotiation messages carried in note salts.
+//! Negotiation messages stored in note salts.
 //!
-//! Port of `sdk/ts/src/channel/wire.ts`. The TypeScript is the oracle: this format is
-//! ours, so Cairo emits no reference vector and the only way to know the two agree is to
-//! diff them (`tests/fixtures/ts-wire-salts.json`).
+//! Wire v1 was a port of `sdk/ts/src/channel/wire.ts`. It stored the 400 message bits in
+//! four public salts. It remains available for historical reads. Wire v2 encrypts and
+//! authenticates the same message in five salts.
 //!
-//! ## The mechanism
+//! A pool note has no payload field. The contract accepts a client-written salt in the range
+//! `2 <= salt < 2^120`. It stores the salt in the high 120 bits of `packed_value`.
+//! Negotiation messages use salts from zero-amount notes. Salts are public, so wire v2
+//! encrypts each message before it splits the message across notes.
 //!
-//! A pool note has no payload field. Its only client-writable space is the salt, which the
-//! contract constrains to `2 <= salt < 2^120` and stores verbatim in the high 120 bits of
-//! `packed_value`. Negotiation state rides there, in zero-amount notes that move no value.
-//!
-//! Bit 119 is pinned to 1 and payload occupies bits 0-118. A chunk that happened to come
-//! out as 0 or 1 would be rejected by the contract (`ZERO_SALT` / `SALT_TOO_SMALL`) —
-//! rare enough to survive testing and unpleasant to diagnose. Pinning the top bit puts
-//! every salt in `[2^119, 2^120)` unconditionally.
+//! Bit 119 is always 1. The payload uses bits 0 through 118. Without the high bit, a chunk
+//! can equal 0 or 1. The contract rejects those values with `ZERO_SALT` or `SALT_TOO_SMALL`.
+//! The high bit keeps every salt in `[2^119, 2^120)`.
 //!
 //! ## Layout
 //!
-//! Fields are packed most-significant-first into a 400-bit integer, then split into four
-//! 119-bit chunks with **chunk 0 holding the least significant bits**:
+//! Fields use most-significant-first order in a 400-bit plaintext:
 //!
 //! ```text
 //!   type:8 | replyTo:32 | createdAt:40 | amount:128 | deadline:64 | memoHash:128
 //!   \_______________________________ 400 bits _______________________________/
 //!
-//!   salts[3] = bits 357..399   (43 significant: type, replyTo, top of createdAt)
-//!   salts[2] = bits 238..356
-//!   salts[1] = bits 119..237
-//!   salts[0] = bits   0..118   (low bits of memoHash)
 //! ```
 //!
-//! Note the header lands in `salts[3]`, not `salts[0]`. The ASCII table in the TypeScript
-//! module docs claims otherwise and is wrong — the code shifts `type` in first, so it ends
-//! up most significant. Trust this table; it was derived from the emitted vectors.
+//! Wire v2 encrypts these 50 bytes with AES-256-GCM-SIV. The ciphertext and 16-byte tag use
+//! 528 of the 595 payload bits. An 8-bit version marker follows. The remaining 59 high bits
+//! must be zero. Chunk 0 holds the least-significant 119 bits, as it does in wire v1.
 //!
-//! Fixed stride: message `k` occupies note indices `4k .. 4k+3`, so a reader seeks
-//! directly and never scans for framing.
+//! Message `k` uses note indices `5k .. 5k+4`. This fixed stride lets a reader find each
+//! message without a framing scan.
 //!
 //! ## Which notes may use this
 //!
-//! Structured salts go on **zero-amount** notes only. A value-bearing note must keep a
-//! random salt, because the salt is the one-time-pad nonce for the encrypted amount:
-//! reusing a mask across two notes with different amounts lets an observer subtract the
-//! ciphertexts and recover the difference. Zero-amount notes have no variance to leak.
+//! Structured salts are valid only on zero-amount notes. A value note needs a random salt
+//! because the salt is the one-time-pad nonce for its encrypted amount. Reusing a mask for
+//! two different amounts lets an observer subtract the ciphertexts and recover the
+//! difference. Zero-amount notes do not leak an amount difference.
 //!
-//! This module cannot enforce that on its own — it only produces salts. The pairing is
-//! enforced where notes are built.
+//! This module only produces salts. The note builder enforces the zero-amount requirement.
 
+use aes_gcm_siv::aead::{AeadInPlace, KeyInit};
+use aes_gcm_siv::{Aes256GcmSiv, Nonce, Tag};
+use hkdf::Hkdf;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use starknet_types_core::felt::Felt;
 
 use crate::actions::{ActionError, NoteSalt};
 
-/// Notes per negotiation message.
-pub const NOTES_PER_MESSAGE: usize = 4;
+/// Notes per wire-v2 negotiation message.
+pub const NOTES_PER_MESSAGE: usize = 5;
+/// Notes per legacy wire-v1 negotiation message.
+pub const LEGACY_NOTES_PER_MESSAGE: usize = 4;
 /// Payload bits per note. Bit 119 is the pinned format flag.
 pub const PAYLOAD_BITS_PER_NOTE: u32 = 119;
 
@@ -66,8 +65,16 @@ const MEMO_HASH_BITS: u32 = 128;
 /// Total packed width.
 pub const MESSAGE_BITS: u32 =
     TYPE_BITS + REPLY_TO_BITS + CREATED_AT_BITS + AMOUNT_BITS + DEADLINE_BITS + MEMO_HASH_BITS;
-/// Bits available across the four notes.
+/// Bits available across five wire-v2 notes.
 pub const CAPACITY_BITS: u32 = NOTES_PER_MESSAGE as u32 * PAYLOAD_BITS_PER_NOTE;
+
+/// Bits available across four legacy wire-v1 notes.
+pub const LEGACY_CAPACITY_BITS: u32 = LEGACY_NOTES_PER_MESSAGE as u32 * PAYLOAD_BITS_PER_NOTE;
+const V2_MARKER: u8 = 2;
+const PLAINTEXT_BYTES: usize = MESSAGE_BITS as usize / 8;
+const TAG_BYTES: usize = 16;
+const V2_PAYLOAD_BYTES: usize = 1 + PLAINTEXT_BYTES + TAG_BYTES;
+const V2_PAYLOAD_BITS: u32 = V2_PAYLOAD_BYTES as u32 * 8;
 
 const FLAG_BIT: u128 = 1u128 << 119;
 const PAYLOAD_MASK: u128 = FLAG_BIT - 1;
@@ -79,6 +86,57 @@ const _: () = assert!(
     MESSAGE_BITS <= CAPACITY_BITS,
     "wire layout does not fit the notes allocated for it"
 );
+const _: () = assert!(MESSAGE_BITS <= LEGACY_CAPACITY_BITS);
+const _: () = assert!(V2_PAYLOAD_BITS <= CAPACITY_BITS);
+
+/// Negotiation wire generation stored with a channel.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireVersion {
+    /// Public four-note wire retained for historical reads only.
+    #[default]
+    V1,
+    /// Five-note authenticated-encryption wire.
+    V2,
+}
+
+impl WireVersion {
+    /// Number of consecutive note slots occupied by one message.
+    pub const fn notes_per_message(self) -> usize {
+        match self {
+            Self::V1 => LEGACY_NOTES_PER_MESSAGE,
+            Self::V2 => NOTES_PER_MESSAGE,
+        }
+    }
+}
+
+/// Immutable context that scopes wire-v2 key derivation and authentication.
+#[derive(Clone, Copy)]
+pub struct WireContext {
+    /// Starknet chain whose state carries the ciphertext.
+    pub chain_id: Felt,
+    /// Pool whose public storage carries the ciphertext.
+    pub pool_address: Felt,
+    /// Directional channel secret.
+    pub channel_key: Felt,
+    /// Token subchannel.
+    pub token: Felt,
+    /// Message position within the subchannel.
+    pub message_index: u32,
+}
+
+impl core::fmt::Debug for WireContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("WireContext")
+            .field("chain_id", &self.chain_id)
+            .field("pool_address", &self.pool_address)
+            .field("channel_key", &"<redacted>")
+            .field("token", &self.token)
+            .field("message_index", &self.message_index)
+            .finish()
+    }
+}
 
 /// Errors encoding or decoding a wire message.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
@@ -103,6 +161,15 @@ pub enum WireError {
     /// A produced salt fell outside the contract's accepted range.
     #[error(transparent)]
     Salt(#[from] ActionError),
+    /// Wire v1 is read-only because its payload is public.
+    #[error("wire v1 is read-only; open a wire-v2 channel before writing")]
+    LegacyReadOnly,
+    /// The authenticated ciphertext was changed or decoded under the wrong context.
+    #[error("wire-v2 authentication failed")]
+    Authentication,
+    /// The five chunks did not carry the wire-v2 marker and canonical zero padding.
+    #[error("invalid wire-v2 marker or padding")]
+    InvalidV2Envelope,
 }
 
 /// What a negotiation message is.
@@ -135,11 +202,11 @@ impl MessageType {
     }
 }
 
-/// A negotiation message as it goes on the wire.
+/// Negotiation message stored on the wire.
 ///
-/// `token` and `nonce` from `OfferTerms` are deliberately absent: a subchannel *is* a
-/// token, so both parties already know it, and the note index already orders messages and
-/// makes each unique. Dropping them is what brings the payload inside four notes.
+/// `OfferTerms::token` is absent because each subchannel identifies one token. The note
+/// index orders messages and makes each message unique, so the wire also omits the nonce.
+/// These omissions keep the plaintext at 400 bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireMessage {
     /// Message kind.
@@ -158,10 +225,9 @@ pub struct WireMessage {
 
 /// Truncates a `felt252` memo hash to the low 128 bits carried on the wire.
 ///
-/// This drops 124 bits, leaving 2^64 collision resistance under birthday bounds. The memo
-/// hash commits to detail held off-chain; it is not a capability and nothing is spent on
-/// it, so grinding a collision buys an attacker only the ability to claim a different memo
-/// matched an agreed offer.
+/// This drops 124 bits and leaves 2^64 collision resistance under birthday bounds. The hash
+/// commits to an off-chain memo. A collision can support a false memo claim, but cannot
+/// authorize a spend.
 pub fn truncate_memo_hash(memo_hash: Felt) -> u128 {
     let bytes = memo_hash.to_bytes_le();
     let mut low = [0u8; 16];
@@ -172,6 +238,11 @@ pub fn truncate_memo_hash(memo_hash: Felt) -> u128 {
 /// First note index of message `message_index` within a subchannel.
 pub fn note_index_for_message(message_index: u32) -> u32 {
     message_index * NOTES_PER_MESSAGE as u32
+}
+
+/// First note index of a historical wire-v1 message.
+pub fn legacy_note_index_for_message(message_index: u32) -> u32 {
+    message_index * LEGACY_NOTES_PER_MESSAGE as u32
 }
 
 /// Bits of the packed message, most significant first.
@@ -200,7 +271,7 @@ impl Bits {
         self.bits[(MESSAGE_BITS - 1 - pos) as usize]
     }
 
-    fn from_chunks(chunks: [u128; NOTES_PER_MESSAGE]) -> Self {
+    fn from_legacy_chunks(chunks: [u128; LEGACY_NOTES_PER_MESSAGE]) -> Self {
         let mut bits = vec![false; MESSAGE_BITS as usize];
         for (slot, chunk) in chunks.iter().enumerate() {
             for j in 0..PAYLOAD_BITS_PER_NOTE {
@@ -210,6 +281,23 @@ impl Bits {
                 }
             }
         }
+        Self { bits }
+    }
+
+    fn to_bytes(&self) -> [u8; PLAINTEXT_BYTES] {
+        let mut bytes = [0u8; PLAINTEXT_BYTES];
+        for (index, bit) in self.bits.iter().enumerate() {
+            if *bit {
+                bytes[index / 8] |= 1 << (7 - index % 8);
+            }
+        }
+        bytes
+    }
+
+    fn from_bytes(bytes: &[u8; PLAINTEXT_BYTES]) -> Self {
+        let bits = (0..MESSAGE_BITS as usize)
+            .map(|index| bytes[index / 8] & (1 << (7 - index % 8)) != 0)
+            .collect();
         Self { bits }
     }
 
@@ -230,8 +318,7 @@ fn fits(value: u128, bits: u32, field: &'static str) -> Result<(), WireError> {
     Ok(())
 }
 
-/// Encodes a message into exactly [`NOTES_PER_MESSAGE`] salts, in note-index order.
-pub fn encode_message(message: &WireMessage) -> Result<[NoteSalt; NOTES_PER_MESSAGE], WireError> {
+fn pack_message(message: &WireMessage) -> Result<Bits, WireError> {
     let reply_to = match message.reply_to {
         Some(NO_REPLY_TO) => return Err(WireError::ReservedReplyTo),
         Some(index) => index,
@@ -249,32 +336,10 @@ pub fn encode_message(message: &WireMessage) -> Result<[NoteSalt; NOTES_PER_MESS
     bits.push(u128::from(message.deadline), DEADLINE_BITS);
     bits.push(message.memo_hash, MEMO_HASH_BITS);
 
-    let mut salts = Vec::with_capacity(NOTES_PER_MESSAGE);
-    for slot in 0..NOTES_PER_MESSAGE {
-        let mut chunk = 0u128;
-        for j in 0..PAYLOAD_BITS_PER_NOTE {
-            if bits.at(slot as u32 * PAYLOAD_BITS_PER_NOTE + j) {
-                chunk |= 1u128 << j;
-            }
-        }
-        salts.push(NoteSalt::new(chunk | FLAG_BIT)?);
-    }
-
-    Ok([salts[0], salts[1], salts[2], salts[3]])
+    Ok(bits)
 }
 
-/// Inverse of [`encode_message`]. Salts must be in note-index order.
-pub fn decode_message(salts: &[NoteSalt; NOTES_PER_MESSAGE]) -> Result<WireMessage, WireError> {
-    let mut chunks = [0u128; NOTES_PER_MESSAGE];
-    for (slot, salt) in salts.iter().enumerate() {
-        let value = salt.get();
-        if value & FLAG_BIT == 0 {
-            return Err(WireError::MissingFlag(slot));
-        }
-        chunks[slot] = value & PAYLOAD_MASK;
-    }
-
-    let bits = Bits::from_chunks(chunks);
+fn unpack_message(bits: &Bits) -> Result<WireMessage, WireError> {
     let mut cursor = 0u32;
     let mut take = |width: u32| {
         let value = bits.read(cursor, width);
@@ -297,4 +362,167 @@ pub fn decode_message(salts: &[NoteSalt; NOTES_PER_MESSAGE]) -> Result<WireMessa
         deadline,
         memo_hash,
     })
+}
+
+fn bit_at_lsb(bytes: &[u8], position: u32) -> bool {
+    let bit_from_msb = bytes.len() as u32 * 8 - 1 - position;
+    bytes[(bit_from_msb / 8) as usize] & (1 << (7 - bit_from_msb % 8)) != 0
+}
+
+fn set_bit_lsb(bytes: &mut [u8], position: u32) {
+    let bit_from_msb = bytes.len() as u32 * 8 - 1 - position;
+    bytes[(bit_from_msb / 8) as usize] |= 1 << (7 - bit_from_msb % 8);
+}
+
+fn derive_key_and_nonce(context: &WireContext) -> ([u8; 32], [u8; 12]) {
+    const SALT: &[u8] = b"EREBUS_WIRE_V2_HKDF_SHA256";
+    let channel_key = context.channel_key.to_bytes_be();
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), &channel_key);
+
+    let mut scope = Vec::with_capacity(96);
+    scope.extend_from_slice(&context.chain_id.to_bytes_be());
+    scope.extend_from_slice(&context.pool_address.to_bytes_be());
+    scope.extend_from_slice(&context.token.to_bytes_be());
+
+    let mut key_info = b"EREBUS_WIRE_V2_KEY".to_vec();
+    key_info.extend_from_slice(&scope);
+    let mut key = [0u8; 32];
+    hkdf.expand(&key_info, &mut key)
+        .expect("32-byte HKDF output is always valid");
+
+    let mut nonce_info = b"EREBUS_WIRE_V2_NONCE".to_vec();
+    nonce_info.extend_from_slice(&scope);
+    nonce_info.extend_from_slice(&context.message_index.to_be_bytes());
+    let mut nonce = [0u8; 12];
+    hkdf.expand(&nonce_info, &mut nonce)
+        .expect("12-byte HKDF output is always valid");
+
+    (key, nonce)
+}
+
+fn associated_data(context: &WireContext) -> Vec<u8> {
+    let mut data = b"EREBUS_WIRE_V2_AAD".to_vec();
+    data.extend_from_slice(&context.chain_id.to_bytes_be());
+    data.extend_from_slice(&context.pool_address.to_bytes_be());
+    data.extend_from_slice(&context.token.to_bytes_be());
+    data.extend_from_slice(&context.message_index.to_be_bytes());
+    data
+}
+
+/// Encrypts a message into exactly five contract-valid salts, in note-index order.
+pub fn encode_message(
+    context: &WireContext,
+    message: &WireMessage,
+) -> Result<[NoteSalt; NOTES_PER_MESSAGE], WireError> {
+    let mut ciphertext = pack_message(message)?.to_bytes();
+    let (key, nonce) = derive_key_and_nonce(context);
+    let cipher =
+        Aes256GcmSiv::new_from_slice(&key).expect("AES-256-GCM-SIV accepts every 32-byte key");
+    let tag = cipher
+        .encrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            &associated_data(context),
+            &mut ciphertext,
+        )
+        .map_err(|_| WireError::Authentication)?;
+
+    let mut payload = [0u8; V2_PAYLOAD_BYTES];
+    payload[0] = V2_MARKER;
+    payload[1..1 + PLAINTEXT_BYTES].copy_from_slice(&ciphertext);
+    payload[1 + PLAINTEXT_BYTES..].copy_from_slice(&tag);
+
+    let mut salts = Vec::with_capacity(NOTES_PER_MESSAGE);
+    for slot in 0..NOTES_PER_MESSAGE {
+        let mut chunk = 0u128;
+        for j in 0..PAYLOAD_BITS_PER_NOTE {
+            let position = slot as u32 * PAYLOAD_BITS_PER_NOTE + j;
+            if position < V2_PAYLOAD_BITS && bit_at_lsb(&payload, position) {
+                chunk |= 1u128 << j;
+            }
+        }
+        salts.push(NoteSalt::new(chunk | FLAG_BIT)?);
+    }
+
+    Ok([salts[0], salts[1], salts[2], salts[3], salts[4]])
+}
+
+/// Authenticates and decrypts five wire-v2 salts in note-index order.
+pub fn decode_message(
+    context: &WireContext,
+    salts: &[NoteSalt; NOTES_PER_MESSAGE],
+) -> Result<WireMessage, WireError> {
+    let mut payload = [0u8; V2_PAYLOAD_BYTES];
+    for (slot, salt) in salts.iter().enumerate() {
+        let value = salt.get();
+        if value & FLAG_BIT == 0 {
+            return Err(WireError::MissingFlag(slot));
+        }
+        let chunk = value & PAYLOAD_MASK;
+        for j in 0..PAYLOAD_BITS_PER_NOTE {
+            let position = slot as u32 * PAYLOAD_BITS_PER_NOTE + j;
+            if chunk & (1 << j) == 0 {
+                continue;
+            }
+            if position >= V2_PAYLOAD_BITS {
+                return Err(WireError::InvalidV2Envelope);
+            }
+            set_bit_lsb(&mut payload, position);
+        }
+    }
+
+    if payload[0] != V2_MARKER {
+        return Err(WireError::InvalidV2Envelope);
+    }
+
+    let mut plaintext = [0u8; PLAINTEXT_BYTES];
+    plaintext.copy_from_slice(&payload[1..1 + PLAINTEXT_BYTES]);
+    let tag = Tag::from_slice(&payload[1 + PLAINTEXT_BYTES..]);
+    let (key, nonce) = derive_key_and_nonce(context);
+    let cipher =
+        Aes256GcmSiv::new_from_slice(&key).expect("AES-256-GCM-SIV accepts every 32-byte key");
+    cipher
+        .decrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            &associated_data(context),
+            &mut plaintext,
+            tag,
+        )
+        .map_err(|_| WireError::Authentication)?;
+
+    unpack_message(&Bits::from_bytes(&plaintext))
+}
+
+/// Encodes the public four-note wire for compatibility vectors only.
+///
+/// New channels must never call this; it exists so the historical format remains pinned.
+pub fn encode_legacy_message(
+    message: &WireMessage,
+) -> Result<[NoteSalt; LEGACY_NOTES_PER_MESSAGE], WireError> {
+    let bits = pack_message(message)?;
+    let mut salts = Vec::with_capacity(LEGACY_NOTES_PER_MESSAGE);
+    for slot in 0..LEGACY_NOTES_PER_MESSAGE {
+        let mut chunk = 0u128;
+        for j in 0..PAYLOAD_BITS_PER_NOTE {
+            if bits.at(slot as u32 * PAYLOAD_BITS_PER_NOTE + j) {
+                chunk |= 1u128 << j;
+            }
+        }
+        salts.push(NoteSalt::new(chunk | FLAG_BIT)?);
+    }
+    Ok([salts[0], salts[1], salts[2], salts[3]])
+}
+
+/// Decodes a historical public four-note message.
+pub fn decode_legacy_message(
+    salts: &[NoteSalt; LEGACY_NOTES_PER_MESSAGE],
+) -> Result<WireMessage, WireError> {
+    let mut chunks = [0u128; LEGACY_NOTES_PER_MESSAGE];
+    for (slot, salt) in salts.iter().enumerate() {
+        let value = salt.get();
+        if value & FLAG_BIT == 0 {
+            return Err(WireError::MissingFlag(slot));
+        }
+        chunks[slot] = value & PAYLOAD_MASK;
+    }
+    unpack_message(&Bits::from_legacy_chunks(chunks))
 }

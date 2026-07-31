@@ -1,19 +1,20 @@
-//! Tests for the read path — P1.3 counterparty read, and the basis of P2.2.
+//! Tests for the read path: P1.3 counterparty read, and the basis of P2.2.
 //!
 //! The strongest test available offline is the round trip: write a message with the real
 //! writer, store it exactly where the writer says, and read it back with the reader. If the
-//! writer's slot derivation and the reader's ever diverge, the note is simply "not found"
-//! with no error anywhere — which is why `writer_and_reader_agree_on_slots` exists as its
-//! own test rather than being implied by the round trip.
+//! writer's slot derivation and the reader's diverge, the note appears absent without an
+//! error. `writer_and_reader_agree_on_slots` checks this boundary directly.
 
 use std::collections::HashMap;
 
 use erebus_sdk::actions::{ClientAction, RandomSalt};
-use erebus_sdk::channel::{Channel, Counterparty, OwnedNote, PoolIdentity};
+use erebus_sdk::channel::{Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity};
 use erebus_sdk::negotiation::{Author, OfferId};
 use erebus_sdk::read::{reconstruct, ChannelReader, ReadError};
 use erebus_sdk::subchannel::SubchannelCursor;
-use erebus_sdk::wire::{MessageType, WireMessage, NOTES_PER_MESSAGE};
+use erebus_sdk::wire::{
+    encode_legacy_message, MessageType, WireError, WireMessage, WireVersion, NOTES_PER_MESSAGE,
+};
 use starknet_types_core::felt::Felt;
 
 /// A stand-in for chain storage: note id -> packed value.
@@ -21,7 +22,7 @@ use starknet_types_core::felt::Felt;
 struct Storage(HashMap<Felt, Felt>);
 
 impl Storage {
-    /// Applies an action set the way the pool would — every `CreateEncNote` becomes a slot.
+    /// Applies each `CreateEncNote` to a pool storage slot.
     fn apply(&mut self, channel: &Channel, set: &erebus_sdk::action_set::ActionSet) {
         for action in set.actions() {
             if let ClientAction::CreateEncNote(note) = action {
@@ -93,6 +94,14 @@ fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
 }
 
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
+}
+
 fn message(kind: MessageType, reply_to: Option<u32>, amount: u128, at: u64) -> WireMessage {
     WireMessage {
         message_type: kind,
@@ -106,17 +115,18 @@ fn message(kind: MessageType, reply_to: Option<u32>, amount: u128, at: u64) -> W
 
 // --- The slot agreement ---------------------------------------------------------
 
-/// The failure this guards is invisible. If the writer's note ids and the reader's diverge,
-/// nothing errors — the note is written somewhere the reader never looks, and the read
-/// returns "no message yet" forever.
+/// If writer and reader note ids diverge, the writer uses a slot that the reader never
+/// checks. Reads then report no message without an error.
 #[test]
 fn writer_and_reader_agree_on_slots() {
-    let channel = Channel::derive(&alice(), bob());
-    let reader = ChannelReader::new(channel.key(), token());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let reader = ChannelReader::new(chain(), pool(), channel.key(), token());
 
     for message_index in 0..4 {
         assert_eq!(
-            channel.note_ids_for_message(token(), message_index),
+            channel
+                .note_ids_for_message(token(), message_index)
+                .to_vec(),
             reader.note_ids(message_index),
             "writer and reader disagree at message {message_index}"
         );
@@ -127,7 +137,7 @@ fn writer_and_reader_agree_on_slots() {
 
 #[test]
 fn a_written_message_reads_back_identically() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut storage = Storage::default();
 
@@ -137,7 +147,7 @@ fn a_written_message_reads_back_identically() {
         .expect("valid message");
     storage.apply(&channel, &set);
 
-    let reader = ChannelReader::new(channel.key(), token());
+    let reader = ChannelReader::new(chain(), pool(), channel.key(), token());
     let read = reader
         .message(index, &storage.source())
         .expect("read succeeds")
@@ -147,8 +157,35 @@ fn a_written_message_reads_back_identically() {
 }
 
 #[test]
+fn a_legacy_four_note_transcript_is_readable_but_not_writable() {
+    let key = Felt::from_hex("0xc4a11e").expect("channel key");
+    let channel = Channel::from_key_with_version(chain(), pool(), key, bob(), WireVersion::V1);
+    let original = message(MessageType::Offer, None, 42, 1_753_699_200);
+    let salts = encode_legacy_message(&original).expect("legacy encoding");
+    let mut storage = Storage::default();
+
+    for (index, salt) in salts.iter().enumerate() {
+        let index = index as u64;
+        let note_id = erebus_sdk::hashes::compute_note_id(key, token(), index);
+        let packed = Felt::from(salt.get()) * two_pow_128()
+            + Felt::from(encrypted_amount(0, salt.get(), key, token(), index));
+        storage.0.insert(note_id, packed);
+    }
+
+    let reader = ChannelReader::with_version(chain(), pool(), key, token(), WireVersion::V1);
+    assert_eq!(
+        reader.message(0, &storage.source()).expect("legacy read"),
+        Some(original)
+    );
+    assert!(matches!(
+        channel.write_message(token(), 1, &original),
+        Err(ChannelError::Wire(WireError::LegacyReadOnly))
+    ));
+}
+
+#[test]
 fn a_whole_transcript_reads_back_in_order() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut storage = Storage::default();
 
@@ -174,7 +211,7 @@ fn a_whole_transcript_reads_back_in_order() {
         storage.apply(&channel, &set);
     }
 
-    let reader = ChannelReader::new(channel.key(), token());
+    let reader = ChannelReader::new(chain(), pool(), channel.key(), token());
     let transcript = reader.transcript(&storage.source()).expect("reads");
 
     assert_eq!(transcript.len(), 3);
@@ -184,12 +221,11 @@ fn a_whole_transcript_reads_back_in_order() {
     }
 }
 
-/// An empty subchannel is "nothing yet", not an error — that is the ordinary answer a
-/// polling agent gets between rounds.
+/// An empty subchannel returns no message instead of an error.
 #[test]
 fn an_empty_subchannel_reads_as_no_messages() {
-    let channel = Channel::derive(&alice(), bob());
-    let reader = ChannelReader::new(channel.key(), token());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let reader = ChannelReader::new(chain(), pool(), channel.key(), token());
     let storage = Storage::default();
 
     assert!(reader
@@ -205,7 +241,7 @@ fn an_empty_subchannel_reads_as_no_messages() {
 /// Both look like an empty subchannel, because the wrong key derives slots nobody wrote to.
 #[test]
 fn the_wrong_channel_key_reads_as_an_empty_channel() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut storage = Storage::default();
 
@@ -218,7 +254,12 @@ fn the_wrong_channel_key_reads_as_an_empty_channel() {
         .expect("valid");
     storage.apply(&channel, &set);
 
-    let wrong = ChannelReader::new(Felt::from_hex("0xbadbad").expect("felt"), token());
+    let wrong = ChannelReader::new(
+        chain(),
+        pool(),
+        Felt::from_hex("0xbadbad").expect("felt"),
+        token(),
+    );
     assert!(
         wrong
             .transcript(&storage.source())
@@ -232,7 +273,7 @@ fn the_wrong_channel_key_reads_as_an_empty_channel() {
 /// produces one, it is the source that is wrong, and saying so beats decoding three notes.
 #[test]
 fn a_partial_message_is_an_error_not_a_silent_truncation() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut storage = Storage::default();
 
@@ -249,14 +290,15 @@ fn a_partial_message_is_an_error_not_a_silent_truncation() {
     let ids = channel.note_ids_for_message(token(), index);
     storage.0.remove(&ids[NOTES_PER_MESSAGE - 1]);
 
-    let error = ChannelReader::new(channel.key(), token())
+    let error = ChannelReader::new(chain(), pool(), channel.key(), token())
         .message(index, &storage.source())
         .expect_err("a torn message must not decode");
     assert!(matches!(
         error,
         ReadError::PartialMessage {
-            found: 3,
-            message_index: 0
+            found: 4,
+            expected: 5,
+            message_index: 0,
         }
     ));
 }
@@ -265,7 +307,7 @@ fn a_partial_message_is_an_error_not_a_silent_truncation() {
 
 #[test]
 fn the_settlement_payment_note_is_found_and_decrypts() {
-    let channel = Channel::derive(&alice(), bob());
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     let mut storage = Storage::default();
 
@@ -299,7 +341,7 @@ fn the_settlement_payment_note_is_found_and_decrypts() {
         .expect("valid settlement");
     storage.apply(&channel, &set);
 
-    let reader = ChannelReader::new(channel.key(), token());
+    let reader = ChannelReader::new(chain(), pool(), channel.key(), token());
     let payment = reader
         .settlement_note(acceptance_index, &storage.source())
         .expect("the payment note is right after the record");
@@ -314,8 +356,8 @@ fn the_settlement_payment_note_is_found_and_decrypts() {
 /// note indices are per-direction, so ordering has to come from `created_at`.
 #[test]
 fn both_directions_reconstruct_into_one_ordered_book() {
-    let a_to_b = Channel::derive(&alice(), bob());
-    let b_to_a = Channel::derive(&bob_identity(), alice_as_counterparty());
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), bob());
+    let b_to_a = Channel::derive(chain(), pool(), &bob_identity(), alice_as_counterparty());
     let mut storage = Storage::default();
     let (mut a_cursor, mut b_cursor) = (SubchannelCursor::new(), SubchannelCursor::new());
 
@@ -338,8 +380,8 @@ fn both_directions_reconstruct_into_one_ordered_book() {
         .expect("counter");
     storage.apply(&b_to_a, &set);
 
-    let ours = ChannelReader::new(a_to_b.key(), token());
-    let theirs = ChannelReader::new(b_to_a.key(), token());
+    let ours = ChannelReader::new(chain(), pool(), a_to_b.key(), token());
+    let theirs = ChannelReader::new(chain(), pool(), b_to_a.key(), token());
     let book = reconstruct(&ours, &theirs, &storage.source()).expect("reconstructs");
 
     assert_eq!(book.len(), 2);
@@ -360,8 +402,8 @@ fn both_directions_reconstruct_into_one_ordered_book() {
 /// wrote what or that check silently stops working.
 #[test]
 fn reconstruction_preserves_authorship() {
-    let a_to_b = Channel::derive(&alice(), bob());
-    let b_to_a = Channel::derive(&bob_identity(), alice_as_counterparty());
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), bob());
+    let b_to_a = Channel::derive(chain(), pool(), &bob_identity(), alice_as_counterparty());
     let mut storage = Storage::default();
     let (mut a_cursor, mut b_cursor) = (SubchannelCursor::new(), SubchannelCursor::new());
 
@@ -383,8 +425,8 @@ fn reconstruction_preserves_authorship() {
     storage.apply(&b_to_a, &set);
 
     let book = reconstruct(
-        &ChannelReader::new(a_to_b.key(), token()),
-        &ChannelReader::new(b_to_a.key(), token()),
+        &ChannelReader::new(chain(), pool(), a_to_b.key(), token()),
+        &ChannelReader::new(chain(), pool(), b_to_a.key(), token()),
         &storage.source(),
     )
     .expect("reconstructs");

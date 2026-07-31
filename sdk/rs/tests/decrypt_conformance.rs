@@ -3,8 +3,8 @@
 //! Same fixture and same ratchet as `cairo_conformance.rs`. These matter more than the
 //! write-side KATs, not less: a wrong *write* eventually surfaces as a revert or a note the
 //! counterparty cannot find, but a wrong *read* returns a plausible number. None of the
-//! schemes here are authenticated — decryption with the wrong key does not fail, it
-//! succeeds and gives you a different answer.
+//! schemes here authenticate their plaintext. Decryption with the wrong key succeeds and
+//! returns a different value.
 //!
 //! The end-to-end tests at the bottom are the ones that would catch a real mistake: encrypt
 //! with our own writer, decrypt with our own reader, and separately check that the Cairo
@@ -74,8 +74,8 @@ fn a_cairo_encrypted_note_decrypts_to_its_amount() {
     assert_eq!(Felt::from(view.salt), felt(&d.inputs.salt));
 }
 
-/// The salt lane's read is just the high half — no decryption at all. If this ever needed a
-/// key, the four-notes-per-message design would not work.
+/// The pool salt itself is just the public high half. Wire v2 treats that public material as
+/// ciphertext and authenticates/decrypts only after five chunks have been reassembled.
 #[test]
 fn the_salt_is_the_high_half_and_needs_no_key() {
     let d = data();
@@ -83,7 +83,7 @@ fn the_salt_is_the_high_half_and_needs_no_key() {
     assert_eq!(Felt::from(salt), felt(&d.inputs.salt));
 }
 
-/// Open notes carry a plaintext amount. This is why `NoteSalt` refuses 1 — an encrypted
+/// Open notes carry a plaintext amount. This is why `NoteSalt` refuses 1: an encrypted
 /// note that landed there would be read back as plaintext by every reader.
 #[test]
 fn an_open_note_is_read_as_plaintext() {
@@ -122,8 +122,8 @@ fn a_wrong_channel_key_decrypts_successfully_to_garbage() {
     assert_eq!(wrong.salt, right.salt, "the salt is not encrypted");
 }
 
-/// The mask is keyed on index, so reading a note at the wrong index is as wrong as the
-/// wrong key — and equally silent.
+/// The index keys the mask. Reading at the wrong index silently returns another value, as a
+/// wrong key does.
 #[test]
 fn the_mask_is_bound_to_the_note_index() {
     let d = data();
@@ -156,7 +156,7 @@ fn cairo_channel_info_decrypts_with_the_recipient_key() {
 }
 
 /// A slot that does not hold channel info fails loudly, which is the *only* loud failure in
-/// this module. It distinguishes "nothing here" from "wrong key" — the latter is silent.
+/// this module. It distinguishes an invalid slot from a wrong key. A wrong key is silent.
 #[test]
 fn a_non_curve_point_is_rejected() {
     let error = decrypt::channel_info(Felt::ZERO, Felt::ONE, Felt::ONE, &Felt::from(7u64));

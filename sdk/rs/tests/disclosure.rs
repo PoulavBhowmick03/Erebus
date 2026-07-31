@@ -1,12 +1,12 @@
-//! Tests for viewing-key disclosure — P2.2.
+//! Tests for viewing-key disclosure: P2.2.
 //!
 //! Two claims are under test and they pull in opposite directions. The grant must reveal
 //! *enough*: an auditor reconstructs the whole negotiation and can check that what was paid
 //! matches what was agreed. And it must reveal *only that*: nothing about the granter's
 //! other channels, other counterparties, or other tokens.
 //!
-//! The leakage tests are the ones that matter. Over-disclosure here is not a bug that shows
-//! up as a failure — it shows up as a compliance claim that was never true.
+//! Leakage tests enforce the grant boundary. Over-disclosure invalidates the compliance
+//! claim without causing a protocol failure.
 
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use erebus_sdk::disclosure::{reveal, ViewingGrant};
 use erebus_sdk::negotiation::{Author, OfferStatus};
 use erebus_sdk::read::NoteSource;
 use erebus_sdk::subchannel::SubchannelCursor;
-use erebus_sdk::wire::{MessageType, WireMessage};
+use erebus_sdk::wire::{MessageType, WireMessage, NOTES_PER_MESSAGE};
 use starknet_types_core::felt::Felt;
 
 const NOON: u64 = 1_753_699_200;
@@ -45,8 +45,8 @@ impl Storage {
         }
     }
 
-    /// Writes a value note directly, bypassing the SDK's own consistency checks — the only
-    /// way to simulate a record a different or hostile client could have written.
+    /// Writes a value note without the SDK consistency checks. This simulates data from a
+    /// different or hostile client.
     fn put_value_note(
         &mut self,
         channel_key: Felt,
@@ -99,6 +99,14 @@ fn token() -> Felt {
     Felt::from_hex("0x7042").expect("token")
 }
 
+fn pool() -> Felt {
+    Felt::from_hex("0x9001").expect("pool")
+}
+
+fn chain() -> Felt {
+    Felt::from_hex("0x534e5f5345504f4c4941").expect("chain")
+}
+
 fn other_token() -> Felt {
     Felt::from_hex("0x9999").expect("token")
 }
@@ -124,8 +132,8 @@ fn salt() -> RandomSalt {
 /// A complete negotiation: A offers 1000, B counters 900, A accepts and pays 900.
 /// Returns the storage and the grant A would hand an auditor.
 fn settled_negotiation() -> (Storage, ViewingGrant) {
-    let a_to_b = Channel::derive(&alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(&bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
+    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
     let mut storage = Storage::default();
     let (mut a_cursor, mut b_cursor) = (SubchannelCursor::new(), SubchannelCursor::new());
 
@@ -219,11 +227,10 @@ fn every_message_is_attributed_to_an_address() {
     assert_eq!(record.messages[1].id.author, Author::Counterparty);
 }
 
-/// The auditor's first question. `agreed_amount` is what the acceptance message claimed;
-/// `paid_amount` is decrypted from the payment note actually written. Conflating them would
-/// make the record unable to answer it.
+/// `agreed_amount` comes from the acceptance. `paid_amount` comes from the payment note.
+/// Keeping both lets an auditor compare them.
 #[test]
-fn the_record_shows_what_was_agreed_and_what_was_actually_paid() {
+fn record_separates_agreed_and_paid_amounts() {
     let (storage, grant) = settled_negotiation();
     let record = reveal(&grant, &storage.source(), NOON + 200).expect("reveals");
 
@@ -243,14 +250,12 @@ fn the_record_shows_what_was_agreed_and_what_was_actually_paid() {
 
 /// The reason `paid_amount` is read from the note rather than copied from the acceptance.
 ///
-/// Our own SDK now refuses to write a settlement whose record and payment disagree, but a
-/// disclosure has to be able to *detect* one — the record on chain may have been written by
-/// a different client, or a deliberately malicious one. So this builds the mismatch by hand,
-/// the way a hostile writer would, and checks the auditor catches it.
+/// The SDK rejects a mismatched record and payment. Another client can still write one, so
+/// this test builds the mismatch directly and checks that disclosure reports it.
 #[test]
 fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
-    let a_to_b = Channel::derive(&alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(&bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
+    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
     let mut storage = Storage::default();
     let mut cursor = SubchannelCursor::new();
 
@@ -266,7 +271,7 @@ fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
 
     // ...next to a payment note carrying 100, written directly the way a hostile client
     // would rather than through `settle_next`, which now refuses to build this.
-    let payment_index = (acceptance_index + 1) * 4;
+    let payment_index = (acceptance_index + 1) * NOTES_PER_MESSAGE as u32;
     storage.put_value_note(
         a_to_b.key(),
         token(),
@@ -290,8 +295,8 @@ fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
 
 #[test]
 fn an_unsettled_negotiation_discloses_as_unsettled() {
-    let a_to_b = Channel::derive(&alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(&bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
+    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
     let mut storage = Storage::default();
     let mut cursor = SubchannelCursor::new();
 
@@ -312,8 +317,7 @@ fn an_unsettled_negotiation_discloses_as_unsettled() {
     assert_eq!(record.messages[0].status, OfferStatus::Proposed);
 }
 
-/// An auditor reading later must still see everything, correctly labelled — `now` colours
-/// the statuses, it does not gate the contents.
+/// `now` changes message statuses but does not filter old messages.
 #[test]
 fn reading_long_after_the_fact_still_discloses_everything() {
     let (storage, grant) = settled_negotiation();
@@ -333,7 +337,7 @@ fn a_grant_discloses_nothing_about_another_counterparty() {
     let (mut storage, grant) = settled_negotiation();
 
     // A also negotiates with Carol, in the same pool, on the same token.
-    let a_to_c = Channel::derive(&alice(), as_counterparty(&carol()));
+    let a_to_c = Channel::derive(chain(), pool(), &alice(), as_counterparty(&carol()));
     let mut cursor = SubchannelCursor::new();
     let (_, set) = a_to_c
         .write_next_message(
@@ -360,7 +364,7 @@ fn a_grant_discloses_nothing_about_another_counterparty() {
 fn a_grant_discloses_nothing_about_another_token() {
     let (mut storage, grant) = settled_negotiation();
 
-    let a_to_b = Channel::derive(&alice(), as_counterparty(&bob()));
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
     let mut cursor = SubchannelCursor::new();
     let (_, set) = a_to_b
         .write_next_message(
@@ -385,20 +389,17 @@ fn a_grant_discloses_nothing_about_another_token() {
 ///
 /// Granting only the direction you derived yourself is an easy mistake. The acceptance
 /// replies to a counter that is now invisible, so the transcript no longer hangs together
-/// and reconstruction says so. For a disclosure path that is the right answer — a record
-/// that quietly omits what the counterparty said is worse than no record, because it looks
+/// and reconstruction returns an error. It must not return a partial record that appears
 /// complete.
 #[test]
 fn a_half_grant_is_rejected_rather_than_disclosing_a_partial_record() {
     let (storage, _) = settled_negotiation();
-    let a_to_b = Channel::derive(&alice(), as_counterparty(&bob()));
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
 
-    let half = ViewingGrant::new(
-        a_to_b.key(),
+    let half = a_to_b.grant_viewing_key(
+        &alice(),
         Felt::from_hex("0xdead").expect("wrong key"),
         token(),
-        alice().address(),
-        bob().address(),
     );
 
     let error = reveal(&half, &storage.source(), NOON + 200)
@@ -445,6 +446,36 @@ fn a_grant_round_trips_through_serialization() {
         original.settlement.map(|s| s.paid_amount),
         after.settlement.map(|s| s.paid_amount)
     );
+}
+
+#[test]
+fn a_legacy_v1_grant_without_new_scope_fields_still_loads() {
+    let outgoing = Felt::from_hex("0xa0").expect("key");
+    let incoming = Felt::from_hex("0xb0").expect("key");
+    let granter = alice().address();
+    let counterparty = bob().address();
+    let checksum = erebus_sdk::hashes::hash(&[
+        Felt::from_bytes_be_slice(b"EREBUS_VIEW_GRANT_V1"),
+        outgoing,
+        incoming,
+        token(),
+        granter,
+        counterparty,
+    ]);
+    let serialized = serde_json::json!({
+        "version": 1,
+        "outgoing_key": outgoing,
+        "incoming_key": incoming,
+        "token": token(),
+        "granter": granter,
+        "counterparty": counterparty,
+        "checksum": checksum,
+    });
+    let grant: ViewingGrant = serde_json::from_value(serialized).expect("legacy grant loads");
+    let empty = |_id: Felt| None;
+
+    let record = reveal(&grant, &empty, NOON).expect("legacy grant validates");
+    assert!(record.messages.is_empty());
 }
 
 #[test]

@@ -9,9 +9,10 @@ problem shaped like it.
 
 Strip the agent story off and four properties are left.
 
-Two known parties get a confidential structured channel that lives on-chain. 400 bits per
-transaction, four notes at 119 usable salt bits each. Only the counterparty can read it, and
-nobody watching the chain can tell a negotiation from any other note write.
+Two known parties target a confidential structured channel that lives on-chain. The Rust
+wire carries a 400-bit message as five authenticated-encryption chunks at 119 usable salt
+bits each. Wire v2 hides content offline; whether its five-note traffic shape preserves the
+claimed relationship privacy still needs live observer evidence.
 
 A payment can be bound to an agreement inside one proof, so the chain applies both or
 neither. There is no window where one side holds an acceptance and no money.
@@ -68,10 +69,10 @@ commercially real one.
 *Contractor and payroll flows.* Amounts private between the two parties, disclosable to a tax
 authority or an auditor on demand without exposing them to everyone else.
 
-*Any two-party protocol that needs a confidential channel — target only.* The salt lane can
-carry structured state, but raw salts are public in `packed_value`. No project should use
-wire v1 as a confidential data channel. This use case becomes valid only after the payload
-is encrypted and authenticated before fragmentation.
+*Any two-party protocol that needs a confidential channel — pre-production.* Raw salts are
+public in `packed_value`, so wire v1 must never be used as a confidential data channel. Rust
+wire v2 encrypts/authenticates before fragmentation; live-chain validation, peer
+interoperability and security review remain before another project should depend on it.
 
 ---
 
@@ -125,9 +126,10 @@ Every project on the privacy roadmap treats a note as a unit of value. Erebus is
 one where a note has to say something rather than be worth something, and the primitive
 turned out to support it without a contract change.
 
-That extends what STRK20 addresses from private payments to private bilateral protocols. The
-120-bit salt was sitting there as a nonce. It is a payload channel, and once notes can carry
-structured data the pool is a private message bus that also happens to move money atomically.
+That could extend what STRK20 addresses from private payments to private bilateral protocols.
+The 120-bit salt is a public payload channel. Wire v2 places only authenticated ciphertext
+there, producing the private-message-bus target in Rust; live observer evidence and review
+remain before presenting it as production infrastructure.
 
 The agent framing is where we think the near-term demand is. The mechanism underneath it is
 not agent-specific at all.
