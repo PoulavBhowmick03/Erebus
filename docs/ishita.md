@@ -162,16 +162,100 @@ is enough for the demo.
 
 ---
 
+## The wire your tools actually call — protocol 2, added 2026-07-31
+
+**Read this before writing a tool handler.** The Rust CLI moved to protocol 2 when the chain
+path landed, and `sdk/py/src/erebus/_seam.py` still sends the protocol-1 shapes. They are
+incompatible — not subtly, but immediately, on the first call. Build against what is below,
+not against what `_seam.py` currently does. Poulav broke this; it is on his side to say so,
+which is what this section is.
+
+The source of truth is `sdk/rs/src/bin/erebus_cli.rs:33` and nothing else. If this section
+and that enum disagree, the enum is right and this section is stale — tell Poulav.
+
+One JSON object in on stdin, one out on stdout:
+
+```json
+{ "method": "propose_offer", "params": { "config": { … }, "handle": "…", "terms": { … } } }
+```
+
+**Every method except `version` carries the same `config` block.** The CLI is one-shot and
+holds nothing between calls, so operator configuration is re-supplied each time and channel
+state is recovered from `state_dir` by handle. All nine fields are required:
+
+```json
+"config": {
+  "rpc_url":           "…",   "prover_url":     "…",
+  "pool_address":      "0x…", "chain_id":       "0x…",
+  "account_address":   "0x…", "token":          "0x…",
+  "pool_key_file":     "/path/to/pool.key",
+  "account_key_file":  "/path/to/account.key",
+  "state_dir":         "/path/to/state"
+}
+```
+
+The two `*_key_file` fields are **paths**. That is the whole custody argument for this seam:
+Rust opens them, and no pool or account private key ever enters your Python heap, a request
+body, or argv. If you ever find yourself reading one of those files in Python to pass its
+contents, stop — that is the architecture violation the guardrails mean.
+
+| method | params beyond `config` |
+|---|---|
+| `version` | *(none, and no `config` — safe startup probe)* |
+| `open_channel` | `counterparty` |
+| `propose_offer` | `handle`, `terms` |
+| `counter_offer` | `handle`, `reply_to`, `terms` |
+| `read_channel_state` | `handle` |
+| `accept_and_settle` | `handle`, `offer_id` |
+| `grant_viewing_key` | `handle`, `grantee` |
+| `reveal` | `viewing_key` *(no handle — see below)* |
+| `shield` | `amount` — administrative funding, not part of the negotiation loop |
+
+`terms` is `{ "amount": "…", "token": "0x…", "deadline": <number>, "memo_hash": "…" }`.
+`amount` and `memo_hash` take decimal or `0x` hex; `token` is hex only. `deadline` is a JSON
+number, not a string.
+
+**Four things that will bite if nobody says them out loud:**
+
+1. **Unknown fields are a hard error, not ignored** (`deny_unknown_fields`). A leftover
+   protocol-1 field like `counterparty_public_key` or `register` fails the whole call with
+   `INVALID_REQUEST`. This is deliberate and it is in your favour — a shape mismatch is the
+   one class of bug in this stack that gets to be loud, so let it be loud rather than
+   filtering fields to make it pass.
+2. **Handles are opaque and mean nothing.** A handle is a random value naming a record under
+   `state_dir`; it is not a key, an address, or anything derivable. Store it, pass it back,
+   never parse it. Two processes sharing a `state_dir` share channels — that is how a
+   one-shot CLI keeps a multi-step negotiation.
+3. **`reveal` takes no handle.** It takes the entire object `grant_viewing_key` returned, and
+   that object *is* the secret — anyone holding it can read that one relationship. Pass it
+   through verbatim; do not construct one, do not log it, do not put it in a tool result an
+   agent will echo into a model context. This is what lets an auditor reveal on a different
+   machine with no access to our `state_dir`, which is the whole point of the compliance
+   story in the demo.
+4. **`open_channel` no longer takes a counterparty public key or channel indices.** Just the
+   counterparty. If your mock has those parameters, drop them.
+
+Errors arrive as `{"ok": false, "error": {"code", "message", "retryable"}}` exactly as
+before — that part of the contract did not move, and `retryable` is still the only field
+worth branching on.
+
+---
+
 ## Day 2 — integrate and demo
 
 ### I2.1 — Swap mock for real
-- [ ] Point `sdk/py` at Poulav's Rust client instead of the mock
-- [ ] Fix interface mismatches together — expect some
-- [ ] Handle real proof latency in the agent loop
+- [ ] Bring `sdk/py/src/erebus/_seam.py` up to protocol 2 — it still sends the protocol-1
+      `open_channel` and knows none of the other six methods. **Shared file: agree the change
+      with Poulav first** (CLAUDE.md), and keep it transport-only — new methods are new
+      argument-forwarding functions, never new logic.
+- [ ] Point the agents at the real seam instead of the mock
+- [ ] Handle real proof latency in the agent loop — ~29 s per proof, and settlement is more
+      than one
 
-**Do not let this be the first time the two languages meet.** P0.4 on Poulav's list exists
-to get one method across the Python↔Rust seam early, with a stub underneath. Push for that
-to happen in Phase 1, not here — this is the step with no schedule left behind it.
+**Do not let this be the first time the two languages meet.** P0.4 already got one method
+across with a stub underneath, so the *mechanism* is proven — but protocol 2 then changed the
+shapes underneath it, so the surface is not. The gap is exactly the wire contract above:
+mechanical, but it is nobody's by default, which is how it survives to demo day.
 
 **Acceptance:** one green end-to-end run on testnet.
 
