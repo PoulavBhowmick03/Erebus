@@ -107,7 +107,26 @@ def main() -> int:
         return 1
 
     terms = decode(salts)
-    kind = MESSAGE_TYPES.get(terms["type"], f'unknown({terms["type"]})')
+    kind = MESSAGE_TYPES.get(terms["type"])
+
+    # Plausibility, so the script reports a verdict instead of leaving you to eyeball a
+    # number. Wire v2 encrypts the payload, so these bits are ciphertext and the decode
+    # produces noise that fails every one of these.
+    readable = (
+        kind is not None
+        and 1_600_000_000 < terms["created_at"] < 2_600_000_000
+        and 1_600_000_000 < terms["deadline"] < 2_600_000_000
+    )
+
+    if not readable:
+        print("  payload does not decode to a valid message")
+        print(f"    type {terms['type']}, created_at {terms['created_at']}, "
+              f"deadline {terms['deadline']}")
+        print("\nContent is confidential (F30 closed).")
+        print(f"Traffic is not: {len(salts)} salts were located by their bit-119 format "
+              "flag without any key, which is F31.")
+        return 1
+
     print(f"  message type : {kind}")
     print(f"  amount       : {terms['amount']}  ({terms['amount'] / 1e18:g} tokens)")
     print(f"  deadline     : {terms['deadline']}")
