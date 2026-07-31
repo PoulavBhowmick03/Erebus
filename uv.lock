@@ -249,6 +249,7 @@ name = "erebus-agents"
 version = "0.0.0"
 source = { editable = "agents" }
 dependencies = [
+    { name = "erebus-mcp-server" },
     { name = "mcp", extra = ["cli"] },
 ]
 
@@ -258,7 +259,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mcp", extras = ["cli"], specifier = ">=1.2.0" }]
+requires-dist = [
+    { name = "erebus-mcp-server", editable = "mcp-server" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
