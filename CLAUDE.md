@@ -174,11 +174,17 @@ pnpm install && pnpm -r typecheck && cd sdk/ts && pnpm vitest run
 # Cairo probes — copy into a starknet-privacy checkout first, see contracts/README.md
 cd ../starknet-privacy && snforge test p0_2
 
-# Python binding / agents — not yet scaffolded beyond a stub
-uv sync && uv run pytest
+# Python workspace — verified working. Plain `uv sync` skips workspace members' editable
+# installs, so use --all-packages or the 4 erebus-* packages won't be importable.
+uv sync --all-packages && uv run pytest
 
-# MCP server (Python) — not yet implemented
-uv run mcp dev mcp-server/src/server.py
+# Reference agents — mock-backed (I2.1, the swap to the real sdk/py seam, hasn't landed)
+uv run python agents/src/erebus_agents/demo.py
+
+# MCP server (Python) — verified working, also mock-backed. Requires AGENT_ADDRESS and
+# PROVING_SERVICE_URL in the environment; fails loudly without them.
+AGENT_ADDRESS=0xyouraddress PROVING_SERVICE_URL=http://placeholder \
+  uv run mcp dev mcp-server/src/server.py
 ```
 
 Toolchain: scarb 2.17.0 / starknet-foundry 0.59.0 (pinned via asdf to match upstream's

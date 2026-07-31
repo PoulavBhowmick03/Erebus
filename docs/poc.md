@@ -91,7 +91,16 @@ Working and tested offline:
 The Rust client exists because there is no Rust write side. `discovery-core`
 covers reads. We need to build `ClientAction`s, serialises calldata, signing the invoke or calling the prover.
 
-Not done: anything on-chain, settlement, the MCP server, the agent loop.
+Not done: anything on-chain.
+
+Done, but mock-backed rather than on-chain: the agent loop and the MCP server (`agents/`,
+`mcp-server/` — see `docs/one-pager.md`). They're built against the frozen `ErebusClient`
+interface, not against real settlement, so "not done" now means the swap to the real
+`sdk/py` seam (I2.1), not the loop or the server themselves.
+
+*(This table otherwise reflects an earlier snapshot — e.g. it predates the Rust write path,
+protocol 2, and settlement/disclosure landing in `sdk/rs`. Not rewriting Poulav's rows here;
+flagging so nobody reads "Not done: settlement" as still true.)*
 
 
 ## Where this goes
