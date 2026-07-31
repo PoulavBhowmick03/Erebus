@@ -22,6 +22,11 @@ the proof invocation needs an account-valid signature, and the final invoke must
 signed. “Does not appear in prover calldata” means the prover cannot steal it; it does not
 mean the client can execute without a signer.
 
+The Rust seam now provisions the pool key with `generate_pool_key`: OS entropy goes directly
+to a new mode-`0600` file and only its path and public key are returned. The account key is
+not generated there because a usable Starknet account also needs deployment metadata and
+funding; `sncast` owns that lifecycle, while Erebus consumes a raw key file for the MVP.
+
 ## 2. Why the pool key cannot simply stay in the agent's wallet
 
 Because the channel key derivation needs it:

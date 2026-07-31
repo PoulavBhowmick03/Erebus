@@ -27,8 +27,32 @@ The values of both private keys must not appear in JSON or argv. Rust opens the 
 paths when an operation needs them. `state_dir` contains mode-`0600` secret-bearing channel
 records under a mode-`0700` directory.
 
+### Provision the two keys
+
+They belong to one pool identity but serve different systems:
+
+- `account_key_file` contains the private key for the deployed Starknet account at
+  `account_address`. Create and fund that account with `sncast account create` /
+  `sncast account deploy`, then place its raw `0x`-prefixed private felt in a mode-`0600`
+  file. The CLI does not read the sncast account registry.
+- `pool_key_file` contains an independent STRK20 pool identity key. No service issues it.
+  Generate it inside Rust so the value never crosses the JSON seam:
+
+```sh
+mkdir -m 700 /absolute/operator/path/erebus
+printf '%s\n' \
+  '{"method":"generate_pool_key","params":{"path":"/absolute/operator/path/erebus/pool.key"}}' \
+  | target/release/erebus-cli
+```
+
+`generate_pool_key` refuses relative paths and existing files, creates the destination mode
+`0600` on Unix, and returns only the path and public key. Registration is automatic on the
+first `shield` or `open_channel`; do not generate a replacement for an address that is
+already registered.
+
 Methods:
 
+- `generate_pool_key` — local provisioning utility; no network or Python key value involved
 - `open_channel`
 - `propose_offer`
 - `counter_offer`
@@ -55,6 +79,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   `compile_actions` calldata. Use an operator-controlled prover.
 - The preflight `starknet_call(compile_actions)` sends the same key to `rpc_url`. The write
   path therefore also requires an operator-controlled RPC/Pathfinder, not a public endpoint.
+- Pool-key exposure reveals the identity's private history and derived locations. It does
+  not by itself authorize a spend: the pool's simulated `__execute__` also validates the
+  Starknet account signature over the action set.
 - The account signing key never enters proving calldata, but the local Rust process needs
   it to sign the proof invocation and final account transaction.
 - `grant_viewing_key` is the intentional exception: it exports a self-contained bearer

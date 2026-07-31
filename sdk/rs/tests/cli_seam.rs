@@ -5,6 +5,7 @@
 //! and opaque-handle validation.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const CLI: &str = env!("CARGO_BIN_EXE_erebus-cli");
@@ -42,6 +43,10 @@ fn config(name: &str, pool_key_file: &str, account_key_file: &str) -> serde_json
     })
 }
 
+fn temporary_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("erebus-cli-key-test-{}-{name}", std::process::id()))
+}
+
 #[test]
 fn version_is_protocol_two() {
     let (response, ok) = run(r#"{"method":"version"}"#);
@@ -49,6 +54,70 @@ fn version_is_protocol_two() {
     assert_eq!(response["ok"], true);
     assert_eq!(response["result"]["protocol"], 2);
     assert!(response["error"].is_null());
+}
+
+#[test]
+fn generate_pool_key_writes_the_secret_but_returns_only_public_metadata() {
+    let root = temporary_path("generate");
+    std::fs::create_dir(&root).expect("temporary key directory");
+    let key_file = root.join("pool.key");
+    let request = serde_json::json!({
+        "method": "generate_pool_key",
+        "params": { "path": key_file }
+    });
+
+    let (response, ok) = run(&request.to_string());
+    assert!(ok, "{response}");
+    assert_eq!(response["ok"], true);
+    assert_eq!(
+        response["result"]["pool_key_file"],
+        key_file.to_str().expect("UTF-8 test path")
+    );
+    assert!(response["result"]["public_key"].is_string());
+    assert_eq!(
+        response["result"].as_object().expect("result object").len(),
+        2,
+        "the private key must not enter the response"
+    );
+
+    let private = std::fs::read_to_string(&key_file).expect("key file");
+    assert!(private.trim().starts_with("0x"));
+    assert!(!response.to_string().contains(private.trim()));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key_file)
+            .expect("key metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn generate_pool_key_refuses_to_overwrite() {
+    let root = temporary_path("overwrite");
+    std::fs::create_dir(&root).expect("temporary key directory");
+    let key_file = root.join("pool.key");
+    std::fs::write(&key_file, "sentinel").expect("existing file");
+    let request = serde_json::json!({
+        "method": "generate_pool_key",
+        "params": { "path": key_file }
+    });
+
+    let (response, ok) = run(&request.to_string());
+    assert!(!ok);
+    assert_eq!(response["error"]["code"], "IDENTITY_UNAVAILABLE");
+    assert_eq!(
+        std::fs::read_to_string(&key_file).expect("existing file"),
+        "sentinel"
+    );
+
+    std::fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[test]

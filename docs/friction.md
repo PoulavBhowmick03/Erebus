@@ -929,6 +929,37 @@ the grantee would be false.
 
 ---
 
+## F26 — “Two keys” is not enough setup guidance (P0.4)
+
+The protocol needs two unrelated secrets for one identity. The account key belongs to a
+deployed, funded Starknet account and authorizes transactions; the pool key is locally chosen
+STRK20 identity material used for discovery, decryption, channel derivation and nullifiers.
+The prover and write RPC see the latter, but cannot spend with it alone because
+`assert_valid_signature` also delegates to the account contract.
+
+The first CLI exposed two file-path fields but supplied no safe way to create the pool-key
+file. Telling an operator to pipe `openssl rand` through a shell would work, but contradicts
+the boundary we built: protocol entropy belongs in Rust, and a provisioning command should
+not print the secret it just made.
+
+**Resolved 2026-07-31:** `erebus-cli` now has a local `generate_pool_key` utility. It accepts
+an absolute destination path, refuses overwrite, writes 248 bits of OS entropy mode `0600`
+on Unix, syncs the file, and returns only non-secret path/public-key metadata. It deliberately
+does not generate the account key: a raw scalar without the matching account class, address,
+deployment and funding is not a usable Starknet account. `sncast` owns that lifecycle.
+
+Remaining rough edge: the Rust MVP reads a raw felt from `account_key_file`; it does not
+consume the sncast account registry or a keystore. Extracting that scalar into a protected
+file is acceptable for disposable Sepolia accounts, but a signer abstraction is required
+before this can be called product key handling.
+
+The same pass caught a configuration mismatch before it became a failed live run:
+`.env` used the human label `SN_SEPOLIA`, while the CLI calls `Felt::from_hex` on
+`chain_id`. Both `.env` files now carry the felt encoding
+`0x534e5f5345504f4c4941`.
+
+---
+
 ## F4 — Target network: Sepolia. Confirmed, not assumed. (P0.1)
 
 **Sepolia. The pool is live and callable; mainnet has no published deployment.**

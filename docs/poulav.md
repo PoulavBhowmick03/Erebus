@@ -18,7 +18,7 @@ the TS byte-for-byte. That is why it is still referenced below — as the thing 
 
 ---
 
-## Status — 2026-07-30
+## Status — 2026-07-31
 
 **Rust protocol 2 is complete as an implementation, not yet as live evidence.** The crate
 now has the high-level `ErebusClient` trait and all seven methods, Rust-owned opaque-handle
@@ -255,6 +255,12 @@ hers, which is exactly why it will otherwise be nobody's until integration day b
 
       **Integration is intentionally not ticked:** `sdk/py` still speaks protocol 1. It and
       Ishita's callers were left untouched in this Rust-only pass.
+- [x] **Rust-owned pool-key provisioning landed 2026-07-31.** `generate_pool_key` writes
+      248 bits of OS entropy directly to a caller-selected absolute path, mode `0600` on
+      Unix, refuses overwrite, and returns only the path plus public key. The account key
+      remains a separate `sncast`-managed Starknet-account concern. `.env` and
+      `.env.example` now carry `POOL_KEY_FILE` / `ACCOUNT_KEY_FILE` paths rather than the
+      obsolete protocol-1 raw-key fields.
 - [x] **`SettlementError` crossing — DONE.** A JSON envelope carries `code`, `message` and
       `retryable`; `ErebusError` on the Python side is a frozen dataclass with those fields.
       `retryable` is the only field agent logic should branch on — an agent cannot act on
@@ -593,6 +599,14 @@ means Phase 2 starts with an HTTP call, not a week of syncing.
 
 The ordering that falls out, cheapest-first:
 
+- [x] Sepolia RPC selected for the disposable-key MVP:
+      `https://starknet-sepolia-rpc.publicnode.com`; live checks on 2026-07-31 reported RPC
+      spec 0.10.2 and read pool v2.0 at both head and head - 10. This does **not** prove it
+      accepts the non-standard proof-bearing estimate/submission shape; the real shield is
+      that test. It sees the pool key, so it is not the product configuration.
+- [x] Pool-key generator and path-only environment placeholders
+- [x] `.env` chain id corrected from the human label `SN_SEPOLIA` to its felt encoding
+      `0x534e5f5345504f4c4941`, which is the shape `erebus-cli` actually parses
 - [ ] One deposit prove request against Akash's endpoint — settles screening (blocker 3) and
       exercises the RC-version question (blocker 2) in the same round trip
 - [ ] Fund a Sepolia account with STRK for gas

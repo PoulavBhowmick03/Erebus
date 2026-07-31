@@ -15,6 +15,7 @@ use erebus_sdk::client::{
     Client, ClientConfig, ClientError, ErebusClient, OfferId, OfferTerms, ViewingKeyGrant,
 };
 use erebus_sdk::execution::ExecutionError;
+use erebus_sdk::keys::{generate_pool_key_file, KeyFileError};
 use erebus_sdk::negotiation::NegotiationError;
 use erebus_sdk::prover::ProverError;
 use erebus_sdk::state::{ChannelHandle, StateError};
@@ -32,6 +33,10 @@ use starknet_types_core::felt::Felt;
 )]
 enum Request {
     Version,
+    /// Creates a pool identity key directly in a protected Rust-owned file.
+    GeneratePoolKey {
+        path: PathBuf,
+    },
     OpenChannel {
         config: ConfigParams,
         counterparty: String,
@@ -173,6 +178,8 @@ enum CliError {
     #[error(transparent)]
     State(#[from] StateError),
     #[error(transparent)]
+    KeyFile(#[from] KeyFileError),
+    #[error(transparent)]
     Client(#[from] ClientError),
 }
 
@@ -182,6 +189,7 @@ impl CliError {
             Self::BadRequest(_) | Self::BadValue { .. } | Self::State(_) => {
                 Response::err("INVALID_REQUEST", self.to_string(), false)
             }
+            Self::KeyFile(_) => Response::err("IDENTITY_UNAVAILABLE", self.to_string(), false),
             Self::Client(error) => client_error_response(error),
         }
     }
@@ -194,6 +202,13 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             "version": env!("CARGO_PKG_VERSION"),
             "protocol": 2,
         })),
+        Request::GeneratePoolKey { path } => {
+            let generated = generate_pool_key_file(path)?;
+            Ok(serde_json::json!({
+                "pool_key_file": generated.path,
+                "public_key": format!("{:#x}", generated.public_key),
+            }))
+        }
         Request::OpenChannel {
             config,
             counterparty,
