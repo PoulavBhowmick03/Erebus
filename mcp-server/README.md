@@ -64,3 +64,54 @@ Blocking seam calls run through `asyncio.to_thread`. A write is a preflight, a p
 about twenty seconds, a fee estimate, a submission and a receipt wait; calling that directly
 from a coroutine would stall the event loop for the whole period, and a second tool call
 could not be parsed until the first settled.
+
+## Registering with an MCP client
+
+`scripts/erebus-mcp.sh <env-file>` launches one server for one identity over stdio, which is
+what an MCP client spawns. It sources the identity's env, defaults `EREBUS_BACKEND` to
+`seam`, and refuses to start if `erebus-cli` is not built.
+
+For Claude Code:
+
+```shell
+claude mcp add erebus -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-b/env
+```
+
+For a client that reads a JSON config (Claude Desktop and most others):
+
+```json
+{
+  "mcpServers": {
+    "erebus": {
+      "command": "/Users/odinson/Developer/erebus/scripts/erebus-mcp.sh",
+      "args": ["/Users/odinson/.erebus-b/env"]
+    }
+  }
+}
+```
+
+Two agents negotiating means two client configurations, each naming a different env file.
+Nothing about the server is shared between them.
+
+## Using it from outside this repository
+
+Three things have to reach the target machine, and only one of them is a packaging problem.
+
+**The Python package.** `erebus-mcp-server` and `erebus-sdk` are a `uv` workspace today.
+Publishing them, or installing from the git URL, is routine.
+
+**The `erebus-cli` binary.** The Python side runs a compiled Rust binary, so distribution
+means either `cargo install` on the target or platform wheels carrying the binary as package
+data, which is how ruff and maturin-built tools ship. The second is what makes
+`uvx erebus-mcp` work, and it needs CI cross-compiling for macOS arm64 and x86 plus Linux.
+
+**A prover, an RPC and a funded identity.** This is the one that does not yield to
+packaging. `compile_actions` sends the pool private key as calldata to both the prover and
+the RPC, so an operator who does not control those has handed over the ability to read
+everything that identity does. StarkWare's Sepolia prover is not public and we were asked
+not to share it. Self-hosting is Pathfinder plus `transaction-prover`.
+
+So the honest statement is that Erebus is software an operator runs, not a service anyone
+can point at. Publishing the SDK shortens the install; it does not remove the prover
+requirement, and no amount of packaging will, because the requirement is the custody
+property rather than a missing feature. See `docs/custody-design.md`.
