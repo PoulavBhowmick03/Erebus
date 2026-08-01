@@ -11,7 +11,13 @@
 #   agent.sh <env> accept    <handle> <offer_id>           -> tx hash
 #   agent.sh <env> status    <handle>                      -> compact transcript
 #   agent.sh <env> wait      <handle> <count> [timeout_s]  -> blocks until N offers exist
+#   agent.sh <env> balance                                 -> spendable note denominations
+#   agent.sh <env> fund      <amount>                      -> approve + shield one note
 #   agent.sh <env> whoami                                  -> this identity's address
+#
+# Check `balance` before naming a price. Settlement spends an exact subset of notes and
+# mints no change, so an identity holding one 1 STRK note can pay exactly 1 STRK — not 0.9.
+# Agreeing a number first and discovering that second is the one trap in this loop.
 #
 # <env> is a file of KEY=VALUE lines: the repo .env for agent A, ~/.erebus-b/env for B, and
 # so on. It names the key files by path. Key values never appear in any argument here.
@@ -107,6 +113,51 @@ wait)
         fi
         sleep 10
     done
+    ;;
+balance)
+    out=$(call balance '{}')
+    python3 "$REPO/scripts/balance.py" <<<"$out"
+    ;;
+fund)
+    # The documented two-transaction deposit (runbook §2): the ERC-20 approve must be on
+    # chain and `proving_block_lag` deep before the shield simulates, or the shield fails
+    # with a bare Contract error naming nothing (F20). Doing it in one verb is the only way
+    # an autonomous agent gets past this without a human pasting a transaction hash.
+    amount="${1:?amount in wei}"
+    token=$(grep '^TOKEN_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
+    pool=$(grep '^POOL_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
+    rpc=$(grep '^STARKNET_RPC_URL=' "$ENV_FILE" | cut -d= -f2)
+    me=$(grep '^AGENT_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
+
+    # Resolve the signer by address rather than taking a name on faith: approving from the
+    # wrong account silently grants the wrong allowance and the shield still fails.
+    account="${SNCAST_ACCOUNT:-$(python3 -c '
+import json,sys,pathlib
+want = int(sys.argv[1], 16)
+path = pathlib.Path.home() / ".starknet_accounts/starknet_open_zeppelin_accounts.json"
+if not path.exists():
+    sys.exit("no sncast accounts file; set SNCAST_ACCOUNT")
+for network, accounts in json.loads(path.read_text()).items():
+    for name, body in accounts.items():
+        if int(body.get("address", "0x0"), 16) == want:
+            print(name); raise SystemExit(0)
+sys.exit("no sncast account matches " + sys.argv[1] + "; set SNCAST_ACCOUNT")
+' "$me")}"
+
+    low=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) & ((1<<128)-1)))' "$amount")
+    high=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) >> 128))' "$amount")
+
+    echo "approving $amount for pool $pool as sncast account '$account'" >&2
+    tx=$(sncast --account "$account" invoke --url "$rpc" \
+        --contract-address "$token" --function approve \
+        --calldata "$pool" "$low" "$high" \
+        | awk '/Transaction Hash:/ {print $3}')
+    [ -n "$tx" ] || { echo "approve did not report a transaction hash" >&2; exit 1; }
+    echo "approve tx $tx" >&2
+
+    RPC="$rpc" bash "$REPO/scripts/wait-for-depth.sh" "$tx" >&2
+    out=$(call shield "$(printf '{"amount":"%s"}' "$amount")")
+    field tx_hash <<<"$out"
     ;;
 *)
     echo "unknown verb: $VERB" >&2; exit 2

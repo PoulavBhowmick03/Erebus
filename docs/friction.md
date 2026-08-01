@@ -1427,3 +1427,58 @@ dependent write. Settlement note discovery is also anchored there; reading candi
 from `latest` would otherwise select funds that `compile_actions` and the proof cannot see.
 
 ---
+
+## F32 — `shield` can only ever run once per identity, and says nothing useful when it can't (2026-08-01)
+
+Hit while driving a third identity (C) through the buyer half of the loop from an
+autonomous agent. Negotiation reached agreement at 0.9 STRK; settlement then failed with
+`INSUFFICIENT_NOTES`, and the documented remedy — the runbook §2 approve-then-shield —
+failed with `NON_ZERO_VALUE, ENTRYPOINT_FAILED` and nothing else.
+
+Three separate defects stacked, all silent, and each one hid the next.
+
+**1. The revert reason was captured and then thrown away.** `RpcError::Rpc` already carried
+the `data` field holding the revert string; its `Display` printed only `{code}: {message}`,
+so every contract revert read as a bare "Contract error". Two failed shields were diagnosed
+blind before this was noticed. One line in `rpc.rs` turned the third attempt into
+`NON_ZERO_VALUE, ENTRYPOINT_FAILED`, which is the whole diagnosis. F20 was diagnosed blind
+for the same reason. **If an error type carries structured detail, print it** — the cost of
+not printing it is measured in hours.
+
+**2. `shield` was a once-per-identity operation and did not know it.** `compute_channel_key`
+takes no index (`hashes.cairo`), so an identity has exactly one self-channel, and its
+`channel_exists` marker is WriteOnce. `Client::shield` unconditionally emitted
+`open_channel` + `open_subchannel(0)`, so the first shield claimed that marker forever and
+every later shield re-derived it and reverted from inside `_apply_write_once` — naming
+neither the slot nor the operation. This is the same shape as F29 (`open_channel` reverting
+on re-open), which was fixed for the pair case and not for the self case.
+
+Fixed by branching on chain state: `channel_exists` is queried before building the action
+set, and an already-open self-channel takes a deposit-and-append path
+(`Channel::deposit_into_open_channel`) that reuses the channel and writes one note at the
+next free index. The note supplies replay protection on its own, so no channel action is
+needed to make the set valid. Note indices stay contiguous, which matters more than it
+looks: discovery stops at the first empty slot, so a gap does not misplace a note, it hides
+every note after it.
+
+**3. Two agents can negotiate a price that cannot be paid.** This is the real one. Settlement
+spends an *exact* subset of notes and mints no change note, so an identity holding a single
+1 STRK note can pay 1 STRK and nothing else — not 0.9, despite "having enough". Nothing in
+the negotiation surface exposed that, so the buyer agent conceded to a number it was
+structurally incapable of settling, and only found out after agreement, when the offer was
+already standing on chain. `INSUFFICIENT_NOTES` reported only the amount required, which is
+the one number the agent already knew.
+
+The error now carries the holdings and the total, and `agent.sh balance` prints the note
+denominations plus the exact subset sums that are payable. A negotiating agent should read
+that *before* naming a price. `agent.sh fund <amount>` now does the whole documented
+two-transaction deposit — resolve the signer by address, approve, wait for proving depth,
+shield — because an autonomous agent that has to stop and have a human paste a transaction
+hash is not autonomous.
+
+**What would have made this easier:** the exact-subset-sum constraint is a hard
+protocol-level restriction on what any agreement can be, and it lived only in the shape of
+`select_exact_notes`. A funding model that mints change would remove the coupling entirely;
+short of that, spendable denominations belong in the negotiation surface, not behind a
+settlement-time error. The general lesson is the same as F31's: the failure was not in the
+cryptography, it was in what the interface declined to say.

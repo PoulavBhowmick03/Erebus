@@ -1,10 +1,10 @@
 //! Minimal Starknet JSON-RPC client for the privacy-pool path.
 //!
-//! This intentionally covers only the calls the Rust SDK needs. Pulling in a full account
-//! SDK would still not remove Erebus's custom `proof_facts` transaction hash, and a second
-//! transaction model would make it easier to sign one shape and submit another.
+//! This module contains only the calls that the Rust SDK needs. A full account SDK would
+//! not support the custom `proof_facts` hash. A second transaction model can also diverge
+//! between signing and submission.
 //!
-//! Write-path warning: `starknet_call(compile_actions)` carries the pool private key in its
+//! Write-path warning: `starknet_call(compile_actions)` includes the pool private key in its
 //! calldata. Use an operator-controlled endpoint. Discovery-only calls do not carry it.
 
 use serde::{Deserialize, Serialize};
@@ -78,9 +78,8 @@ impl StarknetRpc {
 
     /// Estimates the final proof-carrying invoke and returns buffered resource bounds.
     ///
-    /// Validation is skipped because the query transaction is not signed. Execution is
-    /// not skipped: `apply_actions` still verifies the proof and exercises the exact state
-    /// transition that will be submitted.
+    /// The unsigned query skips validation. It still executes `apply_actions`, verifies the
+    /// proof, and runs the submitted state transition.
     pub async fn estimate_bounds(
         &self,
         transaction: &SignedInvokeV3,
@@ -212,7 +211,10 @@ pub enum RpcError {
     #[error("Starknet RPC transport error: {0}")]
     Transport(#[from] reqwest::Error),
     /// JSON-RPC application error.
-    #[error("Starknet RPC error {code}: {message}")]
+    ///
+    /// `data` contains the revert reason for code 40 (`CONTRACT_ERROR`). Without it, the
+    /// message only says `Contract error`. F20 was diagnosed without this detail.
+    #[error("Starknet RPC error {code}: {message}{}", .data.as_ref().map(|d| format!(" — {d}")).unwrap_or_default())]
     Rpc {
         /// RPC error code.
         code: i64,
@@ -260,8 +262,8 @@ fn estimate_bound(
         })?,
     )?;
 
-    // A 50% buffer absorbs the small change between estimation and inclusion. Saturating
-    // arithmetic keeps a malicious endpoint from wrapping a bound into something tiny.
+    // A 50% buffer covers changes between estimation and inclusion. Saturating arithmetic
+    // prevents a malicious endpoint from wrapping the bound.
     Ok(ResourceBound {
         max_amount: amount.saturating_add(amount / 2).max(1),
         max_price_per_unit: price.saturating_add(price / 2).max(1),

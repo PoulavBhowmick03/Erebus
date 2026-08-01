@@ -18,7 +18,7 @@ First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on bloc
 
 Run the focused codec and end-to-end Rust paths first:
 
-```bash
+```shell
 cd ~/Developer/erebus/sdk/rs
 cargo test --test wire_codec
 cargo test --test channel_ops --test read_path --test index_contiguity \
@@ -27,7 +27,7 @@ cargo test --test channel_ops --test read_path --test index_contiguity \
 
 Then run the complete quality gate:
 
-```bash
+```shell
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
@@ -42,9 +42,11 @@ same-index retry safety, and wire-v1 compatibility.
 
 ## 0. Prerequisites
 
-```bash
-cd ~/Developer/erebus/sdk/rs && cargo build --bin erebus-cli
-export CLI=~/Developer/erebus/sdk/rs/target/debug/erebus-cli
+```shell
+export REPO=~/Developer/erebus
+cd "$REPO/sdk/rs" && cargo build --bin erebus-cli
+export CLI="$REPO/sdk/rs/target/debug/erebus-cli"
+export REQ="$REPO/scripts/erebus-request.py"
 export RPC=https://starknet-sepolia-rpc.publicnode.com
 export STRK=0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d
 export POOL=0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91
@@ -53,50 +55,21 @@ export POOL=0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91
 `.env` must already hold `PROVING_SERVICE_URL` (StarkWare's endpoint — not in the repo, not
 to be shared) and the pool/chain/RPC values. `.env.example` has the shape.
 
-**Two helpers.** The request builder, because assembling nine config fields by hand is how
-you get a `INVALID_REQUEST` that tells you nothing:
+The request builder now lives in the repository; no generated Python file or heredoc is
+needed. Confirm the helper can read the env file:
 
-```bash
-mkdir -p ~/.erebus && chmod 700 ~/.erebus
-cat > ~/.erebus/req.py <<'PY'
-import json, sys
-env = {}
-for line in open(sys.argv[1]):
-    line = line.strip()
-    if line and not line.startswith('#') and '=' in line:
-        k, v = line.split('=', 1); env[k] = v
-cfg = {"rpc_url": env["STARKNET_RPC_URL"], "prover_url": env["PROVING_SERVICE_URL"],
-       "pool_address": env["POOL_ADDRESS"], "chain_id": env["STARKNET_CHAIN_ID"],
-       "account_address": env["AGENT_ADDRESS"], "pool_key_file": env["POOL_KEY_FILE"],
-       "account_key_file": env["ACCOUNT_KEY_FILE"], "state_dir": env["EREBUS_STATE_DIR"],
-       "token": env["TOKEN_ADDRESS"]}
-params = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-params["config"] = cfg
-print(json.dumps({"method": sys.argv[2], "params": params}))
-PY
+```shell
+python3 "$REQ" "$REPO/.env" read_channel_state \
+  '{"handle":"ch_0000000000000000000000000000000000000000000000000000000000000000"}' \
+  >/dev/null
 ```
 
-And a block-depth gate. **This one is not optional.** The client proves against `head - 10`,
+The block-depth gate also lives in the repository. **This is not optional.** The client proves against `head - 10`,
 so an `approve` newer than that is invisible to the simulation and the shield fails with a
 bare `-32603` carrying no reason (F20). Waiting a fixed "five minutes" is guesswork; poll:
 
-```bash
-cat > ~/.erebus/wait.sh <<'SH'
-#!/bin/bash
-# wait.sh <tx_hash> — blocks until the tx is at least 10 blocks deep
-req() { curl -s -m 15 -X POST "$RPC" -H 'content-type: application/json' -d "$1"; }
-B=$(req "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"starknet_getTransactionReceipt\",\"params\":[\"$1\"]}" \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["block_number"])')
-while :; do
-  H=$(req '{"jsonrpc":"2.0","id":1,"method":"starknet_blockNumber","params":[]}' \
-      | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"])')
-  D=$((H - B))
-  echo "  depth $D/10 (tx block $B, head $H)"
-  [ "$D" -ge 10 ] && break
-  sleep 20
-done
-SH
-chmod +x ~/.erebus/wait.sh
+```shell
+bash "$REPO/scripts/wait-for-depth.sh" 0x_TRANSACTION_HASH
 ```
 
 ---
@@ -129,31 +102,28 @@ mkdir -p $DIR/state && chmod 700 $DIR $DIR/state
 $CLI <<< "{\"method\":\"generate_pool_key\",\"params\":{\"path\":\"$DIR/pool.key\"}}"
 ```
 
-Then extract the account key to its own file and build the agent's env. Note it reads the
-address out of the JSON rather than asking you to paste it — pasting it by hand is how the
-first attempt produced `field account_address is invalid: <paste B address from above>`:
+Then extract the account key to its own file. This is a repository helper rather than a
+heredoc: a heredoc terminator must start at column one, so indented copy/paste gets stuck at
+the `heredoc>` prompt. The helper never prints the key, creates the file mode `0600`, and
+refuses to overwrite an existing file:
 
 ```bash
-NAME=$NAME DIR=$DIR python3 - <<'PY'
-import json, os
-name, d = os.environ['NAME'], os.path.expanduser(os.environ['DIR'])
-a = json.load(open(os.path.expanduser(
-    '~/.starknet_accounts/starknet_open_zeppelin_accounts.json')))['alpha-sepolia'][name]
-dst = os.path.join(d, 'account.key')
-fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-os.fdopen(fd, 'w').write(a['private_key'] + '\n')
-print('address:', a['address'])
-PY
+python3 "$REPO/scripts/extract-sncast-account-key.py" "$NAME" "$DIR"
 ```
 
-For agent B, derive its env from A's:
+For every additional identity (B, C, and later), derive a dedicated env from A's without
+pasting an address or using another identity's key paths:
 
 ```bash
-B_ADDR=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser(
-  '~/.starknet_accounts/starknet_open_zeppelin_accounts.json')))['alpha-sepolia']['erebus-agent-b']['address'])")
-sed -e "s|^AGENT_ADDRESS=.*|AGENT_ADDRESS=$B_ADDR|" \
-    -e "s|/.erebus/|/.erebus-b/|g" ~/Developer/erebus/.env > ~/.erebus-b/env
-chmod 600 ~/.erebus-b/env
+AGENT_ADDR=$(python3 -c 'import json,os,sys; print(json.load(open(os.path.expanduser("~/.starknet_accounts/starknet_open_zeppelin_accounts.json")))["alpha-sepolia"][sys.argv[1]]["address"])' "$NAME")
+ENV="$DIR/env"
+sed -e "s|^AGENT_ADDRESS=.*|AGENT_ADDRESS=$AGENT_ADDR|" \
+    -e "s|^POOL_KEY_FILE=.*|POOL_KEY_FILE=$DIR/pool.key|" \
+    -e "s|^ACCOUNT_KEY_FILE=.*|ACCOUNT_KEY_FILE=$DIR/account.key|" \
+    -e "s|^EREBUS_STATE_DIR=.*|EREBUS_STATE_DIR=$DIR/state|" \
+    "$REPO/.env" > "$ENV"
+chmod 600 "$ENV"
+echo "agent env: $ENV"
 ```
 
 **The two key files are not two accounts.** `account.key` signs Starknet transactions and is
@@ -172,14 +142,22 @@ A's `open_channel` fails with `CounterpartyUnregistered`.
 ```bash
 ENV=~/Developer/erebus/.env        # or ~/.erebus-b/env
 
-TX=$(sncast --account $NAME invoke --url $RPC \
-  --contract-address $STRK --function approve \
-  --calldata $POOL 0xde0b6b3a7640000 0x0 \
-  | grep -o '0x[0-9a-f]*' | tail -1)
+echo "approving token: $STRK"
+echo "for pool:        $POOL"
+sncast --account "$NAME" invoke --url "$RPC" \
+  --contract-address "$STRK" --function approve \
+  --calldata "$POOL" 0xde0b6b3a7640000 0x0
 
-~/.erebus/wait.sh $TX
-python3 ~/.erebus/req.py $ENV shield '{"amount":"1000000000000000000"}' | $CLI
+# Set this only after sncast prints "Success: Invoke completed".
+TX=0x_PASTE_THE_APPROVE_TRANSACTION_HASH
+
+bash "$REPO/scripts/wait-for-depth.sh" "$TX"
+python3 "$REQ" "$ENV" shield '{"amount":"1000000000000000000"}' | "$CLI"
 ```
+
+`--contract-address` is the ERC-20 token (`$STRK`), never `AGENT_ADDRESS`. Calling
+`approve` on an account contract fails with `ENTRYPOINT_NOT_FOUND`; if approve fails, do
+not run the wait or shield commands.
 
 ⚠️ **Registration is irreversible and writes your pool private key encrypted to the pool's
 auditor on-chain** (`channel.cairo:329-334`, and `channel.rs:123-129`). From that moment the
@@ -220,18 +198,18 @@ The commands below show the first offer/read portion manually for debugging:
 B=$(grep '^AGENT_ADDRESS=' ~/.erebus-b/env | cut -d= -f2)
 
 # A opens a channel to B
-python3 ~/.erebus/req.py ~/Developer/erebus/.env open_channel "{\"counterparty\":\"$B\"}" | $CLI
+python3 "$REQ" "$REPO/.env" open_channel "{\"counterparty\":\"$B\"}" | "$CLI"
 # -> {"channel_handle":"ch_..."}
 
 H=ch_...   # paste the handle
 
 # A writes an offer into the salt lane
 DEADLINE=$(python3 -c "import time;print(int(time.time())+86400)")
-python3 ~/.erebus/req.py ~/Developer/erebus/.env propose_offer \
-  "{\"handle\":\"$H\",\"terms\":{\"amount\":\"500000000000000000\",\"token\":\"$STRK\",\"deadline\":$DEADLINE,\"memo_hash\":\"0x1234\"}}" | $CLI
+python3 "$REQ" "$REPO/.env" propose_offer \
+  "{\"handle\":\"$H\",\"terms\":{\"amount\":\"500000000000000000\",\"token\":\"$STRK\",\"deadline\":$DEADLINE,\"memo_hash\":\"0x1234\"}}" | "$CLI"
 
 # read it back off-chain
-python3 ~/.erebus/req.py ~/Developer/erebus/.env read_channel_state "{\"handle\":\"$H\"}" | $CLI | python3 -m json.tool
+python3 "$REQ" "$REPO/.env" read_channel_state "{\"handle\":\"$H\"}" | "$CLI" | python3 -m json.tool
 ```
 
 **What success looks like.** The script first returns an offer whose `amount`, `deadline`,

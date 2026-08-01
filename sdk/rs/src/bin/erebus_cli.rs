@@ -1,4 +1,4 @@
-//! `erebus-cli` — one JSON request, one JSON response, one process.
+//! `erebus-cli`: one JSON request, one JSON response, one process.
 //!
 //! Requests carry paths to the pool and account key files. They never carry key values.
 //! Channel handles are opaque identifiers into the Rust-owned state directory; channel
@@ -74,6 +74,10 @@ enum Request {
     Shield {
         config: ConfigParams,
         amount: String,
+    },
+    /// Unspent note denominations for payment pricing.
+    Balance {
+        config: ConfigParams,
     },
 }
 
@@ -288,6 +292,15 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         Request::Shield { config, amount } => {
             let client = config.build()?;
             serialize(client.shield(u128_value("amount", &amount)?).await?)
+        }
+        Request::Balance { config } => {
+            let client = config.build()?;
+            let balance = client.note_balance().await?;
+            serialize(serde_json::json!({
+                "notes": balance.spendable.iter().map(u128::to_string).collect::<Vec<_>>(),
+                "total": balance.spendable.iter().sum::<u128>().to_string(),
+                "pending": balance.pending.iter().map(u128::to_string).collect::<Vec<_>>(),
+            }))
         }
     }
 }

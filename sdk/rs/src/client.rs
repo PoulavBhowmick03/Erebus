@@ -1,6 +1,6 @@
 //! High-level Rust client implementing the MVP interface.
 //!
-//! The public methods deal in opaque handles and offer ids. Pool/channel secrets live in
+//! Public methods use opaque handles and offer ids. Pool and channel secrets live in
 //! [`crate::state::StateStore`], while the two private signing values are read from local
 //! files for each operation and dropped when the call returns.
 
@@ -83,9 +83,10 @@ impl Client {
 
     /// Funds the identity with one exact-value private note.
     ///
-    /// This administrative MVP helper sits outside the seven negotiation methods. Exact
-    /// notes are useful because settlement deliberately refuses to destroy surplus value;
-    /// general change-note construction is not yet part of the MVP.
+    /// This administrative helper is outside the seven negotiation methods. The first call
+    /// opens the self-channel. Later calls append a note because the channel marker is
+    /// `WriteOnce` and reopening it reverts. See
+    /// [`Channel::deposit_into_open_channel`] and friction.md F32.
     pub async fn shield(&self, amount: u128) -> Result<SettlementReceipt, ClientError> {
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
@@ -95,7 +96,6 @@ impl Client {
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let registered = self.registered_public_key(identity.address()).await?;
         self.verify_own_registration(&identity, registered)?;
-        let channel_index = self.outgoing_channel_count(&identity, pool_key).await?;
         let counterparty = Counterparty {
             address: identity.address(),
             public_key: identity.public_key(),
@@ -106,20 +106,47 @@ impl Client {
             &identity,
             counterparty,
         );
-        let actions = channel.shield(
-            &identity,
-            SetupParams {
-                register: (registered == Felt::ZERO).then(entropy),
-                channel_index,
-                channel_random: entropy(),
-                channel_salt: entropy(),
-                subchannel_index: 0,
-                token: self.config.token,
-                subchannel_salt: entropy(),
-            },
-            amount,
-            random_salt(),
-        )?;
+
+        // Choose the funding path from chain state. Another machine can shield the identity,
+        // and a wrong path fails after proof generation and fee payment.
+        let self_channel_key = hashes::compute_channel_key(
+            identity.address(),
+            pool_key,
+            identity.address(),
+            identity.public_key(),
+        );
+        let already_open = self.self_channel_open(&identity, self_channel_key).await?;
+
+        let actions = if already_open {
+            // Use the proof anchor for the index. A newer block can contain a slot that
+            // `head - proving_block_lag` cannot see.
+            let block = self.executor.wait_until_provable(0).await?;
+            let note_index = self
+                .next_free_note_index(self_channel_key, self.config.token, &block)
+                .await?;
+            channel.deposit_into_open_channel(
+                self.config.token,
+                note_index,
+                amount,
+                random_salt(),
+            )?
+        } else {
+            let channel_index = self.outgoing_channel_count(&identity, pool_key).await?;
+            channel.shield(
+                &identity,
+                SetupParams {
+                    register: (registered == Felt::ZERO).then(entropy),
+                    channel_index,
+                    channel_random: entropy(),
+                    channel_salt: entropy(),
+                    subchannel_index: 0,
+                    token: self.config.token,
+                    subchannel_salt: entropy(),
+                },
+                amount,
+                random_salt(),
+            )?
+        };
         let receipt = self
             .executor
             .execute(identity.address(), pool_key, account_key, &actions)
@@ -130,6 +157,50 @@ impl Client {
             nullifiers: Vec::new(),
             proved_at: receipt.proving_block,
         })
+    }
+
+    /// The unspent note denominations this identity holds, largest first.
+    ///
+    /// A negotiating agent needs this *before* it names a price. Settlement spends an exact
+    /// subset of notes and mints no change, so what is payable is not "anything up to the
+    /// total" but "any subset sum" — an agent holding one 1 STRK note can pay 1 STRK and
+    /// nothing else. Agreeing a price first and discovering that second is the failure this
+    /// exists to prevent.
+    ///
+    /// Reported in two parts because a note is not spendable the moment it lands. Settlement
+    /// simulates against `head - proving_block_lag`, so a deposit newer than that cannot be
+    /// spent yet; reporting one total would make a just-funded identity look unfunded, which
+    /// is exactly the wrong thing to tell an agent deciding whether to fund again.
+    pub async fn note_balance(&self) -> Result<NoteBalance, ClientError> {
+        let (_, pool_key) = self.pool_identity()?;
+        let provable = self.executor.wait_until_provable(0).await?;
+
+        let mut spendable = self.note_amounts(pool_key, &provable).await?;
+        let mut visible = self.note_amounts(pool_key, &BlockId::Latest).await?;
+
+        // Multiset difference: whatever the chain shows that the proving block does not.
+        for amount in &spendable {
+            if let Some(at) = visible.iter().position(|candidate| candidate == amount) {
+                visible.remove(at);
+            }
+        }
+        spendable.sort_unstable_by(|a, b| b.cmp(a));
+        visible.sort_unstable_by(|a, b| b.cmp(a));
+        Ok(NoteBalance {
+            spendable,
+            pending: visible,
+        })
+    }
+
+    async fn note_amounts(
+        &self,
+        pool_key: Felt,
+        block: &BlockId,
+    ) -> Result<Vec<u128>, ClientError> {
+        let notes = self
+            .discover_owned_notes(pool_key, self.config.token, block)
+            .await?;
+        Ok(notes.iter().map(|note| note.amount).collect())
     }
 
     fn identity_keys(&self) -> Result<(PoolIdentity, Felt, Felt), ClientError> {
@@ -166,6 +237,49 @@ impl Client {
             });
         }
         Ok(())
+    }
+
+    /// Whether this identity's self-channel marker has already been claimed.
+    ///
+    /// The marker is `WriteOnce`, and the channel key has no index. This read determines
+    /// whether the identity was shielded before proof generation.
+    async fn self_channel_open(
+        &self,
+        identity: &PoolIdentity,
+        self_channel_key: Felt,
+    ) -> Result<bool, ClientError> {
+        let marker = hashes::compute_channel_marker(
+            self_channel_key,
+            identity.address(),
+            identity.address(),
+            identity.public_key(),
+        );
+        let result = self
+            .view("channel_exists", &[marker], &BlockId::Latest)
+            .await?;
+        Ok(one_felt("channel_exists", &result)? != Felt::ZERO)
+    }
+
+    /// The first empty note slot in `channel_key`'s subchannel for `token`.
+    ///
+    /// Notes must be contiguous. Like discovery, this stops at the first empty slot. A gap
+    /// hides all later notes.
+    async fn next_free_note_index(
+        &self,
+        channel_key: Felt,
+        token: Felt,
+        block: &BlockId,
+    ) -> Result<u32, ClientError> {
+        for note_index in 0..MAX_DISCOVERY_ITEMS {
+            let note_id = hashes::compute_note_id(channel_key, token, note_index);
+            let stored = self.view("get_note", &[note_id], block).await?;
+            require_len("get_note", &stored, 2)?;
+            if stored[0] == Felt::ZERO {
+                return u32::try_from(note_index)
+                    .map_err(|_| ClientError::Protocol("note index exceeds u32".to_owned()));
+            }
+        }
+        Err(ClientError::DiscoveryLimit("notes"))
     }
 
     async fn outgoing_channel_count(
@@ -414,8 +528,8 @@ impl Client {
     }
 }
 
-/// The frozen negotiation surface, with one correction: granting returns the bearer
-/// viewing grant that must be delivered to the grantee.
+/// Frozen negotiation surface. Granting returns a bearer viewing grant for delivery to the
+/// grantee.
 #[allow(async_fn_in_trait)]
 pub trait ErebusClient {
     /// Establishes and submits a private channel.
@@ -461,11 +575,9 @@ impl ErebusClient for Client {
             return Err(ClientError::CounterpartyUnregistered(counterparty_address));
         }
 
-        // One channel per pair, forever: the pool's channel key takes no index
-        // (`hashes.cairo:119-124`) and its marker is WriteOnce, so re-opening reverts —
-        // but only after the preflight, the proof and the fee have all been paid for, and
-        // it surfaces as a bare `Contract error`. Returning the existing handle makes this
-        // idempotent, which is also what a retrying agent needs. See friction.md F29.
+        // A pair has one channel because the key has no index (`hashes.cairo:119-124`) and
+        // its marker is `WriteOnce`. Reopening returns `Contract error` after preflight,
+        // proving, and fee payment. Reuse the handle for idempotent retries. See F29.
         if let Some(existing) = self.state.find_channel(
             self.config.chain_id,
             self.config.pool_address,
@@ -647,8 +759,8 @@ impl ErebusClient for Client {
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
         validate_scope(lease.state(), &self.config)?;
-        // A one-sided channel is still readable before the counterparty opens their reverse
-        // direction. Only suppress the ordinary not-ready result; ambiguity is actionable.
+        // A one-sided channel is readable before the reverse direction opens. Suppress only
+        // the not-ready result. Multiple candidates remain an error.
         if let Err(error) = self
             .attach_reverse_channel(lease.state_mut(), pool_key)
             .await
@@ -698,10 +810,15 @@ impl ErebusClient for Client {
         let available = self
             .discover_owned_notes(pool_key, lease.state().token, &spend_block)
             .await?;
-        let selected =
-            select_exact_notes(&available, offer.amount).ok_or(ClientError::InsufficientNotes {
+        let selected = select_exact_notes(&available, offer.amount).ok_or_else(|| {
+            let mut held: Vec<u128> = available.iter().map(|note| note.amount).collect();
+            held.sort_unstable_by(|a, b| b.cmp(a));
+            ClientError::InsufficientNotes {
                 required: offer.amount,
-            })?;
+                total: held.iter().sum(),
+                held,
+            }
+        })?;
         let spend: Vec<OwnedNote> = selected.iter().map(|note| note.note).collect();
 
         let state = lease.state();
@@ -878,6 +995,15 @@ pub struct ChannelState {
     pub offers: Vec<Offer>,
     /// Whether an acceptance/payment has landed.
     pub settled: bool,
+}
+
+/// What an identity can pay now, and what it will be able to pay shortly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoteBalance {
+    /// Note denominations spendable at the proving block, largest first.
+    pub spendable: Vec<u128>,
+    /// Notes on chain but newer than the proving block, so not yet spendable.
+    pub pending: Vec<u128>,
 }
 
 /// Submitted settlement or administrative shielding receipt.
@@ -1170,19 +1296,16 @@ fn validate_scope(state: &StoredChannel, config: &ClientConfig) -> Result<(), Cl
 
 /// Validates the `token` field the pool returns alongside a stored note.
 ///
-/// **The field is only meaningful for open notes.** For encrypted notes the pool never
-/// writes it — `privacy.cairo:664`, *"Only `packed_value` needs to be written to storage,
-/// `token` is initialized to zero"*, restated on the struct itself in `objects.cairo:98`
-/// as *"the token address of the note (zero for encrypted notes)"*. A channel note's token
+/// The field is meaningful only for open notes. For encrypted notes, `privacy.cairo:664`
+/// says *"Only `packed_value` needs to be written to storage, `token` is initialized to
+/// zero"*. `objects.cairo:98` also says *"the token address of the note (zero for encrypted
+/// notes)"*. A channel note's token
 /// is implied by the subchannel it was found in and cannot be recovered from the note.
 ///
-/// So the two kinds get opposite checks, and neither is dead weight: an open note must
-/// carry the token we asked for, and an encrypted note must carry zero. A non-zero token
-/// on an encrypted note would mean the id we derived landed on an open note — a real
-/// anomaly, and one that would otherwise decrypt to garbage rather than fail.
+/// An open note must contain the requested token. An encrypted note must contain zero. A
+/// non-zero value on an encrypted note means that its derived id found an open note.
 ///
-/// Getting this wrong was a live bug, not a hypothetical: asserting equality for every note
-/// rejected every valid message note with a protocol-mismatch error. See friction.md F28.
+/// A previous equality check rejected every valid message note. See friction.md F28.
 fn check_note_token(packed: Felt, stored: Felt, expected: Felt) -> Result<(), ClientError> {
     let (salt, _) = decrypt::unpack_note(packed);
     if salt == decrypt::OPEN_NOTE_SALT {
@@ -1332,10 +1455,23 @@ pub enum ClientError {
     #[error("this channel is already settled")]
     AlreadySettled,
     /// Available private notes cannot sum exactly to the payment.
-    #[error("no exact set of unspent notes sums to {required}")]
+    ///
+    /// Carries the holdings because the amount is the negotiable thing: an agent told only
+    /// what it needs can do nothing, whereas one told what it holds can counter at a number
+    /// it can actually pay. Settlement spends an exact subset and mints no change note, so
+    /// "enough value" is not the same as "payable".
+    #[error(
+        "no exact set of unspent notes sums to {required}; holding {} note(s) worth {total} in total ({})",
+        held.len(),
+        if held.is_empty() { "none".to_owned() } else { held.iter().map(u128::to_string).collect::<Vec<_>>().join(", ") }
+    )]
     InsufficientNotes {
         /// Required amount.
         required: u128,
+        /// Unspent note denominations, largest first.
+        held: Vec<u128>,
+        /// Sum of `held`.
+        total: u128,
     },
     /// A keyed discovery run exceeded its defensive cap.
     #[error("discovery limit exceeded while reading {0}")]
@@ -1506,19 +1642,18 @@ mod tests {
         Felt::from_bytes_be(&bytes)
     }
 
-    /// The bug that reached Sepolia: every salt-lane data note is an *encrypted* note, and
+    /// The Sepolia bug: every salt-lane data note is encrypted, and
     /// the pool leaves `token` zero on those (`privacy.cairo:664`). Asserting equality
     /// rejected the entire transcript with a protocol-mismatch error.
     #[test]
-    fn an_encrypted_note_carries_no_token_and_that_is_not_an_error() {
+    fn encrypted_note_token_is_zero() {
         let token = Felt::from_hex("0x4718f5a").expect("token");
         let data_note = packed_note(0x5eed, 0);
 
         assert!(check_note_token(data_note, Felt::ZERO, token).is_ok());
     }
 
-    /// The opposite check still has to bite, or a misderived id that lands on an open note
-    /// would decrypt to garbage instead of failing.
+    /// Rejects a derived encrypted-note id that finds an open note.
     #[test]
     fn an_encrypted_note_with_a_token_is_rejected() {
         let token = Felt::from_hex("0x4718f5a").expect("token");
@@ -1527,8 +1662,7 @@ mod tests {
         assert!(check_note_token(data_note, token, token).is_err());
     }
 
-    /// Open notes do store their token, so equality is the right check there — this is the
-    /// half of the original assertion that was correct and must not be lost.
+    /// Open notes store their token and must match the requested token.
     #[test]
     fn an_open_note_must_match_the_token_we_asked_for() {
         let token = Felt::from_hex("0x4718f5a").expect("token");

@@ -83,8 +83,8 @@ fn full_setup_is_three_actions_in_one_set() {
     assert!(matches!(set.actions()[2], ClientAction::OpenSubchannel(_)));
 }
 
-/// A returning agent skips registration — the viewing key is immutable once set, so a
-/// second `SetViewingKey` reverts on the WriteOnce.
+/// A returning agent skips registration because the viewing key is immutable. A second
+/// `SetViewingKey` reverts on `WriteOnce`.
 #[test]
 fn setup_without_registration_omits_it() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
@@ -141,8 +141,8 @@ fn the_subchannel_action_carries_this_channels_key() {
     assert_eq!(input.recipient_public_key, bob().public_key);
 }
 
-/// A subchannel is per token, so two tokens are two subchannels within one channel — which
-/// is why the wire format can leave `token` out of a message.
+/// Each token uses a separate subchannel. The wire message can omit its token because the
+/// subchannel identifies it.
 #[test]
 fn two_tokens_need_two_subchannels_on_the_same_channel() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
@@ -160,7 +160,7 @@ fn two_tokens_need_two_subchannels_on_the_same_channel() {
 
 // --- Setup then talk ------------------------------------------------------------
 
-/// The sequence an agent actually runs: set up, then send. Two transactions, two proofs,
+/// The sequence an agent runs: set up, then send. Two transactions, two proofs,
 /// and the channel key is the same in both.
 #[test]
 fn setup_and_the_first_message_agree_on_the_channel() {
@@ -225,4 +225,99 @@ fn shield_is_one_balanced_replay_protected_action_set() {
     assert_eq!(deposit.amount, note.amount);
     assert_eq!(note.recipient_addr, identity.address());
     assert_eq!(note.index, 0);
+}
+
+/// A second shield must not re-open the channel.
+///
+/// The channel key takes no index, so the self-channel has one WriteOnce marker and the
+/// first shield claims it permanently. Re-opening reverts with a bare `NON_ZERO_VALUE`
+/// after the proof and the fee are already spent, which is how a funded-looking identity
+/// ends up unable to top up. See friction.md F32.
+#[test]
+fn topping_up_reuses_the_channel_instead_of_reopening_it() {
+    let identity = alice();
+    let self_counterparty = Counterparty {
+        address: identity.address(),
+        public_key: identity.public_key(),
+    };
+    let channel = Channel::derive(chain(), pool(), &identity, self_counterparty);
+    let set = channel
+        .deposit_into_open_channel(token(), 1, 2_500, RandomSalt::from_entropy([0x7; 16]))
+        .expect("top up");
+
+    assert_eq!(set.actions().len(), 2, "deposit and note only");
+    let ClientAction::Deposit(deposit) = &set.actions()[0] else {
+        panic!("expected Deposit");
+    };
+    let ClientAction::CreateEncNote(note) = &set.actions()[1] else {
+        panic!("expected CreateEncNote");
+    };
+    assert!(
+        !set.actions()
+            .iter()
+            .any(|action| matches!(action, ClientAction::OpenChannel(_))),
+        "re-opening the self-channel is the revert this path exists to avoid",
+    );
+    assert!(
+        !set.actions()
+            .iter()
+            .any(|action| matches!(action, ClientAction::OpenSubchannel(_))),
+        "the subchannel is write-once too",
+    );
+    assert_eq!(deposit.amount, note.amount, "action set stays balanced");
+    assert_eq!(note.index, 1, "appends at the requested index");
+    assert_eq!(note.recipient_addr, identity.address());
+}
+
+/// The top-up note must land in the same channel the first shield opened, or it is
+/// invisible to discovery and the funds are stranded.
+#[test]
+fn a_top_up_note_addresses_the_same_self_channel_as_the_first_shield() {
+    let identity = alice();
+    let self_counterparty = Counterparty {
+        address: identity.address(),
+        public_key: identity.public_key(),
+    };
+    let channel = Channel::derive(chain(), pool(), &identity, self_counterparty);
+
+    let first = channel
+        .shield(
+            &identity,
+            params(false),
+            1_000,
+            RandomSalt::from_entropy([0x42; 16]),
+        )
+        .expect("shield");
+    let second = channel
+        .deposit_into_open_channel(token(), 1, 1_000, RandomSalt::from_entropy([0x43; 16]))
+        .expect("top up");
+
+    let ClientAction::CreateEncNote(opening) = &first.actions()[3] else {
+        panic!("expected CreateEncNote");
+    };
+    let ClientAction::CreateEncNote(topup) = &second.actions()[1] else {
+        panic!("expected CreateEncNote");
+    };
+    // Equal sender, recipient, and token fields derive the same channel. Only the note index
+    // differs.
+    assert_eq!(opening.recipient_addr, topup.recipient_addr);
+    assert_eq!(opening.recipient_public_key, topup.recipient_public_key);
+    assert_eq!(opening.token, topup.token);
+    assert_eq!(opening.index + 1, topup.index, "indices stay contiguous");
+}
+
+#[test]
+fn a_zero_top_up_is_rejected() {
+    let identity = alice();
+    let self_counterparty = Counterparty {
+        address: identity.address(),
+        public_key: identity.public_key(),
+    };
+    let channel = Channel::derive(chain(), pool(), &identity, self_counterparty);
+    assert!(
+        channel
+            .deposit_into_open_channel(token(), 1, 0, RandomSalt::from_entropy([0x7; 16]))
+            .is_err(),
+        "a zero deposit unbalances the set and has nothing to spend",
+    );
 }

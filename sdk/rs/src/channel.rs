@@ -1,33 +1,24 @@
 //! Channels, identities, and the negotiation operations built on them.
 //!
-//! This is where the primitives compose into the things an agent actually does: derive a
-//! channel to a counterparty, write a negotiation message into it, and work out where the
-//! counterparty's messages will be.
+//! Combines protocol primitives into channel setup, message writes, and settlement.
 //!
 //! ## Where the key lives
 //!
-//! [`PoolIdentity`] owns the pool private key and never lends it out. There is no accessor,
-//! its `Debug` redacts, and every operation that needs the key takes `&PoolIdentity` and
-//! uses it internally. That is CLAUDE.md constraint 6 made structural: key material does
-//! not leave the SDK boundary, because there is no way to ask for it.
-//!
-//! This matters more under the architecture we settled on. The library runs inside the
-//! agent operator's own process, so the boundary it defends is the one between Erebus's
-//! code and the agent's policy engine — the layer that decides *what* to offer must never
-//! be able to touch *what signs for it*.
+//! [`PoolIdentity`] owns the pool private key and has no accessor. Its `Debug` output
+//! redacts the key. Operations use the key through `&PoolIdentity`. This enforces CLAUDE.md
+//! constraint 6 at the API boundary. The agent policy cannot access signing material.
 //!
 //! ## Channels are directional
 //!
 //! `channel_key = h(TAG, sender_addr, sender_privkey, recipient_addr, recipient_pubkey)`
-//! hashes the **sender's** private key, so only the sender can derive it. The recipient
+//! includes the sender's private key, so only the sender can derive it. The recipient
 //! learns it out of band, encrypted in `EncChannelInfo`, and reconstructs the channel with
-//! [`Channel::from_key`]. A→B and B→A are two different channels with two different keys.
+//! [`Channel::from_key`]. Each direction has a different channel and key.
 //!
 //! ## Reads are keyed, never scanned
 //!
-//! [`Channel::note_ids_for_message`] computes exactly where a message's notes live. The
-//! reader seeks those storage slots directly. Scanning the chain for notes is both slower
-//! and wrong — it defeats the discovery design and does not work at any real pool size.
+//! [`Channel::note_ids_for_message`] computes the storage slots for a message. Readers use
+//! those slots directly. They do not scan pool storage.
 
 use starknet_crypto::get_public_key;
 use starknet_types_core::felt::Felt;
@@ -97,7 +88,7 @@ pub enum ChannelError {
 
 /// An agent's identity inside the pool.
 ///
-/// Holds the pool private key. There is deliberately no way to read it back out.
+/// Holds the pool private key without exposing an accessor.
 #[derive(Clone)]
 pub struct PoolIdentity {
     address: Felt,
@@ -125,15 +116,12 @@ impl PoolIdentity {
 
     /// The action that registers this identity with the pool.
     ///
-    /// Registration publishes the public key so others can send here — and, in the same
-    /// step, writes this identity's **private key encrypted to the pool's auditor**
-    /// on-chain (`privacy.cairo:329-334`). `random` is the ephemeral secret for that
-    /// encryption.
+    /// Registration publishes the public key and writes the private key encrypted to the
+    /// pool auditor (`privacy.cairo:329-334`). `random` is the ephemeral encryption secret.
     ///
-    /// That is worth being deliberate about rather than discovering later: from the moment
-    /// an agent registers, the auditor can decrypt everything it will ever do in the pool.
-    /// It is StarkWare's threshold-auditor design and a condition of using the pool at all,
-    /// not something Erebus adds or can opt out of.
+    /// Registration is irreversible. After registration, the auditor can decrypt the
+    /// identity's full pool history. This is part of StarkWare's threshold-auditor design
+    /// and cannot be disabled by Erebus.
     pub fn register(&self, random: FeltEntropy) -> ClientAction {
         ClientAction::SetViewingKey(SetViewingKeyInput {
             random: random.get(),
@@ -141,8 +129,7 @@ impl PoolIdentity {
     }
 }
 
-/// Redacts the key. A `Debug` that printed it would leak into any log line, panic message
-/// or error report that happened to include an identity.
+/// Redacts the key to keep it out of logs, panic messages, and error reports.
 impl core::fmt::Debug for PoolIdentity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("PoolIdentity")
@@ -163,9 +150,8 @@ pub struct Counterparty {
 
 /// A directional channel.
 ///
-/// The channel key is a *locator*, not a secret in the same class as the private key: the
-/// counterparty holds it too, by design. Anyone else holding it could find the notes, so it
-/// is not public either.
+/// Both parties hold the channel key. It locates and decrypts channel notes, so it is not
+/// public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Channel {
     chain_id: Felt,
@@ -200,8 +186,8 @@ impl Channel {
 
     /// Reconstructs an *incoming* channel from a key learned out of band.
     ///
-    /// The recipient cannot derive this — it hashes the sender's private key — so it
-    /// arrives encrypted in `EncChannelInfo` and is passed here.
+    /// The recipient cannot derive this key because it includes the sender's private key.
+    /// It arrives encrypted in `EncChannelInfo`.
     pub fn from_key(
         chain_id: Felt,
         pool_address: Felt,
@@ -264,12 +250,10 @@ impl Channel {
 
     /// The action that opens this channel to the counterparty.
     ///
-    /// `index` is the channel's position among this sender's outgoing channels, and must
-    /// be contiguous — the contract derives storage from it, so a gap makes later channels
-    /// unreachable rather than merely untidy.
+    /// `index` is the channel's position among the sender's outgoing channels. It must be
+    /// contiguous because a gap makes later channels unreachable.
     ///
-    /// `random` encrypts the channel info so the recipient can learn the channel key they
-    /// cannot derive themselves; `salt` guarantees one-time key usage for that encryption.
+    /// `random` encrypts the channel information. `salt` provides one-time key use.
     pub fn open_channel(&self, index: u32, random: FeltEntropy, salt: FeltEntropy) -> ClientAction {
         ClientAction::OpenChannel(OpenChannelInput {
             recipient_addr: self.counterparty.address,
@@ -281,9 +265,8 @@ impl Channel {
 
     /// The action that opens a subchannel for `token` within this channel.
     ///
-    /// A subchannel is *per token*, not per topic — one channel carries one subchannel for
-    /// each token the parties transact in, and notes live in the subchannel. This is why
-    /// the wire format can drop `token` from a message: the subchannel already says it.
+    /// Each token has one subchannel. Notes live in that subchannel, so wire messages omit
+    /// the token.
     pub fn open_subchannel(&self, index: u32, token: Felt, salt: FeltEntropy) -> ClientAction {
         ClientAction::OpenSubchannel(OpenSubchannelInput {
             recipient_addr: self.counterparty.address,
@@ -295,15 +278,13 @@ impl Channel {
         })
     }
 
-    /// The whole setup for a first conversation, in one action set: register, open the
-    /// channel, open the subchannel.
+    /// Registers the identity and opens the channel and subchannel in one action set.
     ///
-    /// One transaction, so one proof (~29 s) rather than three. Phase order is
-    /// ACCOUNT → CHANNEL → SUBCHANNEL, which is the order the contract requires and which
-    /// [`ActionSetBuilder`] checks.
+    /// One action set needs one ~29 s proof. [`ActionSetBuilder`] enforces the required
+    /// ACCOUNT, CHANNEL, SUBCHANNEL phase order.
     ///
-    /// Skip `register` on an identity already known to the pool — the viewing key is
-    /// immutable once set and a second registration reverts on the `WriteOnce`.
+    /// Skip `register` for an existing identity. The viewing key is immutable, and a second
+    /// registration reverts on `WriteOnce`.
     pub fn setup(
         &self,
         identity: &PoolIdentity,
@@ -329,9 +310,8 @@ impl Channel {
     /// Registers if needed, opens a self-channel, deposits, and creates one encrypted note
     /// in a single action set.
     ///
-    /// This is the MVP funding primitive. A deposit by itself leaves a positive token
-    /// balance and has no replay protection; pairing it with the new value note is what
-    /// makes the action set both balanced and replay-safe.
+    /// A deposit alone leaves a positive token balance and has no replay protection. The new
+    /// value note balances the action set and provides replay protection.
     pub fn shield(
         &self,
         identity: &PoolIdentity,
@@ -364,9 +344,40 @@ impl Channel {
         Ok(builder.build()?)
     }
 
+    /// Deposits into a self-channel that is *already* open, appending one note at
+    /// `note_index`.
+    ///
+    /// [`Self::shield`] can run once per identity. The channel key takes no index
+    /// (`hashes.cairo`, `compute_channel_key`), so a self-channel has exactly one marker,
+    /// and that marker is `WriteOnce`. The first shield claims it. Every later shield
+    /// re-derives the same marker and reverts with a bare `NON_ZERO_VALUE` from deep inside
+    /// `_apply_write_once`. A top-up must reuse the channel and subchannel and append a note.
+    ///
+    /// `note_index` must be the next free index: the contract asserts notes are sequential
+    /// (`_prepare_note_creation`, `INDEX_NOT_SEQUENTIAL`) and discovery stops at the first
+    /// empty slot. A gap hides every later note.
+    ///
+    /// `create_enc_note` emits the `WriteOnce` that provides replay protection. No channel
+    /// action is required.
+    pub fn deposit_into_open_channel(
+        &self,
+        token: Felt,
+        note_index: u32,
+        amount: u128,
+        note_salt: RandomSalt,
+    ) -> Result<ActionSet, ChannelError> {
+        if amount == 0 {
+            return Err(ChannelError::ZeroDeposit);
+        }
+        let mut builder = ActionSetBuilder::new();
+        builder.push(ClientAction::Deposit(DepositInput { token, amount }))?;
+        builder.push(self.value_note(token, note_index, amount, note_salt))?;
+        Ok(builder.build()?)
+    }
+
     /// Storage note ids for every note of message `message_index`.
     ///
-    /// This is how a counterparty reads: compute, then fetch those slots. Never scan.
+    /// Counterparties compute these ids and fetch the slots without scanning.
     pub fn note_ids_for_message(
         &self,
         token: Felt,
@@ -380,12 +391,9 @@ impl Channel {
 
     /// Builds the action set that writes one negotiation message into this channel.
     ///
-    /// Five zero-amount notes at consecutive indices, one action set, one proof.
-    ///
-    /// The notes carry **zero value on purpose**. A structured salt on a value-bearing note
-    /// would reuse the one-time-pad nonce that masks the amount, letting an observer
-    /// subtract two ciphertexts and recover the difference. Zero-amount notes have no
-    /// amount variance to leak, which is what makes the salt lane safe at all.
+    /// Writes five zero-amount notes at consecutive indices. A structured salt on a value
+    /// note can reuse an amount mask. An observer can then subtract ciphertexts and recover
+    /// the amount difference. Zero-amount notes have no amount difference to expose.
     pub fn write_message(
         &self,
         token: Felt,
@@ -407,13 +415,10 @@ impl Channel {
 
     /// Writes the next negotiation message, allocating its indices from `cursor`.
     ///
-    /// Prefer this over [`Channel::write_message`]. The pool checks contiguity
-    /// (`INDEX_NOT_SEQUENTIAL`) and single-use (`NON_ZERO_VALUE`) *after* the proof, so a
-    /// caller-chosen index that is wrong costs a proof to discover. Routing every write
-    /// through one allocator makes both rules hold by construction.
+    /// Prefer this to [`Channel::write_message`]. The pool checks `INDEX_NOT_SEQUENTIAL` and
+    /// `NON_ZERO_VALUE` after proving. The cursor checks both rules before proving.
     ///
-    /// The cursor advances only if the whole message encodes and validates, so a rejected
-    /// message does not burn indices.
+    /// The cursor advances only after the message encodes and validates.
     pub fn write_next_message(
         &self,
         token: Felt,
@@ -428,13 +433,11 @@ impl Channel {
 
     /// Grants a scoped viewing key for this channel pair on `token`.
     ///
-    /// `incoming_key` is the counterparty's channel *to us*, learned from their
-    /// `EncChannelInfo`. Both are needed because channels are directional and one direction
-    /// is half a conversation.
+    /// `incoming_key` is the counterparty-to-local key from `EncChannelInfo`. The grant needs
+    /// both directional keys to show all messages.
     ///
-    /// What leaves here is a channel key, not a pool private key. The holder can read every
-    /// message and decrypt every amount in this channel, and can do nothing anywhere else —
-    /// spending needs a nullifier, which needs the owner's pool key, which no grant carries.
+    /// The grant contains channel keys, not a pool private key. It can read this channel but
+    /// cannot create a nullifier or spend.
     /// See [`crate::disclosure`] for how this differs from the pool's own auditor escrow.
     pub fn grant_viewing_key(
         &self,
@@ -466,8 +469,8 @@ impl Channel {
         })
     }
 
-    /// A value-bearing note. Requires a [`RandomSalt`] — a structured salt here would leak
-    /// the amount under mask reuse, which is why the two salt types are distinct.
+    /// Value note. Requires [`RandomSalt`] because a structured salt can expose an amount
+    /// difference under mask reuse.
     fn value_note(&self, token: Felt, index: u32, amount: u128, salt: RandomSalt) -> ClientAction {
         ClientAction::CreateEncNote(CreateEncNoteInput {
             recipient_addr: self.counterparty.address,
@@ -479,18 +482,14 @@ impl Channel {
         })
     }
 
-    /// Builds the action set that accepts an offer **and pays for it, atomically**.
+    /// Builds one action set that accepts and pays for an offer atomically.
     ///
-    /// This is the operation the whole design exists for. Acceptance and payment go into
-    /// one action set, so they share one proof: either both land or neither does. There is
-    /// no reachable state where the counterparty has an acceptance on record and no money.
+    /// Acceptance and payment share one proof. Both land, or neither lands.
     ///
-    /// The set is ordered by the contract's phases — spends (phase 4) strictly before note
-    /// creation (phase 5) — which [`ActionSetBuilder`] enforces, so an accidental
-    /// create-then-spend is rejected here rather than reverting after a proof.
+    /// [`ActionSetBuilder`] puts spends in phase 4 before note creation in phase 5. It rejects
+    /// create-then-spend before proof generation.
     ///
-    /// The payment note takes a [`RandomSalt`]; only the acceptance record carries
-    /// structure. Mixing those up is the confidentiality bug the type split prevents.
+    /// The payment note uses [`RandomSalt`]. Only the acceptance record carries structure.
     pub fn accept_and_settle(
         &self,
         token: Felt,
@@ -579,15 +578,11 @@ impl Channel {
 
     /// Accepts and settles using the next free indices, allocated from `cursor`.
     ///
-    /// Layout is the acceptance record on the message grid, then the payment note directly
-    /// after it. That ordering is forced: the record has to stay on the `5k..5k+4` grid or
-    /// the counterparty's reader misframes every later message, so the odd-sized payment
-    /// note can only go after it.
+    /// Places the acceptance on the `5k..5k+4` message grid and the payment after it. Putting
+    /// the payment first misaligns the reader.
     ///
-    /// The consequence is that **settlement leaves the cursor off the message grid**, and a
-    /// second negotiation in the same subchannel cannot start. That is currently correct —
-    /// one channel, one deal — but it is a real constraint on multi-deal subchannels and is
-    /// recorded as an open question in `docs/poulav.md` P1.3.
+    /// Settlement leaves the cursor off the message grid. A second negotiation cannot start
+    /// in that subchannel. `docs/poulav.md` P1.3 tracks this multi-deal constraint.
     #[allow(clippy::too_many_arguments)]
     pub fn settle_next(
         &self,
@@ -623,9 +618,8 @@ impl Channel {
 
 /// A note this agent owns and may spend.
 ///
-/// `channel_key` is the channel the note *arrived* in, which is not this channel — notes
-/// are owned in the direction they were sent. Channels being directional means a spend and
-/// the payment it funds reference two different keys.
+/// `channel_key` identifies the incoming channel that owns the note. A spend and its funded
+/// payment use different directional channel keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OwnedNote {
     /// The channel the note arrived in.
