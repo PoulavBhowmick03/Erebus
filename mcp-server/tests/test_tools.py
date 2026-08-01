@@ -37,14 +37,21 @@ def _structured(result) -> dict:
     return json.loads(result.content[0].text)
 
 
-def test_all_seven_tools_are_listed_with_descriptions(tmp_path):
+def test_the_seven_interface_methods_are_exposed_with_descriptions(tmp_path):
+    """The §4 seven, plus wait_for_offers.
+
+    The extra one is ergonomics rather than protocol: there is no push notification, so
+    somebody polls, and doing it server-side costs the agent one tool call instead of one
+    per attempt. It is asserted separately so that a *protocol* method appearing or
+    vanishing still fails this test loudly."""
+
     async def run():
         async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
                 names = {t.name for t in listed.tools}
-                assert names == {
+                assert names >= {
                     "open_channel",
                     "propose_offer",
                     "counter_offer",
@@ -53,6 +60,15 @@ def test_all_seven_tools_are_listed_with_descriptions(tmp_path):
                     "grant_viewing_key",
                     "reveal",
                 }
+                assert names - {"wait_for_offers"} == {
+                    "open_channel",
+                    "propose_offer",
+                    "counter_offer",
+                    "read_channel_state",
+                    "accept_and_settle",
+                    "grant_viewing_key",
+                    "reveal",
+                }, "an unexpected tool appeared, or a protocol method vanished"
                 assert all(t.description for t in listed.tools)
 
     asyncio.run(run())

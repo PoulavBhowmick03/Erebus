@@ -17,11 +17,18 @@ for the caller to branch on.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from mcp.server import MCPServer
 
 from erebus_mcp.interface import ErebusClient, ErebusError, OfferTerms, ViewingKeyGrant
+
+
+#: How long wait_for_offers sleeps between reads. A write takes about 20 s to land and each
+#: read costs a round trip per note, so polling faster buys nothing and costs the RPC.
+POLL_INTERVAL_SECONDS = 5.0
 
 
 def register_tools(server: MCPServer, client: ErebusClient) -> None:
@@ -103,6 +110,40 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
                 "proved_at": receipt.proved_at,
             }
         return outcome
+
+    @server.tool()
+    async def wait_for_offers(
+        channel_handle: str, expected_count: int, timeout_seconds: int = 300
+    ) -> dict[str, Any]:
+        """Block until the channel holds at least `expected_count` offers, then return them.
+
+        Use this instead of calling read_channel_state in a loop. There is no push
+        notification in the protocol, so somebody has to poll; doing it here costs one tool
+        call rather than one per attempt, and the waiting happens while the agent is idle.
+
+        Returns the same shape as read_channel_state, plus `timed_out`. A timeout is not an
+        error: the counterparty may still be thinking, and the caller decides whether to
+        wait again or move on."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            outcome = await _call(client.read_channel_state(channel_handle))
+            if not outcome["ok"]:
+                return outcome
+            state = outcome["result"]
+            if len(state.offers) >= expected_count or time.monotonic() >= deadline:
+                return {
+                    "ok": True,
+                    "result": {
+                        "offers": [_offer_to_json(o) for o in state.offers],
+                        "settlement": (
+                            _settlement_to_json(state.settlement) if state.settlement else None
+                        ),
+                        "timed_out": len(state.offers) < expected_count,
+                    },
+                }
+            # Each read is O(notes) RPC round trips today, so polling faster than this
+            # hammers the endpoint for no gain: a write takes ~20 s to land anyway.
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
     @server.tool()
     async def grant_viewing_key(channel_handle: str, grantee: str) -> dict[str, Any]:
