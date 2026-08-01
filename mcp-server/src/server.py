@@ -20,6 +20,10 @@ owns that key. See docs/custody-design.md.
 
 from mcp.server import MCPServer
 
+from erebus_mcp.config import ServerConfig
+from erebus_mcp.mock_client import MockErebusClient
+from erebus_mcp.tools import register_tools
+
 server = MCPServer(
     name="erebus",
     instructions=(
@@ -30,10 +34,17 @@ server = MCPServer(
     ),
 )
 
-
-# Tools land here — see docs/ishita.md I1.3 for the list and the interface they wrap.
-# They call sdk/py, which is a binding over sdk/rs. No protocol logic at this layer:
-# no hashing, no salt encoding, no felt arithmetic.
+# Backed by MockErebusClient until the shared integration pass swaps in the real seam
+# (blocked on sdk/py catching up to erebus-cli's protocol 2 — see docs/friction.md and
+# ARCHITECTURE §4). No protocol logic at this layer either way: no hashing, no salt
+# encoding, no felt arithmetic — see erebus_mcp/mock_client.py and interface.py.
+_config = ServerConfig.from_env()
+_client = MockErebusClient(
+    identity=_config.address,
+    store_path=_config.mock_store_path,
+    latency_seconds=_config.mock_latency_seconds,
+)
+register_tools(server, _client)
 
 
 if __name__ == "__main__":

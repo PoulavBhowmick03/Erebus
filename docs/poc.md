@@ -4,9 +4,8 @@
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
 Erebus is attempting a third option. Two agents open a channel on STRK20, negotiate as
-structured state transitions, and settle atomically inside the pool. Atomic settlement and
-scoped reconstruction now work live. That run exposed wire v1; the Rust SDK now has an
-encrypted/authenticated five-note wire v2, verified offline but not yet rerun live.
+structured state transitions, and settle atomically inside the pool. Atomic settlement,
+encrypted/authenticated five-note wire v2, and scoped reconstruction now work live.
 
 ---
 
@@ -97,10 +96,12 @@ Working and tested offline:
 The Rust client exists because there is no Rust write side. `discovery-core`
 covers reads. We need to build `ClientAction`s, serialises calldata, signing the invoke or calling the prover.
 
-Done in the Rust path on Sepolia using wire v1: shield, two channel directions, offer,
-counter, atomic accept-and-settle, and independent viewing-grant reconstruction. Done
-offline: wire v2. Not done: live wire-v2 validation, independent cryptographic review, the
-MCP server, and the agent loop.
+Done live in the Rust path on Sepolia using wire v2: shield, two channel directions, offer,
+counter, atomic accept-and-settle, and independent viewing-grant reconstruction. Also done,
+but mock-backed: the reference-agent loop and MCP server (`agents/`, `mcp-server/`). The
+remaining integration step is replacing the mock with the real protocol-2 `sdk/py` seam,
+then proving an external agent framework can drive the live path without touching Erebus
+internals. Independent cryptographic review also remains.
 
 
 ## Where this goes
@@ -111,4 +112,4 @@ viewing-key reveal, driven end to end through an MCP server so any agent framewo
 The salt lane is a general data-carrying mechanism the privacy stack already had and nobody
 had used. Erebus demonstrated both halves: a note can say something rather than only be
 worth something, and public salts must carry ciphertext rather than plaintext. Wire v2 now
-does that in Rust; the next chain run must validate it against the real pool.
+does that in Rust and has completed the full flow against the Sepolia pool.

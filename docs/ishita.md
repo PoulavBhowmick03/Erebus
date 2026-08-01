@@ -97,24 +97,30 @@ will show up.
 ### I0.1 — Agree the interface with Poulav *(do this first)*
 30 minutes together. Walk ARCHITECTURE.md §4 line by line.
 
-- [ ] Confirm `OfferTerms` has everything your policy engine needs to decide
-- [ ] Agree what a failed settlement returns
-- [ ] Freeze it
+- [x] Confirm `OfferTerms` has everything your policy engine needs to decide
+- [x] Agree what a failed settlement returns
+- [x] Freeze it
 
-**Acceptance:** you both have the same interface file committed.
+**Acceptance:** you both have the same interface file committed. — done, ARCHITECTURE §4,
+commit `02f413d`.
 
 ### I0.2 — Build the mock
 This is the most important thing you do on Day 0. Everything else depends on it.
 
-- [ ] Implement `ErebusClient` as an in-memory mock in Python — same signatures, fake state
-- [ ] **`acceptAndSettle` latency: ~30 s.** That is the real number now, not a guess —
+- [x] Implement `ErebusClient` as an in-memory mock in Python — same signatures, fake state
+- [x] **`acceptAndSettle` latency: ~30 s.** That is the real number now, not a guess —
       StarkWare publish ~29 s per transaction for Stwo proof generation. Per *transaction*,
       so a message's 4 notes are one proof, but every negotiation round is its own.
-- [ ] Mock should be able to simulate failure: expired offer, failed proof, unreachable
+- [x] Mock should be able to simulate failure: expired offer, failed proof, unreachable
       discovery service, and **`SCREENING_REJECTED` / `SCREENING_UNAVAILABLE`** — shielding
       funds needs a screener-signed attestation fresh within 300 s. Deposit leg only.
-- [ ] Mock the *binding* surface, not a hypothetical Python client. Whatever shape P0.4
+- [x] Mock the *binding* surface, not a hypothetical Python client. Whatever shape P0.4
       settles on is what you swap out on integration day.
+
+**Done** — `mcp-server/src/erebus_mcp/{interface,mock_client}.py`. One caveat found while
+building it: `AMOUNT_MISMATCH` can't be simulated from real input, because the frozen
+`acceptAndSettle(handle, offerId)` takes no separate payment argument for a mismatch to
+arise from — only `force_error()` exercises that code path. See the module docstring.
 
 **Acceptance:** you can call every method on the mock and get sane responses.
 
@@ -127,22 +133,25 @@ This is the most important thing you do on Day 0. Everything else depends on it.
 ### I1.1 — Negotiation policy engine
 Keep this simple. A threshold rule is enough for the MVP — do not build a sophisticated bargaining strategy.
 
-- [ ] Agent A (buyer): has a budget and a task; proposes, evaluates counters, accepts if within budget, walks away if not
-- [ ] Agent B (seller): has a reserve price; evaluates offers, counters once, accepts or declines
-- [ ] Enforce a maximum round count so the demo can't loop forever. **This now has a price
+- [x] Agent A (buyer): has a budget and a task; proposes, evaluates counters, accepts if within budget, walks away if not
+- [x] Agent B (seller): has a reserve price; evaluates offers, counters once, accepts or declines
+- [x] Enforce a maximum round count so the demo can't loop forever. **This now has a price
       attached:** ~29 s of proving per round, so three rounds is ~90 s of dead air before
       settlement even begins. Decide with Poulav whether the demo runs fewer rounds, is
       time-compressed in the edit, or is honest about the wait.
-- [ ] Unit tests on the accept/reject decision
+- [x] Unit tests on the accept/reject decision
 
 **Acceptance:** given a set of terms, each agent makes a deterministic, testable decision.
+— done, `agents/src/erebus_agents/policy.py`, 10 unit tests in `agents/tests/test_policy.py`.
+Still open: the round-count-vs-demo-length call with Poulav.
 
 ### I1.2 — Two reference agents running the loop
-- [ ] Two agent instances driving the negotiation against the mock
-- [ ] They open a channel, negotiate to agreement, trigger settlement, and one grants a viewing key
-- [ ] Structured logging of every state transition — you'll need this for the demo
+- [x] Two agent instances driving the negotiation against the mock
+- [x] They open a channel, negotiate to agreement, trigger settlement, and one grants a viewing key
+- [x] Structured logging of every state transition — you'll need this for the demo
 
 **Acceptance:** `uv run python agents/demo.py` completes a full negotiation against the mock.
+— done; real path is `agents/src/erebus_agents/demo.py` (this repo uses a `src/` layout).
 
 ### I1.3 — MCP server *(Python)*
 This is what makes it *infrastructure* rather than a demo. It's the difference between "we built a thing" and "any agent framework can use this."
@@ -150,13 +159,16 @@ This is what makes it *infrastructure* rather than a demo. It's the difference b
 Built on the official `mcp` Python SDK — `MCPServer`, decorator-defined tools, stdio transport
 is enough for the demo.
 
-- [ ] MCP server exposing: `open_channel`, `propose_offer`, `counter_offer`, `read_channel_state`, `accept_and_settle`, `grant_viewing_key`, `reveal`
-- [ ] Clear tool descriptions — an agent should understand when to call each without reading source
-- [ ] Verify from a real MCP client, not just your own agents
-- [ ] Tool errors must carry the `SettlementErrorCode` through — a failure that arrives as
+- [x] MCP server exposing: `open_channel`, `propose_offer`, `counter_offer`, `read_channel_state`, `accept_and_settle`, `grant_viewing_key`, `reveal`
+- [x] Clear tool descriptions — an agent should understand when to call each without reading source
+- [x] Verify from a real MCP client, not just your own agents
+- [x] Tool errors must carry the `SettlementErrorCode` through — a failure that arrives as
       an opaque string makes the whole failure-handling path untestable from the agent side
 
 **Acceptance:** an external agent framework can drive the loop through the MCP server with no knowledge of Erebus internals.
+— done, `mcp-server/src/erebus_mcp/tools.py` + `server.py`, verified in
+`mcp-server/tests/test_tools.py` against a real `mcp` SDK client over stdio, independent of
+the reference agents. Still mock-backed — see I2.1.
 
 **Why this matters more than it looks:** StarkWare is evaluating whether this is reusable infrastructure. An MCP server that any framework can call *is* the proof. Prioritize this over polishing the agents.
 
@@ -271,11 +283,13 @@ mechanical, but it is nobody's by default, which is how it survives to demo day.
 **Acceptance:** a link you can send.
 
 ### I2.3 — Write the one-pager
-- [ ] What we built
-- [ ] What fought us (pull from `docs/friction.md`)
-- [ ] One sentence on what we'd ship next
+- [x] What we built
+- [x] What fought us (pull from `docs/friction.md`)
+- [x] One sentence on what we'd ship next
 
-**Acceptance:** fits on one page. Resist expanding it.
+**Acceptance:** fits on one page. Resist expanding it. — done, `docs/one-pager.md`. Marked
+as a draft/current-state snapshot in the doc itself, since I2.1 and I2.2 below are still
+open — update it once they land instead of treating this pass as final.
 
 ---
 
