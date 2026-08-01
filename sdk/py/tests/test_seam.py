@@ -9,17 +9,22 @@ So these assert three things only — a call got through, a result came back wit
 the contract promises, and a failure arrived as a structured error rather than a crash. The
 *correctness* of anything inside those results is pinned on the Rust side, against Cairo
 reference vectors, where there is exactly one implementation to be wrong.
+
+Nothing here touches the chain either. ``version`` and ``generate_pool_key`` are local, and
+the config-bearing calls are given inputs that fail argument parsing before any RPC happens.
+A suite that needed a funded testnet account would stop being run.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from erebus._seam import ErebusError, Seam, SeamUnavailable
+from erebus._seam import ErebusError, Seam, SeamConfig, SeamUnavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "sdk" / "rs" / "target" / "debug" / "erebus-cli"
@@ -31,21 +36,40 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def seam() -> Seam:
-    return Seam(binary=CLI)
+def key_files(tmp_path: Path) -> tuple[Path, Path]:
+    """Two keys on disk, the way an operator supplies them.
+
+    Note what the test does *not* do: hand either key to Python. It writes files and passes
+    paths, which is the whole custody argument for this seam.
+    """
+    pool = tmp_path / "pool.key"
+    pool.write_text("0x1234567890abcdef\n")
+    pool.chmod(0o600)
+    account = tmp_path / "account.key"
+    account.write_text("0xfedcba0987654321\n")
+    account.chmod(0o600)
+    return pool, account
 
 
 @pytest.fixture
-def key_file(tmp_path: Path) -> Path:
-    """A pool key on disk, the way an operator supplies one.
+def config(key_files: tuple[Path, Path], tmp_path: Path) -> SeamConfig:
+    pool, account = key_files
+    return SeamConfig(
+        rpc_url="http://127.0.0.1:1",
+        prover_url="http://127.0.0.1:1",
+        pool_address="0x254a6b2",
+        chain_id="0x534e5f5345504f4c4941",
+        account_address="0xa11ce",
+        pool_key_file=pool,
+        account_key_file=account,
+        state_dir=tmp_path / "state",
+        token="0x7042",
+    )
 
-    Note what the test does *not* do: hand the key to Python. It writes a file and passes
-    the path, which is the whole custody argument for this seam.
-    """
-    path = tmp_path / "pool.key"
-    path.write_text("0x1234567890abcdef")
-    path.chmod(0o600)
-    return path
+
+@pytest.fixture
+def seam(config: SeamConfig) -> Seam:
+    return Seam(config=config, binary=CLI)
 
 
 # --- The call gets through ------------------------------------------------------
@@ -55,70 +79,43 @@ def test_version_round_trips(seam: Seam) -> None:
     result = seam.version()
 
     assert result["name"] == "erebus-sdk"
-    assert result["protocol"] == 1
+    assert result["protocol"] == 2
 
 
-def test_open_channel_returns_a_handle(seam: Seam, key_file: Path) -> None:
-    result = seam.open_channel(
-        address="0xa11ce",
-        key_file=key_file,
-        counterparty_address="0xb0b",
-        counterparty_public_key="0x9bcdef",
-        token="0x7042",
-        register=True,
-    )
+def test_generate_pool_key_returns_a_path_and_a_public_key(seam: Seam, tmp_path: Path) -> None:
+    result = seam.generate_pool_key(tmp_path / "fresh.key")
 
-    # Shape, not value. What the handle *should* be is pinned in Rust against the library;
-    # asserting it here would make this package a second opinion on a derivation.
-    assert result["channel_handle"].startswith("0x")
-    assert result["counterparty"] == "0xb0b"
-    assert result["registered"] is True
+    # Shape, not value. What the key *should* be is a cryptographic decision made in Rust;
+    # asserting anything about it here would make this package a second opinion on entropy.
+    assert result["pool_key_file"] == str(tmp_path / "fresh.key")
+    assert result["public_key"].startswith("0x")
 
 
-def test_the_handle_is_stable_across_calls(seam: Seam, key_file: Path) -> None:
-    """Not a correctness claim about the derivation — a claim that the seam is not
-    injecting nondeterminism of its own, e.g. by reordering or re-encoding arguments."""
-    kwargs = dict(
-        address="0xa11ce",
-        key_file=key_file,
-        counterparty_address="0xb0b",
-        counterparty_public_key="0x9bcdef",
-        token="0x7042",
-    )
-    first = seam.open_channel(**kwargs)
-    second = seam.open_channel(**kwargs)
+def test_generate_pool_key_never_returns_the_private_value(seam: Seam, tmp_path: Path) -> None:
+    """The one property that matters about this call: the secret stays on disk."""
+    path = tmp_path / "secret.key"
+    result = seam.generate_pool_key(path)
+    private = path.read_text().strip()
 
-    assert first["channel_handle"] == second["channel_handle"]
+    assert private not in json.dumps(result)
 
 
 # --- Failures arrive as structure, not as crashes -------------------------------
 
 
-def test_a_missing_key_file_raises_a_structured_error(seam: Seam) -> None:
+def test_a_missing_key_file_raises_a_structured_error(config: SeamConfig) -> None:
+    broken = dataclasses.replace(config, pool_key_file="/definitely/not/here")
+
     with pytest.raises(ErebusError) as caught:
-        seam.open_channel(
-            address="0xa11ce",
-            key_file="/definitely/not/here",
-            counterparty_address="0xb0b",
-            counterparty_public_key="0x9bcdef",
-            token="0x7042",
-        )
+        Seam(config=broken, binary=CLI).open_channel("0xb0b")
 
     assert caught.value.code == "IDENTITY_UNAVAILABLE"
     assert caught.value.retryable is False
 
 
-def test_a_malformed_argument_raises_rather_than_returning_garbage(
-    seam: Seam, key_file: Path
-) -> None:
+def test_a_malformed_argument_raises_rather_than_returning_garbage(seam: Seam) -> None:
     with pytest.raises(ErebusError) as caught:
-        seam.open_channel(
-            address="not-a-felt",
-            key_file=key_file,
-            counterparty_address="0xb0b",
-            counterparty_public_key="0x9bcdef",
-            token="0x7042",
-        )
+        seam.open_channel("not-a-felt")
 
     assert caught.value.code == "INVALID_REQUEST"
 
@@ -136,6 +133,16 @@ def test_the_retryable_flag_survives_the_seam(seam: Seam) -> None:
 def test_an_unknown_method_does_not_hang_or_crash(seam: Seam) -> None:
     with pytest.raises(ErebusError):
         seam.call("definitely_not_a_method", {"anything": 1})
+
+
+def test_a_config_free_seam_refuses_calls_that_need_one() -> None:
+    """Constructing without config is legal, because keygen and version do not need one.
+    Using it for a protocol call must fail as a broken setup, not as a protocol error."""
+    bare = Seam(binary=CLI)
+    bare.version()
+
+    with pytest.raises(SeamUnavailable):
+        bare.open_channel("0xb0b")
 
 
 # --- Broken install is a different failure than a protocol error ----------------
@@ -161,11 +168,12 @@ def test_non_json_output_is_reported_as_a_broken_install(tmp_path: Path) -> None
 # --- Custody --------------------------------------------------------------------
 
 
-def test_the_key_is_never_passed_through_python(seam: Seam, key_file: Path) -> None:
+def test_neither_key_is_passed_through_python(seam: Seam, key_files: tuple[Path, Path]) -> None:
     """The custody claim, asserted rather than asserted-in-prose.
 
-    The request Python sends must contain the key file's *path* and never its contents.
+    The request Python sends must contain each key file's *path* and never its contents.
     """
+    pool, account = key_files
     sent: dict[str, object] = {}
     original = subprocess.run
 
@@ -175,16 +183,13 @@ def test_the_key_is_never_passed_through_python(seam: Seam, key_file: Path) -> N
 
     subprocess.run = capture  # type: ignore[assignment]
     try:
-        seam.open_channel(
-            address="0xa11ce",
-            key_file=key_file,
-            counterparty_address="0xb0b",
-            counterparty_public_key="0x9bcdef",
-            token="0x7042",
-        )
+        with pytest.raises(ErebusError):
+            seam.open_channel("not-a-felt")
     finally:
         subprocess.run = original  # type: ignore[assignment]
 
     rendered = json.dumps(sent)
-    assert str(key_file) in rendered, "the path should be sent"
-    assert "1234567890abcdef" not in rendered, "key material reached the request body"
+    assert str(pool) in rendered, "the pool key path should be sent"
+    assert str(account) in rendered, "the account key path should be sent"
+    assert "1234567890abcdef" not in rendered, "pool key material reached the request body"
+    assert "fedcba0987654321" not in rendered, "account key material reached the request body"

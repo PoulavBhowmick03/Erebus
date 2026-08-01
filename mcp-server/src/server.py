@@ -22,6 +22,7 @@ from mcp.server import MCPServer
 
 from erebus_mcp.config import ServerConfig
 from erebus_mcp.mock_client import MockErebusClient
+from erebus_mcp.seam_client import SeamErebusClient
 from erebus_mcp.tools import register_tools
 
 server = MCPServer(
@@ -34,16 +35,40 @@ server = MCPServer(
     ),
 )
 
-# Backed by MockErebusClient until the shared integration pass swaps in the real seam
-# (blocked on sdk/py catching up to erebus-cli's protocol 2 — see docs/friction.md and
-# ARCHITECTURE §4). No protocol logic at this layer either way: no hashing, no salt
-# encoding, no felt arithmetic — see erebus_mcp/mock_client.py and interface.py.
+# EREBUS_BACKEND picks the client. `mock` is the default so the agent track stays runnable
+# with no chain, no keys and no gas; `seam` drives the real Rust client through the
+# subprocess binding. No protocol logic at this layer either way: no hashing, no salt
+# encoding, no felt arithmetic — see erebus_mcp/{mock_client,seam_client,interface}.py.
 _config = ServerConfig.from_env()
-_client = MockErebusClient(
-    identity=_config.address,
-    store_path=_config.mock_store_path,
-    latency_seconds=_config.mock_latency_seconds,
-)
+
+if _config.backend == "seam":
+    from erebus import Seam, SeamConfig
+
+    assert _config.seam is not None  # from_env guarantees this for the seam backend
+    _settings = _config.seam
+    _client = SeamErebusClient(
+        Seam(
+            config=SeamConfig(
+                rpc_url=_settings.rpc_url,
+                prover_url=_config.prover_url,
+                pool_address=_settings.pool_address,
+                chain_id=_settings.chain_id,
+                account_address=_config.address,
+                pool_key_file=_settings.pool_key_file,
+                account_key_file=_settings.account_key_file,
+                state_dir=_settings.state_dir,
+                token=_settings.token,
+            ),
+            binary=_settings.binary,
+        )
+    )
+else:
+    _client = MockErebusClient(
+        identity=_config.address,
+        store_path=_config.mock_store_path,
+        latency_seconds=_config.mock_latency_seconds,
+    )
+
 register_tools(server, _client)
 
 

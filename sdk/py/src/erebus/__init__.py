@@ -1,40 +1,27 @@
-"""Python binding for Erebus.
+"""Python binding for the frozen ``ErebusClient`` interface (ARCHITECTURE.md §4).
 
-Mirrors the frozen ``ErebusClient`` interface (ARCHITECTURE.md §4, typed in
-``sdk/ts/src/interface.ts``). Types only for now.
+This package sends arguments to ``sdk/rs`` and returns its results. It does not hash, encode
+salts, convert felts, or make protocol decisions. A wrong preimage silently derives an
+unused storage slot, so duplicate protocol logic can hide a wrong answer.
 
-This is a **binding, not a client.** It marshals arguments down to ``sdk/rs`` and marshals
-results back. It does not hash, encode salts, convert felts, or decide anything. Every
-failure mode in this protocol is silent — a wrong preimage derives a storage slot nobody
-wrote to, and the note is simply "not found" with no error anywhere — so a second place
-where protocol logic can live is a second place a wrong answer can hide.
-
-The tripwire, because "no protocol logic" is a principle and principles drift:
-
-    This package should never need a known-answer test.
-
-If a test here has to assert a *computed value*, this package is computing something and has
-become a third implementation. Its tests assert that a call got through and came back,
-nothing more.
+This package must not need a known-answer test. Its tests cover transport and response shape.
+A computed-value assertion means that Python has become another protocol implementation.
 
 The seam
 --------
-**Subprocess, decided 2026-07-30** (ARCHITECTURE.md §3). ``erebus-cli`` takes one JSON
-request on stdin and answers with one JSON envelope on stdout. :class:`erebus.Seam` is the
-whole of it.
+The project chose a subprocess on 2026-07-30 (ARCHITECTURE.md §3). ``erebus-cli`` reads one
+JSON request from stdin and writes one JSON envelope to stdout. :class:`erebus.Seam` wraps
+this exchange.
 
-The deciding argument was custody. Requests carry a **path** to a key file, never a key, so
-this process — the one that also runs agent frameworks and model-driven code — never holds a
-pool private key at all. In-process via PyO3, CLAUDE.md constraint 6 would have degraded
-from "structurally unreachable" to "same heap as whatever else got imported".
+Requests contain key-file paths, not keys. The Python process runs agent frameworks and
+model-driven code but never holds a pool private key. An in-process PyO3 binding would put
+the key in the same heap, contrary to CLAUDE.md constraint 6.
 
-Entropy is generated inside the Rust binary for the same reason: if this package supplied a
-salt, it would be making a cryptographic decision, and a second place that can produce a
-weak salt is a second place a silent failure hides.
+The Rust binary also generates entropy. Python does not produce keys or salts.
 """
 
-from erebus._seam import ErebusError, Seam, SeamUnavailable
+from erebus._seam import ErebusError, Seam, SeamConfig, SeamUnavailable
 
-__all__ = ["ErebusError", "Seam", "SeamUnavailable", "__version__"]
+__all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable", "__version__"]
 
 __version__ = "0.0.0"

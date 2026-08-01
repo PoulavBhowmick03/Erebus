@@ -1,0 +1,184 @@
+"""Tests for the adapter between the subprocess seam and the §4 interface.
+
+Unlike ``sdk/py``, this layer is allowed to have logic, and the logic it has is exactly the
+kind that fails quietly: a field renamed on the Rust side, a code the enum does not know, a
+128-bit integer serialised as a JSON number. So these tests are about shape and translation,
+driven by a stub seam. Nothing here reaches a chain.
+
+The stub returns the payloads ``erebus-cli`` actually returned during the live runs on
+2026-07-31, trimmed. Inventing plausible-looking payloads would test the adapter against
+this file's idea of the wire rather than against the wire.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+from erebus import ErebusError as SeamError
+
+from erebus_mcp.interface import (
+    ErebusError,
+    OfferStatus,
+    OfferTerms,
+    SettlementErrorCode,
+    ViewingKeyGrant,
+)
+from erebus_mcp.seam_client import SeamErebusClient, _wire_terms
+
+CHANNEL = "ch_" + "a8" * 32
+OFFER = {
+    "offer_id": f"{CHANNEL}:us:0",
+    "channel_id": CHANNEL,
+    "proposer": "0x32bb394a452d4bdd24c4c0cdd76ea9d7c140b9a28287a9b81dcb25703bdc805",
+    "status": "countered",
+    "created_at": 1785479790,
+    "reply_to": None,
+    "terms": {
+        "amount": 500000000000000000,
+        "token": "0x4718f5a",
+        "deadline": 1785566189,
+        "memo_hash": 4660,
+    },
+}
+
+
+class StubSeam:
+    """Records what it was asked and answers with recorded CLI payloads."""
+
+    def __init__(self, **answers: Any) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        def method(*args: Any) -> Any:
+            self.calls.append((name, args))
+            answer = self.answers[name]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        return method
+
+
+def run(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+def test_offers_map_onto_the_interface_dataclasses() -> None:
+    seam = StubSeam(read_channel_state={"channel_id": CHANNEL, "offers": [OFFER], "settled": False})
+    state = run(SeamErebusClient(seam).read_channel_state(CHANNEL))
+
+    assert len(state.offers) == 1
+    offer = state.offers[0]
+    assert offer.status is OfferStatus.COUNTERED
+    assert offer.terms.amount == 500000000000000000
+    assert offer.reply_to is None
+
+
+def test_read_channel_state_carries_no_settlement_object() -> None:
+    """The CLI reports `settled` as a boolean here and only reconstructs a settlement in
+    `reveal`. A participant still sees the outcome through the accepted offer's status, so
+    this is a real difference between the two calls rather than a dropped field."""
+    seam = StubSeam(read_channel_state={"channel_id": CHANNEL, "offers": [], "settled": True})
+    state = run(SeamErebusClient(seam).read_channel_state(CHANNEL))
+
+    assert state.settlement is None
+
+
+def test_reveal_reconstructs_the_settlement() -> None:
+    seam = StubSeam(
+        reveal={
+            "channel_id": CHANNEL,
+            "participants": ["0xa11ce", "0xb0b"],
+            "offers": [OFFER],
+            "settlement": {
+                "acceptance": f"{CHANNEL}:us:1",
+                "accepted_offer": f"{CHANNEL}:them:0",
+                "agreed_amount": 1000000000000000000,
+                "paid_amount": 1000000000000000000,
+            },
+        }
+    )
+    grant = ViewingKeyGrant(channel_id=CHANNEL, grantee="0xa0d17", viewing_key="vk_opaque")
+    record = run(SeamErebusClient(seam).reveal(grant))
+
+    assert record.participants == ["0xa11ce", "0xb0b"]
+    assert record.settlement is not None
+    assert record.settlement.is_consistent()
+
+
+def test_a_disagreeing_settlement_is_reported_not_hidden() -> None:
+    """Atomicity guarantees both legs land, not that they describe the same trade (F23).
+    A reader must still check, so the adapter must carry both numbers through unchanged."""
+    seam = StubSeam(
+        reveal={
+            "channel_id": CHANNEL,
+            "participants": [],
+            "offers": [],
+            "settlement": {
+                "acceptance": f"{CHANNEL}:us:1",
+                "agreed_amount": 1000000000000000000,
+                "paid_amount": 1,
+            },
+        }
+    )
+    grant = ViewingKeyGrant(channel_id=CHANNEL, grantee="0x0", viewing_key="vk")
+    record = run(SeamErebusClient(seam).reveal(grant))
+
+    assert record.settlement is not None
+    assert not record.settlement.is_consistent()
+
+
+def test_seam_errors_become_interface_errors() -> None:
+    seam = StubSeam(
+        accept_and_settle=SeamError(code="ALREADY_SETTLED", message="terminal", retryable=False)
+    )
+
+    with pytest.raises(ErebusError) as caught:
+        run(SeamErebusClient(seam).accept_and_settle(CHANNEL, "x"))
+
+    assert caught.value.code is SettlementErrorCode.ALREADY_SETTLED
+    assert caught.value.retryable is False
+
+
+def test_an_unknown_code_degrades_instead_of_crashing() -> None:
+    """A code this enum has not caught up with means the file is stale, not that the agent
+    should take an exception it cannot catch. The retryable flag still carries the only
+    decision the agent needs."""
+    seam = StubSeam(
+        open_channel=SeamError(code="SOMETHING_NEW", message="from a newer cli", retryable=True)
+    )
+
+    with pytest.raises(ErebusError) as caught:
+        run(SeamErebusClient(seam).open_channel("0xb0b"))
+
+    assert caught.value.code is SettlementErrorCode.PROOF_FAILED
+    assert caught.value.retryable is True
+
+
+def test_wide_integers_cross_as_strings() -> None:
+    """JSON numbers are doubles. A 1e18 amount survives that; a memo hash near 2^128 does
+    not, and would arrive at the CLI silently rounded."""
+    memo = (1 << 128) - 1
+    wire = _wire_terms(OfferTerms(amount=10**18, token="0x7042", deadline=1785566189, memo_hash=memo))
+
+    assert wire["amount"] == "1000000000000000000"
+    assert wire["memo_hash"] == str(memo)
+    assert isinstance(wire["deadline"], int), "the CLI parses deadline as a number, not a string"
+
+
+def test_the_grant_is_passed_through_without_reshaping() -> None:
+    """The disclosure format belongs to Rust. Reading into the grant here would make this
+    file a second opinion on it, and a wrong one the day the format changes."""
+    seam = StubSeam(reveal={"channel_id": CHANNEL, "participants": [], "offers": []})
+    grant = ViewingKeyGrant(channel_id=CHANNEL, grantee="0xa0d17", viewing_key="vk_opaque")
+    run(SeamErebusClient(seam).reveal(grant))
+
+    _, args = seam.calls[0]
+    assert args[0] == {
+        "channel_id": CHANNEL,
+        "grantee": "0xa0d17",
+        "viewing_key": "vk_opaque",
+    }

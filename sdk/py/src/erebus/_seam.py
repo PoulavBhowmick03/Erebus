@@ -7,9 +7,15 @@ build a JSON request, run the binary, parse one JSON envelope, raise or return.
 entropy. If a change to this file needs a known-answer test, the change is wrong — see the
 tripwire in ``erebus/__init__.py``.
 
-Key material never passes through this process. Requests carry a *path* to a key file; the
-Rust binary opens it. That is the reason subprocess won: the agent's Python heap, where
-model-driven and third-party framework code runs, never holds a pool private key at all.
+Key material never passes through this process. :class:`SeamConfig` carries *paths* to two
+key files; the Rust binary opens them. That is the reason subprocess won: the agent's Python
+heap, where model-driven and third-party framework code runs, never holds a pool private key
+at all.
+
+Protocol 2, 2026-08-01. Every method except ``version`` and ``generate_pool_key`` carries
+the same nine-field config block, because ``erebus-cli`` is one-shot and holds nothing
+between invocations. Channel state lives in ``state_dir`` and is addressed by an opaque
+handle.
 """
 
 from __future__ import annotations
@@ -21,11 +27,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-__all__ = ["ErebusError", "Seam", "SeamUnavailable"]
+__all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable"]
 
-#: How long a call may take. Generous because proving is ~29 s per transaction and the
-#: binary may be doing one; short enough that a hung child does not hang an agent forever.
-DEFAULT_TIMEOUT_SECONDS = 120
+#: How long a call may take. A write is a preflight, a proof (~20 s), a fee estimate, a
+#: submission and a receipt wait, so this is generous. Short enough that a hung child does
+#: not hang an agent forever.
+DEFAULT_TIMEOUT_SECONDS = 300
 
 
 class SeamUnavailable(RuntimeError):
@@ -49,15 +56,53 @@ class ErebusError(Exception):
         return f"{self.code}: {self.message}"
 
 
+@dataclass(frozen=True)
+class SeamConfig:
+    """Operator configuration, re-sent on every call.
+
+    The two ``*_key_file`` fields are **paths**. Putting a key value here would defeat the
+    reason this seam is a subprocess, and no code path accepts one.
+
+    ``rpc_url`` deserves care. The ``compile_actions`` preflight sends the pool private key
+    as calldata, so a public third-party RPC sees it. Acceptable for a throwaway testnet
+    identity, not for anything else.
+    """
+
+    rpc_url: str
+    prover_url: str
+    pool_address: str
+    chain_id: str
+    account_address: str
+    pool_key_file: str | Path
+    account_key_file: str | Path
+    state_dir: str | Path
+    token: str
+
+    def as_params(self) -> dict[str, str]:
+        return {
+            "rpc_url": self.rpc_url,
+            "prover_url": self.prover_url,
+            "pool_address": self.pool_address,
+            "chain_id": self.chain_id,
+            "account_address": self.account_address,
+            "pool_key_file": str(self.pool_key_file),
+            "account_key_file": str(self.account_key_file),
+            "state_dir": str(self.state_dir),
+            "token": self.token,
+        }
+
+
 class Seam:
     """Runs ``erebus-cli``, one request per invocation.
 
+    :param config: operator configuration attached to every protocol call.
     :param binary: path to ``erebus-cli``. Defaults to whatever is on ``PATH``.
     :param timeout: seconds before a call is abandoned.
     """
 
     def __init__(
         self,
+        config: SeamConfig | None = None,
         binary: str | Path | None = None,
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -70,6 +115,7 @@ class Seam:
             )
         self._binary = resolved
         self._timeout = timeout
+        self._config = config
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Invokes ``method`` and returns its result.
@@ -95,9 +141,7 @@ class Seam:
         except OSError as exc:
             raise SeamUnavailable(f"could not run {self._binary}: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise SeamUnavailable(
-                f"{method} exceeded {self._timeout}s"
-            ) from exc
+            raise SeamUnavailable(f"{method} exceeded {self._timeout}s") from exc
 
         try:
             envelope = json.loads(completed.stdout)
@@ -120,37 +164,66 @@ class Seam:
             retryable=bool(error.get("retryable", False)),
         )
 
+    def _with_config(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._config is None:
+            raise SeamUnavailable(
+                "this Seam was constructed without a SeamConfig, so it can only call "
+                "version() and generate_pool_key()"
+            )
+        return {"config": self._config.as_params(), **params}
+
+    # --- Calls that carry no operator configuration -------------------------------
+
     def version(self) -> dict[str, Any]:
         """Liveness check. Touches no key material, so it is safe to call at startup."""
         return self.call("version")
 
-    def open_channel(
-        self,
-        *,
-        address: str,
-        key_file: str | Path,
-        counterparty_address: str,
-        counterparty_public_key: str,
-        token: str,
-        channel_index: int = 0,
-        subchannel_index: int = 0,
-        register: bool = False,
-    ) -> dict[str, Any]:
-        """Derives a channel and builds its setup action set.
+    def generate_pool_key(self, path: str | Path) -> dict[str, Any]:
+        """Creates a pool identity key file and returns its path and public half.
 
-        ``key_file`` is a **path**, never a key. Passing key material through this function
-        would defeat the reason this seam is a subprocess.
+        The private value is never returned and never crosses this process. Entropy comes
+        from the Rust binary: a key generated here would be a cryptographic decision taken
+        in the wrong place.
         """
+        return self.call("generate_pool_key", {"path": str(path)})
+
+    # --- The seven interface methods, plus the administrative shield ---------------
+
+    def open_channel(self, counterparty: str) -> dict[str, Any]:
+        return self.call("open_channel", self._with_config({"counterparty": counterparty}))
+
+    def propose_offer(self, handle: str, terms: dict[str, Any]) -> dict[str, Any]:
+        return self.call("propose_offer", self._with_config({"handle": handle, "terms": terms}))
+
+    def counter_offer(
+        self, handle: str, reply_to: str, terms: dict[str, Any]
+    ) -> dict[str, Any]:
         return self.call(
-            "open_channel",
-            {
-                "address": address,
-                "key_file": str(key_file),
-                "counterparty_address": counterparty_address,
-                "counterparty_public_key": counterparty_public_key,
-                "token": token,
-                "channel_index": channel_index,
-                "subchannel_index": subchannel_index,
-                "register": register,
-            },
+            "counter_offer",
+            self._with_config({"handle": handle, "reply_to": reply_to, "terms": terms}),
         )
+
+    def read_channel_state(self, handle: str) -> dict[str, Any]:
+        return self.call("read_channel_state", self._with_config({"handle": handle}))
+
+    def accept_and_settle(self, handle: str, offer_id: str) -> dict[str, Any]:
+        return self.call(
+            "accept_and_settle", self._with_config({"handle": handle, "offer_id": offer_id})
+        )
+
+    def grant_viewing_key(self, handle: str, grantee: str) -> dict[str, Any]:
+        return self.call(
+            "grant_viewing_key", self._with_config({"handle": handle, "grantee": grantee})
+        )
+
+    def reveal(self, viewing_key: dict[str, Any]) -> dict[str, Any]:
+        """Reconstructs a record from a bearer grant.
+
+        The grant travels through opaquely. Reading or reshaping it here would make this
+        package a second opinion on the disclosure format.
+        """
+        return self.call("reveal", self._with_config({"viewing_key": viewing_key}))
+
+    def shield(self, amount: str) -> dict[str, Any]:
+        """Administrative funding helper. Outside the seven negotiation methods."""
+        return self.call("shield", self._with_config({"amount": amount}))
