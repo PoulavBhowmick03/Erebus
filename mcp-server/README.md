@@ -115,3 +115,26 @@ So the honest statement is that Erebus is software an operator runs, not a servi
 can point at. Publishing the SDK shortens the install; it does not remove the prover
 requirement, and no amount of packaging will, because the requirement is the custody
 property rather than a missing feature. See `docs/custody-design.md`.
+
+## Self-provisioning identities
+
+An agent cannot ask the server to create its wallet. `ServerConfig.from_env()` runs at
+import, so the identity is bound before the first tool call and a newly created one could
+not be used by that process. Provisioning therefore happens in the launcher.
+
+```shell
+claude mcp add erebus --env EREBUS_PROVISION_FROM=erebus-agent \
+  -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-mine/env
+```
+
+When the env file is absent and `EREBUS_PROVISION_FROM` names a funded sncast account, the
+launcher creates the account, seeds it with STRK (`EREBUS_PROVISION_STRK`, default 15),
+deploys it, generates a pool key, writes the env, approves the pool and shields once, which
+also registers the identity. It takes a few minutes, mostly waiting ten blocks for the
+approve to mature. Later starts find the env and skip all of it.
+
+The funder exists because a public faucet is a web form with a captcha, so nothing automated
+gets past one. On mainnet the equivalent is a treasury account, which is a policy decision
+rather than a script.
+
+Setup noise goes to stderr. Anything on stdout would be parsed as an MCP protocol message.

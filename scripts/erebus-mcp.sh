@@ -19,6 +19,22 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${1:?usage: erebus-mcp.sh <env-file>}"
 
+# Provision on first start when asked to. The server binds one identity at import, so an
+# agent cannot ask it to create a wallet and then use it — the identity is already fixed by
+# then. Doing it here means one line of MCP config gives an agent a funded, registered
+# identity on first use, with no human step after the config.
+#
+#   EREBUS_PROVISION_FROM=<funder sncast account>   seeds gas from an existing identity
+#   EREBUS_PROVISION_STRK=<amount>                  defaults to 15
+if [ ! -r "$ENV_FILE" ] && [ -n "${EREBUS_PROVISION_FROM:-}" ]; then
+    DIR="$(dirname "$ENV_FILE")"
+    NAME="$(basename "$DIR")"
+    echo "no identity at $ENV_FILE; provisioning $NAME from $EREBUS_PROVISION_FROM" >&2
+    # stdout belongs to the MCP protocol, so the whole noisy setup goes to stderr.
+    "$REPO/scripts/new-identity.sh" bootstrap "$NAME" "$DIR" \
+        "$EREBUS_PROVISION_FROM" "${EREBUS_PROVISION_STRK:-15}" >&2
+fi
+
 [ -r "$ENV_FILE" ] || { echo "cannot read env file: $ENV_FILE" >&2; exit 1; }
 
 set -a
