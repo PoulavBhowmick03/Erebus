@@ -26,13 +26,27 @@ then needs fresh identities (F29).
 One server per identity, each spawned by its own MCP client configuration.
 
 ```shell
-claude mcp add erebus -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-d/env   # seller
-claude mcp add erebus -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-e/env   # buyer
+claude mcp add erebus-seller -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-d/env payee
+claude mcp add erebus-buyer  -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-e/env payer
 ```
 
-Both agents then see eight tools: the seven §4 methods plus `wait_for_offers`, which blocks
-server-side until the transcript grows. Polling `read_channel_state` in a loop works and
-costs the agent one turn per attempt, which is why the extra tool exists.
+Both agents then see nine tools: the seven §4 methods, `wait_for_offers`, and
+`get_note_balance`. The launch role is a safety boundary: the seller/payee server refuses
+`accept_and_settle`, because the accepting identity is always the payer.
+
+Before starting a priced negotiation, check the buyer's denominations. Total balance is not
+enough: settlement consumes an exact subset and creates no change note.
+
+```shell
+scripts/agent.sh ~/.erebus-e/env balance
+# For the 0.5 -> 0.6 -> 0.7 example, add exact denominations if they are absent:
+scripts/agent.sh ~/.erebus-e/env fund 500000000000000000
+scripts/agent.sh ~/.erebus-e/env fund 100000000000000000
+scripts/agent.sh ~/.erebus-e/env fund 100000000000000000
+```
+
+`fund` waits until each new note is old enough for the proving block, so the next
+`get_note_balance` call can use it rather than reporting it as pending.
 
 ## The seller's brief (MCP)
 
@@ -50,8 +64,10 @@ costs the agent one turn per attempt, which is why the extra tool exists.
 >
 > Your walk-away price is 700000000000000000. Concede at most 150000000000000000 per round
 > using `counter_offer`, replying to their most recent `offer_id`. Never go below the
-> walk-away. When their standing offer is at or above it, stop countering and leave it for
-> them to accept. Do not call `accept_and_settle` yourself; the buyer pays.
+> walk-away. When their standing offer is at or above it, use `counter_offer` once more at
+> exactly their amount. That creates a seller-authored offer for the buyer to accept. Do not
+> call `accept_and_settle` yourself; the accepting identity pays, and the payee server
+> structurally refuses that call.
 >
 > Every write takes about 20 seconds and costs about 3 STRK in gas. Report each round: what
 > you offered, what they replied, and why you moved as you did.
@@ -70,10 +86,15 @@ costs the agent one turn per attempt, which is why the extra tool exists.
 > own `channel_handle`. Then `wait_for_offers` with `expected_count` 1 to pick up their
 > opening price.
 >
+> Before naming any price, call `get_note_balance` with that amount. Only propose, counter,
+> or accept when `can_pay_exactly` is true. If false, stop before writing an offer and report
+> the required denomination; having a larger total balance does not make the amount payable.
+>
 > Your maximum is 900000000000000000. Counter at 500000000000000000 with `counter_offer`,
 > replying to their `offer_id`, and concede at most 100000000000000000 per round. As soon as
-> their standing offer is at or below your maximum, call `accept_and_settle` on it. That
-> settles and pays atomically in one proof.
+> their seller-authored standing offer is at or below your maximum and `get_note_balance`
+> says it is exactly payable, call `accept_and_settle` on it. That settles and pays atomically
+> in one proof.
 >
 > After settling, call `grant_viewing_key` with grantee `0xa0d17` and report the returned
 > `channel_id` so a third party can audit the deal. Do not print the `viewing_key` itself.
@@ -138,7 +159,7 @@ observer learns that these two accounts negotiated and how many rounds it took.
 ## Where this leaks
 
 The agent process can read the key files. Passing paths rather than values keeps keys out of
-model context and out of transcripts, which is the failure mode that actually happens. It is
+model context and out of transcripts, which is the observed failure mode. It is
 not a sandbox. An agent that decides to `cat` the pool key can, and the honest description
 of the current boundary is the local OS account.
 

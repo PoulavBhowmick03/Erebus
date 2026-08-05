@@ -1,11 +1,11 @@
-# Runbook — reproducing the on-chain demonstration
+# Runbook: reproducing the on-chain demonstration
 
 What this gets you: two registered identities on Sepolia, each holding a shielded note, a
 directional channel pair between them, negotiation state written into note salts and read
 back with every field intact, an atomic settlement, and an independently reconstructed
 disclosure record.
 
-**Evidence boundary — 2026-07-31:** the recorded live transaction used public wire v1 and
+**Evidence boundary. 2026-07-31:** the recorded live transaction used public wire v1 and
 demonstrates mechanics, not private negotiation. New channels now use five-note wire v2:
 AES-256-GCM-SIV ciphertext plus a 128-bit tag. Wire v2 is verified offline but has not yet
 completed this live run. See friction.md F30/F31.
@@ -33,7 +33,7 @@ cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 ```
 
-Expected as of 2026-07-31: 190 passed and two deliberately ignored live-prover probes.
+Expected as of 2026-07-31: 190 passed and two intentionally ignored live-prover probes.
 The focused codec suite has 17 tests: the pinned five-salt known answer, round trips,
 single-bit tamper rejection, chain/pool/channel/token/index binding, canonical padding,
 same-index retry safety, and wire-v1 compatibility.
@@ -52,7 +52,7 @@ export STRK=0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d
 export POOL=0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91
 ```
 
-`.env` must already hold `PROVING_SERVICE_URL` (StarkWare's endpoint — not in the repo, not
+`.env` must already hold `PROVING_SERVICE_URL` (StarkWare's endpoint, not in the repo, not
 to be shared) and the pool/chain/RPC values. `.env.example` has the shape.
 
 The request builder now lives in the repository; no generated Python file or heredoc is
@@ -86,7 +86,7 @@ DIR=~/.erebus          # or ~/.erebus-b
 sncast account create --url $RPC --name $NAME
 ```
 
-⏸ **Fund the printed address** at https://starknet-faucet.vercel.app. Budget ~10 STRK: a
+**Pause: fund the printed address** at https://starknet-faucet.vercel.app. Budget ~10 STRK: a
 proof-carrying transaction costs ~3 STRK in gas (F27), and each agent does at least one.
 
 ```bash
@@ -128,7 +128,7 @@ echo "agent env: $ENV"
 
 **The two key files are not two accounts.** `account.key` signs Starknet transactions and is
 custody; `pool.key` is the STRK20 identity and is confidentiality. Only the account key can
-authorise a spend — `__execute__` calls `assert_valid_signature` against your account
+authorise a spend. `__execute__` calls `assert_valid_signature` against your account
 contract (`utils.cairo:390`). See F26.
 
 ---
@@ -159,7 +159,7 @@ python3 "$REQ" "$ENV" shield '{"amount":"1000000000000000000"}' | "$CLI"
 `approve` on an account contract fails with `ENTRYPOINT_NOT_FOUND`; if approve fails, do
 not run the wait or shield commands.
 
-⚠️ **Registration is irreversible and writes your pool private key encrypted to the pool's
+**Warning: registration is irreversible and writes your pool private key encrypted to the pool's
 auditor on-chain** (`channel.cairo:329-334`, and `channel.rs:123-129`). From that moment the
 auditor can decrypt everything that identity ever does. Fine for throwaway testnet keys; it
 is the strongest argument for deploying our own pool instance for the product, where we
@@ -230,20 +230,47 @@ storage slot nobody wrote to.
 
 ---
 
+## 4. Autonomous agents through MCP
+
+Register separate role-bound servers. The role is required because
+`accept_and_settle` spends the caller's notes: the buyer is the payer and the seller is the
+payee.
+
+```bash
+claude mcp add erebus-seller -- "$REPO/scripts/erebus-mcp.sh" ~/.erebus-d/env payee
+claude mcp add erebus-buyer  -- "$REPO/scripts/erebus-mcp.sh" ~/.erebus-e/env payer
+```
+
+Restart the agent clients after adding them. Before negotiating, inspect the buyer's exact
+denominations:
+
+```bash
+scripts/agent.sh ~/.erebus-e/env balance
+```
+
+Inside MCP, call `get_note_balance` with each candidate price. Only a result with
+`can_pay_exactly: true` may be proposed, countered, or accepted. The payer server enforces
+that rule even if the prompt omits it. A payee server structurally refuses settlement and
+must counter at the agreed price, leaving a payee-authored offer for the buyer to accept.
+
+For prompts and the full two-agent sequence, use [agent-brief.md](./agent-brief.md).
+
+---
+
 ## Reference: first successful run
 
 | step | tx | result |
 |---|---|---|
 | A shield | `0x5f57eb…b9e2` | block 12715064, fee 3.04 STRK |
 | B shield | `0x10c3376c…77e0` | registered |
-| A `open_channel` → B | — | `ch_a8f81fdc…2d59` |
-| A `propose_offer` | — | `ch_a8f81fdc…2d59:us:0` |
-| `read_channel_state` | — | offer returned, all fields exact |
-| B `open_channel` → A | — | `ch_c4d09ef1…5aab` |
-| B `counter_offer` | — | 1 STRK counter returned and A read it |
+| A `open_channel` → B |: | `ch_a8f81fdc…2d59` |
+| A `propose_offer` |: | `ch_a8f81fdc…2d59:us:0` |
+| `read_channel_state` |: | offer returned, all fields exact |
+| B `open_channel` → A |: | `ch_c4d09ef1…5aab` |
+| B `counter_offer` |: | 1 STRK counter returned and A read it |
 | A `accept_and_settle` | `0x44289c…84bb7` | accepted on L2; nullifier exists |
 | independent `reveal` | read-only | full offers, acceptance and exact payment reconstructed |
 
 Screening never came up. StarkWare's prover mints the attestation via its
-`proof-interceptor` sidecar and packs it automatically — see F6, which was open for six days
+`proof-interceptor` sidecar and packs it automatically, see F6, which was open for six days
 predicting the opposite.

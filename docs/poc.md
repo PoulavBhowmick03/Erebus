@@ -1,6 +1,5 @@
 # Erebus PoC
 
-
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
 Erebus is attempting a third option. Two agents open a channel on STRK20, negotiate as
@@ -51,13 +50,13 @@ because the salt is the one-time-pad nonce for the encrypted amount. Reuse a mas
 
 ## Workflow
 
-*Setup, once per agent*: The operator has a Starknet account and generates a
+_Setup, once per agent_: The operator has a Starknet account and generates a
 separate pool key. Registering publishes the public half so other agents can send to them. Getting money in is two transactions: an ERC-20 approve, then a deposit that turns public funds into a private note. The deposit leg is public by construction. Wire-v2 salts are also public, but contain only authenticated ciphertext.
 
-*Opening a channel*: Agent A derives a shared location from its own pool key plus B's
+_Opening a channel_: Agent A derives a shared location from its own pool key plus B's
 address and public key, then writes an encrypted note telling B where that is. From then on both sides go straight to the right storage slots. An observer sees writes to storage that looks unrelated.
 
-*Negotiating, wire v2*: A's policy engine produces terms. Erebus derives a scoped key and
+_Negotiating, wire v2_: A's policy engine produces terms. Erebus derives a scoped key and
 nonce from the chain, pool, directional channel key, token and message index, encrypts/authenticates
 the canonical record, and writes five ciphertext salts into B's subchannel. B reassembles,
 authenticates and decrypts the offer before deciding: accept, counter, or walk.
@@ -65,44 +64,43 @@ authenticates and decrypts the offer before deciding: accept, counter, or walk.
 Each round costs one proof, ~29 seconds on published figure. Three rounds is
 about 90 seconds before settlement starts.
 
-*Settling*: Acceptance and payment go into one set. Spend A's notes, create a note
+_Settling_: Acceptance and payment go into one set. Spend A's notes, create a note
 for B with the agreed amount, record the acceptance. One proof covers all of it, so either the deal is struck and paid or neither happened. There is no state where B accepted and wasn't paid.
 
-*Disclosure*: An agent grants a viewing key and the holder reads the full sequence:
+_Disclosure_: An agent grants a viewing key and the holder reads the full sequence:
 offers, counters, acceptance, settlement, reconstructed from chain data alone. Nobody else learns anything.
 
 ## The same pipeline for every write action
 
-Simulate locally, prove, submit through `apply_actions`. We run our own prover. This is deliberate. The invocation sent to `starknet_proveTransaction` carries `user_private_key` in the clear at `calldata[5]`. A prover therefore sits inside the trust boundary of whoever owns that key. For agent infrastructure that means the prover belongs to the agent operator, and Erebus operates nothing.
+Simulate locally, prove, then submit through `apply_actions`. We run our own prover because the invocation sent to `starknet_proveTransaction` carries `user_private_key` in the clear at `calldata[5]`. The prover sits inside the key owner's trust boundary. For agent infrastructure, the agent operator runs the prover. Erebus operates nothing.
 
 That means, Erebus never holds agent keys. The library
 runs inside the operator's own process, against the operator's own prover.
 
 ---
 
-## Where we are (AI generated)
+## Current status
 
 Working and tested offline:
 
-| | |
-|---|---|
-| Full pool flow: register, channel, subchannel, shield, private transfer | TypeScript, 37 tests |
-| Legacy negotiation encoding, four public notes | TypeScript/Rust compatibility vectors |
-| Wire v2, five authenticated encrypted notes | Rust KATs, tamper/context/migration tests |
-| Rust client: domain hashes, `ClientAction` encoding, `INVOKE_TXN_V3` hashing, Stark ECDSA | 36 tests |
-| Rust reproduces an SDK-built proof invocation signature byte for byte | pinned |
-| Proving endpoint reachable, spec `0.10.3-rc.2` | verified |
+|                                                                                           |                                           |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Full pool flow: register, channel, subchannel, shield, private transfer                   | TypeScript, 37 tests                      |
+| Legacy negotiation encoding, four public notes                                            | TypeScript/Rust compatibility vectors     |
+| Wire v2, five authenticated encrypted notes                                               | Rust KATs, tamper/context/migration tests |
+| Rust client: domain hashes, `ClientAction` encoding, `INVOKE_TXN_V3` hashing, Stark ECDSA | 36 tests                                  |
+| Rust reproduces an SDK-built proof invocation signature byte for byte                     | pinned                                    |
+| Proving endpoint reachable, spec `0.10.3-rc.2`                                            | verified                                  |
 
 The Rust client exists because there is no Rust write side. `discovery-core`
 covers reads. We need to build `ClientAction`s, serialises calldata, signing the invoke or calling the prover.
 
 Done live in the Rust path on Sepolia using wire v2: shield, two channel directions, offer,
-counter, atomic accept-and-settle, and independent viewing-grant reconstruction. Also done,
-but mock-backed: the reference-agent loop and MCP server (`agents/`, `mcp-server/`). The
-remaining integration step is replacing the mock with the real protocol-2 `sdk/py` seam,
-then proving an external agent framework can drive the live path without touching Erebus
-internals. Independent cryptographic review also remains.
-
+counter, atomic accept-and-settle, and independent viewing-grant reconstruction. The MCP
+server now drives that Rust path through the protocol-2 Python seam. A live external-agent
+negotiation exposed two orchestration constraints now enforced in the surface: the acceptor
+is the payer, and the payer can only name exact-payable note denominations. One corrected
+external-agent settlement run and independent cryptographic review remain.
 
 ## Where this goes
 
