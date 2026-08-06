@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Verb-level wrapper for driving one Erebus identity from an autonomous agent.
+# Command wrapper for one Erebus identity.
 #
-# An LLM agent should not be assembling nine-field config JSON, and it should not be shown
-# more output than it needs to decide. Every verb here prints a few lines. Errors print the
-# code and message and exit non-zero.
+# The wrapper builds the nine-field configuration and limits output. Each command prints a
+# few lines. Errors print a code and message and return a non-zero status.
 #
 #   agent.sh <env> open      <counterparty_addr>          -> handle
 #   agent.sh <env> offer     <handle> <amount> [memo_hex]  -> offer_id
@@ -15,9 +14,8 @@
 #   agent.sh <env> fund      <amount>                      -> approve + shield one note
 #   agent.sh <env> whoami                                  -> this identity's address
 #
-# Check `balance` before naming a price. Settlement spends an exact subset of notes and
-# mints no change, so an identity holding one 1 STRK note can pay exactly 1 STRK — not 0.9.
-# Agreeing a number first and discovering that second is the one trap in this loop.
+# Check `balance` before naming a price. Settlement spends an exact subset and creates no
+# change. One 1 STRK note can pay 1 STRK but not 0.9 STRK.
 #
 # <env> is a file of KEY=VALUE lines: the repo .env for agent A, ~/.erebus-b/env for B, and
 # so on. It names the key files by path. Key values never appear in any argument here.
@@ -49,22 +47,19 @@ call() {
     rm -f "$out"
 }
 
-# Deadline is 24h out. Agents negotiating over minutes have no reason to think about it, and
-# an expired offer is rejected client-side with a distinct error rather than silently.
+# Use a 24-hour deadline for negotiations that take minutes. The client returns a distinct
+# error for an expired offer.
 deadline() { python3 -c 'import time;print(int(time.time())+86400)'; }
 
-# One line per offer: who proposed it, what it asks, what became of it. Enough to apply a
-# threshold rule, small enough not to flood a model's context.
+# Print one line per offer for threshold decisions.
 summarise() { python3 "$REPO/scripts/summarise.py"; }
 
-# Pull one field out of a result object. Callers assign `call` output to a variable first
-# and feed it here, rather than piping: a failing `call` in a pipeline sends empty stdin
-# downstream, and the resulting JSON traceback buries the error that actually mattered.
+# Read one field from a result object. Callers save `call` output before using this function.
+# A pipeline can replace the original error with a JSON traceback on empty input.
 field() { python3 -c 'import sys,json; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
-# An offer id is <handle>:<author>:<index>, but `status` prints only the tail because the
-# handle is 67 identical characters on every line. Accept either form here so an agent can
-# copy what it just read instead of reassembling it.
+# `status` omits the repeated 67-character handle from each offer id. Accept full and short
+# forms so callers can reuse its output.
 offer_ref() { case "$1" in ch_*) printf '%s' "$1" ;; *) printf '%s:%s' "$2" "$1" ;; esac; }
 
 case "$VERB" in
@@ -157,7 +152,10 @@ sys.exit("no sncast account matches " + sys.argv[1] + "; set SNCAST_ACCOUNT")
 
     RPC="$rpc" bash "$REPO/scripts/wait-for-depth.sh" "$tx" >&2
     out=$(call shield "$(printf '{"amount":"%s"}' "$amount")")
-    field tx_hash <<<"$out"
+    shield_tx=$(field tx_hash <<<"$out")
+    echo "shield tx $shield_tx; waiting until its note is spendable" >&2
+    RPC="$rpc" bash "$REPO/scripts/wait-for-depth.sh" "$shield_tx" >&2
+    echo "$shield_tx"
     ;;
 *)
     echo "unknown verb: $VERB" >&2; exit 2

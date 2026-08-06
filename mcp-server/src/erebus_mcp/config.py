@@ -1,36 +1,44 @@
-"""Server configuration, loaded from the environment.
+"""Server configuration from environment variables.
 
 ``docs/ishita.md``: "It needs a prover URL and identity in its config, and it should fail
 loudly rather than fall back to a shared endpoint." Erebus holds no keys, so this process
-runs against the operator's own prover (``docs/custody-design.md``) — ``prover_url`` is
-required here even when the mock backend never calls it, because the failure this guards
-against is a config that silently reaches for someone else's endpoint, and that check
-should exist regardless of which client sits behind it.
+runs against the operator's prover (``docs/custody-design.md``). ``prover_url`` remains
+required for the mock backend so every configuration names its endpoint explicitly.
 
-Two backends. ``mock`` is the default and needs nothing beyond an address and a prover URL.
-``seam`` drives the real Rust client and needs the full protocol-2 configuration, which is
-validated at startup rather than on the first tool call: an agent discovering a missing
-``POOL_KEY_FILE`` twenty seconds into a proof has already wasted a turn and some gas.
+``mock`` is the default and needs an address and prover URL. ``seam`` drives the Rust client
+and needs the full protocol-2 configuration. Startup validation catches a missing
+``POOL_KEY_FILE`` before a tool call starts proving.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 
 class ConfigError(RuntimeError):
-    """A required setting was missing. Fails loudly at startup, not on first use."""
+    """A required setting is missing at startup."""
+
+
+class SettlementRole(str, Enum):
+    """Which side of a payment this MCP identity is allowed to take.
+
+    ``accept_and_settle`` spends the caller's notes. A configured role prevents a payee
+    server from accepting. ``BOTH`` supports an identity that buys and sells.
+    """
+
+    PAYER = "payer"
+    PAYEE = "payee"
+    BOTH = "both"
 
 
 @dataclass(frozen=True)
 class SeamSettings:
     """Everything ``erebus-cli`` needs, plus where to find it.
 
-    The key files are paths and stay paths. This process never reads them; the Rust binary
-    does. That is the whole custody argument for the subprocess seam, and it holds only for
-    as long as nothing here opens them.
+    This process passes key-file paths to the Rust binary and never opens them.
     """
 
     binary: Path
@@ -48,20 +56,31 @@ class ServerConfig:
     address: str
     prover_url: str
     backend: str
+    settlement_role: SettlementRole
     mock_store_path: Path
     mock_latency_seconds: float
+    mock_spendable_notes: tuple[int, ...]
+    mock_pending_notes: tuple[int, ...]
     seam: SeamSettings | None = None
 
     @classmethod
     def from_env(cls) -> ServerConfig:
-        # No counterparty here: `open_channel(counterparty)` takes it per call (§4), so it's
-        # a tool argument, not server config — baking one in would make this server only
-        # able to talk to a single fixed counterparty, which isn't what the interface says.
+        # `open_channel(counterparty)` supplies the counterparty for each call (§4). Do not
+        # bind the server to one counterparty in configuration.
         address = _require("AGENT_ADDRESS")
         prover_url = _require("PROVING_SERVICE_URL")
         backend = os.environ.get("EREBUS_BACKEND", "mock").strip().lower()
         if backend not in {"mock", "seam"}:
             raise ConfigError(f"EREBUS_BACKEND must be 'mock' or 'seam', got {backend!r}")
+
+        role_raw = _require("EREBUS_SETTLEMENT_ROLE").strip().lower()
+        try:
+            settlement_role = SettlementRole(role_raw)
+        except ValueError as exc:
+            choices = ", ".join(role.value for role in SettlementRole)
+            raise ConfigError(
+                f"EREBUS_SETTLEMENT_ROLE must be one of {choices}, got {role_raw!r}"
+            ) from exc
 
         store_path = os.environ.get("EREBUS_MOCK_STORE_PATH", "/tmp/erebus-mock-store.json")
         latency = os.environ.get("EREBUS_MOCK_LATENCY_SECONDS", "0.2")
@@ -70,14 +89,20 @@ class ServerConfig:
         except ValueError as exc:
             raise ConfigError(f"EREBUS_MOCK_LATENCY_SECONDS is not a number: {latency!r}") from exc
 
+        mock_spendable = _amounts("EREBUS_MOCK_SPENDABLE_NOTES", "1000000000000000000")
+        mock_pending = _amounts("EREBUS_MOCK_PENDING_NOTES", "")
+
         seam = _seam_settings() if backend == "seam" else None
 
         return cls(
             address=address,
             prover_url=prover_url,
             backend=backend,
+            settlement_role=settlement_role,
             mock_store_path=Path(store_path),
             mock_latency_seconds=latency_seconds,
+            mock_spendable_notes=mock_spendable,
+            mock_pending_notes=mock_pending,
             seam=seam,
         )
 
@@ -113,3 +138,16 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(f"{name} is required and not set")
     return value
+
+
+def _amounts(name: str, default: str) -> tuple[int, ...]:
+    raw = os.environ.get(name, default).strip()
+    if not raw:
+        return ()
+    try:
+        values = tuple(int(part.strip()) for part in raw.split(","))
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be comma-separated integers, got {raw!r}") from exc
+    if any(value <= 0 for value in values):
+        raise ConfigError(f"{name} values must all be positive")
+    return values

@@ -1,6 +1,6 @@
-"""I1.3's acceptance criterion, verified literally: "Verify from a real MCP client, not
-just your own agents." Spawns `server.py` as a real subprocess over stdio and drives it
-with the official `mcp` SDK's client — independent of anything in `agents/`.
+"""I1.3 tests through the official `mcp` client, independent of `agents/` code.
+
+The tests start `server.py` as a subprocess over stdio.
 """
 
 from __future__ import annotations
@@ -17,16 +17,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_PATH = REPO_ROOT / "mcp-server" / "src" / "server.py"
 
 
-def _server_params(store_path: Path) -> StdioServerParameters:
+def _server_params(
+    store_path: Path, role: str = "payer", identity: str = "0xbuyer"
+) -> StdioServerParameters:
     return StdioServerParameters(
         command="uv",
         args=["run", "python", str(SERVER_PATH)],
         cwd=str(REPO_ROOT),
         env={
-            "AGENT_ADDRESS": "0xbuyer",
+            "AGENT_ADDRESS": identity,
             "PROVING_SERVICE_URL": "http://unused.invalid",
             "EREBUS_MOCK_STORE_PATH": str(store_path),
             "EREBUS_MOCK_LATENCY_SECONDS": "0",
+            "EREBUS_MOCK_SPENDABLE_NOTES": "100,150",
+            "EREBUS_SETTLEMENT_ROLE": role,
         },
     )
 
@@ -37,13 +41,12 @@ def _structured(result) -> dict:
     return json.loads(result.content[0].text)
 
 
-def test_the_seven_interface_methods_are_exposed_with_descriptions(tmp_path):
-    """The §4 seven, plus wait_for_offers.
+def test_the_protocol_and_payment_planning_methods_are_exposed_with_descriptions(tmp_path):
+    """Checks the seven §4 tools and the polling helper.
 
-    The extra one is ergonomics rather than protocol: there is no push notification, so
-    somebody polls, and doing it server-side costs the agent one tool call instead of one
-    per attempt. It is asserted separately so that a *protocol* method appearing or
-    vanishing still fails this test loudly."""
+    The protocol has no push notification. Server-side polling uses one agent tool call.
+    The separate assertion detects changes to the protocol method set.
+    """
 
     async def run():
         async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
@@ -60,7 +63,7 @@ def test_the_seven_interface_methods_are_exposed_with_descriptions(tmp_path):
                     "grant_viewing_key",
                     "reveal",
                 }
-                assert names - {"wait_for_offers"} == {
+                assert names - {"wait_for_offers", "get_note_balance"} == {
                     "open_channel",
                     "propose_offer",
                     "counter_offer",
@@ -70,6 +73,118 @@ def test_the_seven_interface_methods_are_exposed_with_descriptions(tmp_path):
                     "reveal",
                 }, "an unexpected tool appeared, or a protocol method vanished"
                 assert all(t.description for t in listed.tools)
+
+    asyncio.run(run())
+
+
+def test_balance_reports_exact_payability(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                payable = _structured(await session.call_tool("get_note_balance", {"amount": 250}))
+                unpayable = _structured(await session.call_tool("get_note_balance", {"amount": 125}))
+                assert payable["result"]["can_pay_exactly"] is True
+                assert unpayable["result"]["can_pay_exactly"] is False
+
+    asyncio.run(run())
+
+
+def test_payer_cannot_write_an_offer_it_cannot_later_settle(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                result = await session.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 125,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                body = _structured(result)
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INSUFFICIENT_NOTES"
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["offers"] == []
+
+    asyncio.run(run())
+
+
+def test_payee_server_structurally_refuses_to_accept(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json", role="payee")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                result = await session.call_tool(
+                    "accept_and_settle", {"channel_handle": handle, "offer_id": "anything"}
+                )
+                body = _structured(result)
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INVALID_REQUEST"
+                assert "configured as payee" in body["error"]["message"]
+
+    asyncio.run(run())
+
+
+def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
+    """The production topology: two independent MCP processes, one shared pool state."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        seller_params = _server_params(store, role="payee", identity="0xseller")
+        buyer_params = _server_params(store, role="payer", identity="0xbuyer")
+        async with stdio_client(seller_params) as (seller_read, seller_write):
+            async with ClientSession(seller_read, seller_write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                proposed = await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 150,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                offer_id = _structured(proposed)["result"]["offer_id"]
+
+                async with stdio_client(buyer_params) as (buyer_read, buyer_write):
+                    async with ClientSession(buyer_read, buyer_write) as buyer:
+                        await buyer.initialize()
+                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+                        payable = _structured(
+                            await buyer.call_tool("get_note_balance", {"amount": 150})
+                        )
+                        assert payable["result"]["can_pay_exactly"] is True
+
+                        settled = _structured(
+                            await buyer.call_tool(
+                                "accept_and_settle",
+                                {"channel_handle": handle, "offer_id": offer_id},
+                            )
+                        )
+                        assert settled["ok"] is True
+
+                        balance = _structured(await buyer.call_tool("get_note_balance", {}))
+                        assert balance["result"]["spendable_notes"] == [100]
+
+                state = _structured(
+                    await seller.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["settlement"]["agreed_amount"] == 150
 
     asyncio.run(run())
 
@@ -104,8 +219,7 @@ def test_open_channel_and_propose_offer_round_trip(tmp_path):
 
 
 def test_a_settlement_error_comes_back_as_parseable_structured_json(tmp_path):
-    """I1.3: 'Tool errors must carry the SettlementErrorCode through — a failure that
-    arrives as an opaque string makes the whole failure-handling path untestable.'"""
+    """Checks that I1.3 errors preserve ``SettlementErrorCode`` as structured data."""
 
     async def run():
         async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
@@ -125,8 +239,7 @@ def test_a_settlement_error_comes_back_as_parseable_structured_json(tmp_path):
                 assert body["ok"] is False
                 assert body["error"]["code"] == "OFFER_UNKNOWN"
                 assert isinstance(body["error"]["retryable"], bool)
-                # And critically: this did NOT come back as an MCP-protocol-level error —
-                # the call succeeded, the payload carries the failure.
+                # The MCP call succeeds. Its payload carries the protocol failure.
                 assert result.is_error is False
 
     asyncio.run(run())

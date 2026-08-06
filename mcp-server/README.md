@@ -1,13 +1,13 @@
 # MCP server
 
 Owned by Ishita (CLAUDE.md, repo layout). Exposes the Erebus tools so an external agent
-framework can drive the whole loop without knowing Erebus exists — that is definition-of-done
+framework can drive the whole loop without knowing Erebus exists, that is definition-of-done
 item 4.
 
 **Python, on the official `mcp` SDK (`mcp.server.MCPServer`).** Decided 2026-07-28. This directory used to
 hold a one-line TypeScript stub from the initial scaffold; it was removed on 2026-07-29
 because it predated that decision and would have started this track in the wrong language.
-There is no TypeScript above the SDK boundary and there should not be — see the note in
+There is no TypeScript above the SDK boundary and there should not be, see the note in
 CLAUDE.md about x402, which is the argument people reach for and which does not hold.
 
 ```bash
@@ -21,7 +21,7 @@ uv run mcp dev mcp-server/src/server.py
 agents → mcp-server → sdk/py → sdk/rs → Starknet
 ```
 
-Python above the binding, Rust below it. `sdk/py` is a *binding*, not a client — if it grows
+Python above the binding, Rust below it. `sdk/py` is a *binding*, not a client, if it grows
 a hash function, a salt encoder, or anything that could disagree with `sdk/rs`, that is a bug.
 
 ## What it must not do
@@ -39,6 +39,7 @@ through `sdk/py`'s subprocess binding.
 
 ```shell
 export EREBUS_BACKEND=seam
+export EREBUS_SETTLEMENT_ROLE=both       # use payer/payee for autonomous agents
 export EREBUS_CLI=~/Developer/erebus/sdk/rs/target/debug/erebus-cli
 set -a; . ~/.erebus-b/env; set +a          # the identity's own env, see docs/runbook.md
 uv run mcp dev mcp-server/src/server.py
@@ -67,14 +68,17 @@ could not be parsed until the first settled.
 
 ## Registering with an MCP client
 
-`scripts/erebus-mcp.sh <env-file>` launches one server for one identity over stdio, which is
-what an MCP client spawns. It sources the identity's env, defaults `EREBUS_BACKEND` to
-`seam`, and refuses to start if `erebus-cli` is not built.
+`scripts/erebus-mcp.sh <env-file> <payer|payee|both>` launches one server for one identity
+over stdio. The role is required: `accept_and_settle` spends the caller's private notes, so
+a payee server refuses that call rather than trusting a prompt to remember payment direction.
+It sources the identity's env, defaults `EREBUS_BACKEND` to `seam`, and refuses to start if
+`erebus-cli` is not built.
 
 For Claude Code:
 
 ```shell
-claude mcp add erebus -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-b/env
+claude mcp add erebus-seller -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-b/env payee
+claude mcp add erebus-buyer  -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-c/env payer
 ```
 
 For a client that reads a JSON config (Claude Desktop and most others):
@@ -84,7 +88,7 @@ For a client that reads a JSON config (Claude Desktop and most others):
   "mcpServers": {
     "erebus": {
       "command": "/Users/odinson/Developer/erebus/scripts/erebus-mcp.sh",
-      "args": ["/Users/odinson/.erebus-b/env"]
+      "args": ["/Users/odinson/.erebus-b/env", "payee"]
     }
   }
 }
@@ -92,6 +96,18 @@ For a client that reads a JSON config (Claude Desktop and most others):
 
 Two agents negotiating means two client configurations, each naming a different env file.
 Nothing about the server is shared between them.
+
+### Payment denominations
+
+`get_note_balance(amount)` reports the caller's spendable note denominations and whether an
+exact subset pays `amount`. Payer-role servers apply the same check before every proposal,
+counter and settlement, so an autonomous buyer cannot spend several proof rounds agreeing
+to a price it cannot pay. Payee-role proposals are asks and therefore do not inspect the
+payee's notes.
+
+This is a preflight, not change-making. The MVP pool transition creates no change note: one
+1 STRK note cannot pay 0.7 STRK. Add denominations before the agent session with
+`scripts/agent.sh <payer-env> fund <amount>`.
 
 ## Using it from outside this repository
 
@@ -124,7 +140,7 @@ not be used by that process. Provisioning therefore happens in the launcher.
 
 ```shell
 claude mcp add erebus --env EREBUS_PROVISION_FROM=erebus-agent \
-  -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-mine/env
+  -- ~/Developer/erebus/scripts/erebus-mcp.sh ~/.erebus-mine/env payer
 ```
 
 When the env file is absent and `EREBUS_PROVISION_FROM` names a funded sncast account, the

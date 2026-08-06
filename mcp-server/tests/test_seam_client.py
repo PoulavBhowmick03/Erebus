@@ -1,13 +1,9 @@
-"""Tests for the adapter between the subprocess seam and the §4 interface.
+"""Tests for the subprocess-to-§4 adapter.
 
-Unlike ``sdk/py``, this layer is allowed to have logic, and the logic it has is exactly the
-kind that fails quietly: a field renamed on the Rust side, a code the enum does not know, a
-128-bit integer serialised as a JSON number. So these tests are about shape and translation,
-driven by a stub seam. Nothing here reaches a chain.
+This layer converts field names, error codes, and 128-bit integers. A stub binding drives
+shape and translation tests without chain access.
 
-The stub returns the payloads ``erebus-cli`` actually returned during the live runs on
-2026-07-31, trimmed. Inventing plausible-looking payloads would test the adapter against
-this file's idea of the wire rather than against the wire.
+The stub returns trimmed payloads from live ``erebus-cli`` runs on 2026-07-31.
 """
 
 from __future__ import annotations
@@ -75,6 +71,17 @@ def test_offers_map_onto_the_interface_dataclasses() -> None:
     assert offer.status is OfferStatus.COUNTERED
     assert offer.terms.amount == 500000000000000000
     assert offer.reply_to is None
+
+
+def test_balance_amount_strings_map_to_note_denominations() -> None:
+    seam = StubSeam(balance={"notes": ["100", "150"], "total": "250", "pending": ["25"]})
+    balance = run(SeamErebusClient(seam).note_balance())
+
+    assert balance.spendable == [100, 150]
+    assert balance.pending == [25]
+    assert balance.total == 250
+    assert balance.can_pay(250)
+    assert not balance.can_pay(125)
 
 
 def test_read_channel_state_carries_no_settlement_object() -> None:

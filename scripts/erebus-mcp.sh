@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 # Launches one Erebus MCP server for one identity, over stdio.
 #
-#   scripts/erebus-mcp.sh <env-file>
+#   scripts/erebus-mcp.sh <env-file> <payer|payee|both>
 #
-# An MCP client spawns this and speaks JSON-RPC on stdin/stdout, so nothing may be printed
-# to stdout that is not a protocol message. Diagnostics go to stderr.
+# An MCP client uses stdin and stdout for JSON-RPC. Send all diagnostics to stderr.
 #
 # The env file is the identity's own (docs/runbook.md §1): AGENT_ADDRESS,
 # PROVING_SERVICE_URL, STARKNET_RPC_URL, POOL_ADDRESS, STARKNET_CHAIN_ID, TOKEN_ADDRESS,
 # POOL_KEY_FILE, ACCOUNT_KEY_FILE, EREBUS_STATE_DIR. Config validates all of them at startup
 # rather than on the first tool call.
 #
-# One server per identity. Two identities in one process would hold both pool keys in the
-# same heap, which is what the two-server decision in docs/ishita.md exists to avoid.
+# Run one server per identity. Two identities in one process put both pool keys in the same
+# heap. See the two-server decision in docs/ishita.md.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${1:?usage: erebus-mcp.sh <env-file>}"
+SETTLEMENT_ROLE="${2:?usage: erebus-mcp.sh <env-file> <payer|payee|both>}"
+case "$SETTLEMENT_ROLE" in
+    payer|payee|both) ;;
+    *) echo "settlement role must be payer, payee, or both" >&2; exit 2 ;;
+esac
 
-# Provision on first start when asked to. The server binds one identity at import, so an
-# agent cannot ask it to create a wallet and then use it — the identity is already fixed by
-# then. Doing it here means one line of MCP config gives an agent a funded, registered
-# identity on first use, with no human step after the config.
+# Optional first-start provisioning runs before the server binds its identity at import.
+# This lets one MCP configuration create a funded and registered identity.
 #
 #   EREBUS_PROVISION_FROM=<funder sncast account>   seeds gas from an existing identity
 #   EREBUS_PROVISION_STRK=<amount>                  defaults to 15
@@ -43,6 +45,7 @@ set -a
 set +a
 
 export EREBUS_BACKEND="${EREBUS_BACKEND:-seam}"
+export EREBUS_SETTLEMENT_ROLE="$SETTLEMENT_ROLE"
 export EREBUS_CLI="${EREBUS_CLI:-$REPO/sdk/rs/target/debug/erebus-cli}"
 export PYTHONPATH="$REPO/mcp-server/src${PYTHONPATH:+:$PYTHONPATH}"
 

@@ -1,18 +1,14 @@
-"""The 7 tools from `docs/ishita.md` I1.3, wrapping an `ErebusClient`.
+"""Protocol tools and payment-planning helpers over an `ErebusClient`.
 
-Flat primitive arguments, not a nested `OfferTerms` object — "an agent should understand
-when to call each without reading source" reads better against `amount: int, token: str,
-deadline: int, memo_hash: int` than against an opaque struct.
+Tools accept primitive fields instead of an `OfferTerms` object. Their schemas show
+`amount`, `token`, `deadline`, and `memo_hash` directly.
 
-**Error shape, checked against the installed `mcp==2.0.0`:** letting `ErebusError` escape a
-tool function does *not* produce a structured error. `Tool.run` catches it, wraps it as
+With installed `mcp==2.0.0`, an uncaught `ErebusError` does not produce structured output.
+`Tool.run` catches it and wraps it as
 `ToolError(f"Error executing tool {name}: {e}")`, and the server's `_handle_call_tool`
 catches that and returns `CallToolResult(content=[TextContent(text=str(e))], is_error=True)`
-— a prose string with the code embedded in it, exactly the "opaque string" the doc says a
-tool error must not be. So every tool here catches `ErebusError` itself and returns a
-plain JSON-serializable dict with an explicit `ok` flag — the call succeeds at the MCP
-protocol level either way, and the payload carries the structured `SettlementErrorCode`
-for the caller to branch on.
+with a prose string. Each tool catches `ErebusError` and returns a JSON object with an `ok`
+flag. The payload carries the structured `SettlementErrorCode`.
 """
 
 from __future__ import annotations
@@ -23,16 +19,25 @@ from typing import Any
 
 from mcp.server import MCPServer
 
-from erebus_mcp.interface import ErebusClient, ErebusError, OfferTerms, ViewingKeyGrant
+from erebus_mcp.config import SettlementRole
+from erebus_mcp.interface import (
+    ErebusClient,
+    ErebusError,
+    NoteBalance,
+    OfferTerms,
+    SettlementErrorCode,
+    ViewingKeyGrant,
+)
 
 
-#: How long wait_for_offers sleeps between reads. A write takes about 20 s to land and each
-#: read costs a round trip per note, so polling faster buys nothing and costs the RPC.
+#: Poll interval. Writes take about 20 s, and each read needs one RPC round-trip per note.
 POLL_INTERVAL_SECONDS = 5.0
 
 
-def register_tools(server: MCPServer, client: ErebusClient) -> None:
-    """Registers all 7 tools against `server`, each closing over `client`."""
+def register_tools(
+    server: MCPServer, client: ErebusClient, settlement_role: SettlementRole
+) -> None:
+    """Registers the tools against one identity-bound client."""
 
     async def _call(coro: Any) -> dict[str, Any]:
         try:
@@ -40,6 +45,41 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
         except ErebusError as e:
             return {"ok": False, "error": {"code": e.code.value, "message": e.message, "retryable": e.retryable}}
         return {"ok": True, "result": result}
+
+    def _error(code: SettlementErrorCode, message: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": {"code": code.value, "message": message, "retryable": False},
+        }
+
+    def _balance_json(balance: NoteBalance, amount: int | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "spendable_notes": balance.spendable,
+            "total": balance.total,
+            "pending_notes": balance.pending,
+        }
+        if amount is not None:
+            result["requested_amount"] = amount
+            result["can_pay_exactly"] = balance.can_pay(amount)
+        return result
+
+    async def _require_payable(amount: int) -> dict[str, Any] | None:
+        outcome = await _call(client.note_balance())
+        if not outcome["ok"]:
+            return outcome
+        balance = outcome["result"]
+        if balance.can_pay(amount):
+            return None
+        pending = (
+            f"; pending notes: {balance.pending}" if balance.pending else ""
+        )
+        return _error(
+            SettlementErrorCode.INSUFFICIENT_NOTES,
+            "this payer cannot name or accept an unpayable amount: "
+            f"no exact subset of {balance.spendable} sums to {amount}{pending}. "
+            "Use get_note_balance before negotiating; total value is not enough because "
+            "settlement creates no change note.",
+        )
 
     @server.tool()
     async def open_channel(counterparty: str) -> dict[str, Any]:
@@ -56,7 +96,15 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
     ) -> dict[str, Any]:
         """Write a new offer into the channel: amount in token base units, token address,
         deadline as a unix timestamp, memo_hash as a 128-bit int (truncate your own hash to
-        the low 128 bits before calling — this field does not fit a full digest)."""
+        the low 128 bits before calling because this field does not fit a full digest).
+
+        If this server is configured as payer, the amount must be exactly payable from its
+        current note denominations; call get_note_balance first. Payee offers are asks and
+        do not spend the payee's notes."""
+        if settlement_role is SettlementRole.PAYER:
+            failure = await _require_payable(amount)
+            if failure is not None:
+                return failure
         terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
         outcome = await _call(client.propose_offer(channel_handle, terms))
         if outcome["ok"]:
@@ -73,12 +121,31 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
         memo_hash: int,
     ) -> dict[str, Any]:
         """Write a counter-offer replying to a specific offer_id from the other party.
-        Does not withdraw the offer you're replying to — it stays acceptable until it
-        expires or is settled. Use a short deadline instead of trying to retract."""
+        Does not withdraw the offer you're replying to. It stays acceptable until it
+        expires or is settled. Use a short deadline instead of trying to retract. A payer
+        may only counter with an exactly payable amount; a payee uses this to leave the
+        final seller-authored offer that the payer will accept."""
+        if settlement_role is SettlementRole.PAYER:
+            failure = await _require_payable(amount)
+            if failure is not None:
+                return failure
         terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
         outcome = await _call(client.counter_offer(channel_handle, reply_to, terms))
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
+        return outcome
+
+    @server.tool()
+    async def get_note_balance(amount: int | None = None) -> dict[str, Any]:
+        """Read this identity's private payment denominations without moving value.
+
+        Pass a proposed payment amount to receive can_pay_exactly. Settlement consumes an
+        exact subset and creates no change: holding one 1 STRK note cannot pay 0.7 STRK.
+        A payer must call this before naming or accepting a price. Pending notes are already
+        on-chain but cannot be used until they reach the proving block."""
+        outcome = await _call(client.note_balance())
+        if outcome["ok"]:
+            outcome["result"] = _balance_json(outcome["result"], amount)
         return outcome
 
     @server.tool()
@@ -97,9 +164,31 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
 
     @server.tool()
     async def accept_and_settle(channel_handle: str, offer_id: str) -> dict[str, Any]:
-        """Accept an offer from the other party AND settle payment atomically — one state
-        transition, not two. This closes the channel to further offers: one channel is one
-        deal. You cannot accept your own offer."""
+        """PAYER ONLY: accept an offer and pay it from this calling identity's private
+        notes, atomically. The offer's author receives the payment. A supplier/payee must
+        never call this; leave a final payee-authored offer for the buyer to accept.
+
+        This closes the channel: one channel is one deal. The server checks that the exact
+        amount is payable before invoking Rust; total balance alone is insufficient because
+        settlement creates no change note."""
+        if settlement_role is SettlementRole.PAYEE:
+            return _error(
+                SettlementErrorCode.INVALID_REQUEST,
+                "accept_and_settle is disabled: this MCP identity is configured as payee. "
+                "Counter at the agreed price and leave that offer for the payer to accept.",
+            )
+
+        state_outcome = await _call(client.read_channel_state(channel_handle))
+        if not state_outcome["ok"]:
+            return state_outcome
+        target = next(
+            (offer for offer in state_outcome["result"].offers if offer.offer_id == offer_id),
+            None,
+        )
+        if target is not None:
+            failure = await _require_payable(target.terms.amount)
+            if failure is not None:
+                return failure
         outcome = await _call(client.accept_and_settle(channel_handle, offer_id))
         if outcome["ok"]:
             receipt = outcome["result"]
@@ -141,15 +230,15 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
                         "timed_out": len(state.offers) < expected_count,
                     },
                 }
-            # Each read is O(notes) RPC round trips today, so polling faster than this
-            # hammers the endpoint for no gain: a write takes ~20 s to land anyway.
+            # Each read uses O(notes) RPC round-trips. A write takes ~20 s, so faster polling
+            # only adds RPC load.
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
     @server.tool()
     async def grant_viewing_key(channel_handle: str, grantee: str) -> dict[str, Any]:
         """Export a self-contained bearer grant that lets `grantee` reconstruct this
-        channel's full record via reveal(). Treat the returned viewing_key as a secret —
-        whoever holds it can read the relationship and token; delivery is your
+        channel's full record via reveal(). Treat the returned viewing_key as a secret.
+        Whoever holds it can read the relationship and token. Delivery is your
         responsibility, not this tool's."""
         outcome = await _call(client.grant_viewing_key(channel_handle, grantee))
         if outcome["ok"]:
@@ -165,7 +254,7 @@ def register_tools(server: MCPServer, client: ErebusClient) -> None:
     async def reveal(channel_id: str, grantee: str, viewing_key: str) -> dict[str, Any]:
         """Reconstruct a channel's full record (offers, counters, acceptance, settlement)
         from a viewing key grant returned by grant_viewing_key. No prior local state is
-        needed — this works from the grant alone."""
+        needed. The grant is self-contained."""
         grant = ViewingKeyGrant(channel_id=channel_id, grantee=grantee, viewing_key=viewing_key)
         outcome = await _call(client.reveal(grant))
         if outcome["ok"]:

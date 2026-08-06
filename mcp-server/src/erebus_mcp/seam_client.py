@@ -1,20 +1,16 @@
-"""The real :class:`~erebus_mcp.interface.ErebusClient`, backed by ``sdk/py``'s subprocess seam.
+"""Real :class:`~erebus_mcp.interface.ErebusClient` over the ``sdk/py`` subprocess binding.
 
-Swaps in for :class:`~erebus_mcp.mock_client.MockErebusClient`. Everything here is
-adaptation: run the blocking seam off the event loop, and reshape its dicts into the §4
-dataclasses. No hashing, no felt arithmetic, no salt encoding — those live in Rust, where
-there is exactly one implementation to be wrong.
+This adapter replaces :class:`~erebus_mcp.mock_client.MockErebusClient`. It runs the blocking
+binding outside the event loop and converts dictionaries to §4 dataclasses. Hashing, felt
+arithmetic, and salt encoding remain in Rust.
 
-**Why the thread.** ``erebus-cli`` is a blocking subprocess and a write is a preflight, a
-proof of about twenty seconds, a fee estimate, a submission and a receipt wait. Calling it
-directly from a coroutine would stall the MCP server's event loop for that whole period, so
-a second tool call could not even be parsed until the first settled. ``asyncio.to_thread``
-keeps the server responsive; the subprocess is doing the waiting anyway.
+``erebus-cli`` blocks during preflight, a proof of about twenty seconds, fee estimation,
+submission, and receipt polling. ``asyncio.to_thread`` keeps the MCP event loop available
+while the subprocess waits.
 
-**Two error types on purpose.** ``sdk/py`` raises a frozen ``ErebusError`` carrying a plain
-string code. The interface's ``ErebusError`` carries a ``SettlementErrorCode`` and is
-deliberately not frozen (a frozen exception breaks ``pytest.raises``, see interface.py).
-Translating at this boundary keeps agent-layer code catching one type.
+``sdk/py`` raises a frozen ``ErebusError`` with a string code. The interface error uses
+``SettlementErrorCode`` and is not frozen (see interface.py). This adapter converts between
+them so agent code catches one type.
 """
 
 from __future__ import annotations
@@ -32,6 +28,7 @@ from erebus_mcp.interface import (
     DisclosedRecord,
     DisclosedSettlement,
     ErebusError,
+    NoteBalance,
     Offer,
     OfferId,
     OfferStatus,
@@ -46,10 +43,8 @@ from erebus_mcp.interface import (
 def _translate(exc: SeamError) -> ErebusError:
     """Seam error to interface error.
 
-    An unrecognised code becomes ``PROOF_FAILED`` rather than raising, because a client that
-    crashes on an unknown code turns a recoverable protocol failure into an outage. The
-    Rust side is the authority on the code set; a mismatch means this file is stale, and
-    the ``retryable`` flag it sent still carries the only decision an agent needs.
+    An unknown code becomes ``PROOF_FAILED``. Rust defines the code set, so an unknown code
+    means that this adapter is stale. The Rust ``retryable`` value still controls retries.
     """
     try:
         code = SettlementErrorCode(exc.code)
@@ -93,9 +88,8 @@ def _settlement(raw: dict[str, Any] | None) -> DisclosedSettlement | None:
 class SeamErebusClient:
     """Drives one identity through ``erebus-cli``.
 
-    One instance per agent. Two identities in one process would put both pool keys in the
-    same heap, which is the arrangement ``docs/ishita.md`` rejected when it settled on two
-    MCP servers rather than one multi-tenant one.
+    Use one instance per agent. Two identities in one process put both pool keys in the same
+    heap. ``docs/ishita.md`` requires separate MCP servers.
     """
 
     def __init__(self, seam: Seam) -> None:
@@ -125,12 +119,18 @@ class SeamErebusClient:
 
     async def read_channel_state(self, handle: ChannelHandle) -> ChannelState:
         result = await self._run(self._seam.read_channel_state, handle)
-        # read_channel_state reports `settled` as a boolean and carries no settlement
-        # object; only `reveal` reconstructs one. A participant can still see the outcome
-        # because the accepted offer's status is `settled`.
+        # read_channel_state reports `settled` as a boolean. Only `reveal` reconstructs a
+        # settlement object. Participants see the result in the accepted offer status.
         return ChannelState(
             offers=[_offer(o) for o in result.get("offers", [])],
             settlement=_settlement(result.get("settlement")),
+        )
+
+    async def note_balance(self) -> NoteBalance:
+        result = await self._run(self._seam.balance)
+        return NoteBalance(
+            spendable=[int(amount) for amount in result.get("notes", [])],
+            pending=[int(amount) for amount in result.get("pending", [])],
         )
 
     async def accept_and_settle(
@@ -148,8 +148,8 @@ class SeamErebusClient:
         self, handle: ChannelHandle, grantee: PublicKey
     ) -> ViewingKeyGrant:
         result = await self._run(self._seam.grant_viewing_key, handle, grantee)
-        # The grant is a bearer secret: whoever holds it can read this one relationship.
-        # It is carried, never logged, and never widened.
+        # The bearer grant reads one relationship. Pass it through without logging or
+        # widening its scope.
         return ViewingKeyGrant(
             channel_id=result["channel_id"],
             grantee=result["grantee"],
@@ -173,8 +173,8 @@ class SeamErebusClient:
     async def shield(self, amount: int) -> SettlementReceipt:
         """Administrative funding, outside the seven interface methods.
 
-        An identity needs one shielded note before it can settle, and its first action set
-        is also what registers it with the pool.
+        An identity needs a shielded note before settlement. Its first action set also
+        registers it with the pool.
         """
         result = await self._run(self._seam.shield, str(amount))
         return SettlementReceipt(
@@ -188,8 +188,8 @@ class SeamErebusClient:
 def _wire_terms(terms: OfferTerms) -> dict[str, Any]:
     """Terms as the CLI wants them.
 
-    Amounts and the memo hash cross as strings because they are 128-bit values and JSON
-    numbers are doubles; a 1e18 amount survives that, a memo hash near 2^128 does not.
+    Amounts and memo hashes cross as strings because JSON numbers are doubles. A 1e18 amount
+    survives conversion, but a memo hash near 2^128 does not.
     ``deadline`` stays a number because the CLI parses it as one and would reject a string.
     """
     return {

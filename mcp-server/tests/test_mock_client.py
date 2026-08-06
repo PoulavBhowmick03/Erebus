@@ -1,8 +1,6 @@
-"""I0.2's acceptance criterion: call every method on the mock and get sane responses,
-including at least one simulated failure per `SettlementErrorCode` group.
+"""I0.2 acceptance tests for every mock method and error-code group.
 
-Plain `asyncio.run()` per test rather than pytest-asyncio — no new dependency needed for
-sequential await chains this simple.
+Each test uses `asyncio.run()` instead of adding pytest-asyncio for sequential calls.
 """
 
 from __future__ import annotations
@@ -26,8 +24,12 @@ def store_path(tmp_path):
 
 @pytest.fixture
 def clients(store_path):
-    buyer = MockErebusClient(identity="0xbuyer", store_path=store_path, latency_seconds=0)
-    seller = MockErebusClient(identity="0xseller", store_path=store_path, latency_seconds=0)
+    buyer = MockErebusClient(
+        identity="0xbuyer", store_path=store_path, latency_seconds=0, spendable_notes=[100, 150]
+    )
+    seller = MockErebusClient(
+        identity="0xseller", store_path=store_path, latency_seconds=0, spendable_notes=[]
+    )
     return buyer, seller
 
 
@@ -71,8 +73,8 @@ def test_post_settle_write_is_rejected(clients):
 
     async def run():
         handle = await buyer.open_channel("0xseller")
-        offer_id = await buyer.propose_offer(handle, _terms())
-        await seller.accept_and_settle(handle, offer_id)
+        offer_id = await seller.propose_offer(handle, _terms())
+        await buyer.accept_and_settle(handle, offer_id)
 
         with pytest.raises(ErebusError) as excinfo:
             await seller.propose_offer(handle, _terms())
@@ -86,10 +88,10 @@ def test_accepting_an_expired_offer_is_rejected(clients):
 
     async def run():
         handle = await buyer.open_channel("0xseller")
-        offer_id = await buyer.propose_offer(handle, _terms(deadline_delta=-1))
+        offer_id = await seller.propose_offer(handle, _terms(deadline_delta=-1))
 
         with pytest.raises(ErebusError) as excinfo:
-            await seller.accept_and_settle(handle, offer_id)
+            await buyer.accept_and_settle(handle, offer_id)
         assert excinfo.value.code == SettlementErrorCode.OFFER_EXPIRED
 
     asyncio.run(run())
@@ -100,12 +102,31 @@ def test_already_settled_channel_rejects_a_second_settlement(clients):
 
     async def run():
         handle = await buyer.open_channel("0xseller")
-        offer_id = await buyer.propose_offer(handle, _terms())
-        await seller.accept_and_settle(handle, offer_id)
+        offer_id = await seller.propose_offer(handle, _terms())
+        await buyer.accept_and_settle(handle, offer_id)
 
         with pytest.raises(ErebusError) as excinfo:
-            await seller.accept_and_settle(handle, offer_id)
+            await buyer.accept_and_settle(handle, offer_id)
         assert excinfo.value.code == SettlementErrorCode.ALREADY_SETTLED
+
+    asyncio.run(run())
+
+
+def test_acceptor_is_the_payer_and_exact_notes_are_consumed(clients):
+    buyer, seller = clients
+
+    async def run():
+        handle = await buyer.open_channel("0xseller")
+        buyer_offer = await buyer.propose_offer(handle, _terms(amount=100))
+
+        with pytest.raises(ErebusError) as excinfo:
+            await seller.accept_and_settle(handle, buyer_offer)
+        assert excinfo.value.code == SettlementErrorCode.INSUFFICIENT_NOTES
+
+        seller_offer = await seller.counter_offer(handle, buyer_offer, _terms(amount=150))
+        await buyer.accept_and_settle(handle, seller_offer)
+        balance = await buyer.note_balance()
+        assert balance.spendable == [100]
 
     asyncio.run(run())
 
@@ -144,7 +165,7 @@ def test_countering_an_unknown_offer_is_rejected(clients):
         SettlementErrorCode.SCREENING_REJECTED,  # terminal
         SettlementErrorCode.PROVER_UNAVAILABLE,  # retry may succeed
         SettlementErrorCode.PROOF_FAILED,  # opaque
-        SettlementErrorCode.AMOUNT_MISMATCH,  # do-not-retry — see mock_client.py's module
+        SettlementErrorCode.AMOUNT_MISMATCH,  # do not retry; see mock_client.py's module
         # docstring: not derivable from real input at this interface, so force_error is
         # the only way to exercise it.
     ],
@@ -161,7 +182,7 @@ def test_forced_failures_carry_the_code_and_retryable_flag(clients, code):
 
     asyncio.run(run())
 
-    # The hook clears after one use — the call right after succeeds normally.
+    # The hook clears after one use. The next call succeeds.
     async def run_again():
         handle = await buyer.open_channel("0xseller")
         assert handle.startswith("ch_")

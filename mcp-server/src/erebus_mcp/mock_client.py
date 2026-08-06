@@ -1,28 +1,18 @@
-"""``MockErebusClient`` — I0.2's mock of the frozen ``ErebusClient`` interface.
+"""I0.2 mock of the frozen ``ErebusClient`` interface.
 
-Stands in for the real binding (`sdk/py` -> `sdk/rs`, still on protocol 1 and only 2 of 7
-methods deep — see the plan this was built from) until the shared integration pass makes a
-swap possible. Mocks the *binding* surface: `interface.py`'s dataclasses and error shape are
-what a caller sees either way.
+This replaces the real `sdk/py` to `sdk/rs` binding in deterministic tests and policy
+rehearsals. Callers see the dataclasses and error shape from `interface.py`.
 
-State lives in a small JSON file, not just in memory, because the mock represents the
-*shared* pool — two independent `MockErebusClient` instances (one per agent, each its own
-process in the MCP-server case) read and write the same channel the way two agents both
-read and write the same on-chain storage. Read-modify-write per call, atomic replacement on
-write (temp file + rename) so a failed write can't truncate the record — the same shape as
-`erebus-cli`'s real state directory, minus locking and crypto: this mock's callers act
-sequentially (one agent's call completes before the other's starts), so there is no
-concurrent-writer case to guard against.
+The mock stores shared pool state in a JSON file. Two clients read and write the same
+channels. Each call reads, changes, and atomically replaces the file. The real CLI uses a
+similar directory with locking and cryptography. Mock callers run sequentially, so the mock
+does not lock concurrent writers.
 
-One thing this mock cannot organically produce: ``AMOUNT_MISMATCH``. The frozen
+The mock cannot produce ``AMOUNT_MISMATCH`` from a normal call. The frozen
 ``acceptAndSettle(handle, offerId)`` takes no separate payment argument, so there is no
-caller-supplied value that could disagree with ``offer.terms.amount`` — the payment *is*
-the offer's amount, always. Friction F23 is about a Rust-internal bug where the acceptance
-record and the payment note were computed from two different places and drifted; a
-correctly-written client (this one included) has only one source of truth. So
-``AMOUNT_MISMATCH`` here is exercised only via ``force_error``, which is honest: it tests
-that the error carries through the stack, not that some validation branch catches a bad
-input, because no such input is expressible at this interface.
+caller value that can differ from ``offer.terms.amount``. Friction F23 describes a Rust bug
+where the record and payment used different sources. ``force_error`` injects this code to
+test error transport because the interface cannot express mismatched input.
 """
 
 from __future__ import annotations
@@ -42,6 +32,7 @@ from erebus_mcp.interface import (
     DisclosedRecord,
     DisclosedSettlement,
     ErebusError,
+    NoteBalance,
     Offer,
     OfferId,
     OfferStatus,
@@ -52,10 +43,9 @@ from erebus_mcp.interface import (
     ViewingKeyGrant,
 )
 
-# Proof-bearing calls only (ARCHITECTURE / friction F7): everything that would be one
+# Proof-bearing calls only (ARCHITECTURE / friction F7): each set becomes one
 # `apply_actions` transaction on the real pool. `grant_viewing_key` is a local export with
-# no chain transaction (ARCHITECTURE §3, "disclosure is the intentional exception"); the two
-# reads don't write anything either.
+# no chain transaction (ARCHITECTURE §3). The two reads also do not write.
 _PROOF_BEARING_METHODS = frozenset(
     {"open_channel", "propose_offer", "counter_offer", "accept_and_settle"}
 )
@@ -75,7 +65,7 @@ _RETRYABLE_CODES = frozenset(
 class MockErebusClient:
     """In-memory-shaped fake of `ErebusClient`, backed by a shared JSON file.
 
-    :param identity: this client's own address. Bound once, not passed per call — mirrors
+    :param identity: this client's address. Bound once and not passed per call. This mirrors
         how a real client is constructed with a key file rather than taking an address on
         every method (ARCHITECTURE §4).
     :param store_path: path to the shared JSON store. Two clients pointed at the same path
@@ -89,10 +79,16 @@ class MockErebusClient:
         identity: AgentId,
         store_path: Path,
         latency_seconds: float = 0.2,
+        spendable_notes: list[int] | None = None,
+        pending_notes: list[int] | None = None,
     ) -> None:
         self._identity = identity
         self._store_path = store_path
         self._latency_seconds = latency_seconds
+        self._spendable_notes = list(
+            [1_000_000_000_000_000_000] if spendable_notes is None else spendable_notes
+        )
+        self._pending_notes = list([] if pending_notes is None else pending_notes)
         self._forced_error: ErebusError | None = None
         if not self._store_path.exists():
             self._write_store({"channels": {}})
@@ -100,12 +96,11 @@ class MockErebusClient:
     # --- test-only failure injection ------------------------------------------------
 
     def force_error(self, code: SettlementErrorCode, message: str = "forced for testing") -> None:
-        """The next call raises this error instead of doing anything, then clears.
+        """Makes the next call raise one error and then clears it.
 
-        For codes this mock cannot derive from any real condition — `SCREENING_REJECTED`,
-        `PROVER_UNAVAILABLE`, `PROOF_FAILED`, `AMOUNT_MISMATCH` — this is the only way to
-        exercise the failure path, and that's honest: those are prover/screener/(buggy
-        internal) conditions, not things a correct mock organically hits.
+        Use this for prover, screener, and internal errors that normal mock input cannot
+        produce: `SCREENING_REJECTED`, `PROVER_UNAVAILABLE`, `PROOF_FAILED`, and
+        `AMOUNT_MISMATCH`.
         """
         self._forced_error = ErebusError(code=code, message=message, retryable=code in _RETRYABLE_CODES)
 
@@ -126,17 +121,15 @@ class MockErebusClient:
 
     @staticmethod
     def _channel_handle(a: AgentId, b: AgentId) -> ChannelHandle:
-        # Deterministic and symmetric so both parties converge on the same handle whether
-        # they open the channel first or second. Real handles are opaque random ids
-        # (ARCHITECTURE §3); nothing in §4 requires that shape, only that it's a string.
+        # A symmetric value gives both parties the same handle in either open order. Real
+        # handles are opaque random ids (ARCHITECTURE §3), but §4 only requires a string.
         return "ch_" + "_".join(sorted([a, b]))
 
     def _get_channel(self, store: dict, handle: ChannelHandle) -> dict:
         channel = store["channels"].get(handle)
         if channel is None:
-            # No code in SettlementErrorCode names "channel not found" — closest fit is
-            # INDEX_CONFLICT ("the subchannel state is not what we thought"), which is what
-            # this is: a client acting on a channel it never set up.
+            # SettlementErrorCode has no channel-not-found value. INDEX_CONFLICT represents
+            # a client whose local channel state does not match shared state.
             raise ErebusError(
                 code=SettlementErrorCode.INDEX_CONFLICT,
                 message=f"no channel at handle {handle!r}",
@@ -166,8 +159,7 @@ class MockErebusClient:
         )
 
     def _effective_status(self, offer: Offer, now: int) -> OfferStatus:
-        """Deadlines are enforced client-side only (ARCHITECTURE §4: 'every transition here
-        is enforced client-side and nowhere else') — computed at read time, not stored."""
+        """Computes the client-enforced deadline status at read time (ARCHITECTURE §4)."""
         if offer.status in (OfferStatus.PROPOSED, OfferStatus.COUNTERED) and now > offer.terms.deadline:
             return OfferStatus.EXPIRED
         return offer.status
@@ -201,7 +193,7 @@ class MockErebusClient:
                 retryable=False,
             )
         seq = channel["next_seq"].get(self._identity, 0)
-        # OfferId keyed by (author, seq), not a bare index — friction F22: a bare index
+        # OfferId uses (author, seq), not a bare index. Under friction F22, a bare index
         # collides across the two directions, because each side numbers its own subchannel
         # from zero.
         offer_id = f"{self._identity}:{seq}"
@@ -235,7 +227,7 @@ class MockErebusClient:
             raise ErebusError(
                 code=SettlementErrorCode.OFFER_UNKNOWN, message=f"no offer {reply_to!r}", retryable=False
             )
-        # A reply always crosses the table (F22) — countering your own offer isn't a thing.
+        # A reply crosses directions (F22), so a client cannot counter its own offer.
         if target.proposer == self._identity:
             raise ErebusError(
                 code=SettlementErrorCode.NOT_YOUR_OFFER,
@@ -300,6 +292,13 @@ class MockErebusClient:
         settlement = self._settlement_from_dict(channel["settlement"]) if channel["settlement"] else None
         return ChannelState(offers=offers, settlement=settlement)
 
+    async def note_balance(self) -> NoteBalance:
+        self._maybe_raise_forced()
+        return NoteBalance(
+            spendable=sorted(self._spendable_notes, reverse=True),
+            pending=sorted(self._pending_notes, reverse=True),
+        )
+
     async def accept_and_settle(self, handle: ChannelHandle, offer_id: OfferId) -> SettlementReceipt:
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
@@ -323,8 +322,26 @@ class MockErebusClient:
         if self._effective_status(target, now) == OfferStatus.EXPIRED:
             raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=offer_id, retryable=False)
 
-        # Acceptance and payment in one action set, one proof (ARCHITECTURE §4) — there is
-        # no accepted-but-not-settled state, so this is the only place `settlement` is set.
+        selected = _select_exact_indices(self._spendable_notes, target.terms.amount)
+        if selected is None:
+            held = sorted(self._spendable_notes, reverse=True)
+            rendered = ", ".join(str(amount) for amount in held) or "none"
+            raise ErebusError(
+                code=SettlementErrorCode.INSUFFICIENT_NOTES,
+                message=(
+                    f"no exact set of unspent notes sums to {target.terms.amount}; "
+                    f"holding {len(held)} note(s) worth {sum(held)} in total ({rendered})"
+                ),
+                retryable=False,
+            )
+
+        # The acceptor is the payer. The original mock did not consume its notes, so a seller
+        # could appear to settle without the Rust client spending seller funds.
+        for index in sorted(selected, reverse=True):
+            del self._spendable_notes[index]
+
+        # Acceptance and payment share one action set and proof (ARCHITECTURE §4). There is
+        # no accepted-but-unsettled state.
         receipt = SettlementReceipt(
             offer_id=offer_id,
             tx_hash="0x" + secrets.token_hex(32),
@@ -335,7 +352,7 @@ class MockErebusClient:
             "acceptance": offer_id,
             "accepted_offer": target.reply_to,
             "agreed_amount": target.terms.amount,
-            "paid_amount": target.terms.amount,  # only source of truth — see module docstring
+            "paid_amount": target.terms.amount,  # only source of truth; see module docstring
             "receipt": {
                 "offer_id": receipt.offer_id,
                 "tx_hash": receipt.tx_hash,
@@ -386,3 +403,19 @@ class MockErebusClient:
             agreed_amount=d["agreed_amount"],
             paid_amount=d.get("paid_amount"),
         )
+
+
+def _select_exact_indices(notes: list[int], target: int) -> list[int] | None:
+    """Returns one exact subset by index, or ``None`` when the denomination is impossible."""
+    reachable: dict[int, list[int]] = {0: []}
+    for index, note in enumerate(notes):
+        additions: dict[int, list[int]] = {}
+        for subtotal, selected in reachable.items():
+            candidate = subtotal + note
+            if candidate > target or candidate in reachable or candidate in additions:
+                continue
+            additions[candidate] = [*selected, index]
+        reachable.update(additions)
+        if target in reachable:
+            return reachable[target]
+    return None
