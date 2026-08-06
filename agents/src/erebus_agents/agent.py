@@ -1,9 +1,7 @@
-"""I1.2 — two reference agents running the offer/counter/accept loop against the mock.
+"""Two I1.2 reference agents running the negotiation loop against the mock.
 
-Direct calls to `MockErebusClient`, no MCP — see the plan this was built from for why:
-`docs/ishita.md` writes I1.2 as "against the mock," and I1.3 (the MCP server) is a
-separate, independently-verified way to reach the same `erebus_mcp` package, not something
-I1.2's reference agents are required to route through.
+These agents call `MockErebusClient` directly. The MCP server in I1.3 provides a separate
+route to the same `erebus_mcp` package. See `docs/ishita.md`.
 """
 
 from __future__ import annotations
@@ -37,22 +35,23 @@ async def run_negotiation(
     auditor_address: AgentId = "auditor",
     max_rounds: int = 3,
 ) -> DisclosedRecord:
-    """Opens a channel, negotiates to agreement or walk-away, settles if agreed, grants a
-    viewing key, and reveals as a third party would — proving the record reconstructs from
-    the shared store alone, not from either agent's memory.
-    """
+    """Run a negotiation and reconstruct its disclosed record from the shared store."""
     handle = await buyer_client.open_channel(seller_address)
     await seller_client.open_channel(buyer_address)  # both sides derive the same channel
     _log_event("channel_opened", channel_handle=handle, buyer=buyer_address, seller=seller_address)
 
-    # `max_rounds` here is a hard stop on the loop itself; each policy also carries its own
-    # `max_rounds` and returns WALK once it's hit (that's the real cutoff — see policy.py).
-    # Belt-and-suspenders: pass the same value to both so they agree, but this loop bound is
-    # what actually prevents a runaway if a policy ever fails to WALK on schedule.
+    # Policies normally return WALK at `max_rounds`. This bound also stops a policy that
+    # fails to do so.
     settled = False
     for round_index in range(max_rounds + 1):
         buyer_state = await buyer_client.read_channel_state(handle)
-        buyer_decision = buyer_policy.decide(buyer_state, round_index, token)
+        buyer_balance = await buyer_client.note_balance()
+        buyer_decision = buyer_policy.decide(
+            buyer_state,
+            round_index,
+            token,
+            _payable_amounts(buyer_balance.spendable),
+        )
         _log_event("buyer_decision", round=round_index, action=buyer_decision.action.value)
 
         if buyer_decision.action == NegotiationAction.WALK:
@@ -79,11 +78,7 @@ async def run_negotiation(
             _log_event("seller_walked", round=round_index)
             break
         if seller_decision.action == NegotiationAction.ACCEPT:
-            assert seller_decision.reply_to is not None
-            receipt = await seller_client.accept_and_settle(handle, seller_decision.reply_to)
-            _log_event("settled", by="seller", tx_hash=receipt.tx_hash, offer_id=seller_decision.reply_to)
-            settled = True
-            break
+            raise RuntimeError("seller policy cannot accept: the accepting identity pays")
         if seller_decision.action == NegotiationAction.COUNTER:
             offer_id = await seller_client.counter_offer(handle, seller_decision.reply_to, seller_decision.terms)
             _log_event("countered", by="seller", offer_id=offer_id, amount=seller_decision.terms.amount)
@@ -91,10 +86,8 @@ async def run_negotiation(
     if not settled:
         _log_event("negotiation_ended_without_settlement", channel_handle=handle)
 
-    # One agent grants a viewing key (docs/ishita.md I1.2); doesn't matter which side, so
-    # the buyer does it. Then reveal as a genuine third party — a fresh client with no
-    # relationship to either agent's identity, pointed only at the shared store and the
-    # grant — to demonstrate ARCHITECTURE §3's claim that no grantor-local state is needed.
+    # A fresh auditor client receives only the grant and shared store. This checks the
+    # ARCHITECTURE §3 claim that disclosure needs no grantor-local state.
     grant = await buyer_client.grant_viewing_key(handle, auditor_address)
     _log_event("viewing_key_granted", channel_handle=handle, grantee=auditor_address)
 
@@ -108,3 +101,12 @@ async def run_negotiation(
         settled=record.settlement is not None,
     )
     return record
+
+
+def _payable_amounts(notes: list[int]) -> set[int]:
+    """All exact subset sums for the small MVP note set."""
+    reachable = {0}
+    for note in notes:
+        reachable |= {subtotal + note for subtotal in reachable}
+    reachable.discard(0)
+    return reachable

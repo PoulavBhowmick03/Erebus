@@ -1,7 +1,4 @@
-"""I1.2's acceptance criterion, automated: two agent instances complete a full negotiation
-against the mock, ending in a settled, revealed record. `agents/demo.py` is the manual/CLI
-form of this same run.
-"""
+"""I1.2 integration tests for negotiation and disclosure against the mock."""
 
 from __future__ import annotations
 
@@ -17,8 +14,15 @@ TOKEN = "0xtoken"
 
 def _run(*, budget: int, reserve: int, max_rounds: int, tmp_path):
     store_path = tmp_path / "store.json"
-    buyer_client = MockErebusClient(identity="0xbuyer", store_path=store_path, latency_seconds=0)
-    seller_client = MockErebusClient(identity="0xseller", store_path=store_path, latency_seconds=0)
+    buyer_client = MockErebusClient(
+        identity="0xbuyer",
+        store_path=store_path,
+        latency_seconds=0,
+        spendable_notes=[budget],
+    )
+    seller_client = MockErebusClient(
+        identity="0xseller", store_path=store_path, latency_seconds=0, spendable_notes=[]
+    )
     buyer_policy = BuyerPolicy(identity="0xbuyer", budget=budget, deadline_seconds=3600, max_rounds=max_rounds)
     seller_policy = SellerPolicy(identity="0xseller", reserve=reserve, deadline_seconds=3600, max_rounds=max_rounds)
 
@@ -56,14 +60,12 @@ def test_negotiation_walks_away_when_ranges_never_overlap(tmp_path):
     record = _run(budget=500, reserve=5000, max_rounds=3, tmp_path=tmp_path)
 
     assert record.settlement is None
-    # Still reconstructs from the shared store alone, even with no settlement — reveal
-    # doesn't require a successful deal, only a granted key.
+    # Disclosure needs a grant, not a successful settlement.
     assert sorted(record.participants) == sorted(["0xbuyer", "0xseller"])
 
 
 def test_negotiation_reveal_is_from_a_genuine_third_party(tmp_path):
-    # The auditor identity used inside run_negotiation never appears as a channel
-    # participant or an offer proposer — it only ever calls reveal().
+    # The auditor only calls reveal and never joins the channel or proposes an offer.
     record = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
 
     assert "0xauditor" not in record.participants

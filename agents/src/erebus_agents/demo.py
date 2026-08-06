@@ -1,10 +1,7 @@
-"""I1.2's acceptance criterion: `uv run python agents/demo.py` completes a full negotiation
-against the mock.
+"""Run the I1.2 mock negotiation from the command line.
 
-Wires two dummy identities against one shared mock store, runs the negotiation, and prints
-each transition plus the final revealed record. Fast by default (latency=0.2s/round) so
-this is a normal dev-loop command; `--latency 29` rehearses the real per-round cost before
-recording the demo video (I2.2 — not built here, but this flag is what unblocks it).
+The command prints each transition and the final disclosed record. It defaults to 0.2 s of
+latency per round. Use `--latency 29` to rehearse the measured proof cost from I2.2.
 """
 
 from __future__ import annotations
@@ -46,8 +43,18 @@ async def _main() -> DisclosedRecord:
 
     with tempfile.TemporaryDirectory() as tmp:
         store_path = Path(tmp) / "erebus-mock-store.json"
-        buyer_client = MockErebusClient(identity=BUYER_ADDRESS, store_path=store_path, latency_seconds=args.latency)
-        seller_client = MockErebusClient(identity=SELLER_ADDRESS, store_path=store_path, latency_seconds=args.latency)
+        buyer_client = MockErebusClient(
+            identity=BUYER_ADDRESS,
+            store_path=store_path,
+            latency_seconds=args.latency,
+            spendable_notes=[args.budget],
+        )
+        seller_client = MockErebusClient(
+            identity=SELLER_ADDRESS,
+            store_path=store_path,
+            latency_seconds=args.latency,
+            spendable_notes=[],
+        )
         buyer_policy = BuyerPolicy(
             identity=BUYER_ADDRESS, budget=args.budget, deadline_seconds=3600, max_rounds=args.rounds
         )

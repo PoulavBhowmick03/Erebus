@@ -1,14 +1,10 @@
-"""Negotiation policy — I1.1. Pure, deterministic, no MCP, no I/O.
+"""Deterministic negotiation policy for I1.1. No MCP or I/O.
 
-"Keep this simple. A threshold rule is enough for the MVP — do not build a sophisticated
-bargaining strategy" (docs/ishita.md). Both policies below make exactly one concession: an
-opening anchor, one counter toward the caller's limit, then accept or walk. No concession
-curve, no modeling of the other side.
+Both policies make one concession: an opening anchor followed by one counter toward the
+caller's limit. They then accept or walk. See docs/ishita.md.
 
-Round-limit cutoff lives here, not in the orchestration loop, because it's the direct
-consequence of a real cost (~29s/proof round, friction F7): the policy is the thing
-deciding whether another round is worth ~29s, so the cutoff belongs where that judgment is
-made.
+The policy owns the round limit because it decides whether another ~29 s proof is worth
+running. See friction F7.
 """
 
 from __future__ import annotations
@@ -56,32 +52,53 @@ class BuyerPolicy:
         self.deadline_seconds = deadline_seconds
         self.max_rounds = max_rounds
 
-    def decide(self, state: ChannelState, round_index: int, token: str, memo_hash: int = 0) -> NegotiationDecision:
+    def decide(
+        self,
+        state: ChannelState,
+        round_index: int,
+        token: str,
+        payable_amounts: set[int],
+        memo_hash: int = 0,
+    ) -> NegotiationDecision:
         counter = _latest_open_offer(state, self.identity)
         now = int(time.time())
         deadline = now + self.deadline_seconds
 
+        payable = sorted(amount for amount in payable_amounts if 0 < amount <= self.budget)
+        if not payable:
+            return NegotiationDecision(action=NegotiationAction.WALK)
+
         if counter is not None:
-            if counter.terms.amount <= self.budget:
+            if counter.terms.amount <= self.budget and counter.terms.amount in payable_amounts:
                 return NegotiationDecision(action=NegotiationAction.ACCEPT, reply_to=counter.offer_id)
             if round_index >= self.max_rounds:
                 return NegotiationDecision(action=NegotiationAction.WALK)
-            terms = OfferTerms(amount=self.budget, token=token, deadline=deadline, memo_hash=memo_hash)
+            amount = _closest_payable(payable, min(counter.terms.amount, self.budget))
+            terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
             return NegotiationDecision(
                 action=NegotiationAction.COUNTER, terms=terms, reply_to=counter.offer_id
             )
 
-        # No offer from the seller yet — this is the opening round.
+        # No seller offer exists yet, so open the negotiation.
         if round_index >= self.max_rounds:
             return NegotiationDecision(action=NegotiationAction.WALK)
         opening_amount = int(self.budget * 0.8)  # anchor below budget, leave room to move
-        terms = OfferTerms(amount=opening_amount, token=token, deadline=deadline, memo_hash=memo_hash)
+        terms = OfferTerms(
+            amount=_closest_payable(payable, opening_amount),
+            token=token,
+            deadline=deadline,
+            memo_hash=memo_hash,
+        )
         return NegotiationDecision(action=NegotiationAction.PROPOSE, terms=terms)
 
 
 class SellerPolicy:
-    """Has a reserve price; evaluates offers, counters once, accepts or declines
-    (docs/ishita.md I1.1). Only ever reacts — the buyer opens."""
+    """Has a reserve price and leaves seller-authored terms for the buyer to settle.
+
+    The seller never returns ``ACCEPT``: in Erebus the accepting identity pays. Agreement
+    with a buyer bid is represented by countering at that same amount, after which the
+    buyer accepts the seller-authored offer and funds the atomic settlement.
+    """
 
     def __init__(self, identity: AgentId, reserve: int, deadline_seconds: int, max_rounds: int = 3) -> None:
         self.identity = identity
@@ -98,13 +115,29 @@ class SellerPolicy:
             )
 
         if offer.terms.amount >= self.reserve:
-            return NegotiationDecision(action=NegotiationAction.ACCEPT, reply_to=offer.offer_id)
+            deadline = int(time.time()) + self.deadline_seconds
+            terms = OfferTerms(
+                amount=offer.terms.amount,
+                token=offer.terms.token,
+                deadline=deadline,
+                memo_hash=memo_hash,
+            )
+            return NegotiationDecision(
+                action=NegotiationAction.COUNTER,
+                terms=terms,
+                reply_to=offer.offer_id,
+            )
         if round_index >= self.max_rounds:
             return NegotiationDecision(action=NegotiationAction.WALK)
-        # Same token as the offer being countered — a subchannel is a token, so a counter
-        # can't switch which one it's in.
+        # A subchannel is token-specific, so a counter cannot change the token.
         deadline = int(time.time()) + self.deadline_seconds
         terms = OfferTerms(amount=self.reserve, token=offer.terms.token, deadline=deadline, memo_hash=memo_hash)
         return NegotiationDecision(
             action=NegotiationAction.COUNTER, terms=terms, reply_to=offer.offer_id
         )
+
+
+def _closest_payable(payable: list[int], preferred: int) -> int:
+    """Best payable bid at or below ``preferred``, else the smallest affordable amount."""
+    at_or_below = [amount for amount in payable if amount <= preferred]
+    return max(at_or_below) if at_or_below else min(payable)
