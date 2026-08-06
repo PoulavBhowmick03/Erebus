@@ -1,6 +1,6 @@
-# Erebus — Architecture
+# Erebus: Architecture
 
-> Scope note: this describes the **MVP** architecture. Anything marked *(post-MVP)* is deliberately out of scope for the first build.
+> Scope note: this describes the **MVP** architecture. Anything marked *(post-MVP)* is intentionally out of scope for the first build.
 
 ---
 
@@ -8,24 +8,24 @@
 
 ```mermaid
 flowchart TB
-    subgraph agentlayer["Agent Layer — Ishita's track"]
+    subgraph agentlayer["Agent Layer: Ishita's track"]
         A1["Agent A<br/>buyer / requester"]
         A2["Agent B<br/>seller / provider"]
         NEG["Negotiation Policy Engine<br/>offer / counter / accept logic"]
     end
 
-    subgraph toollayer["Tool Layer — Ishita's track"]
+    subgraph toollayer["Tool Layer: Ishita's track"]
         MCP["MCP Server (Python)<br/>exposes Erebus tools"]
         A2A["A2A Extension<br/>post-MVP"]
     end
 
     subgraph sdklayer["Erebus SDK"]
-        BIND["sdk/py — thin binding<br/>no protocol logic"]
-        SDK["sdk/rs — Rust client<br/>local simulate, prove, submit"]
-        ORACLE["sdk/ts — differential-test<br/>oracle, ships nothing"]
+        BIND["sdk/py: thin binding<br/>no protocol logic"]
+        SDK["sdk/rs: Rust client<br/>local simulate, prove, submit"]
+        ORACLE["sdk/ts: differential-test<br/>oracle, ships nothing"]
     end
 
-    subgraph chainlayer["On-Chain Layer — Poulav's track"]
+    subgraph chainlayer["On-Chain Layer: Poulav's track"]
         CH["Channel Layer 'Eleusis'<br/>channel_key via ECDH<br/>subchannels carry offer state"]
         POOL["STRK20 Privacy Pool<br/>notes, nullifiers, ZK proofs"]
         VK["Viewing Key Registry<br/>encrypted, threshold auditor"]
@@ -59,12 +59,12 @@ simulate → prove → submit pipeline and all key handling. The channel layer a
 both on Starknet; a keyed discovery provider lets the SDK find only its own secret-derived
 locations. Production uses the off-chain indexer; the Rust MVP uses direct contract reads.
 
-**On the language boundary** — everything above `sdk/py` is Python, everything below it is
+**On the language boundary**, everything above `sdk/py` is Python, everything below it is
 Rust. `sdk/py` carries no protocol logic: it marshals arguments across and returns results.
 Key material stays inside `sdk/rs`, which makes constraint 6 in §5 a boundary the runtime
 enforces rather than a rule people remember. `sdk/ts` is not in the call path at all.
 
-**On `channel_key`** — a channel is **directional**, and the key is not a symmetric ECDH
+**On `channel_key`**, a channel is **directional**, and the key is not a symmetric ECDH
 secret. `compute_channel_key` is a hash over the *sender's private key* and the
 recipient's public key, so only the sender can derive it. The recipient *receives* it, encrypted
 under a separate ephemeral ECDH, via `EncChannelInfo.enc_channel_key` written on-chain by
@@ -113,7 +113,7 @@ sequenceDiagram
 
     K->>SDK: reveal(viewing_key, handle)
     SDK->>POOL: reconstruct scoped history
-    POOL-->>K: full record — terms + payment<br/>no leakage about other users
+    POOL-->>K: full record: terms + payment<br/>no leakage about other users
 ```
 
 ---
@@ -122,26 +122,26 @@ sequenceDiagram
 
 | Component | Owner | Responsibility | MVP? |
 |---|---|---|---|
-| Channel layer | Poulav | `channel_key` derivation, subchannel writes, offer state transitions — **client-side, no Erebus Cairo**; the pool's own actions do the on-chain work | Yes |
+| Channel layer | Poulav | `channel_key` derivation, subchannel writes, offer state transitions: **client-side, no Erebus Cairo**; the pool's own actions do the on-chain work | Yes |
 | Settlement integration | Poulav | Bind accepted offer to shielded transfer in one action set; atomicity | Yes |
 | Viewing key / disclosure | Poulav | Scoped reconstruction of a channel's record | Yes |
 | Proof + submission pipeline | Poulav | simulate → prove → `apply_actions` | Yes |
-| Erebus SDK (Rust) | Poulav | Primary client — action building, Cairo Serde, signing, proving, salt-lane codec. Sole holder of key material | Yes |
-| `sdk/py` binding | Poulav + Ishita | Thin marshalling layer over `sdk/rs`. **No protocol logic** — if it grows a hash function, that is a bug | Yes |
+| Erebus SDK (Rust) | Poulav | Primary client: action building, Cairo Serde, signing, proving, salt-lane codec. Sole holder of key material | Yes |
+| `sdk/py` binding | Poulav + Ishita | Thin marshalling layer over `sdk/rs`. **No protocol logic**: if it grows a hash function, that is a bug | Yes |
 | Erebus SDK (TS) | Shared | Differential-test oracle for the Rust port. **Ships nothing**, not in any call path | Yes |
 | MCP Server (Python) | Ishita | Tool definitions callable by any agent framework | Yes |
 | Negotiation policy engine | Ishita | When to offer, counter, accept, walk away | Yes |
 | Reference agents | Ishita | Two agents running the loop autonomously | Yes |
 | A2A extension | Shared | Register as an A2A skill | *(post-MVP)* |
-| Free-text encrypted messaging | — | Prose chat between agents | *(post-MVP — see §7)* |
-| Multi-party channels (>2) | — | N-way negotiation | *(post-MVP)* |
+| Free-text encrypted messaging |: | Prose chat between agents | *(post-MVP: see §7)* |
+| Multi-party channels (>2) |: | N-way negotiation | *(post-MVP)* |
 
 ---
 
 ### Why Rust, and why the TS stays
 
 `starkware-libs/starknet-privacy` ships a TypeScript SDK and a Rust `discovery-core`
-crate. `discovery-core` covers the **read** side — hashes, storage slots, ECDH,
+crate. `discovery-core` covers the **read** side, hashes, storage slots, ECDH,
 decryption, note discovery. There is no Rust **write** side anywhere: nothing builds
 `ClientAction`s, serialises Cairo calldata, signs the invoke, or calls the proving
 service. Erebus's Rust client fills that gap, and is useful beyond this project.
@@ -151,13 +151,13 @@ salts belong only on zero-amount notes, actions must be phase-ordered, `tip` mus
 in the proven transaction. In Rust those are unrepresentable rather than remembered.
 
 The TypeScript implementation is **kept, not replaced.** There is no written spec for the
-wire format — the reference is Cairo and their TS. Two independent implementations
+wire format, the reference is Cairo and their TS. Two independent implementations
 agreeing on the same Cairo-emitted vectors is the strongest correctness signal available,
 and it evaporates the moment one is deleted.
 
 ---
 
-### Why Python above the SDK — *decided 2026-07-28*
+### Why Python above the SDK: *decided 2026-07-28*
 
 The MCP server and the agents are Python. `mcp` (the official SDK, Anthropic-maintained)
 supports stdio, SSE, and streamable HTTP, so nothing about MCP required TypeScript. This
@@ -165,62 +165,62 @@ puts Ishita in her own language and keeps the Rust client on the demo's critical
 rather than beside it.
 
 What this decision explicitly does **not** rest on: reusing Ishita's prior x402 /
-ERC-8004 work. That was checked and it does not transfer as code —
+ERC-8004 work. That was checked, and it does not transfer as code.
 
 - **ERC-8004** is Draft and EVM-only (`eip155` namespace, EIP-155/712/721/1271). It has no
   Starknet form.
 - **x402** has an official Python SDK, but its mechanisms are EVM, Solana, and TON.
-  x402 *does* support Starknet — via SNIP-9 outside execution, in
-  `NethermindEth/x402-starknet` — and that library is **TypeScript only**.
+  x402 *does* support Starknet, via SNIP-9 outside execution, in
+  `NethermindEth/x402-starknet`, and that library is **TypeScript only**.
 
 So there is no Python x402 path to Starknet and no TypeScript reuse worth having either,
 since that library solves paying for HTTP APIs, not private settlement. Her experience
 transfers as pattern, not code. The language choice therefore rests on the Erebus seam
 alone.
 
-*(Post-MVP, x402-on-Starknet and Erebus do compose — private negotiation, then x402 as the
+*(Post-MVP, x402-on-Starknet and Erebus do compose, private negotiation, then x402 as the
 HTTP payment trigger, same chain. Out of scope now.)*
 
-### The Rust client is async — *decided 2026-07-28*
+### The Rust client is async: *decided 2026-07-28*
 
 `sdk/rs` uses an async HTTP stack for the proving-service and RPC calls. Recorded here
 because it constrains the seam below: PyO3 across an async boundary needs a runtime owned
 on one side, whereas a subprocess CLI can keep the runtime entirely inside Rust and hand
 Python plain JSON. Decide the seam knowing this, not around it.
 
-### The Python ↔ Rust seam — **DECIDED 2026-07-30: subprocess**
+### The Python ↔ Rust seam: **DECIDED 2026-07-30: subprocess**
 
 `sdk/rs` grows an `erebus-cli` binary. JSON on stdin, JSON on stdout, one request per
 invocation. `sdk/py` shells out to it and marshals nothing else.
 
 | | How | Cost |
 |---|---|---|
-| **Subprocess** ✅ | `erebus-cli`; JSON on stdin, JSON on stdout; Python shells out | No FFI, no wheel matrix. Process spawn per call — irrelevant against a ~29 s proof. Key material isolated by the OS |
+| **Subprocess** ✅ | `erebus-cli`; JSON on stdin, JSON on stdout; Python shells out | No FFI, no wheel matrix. Process spawn per call: irrelevant against a ~29 s proof. Key material isolated by the OS |
 | **PyO3 / maturin** | In-process native extension | Better ergonomics, no spawn. You own a wheel build per platform and a type conversion for every value crossing |
 
-The surface is small either way — the seven `ErebusClient` methods in §4.
+The surface is small either way, the seven `ErebusClient` methods in §4.
 
 **Why subprocess, in order of weight:**
 
 1. **The process boundary is load-bearing for custody.** Constraint 6 is currently
    *structural*: `PoolIdentity` exposes no accessor, so nothing can ask for the pool key.
    In-process, that guarantee weakens to "the same heap as whatever agent code is loaded,"
-   and the claim we made to StarkWare — that Erebus runs inside the operator's process and
-   holds nothing reachable — acquires a footnote. A subprocess keeps an OS boundary there.
+   and the claim we made to StarkWare, that Erebus runs inside the operator's process and
+   holds nothing reachable, acquires a footnote. A subprocess keeps an OS boundary there.
 2. **Async stays on one side.** The prover client is async (see above). PyO3 across an async
    boundary needs a runtime owned by one language and is a known source of deadlocks;
    a subprocess keeps the runtime entirely inside Rust.
 3. **Errors are explicit.** A JSON envelope we design carries `SettlementErrorCode` through
    by construction, rather than depending on an exception mapping surviving the FFI.
 4. **Failures are loud.** Serializing everything means felts cross as strings, which is a
-   place to get encoding wrong — but wrong there is a *parse error*, not a silently mangled
+   place to get encoding wrong, but wrong there is a *parse error*, not a silently mangled
    felt. In a protocol where every other failure is silent, that asymmetry is worth a
    millisecond.
 
 Cost accepted: a per-platform binary to ship alongside the Python package. Not a saving over
-PyO3 — that needed per-platform wheels anyway — so distribution is a wash.
+PyO3, that needed per-platform wheels anyway, so distribution is a wash.
 
-#### State across one-shot processes — decided 2026-07-30
+#### State across one-shot processes: decided 2026-07-30
 
 `ChannelHandle` is a random opaque identifier (`ch_` plus 256 random bits), never a channel
 key encoded as a string. `erebus-cli` resolves it inside a Rust-owned state directory. Each
@@ -260,7 +260,7 @@ This is the seam between the two tracks. **Agree this before writing code.** Ish
 
 **This TypeScript block is normative**, and it is the one place that stays language-neutral
 by convention: it is the declaration of the contract, not an implementation of it. Three
-things mirror it and must not drift —
+things mirror it and must not drift.
 `sdk/ts/src/interface.ts` (the committed transcription), the Rust trait in `sdk/rs`, and
 the Python surface exposed over the seam. If a signature changes here it changes in all
 three, and it needs both owners (see CLAUDE.md, "The interface contract is frozen").
@@ -287,7 +287,8 @@ interface ErebusClient {
   // Read all offer state visible to this party.
   readChannelState(handle: ChannelHandle): Promise<ChannelState>;
 
-  // Accept an offer AND settle atomically. One state transition.
+  // Payer action: the caller accepts an offer and spends its own private notes to the
+  // offer author, atomically. A payee confirms agreement by authoring the final offer.
   acceptAndSettle(handle: ChannelHandle, offerId: OfferId): Promise<SettlementReceipt>;
 
   // Export a self-contained bearer viewing grant for a third party (the Kleidouchos).
@@ -305,7 +306,7 @@ interface OfferTerms {
   amount: bigint;            // token base units
   token: ContractAddress;    // ERC-20 address
   deadline: number;          // unix seconds
-  memoHash: bigint;          // 128-bit — hash of off-chain detail, not the detail itself
+  memoHash: bigint;          // 128-bit: hash of off-chain detail, not the detail itself
 }
 
 type OfferStatus =
@@ -350,14 +351,14 @@ interface DisclosedRecord {
 }
 
 // Frozen 2026-07-30. Grouped by what the caller should do about it, which is the only
-// distinction the agent layer needs — an agent cannot act on twelve separate codes.
+// distinction the agent layer needs: an agent cannot act on twelve separate codes.
 type SettlementErrorCode =
   // Do not retry. The offer is wrong; build a different one.
   | "OFFER_EXPIRED"
   | "OFFER_UNKNOWN"
   | "ALREADY_SETTLED"
   | "NOT_YOUR_OFFER"
-  | "AMOUNT_MISMATCH"        // acceptance and payment disagree — see friction F23
+  | "AMOUNT_MISMATCH"        // acceptance and payment disagree: see friction F23
   | "INSUFFICIENT_NOTES"
   | "INDEX_CONFLICT"         // contiguity or write-once; the subchannel state is not what we thought
   // Retry may succeed.
@@ -368,10 +369,10 @@ type SettlementErrorCode =
   // Terminal for this counterparty or this deposit.
   | "SCREENING_REJECTED"
   // The prover refused and told us nothing. JSON-RPC -32603 carries no reason at all,
-  // so this is genuinely opaque rather than lazily mapped — see friction F20.
+  // so this is opaque rather than lazily mapped. See friction F20.
   | "PROOF_FAILED"
   // Seam-level, added 2026-07-30 when erebus-cli was built. These fail before any
-  // protocol code runs, so they are not settlement failures — but they arrive through the
+  // protocol code runs, so they are not settlement failures: but they arrive through the
   // same envelope and agent code must handle them, so they live in the same union.
   | "INVALID_REQUEST"        // malformed call: bad JSON, unknown method, a field that is not a felt
   | "IDENTITY_UNAVAILABLE";  // the key file could not be read
@@ -399,11 +400,11 @@ explicitly, which also makes the 2^64 collision resistance a visible choice rath
 buried one.
 
 **`withdrawn` is gone, and not because it was unimplemented.** It cannot be made to work.
-Notes are write-once, so an offer cannot be deleted or edited once written — "withdraw" has
+Notes are write-once, so an offer cannot be deleted or edited once written. "withdraw" has
 to be a *new* message retracting an earlier one. That races with no ordering guarantee: A
 writes the retraction, B has already built a settlement against the original, B's proof
 applies, and A is bound to terms it tried to withdraw. Withdrawal is therefore advisory,
-working only where the counterparty voluntarily checks first — and not depending on that is
+working only where the counterparty voluntarily checks first, and not depending on that is
 the entire point of atomic settlement.
 
 A short `deadline` gives you everything withdrawal was for without the race, because the
@@ -427,12 +428,12 @@ stateDiagram-v2
     expired --> [*]
 ```
 
-Note that `accepted` and `settled` are separated only for observability — on-chain they are one atomic transition. If the proof fails, the acceptance never happened.
+`accepted` and `settled` are separated only for observability. On-chain they are one atomic transition. If the proof fails, the acceptance never happened.
 
 **Every transition here is enforced client-side and nowhere else.** The pool stores notes; it
 has no `status`, no `deadline` and no `replyTo`, so a settlement against a week-old offer
 proves and applies exactly as cleanly as one against a live offer. Unlike an index mistake,
-which reverts, there is no backstop under this diagram — implemented in
+which reverts, there is no backstop under this diagram, implemented in
 `sdk/rs/src/negotiation.rs`, and a rule not in that file is not a rule.
 
 A countered offer stays acceptable. Countering proposes; it does not revoke. Revocation
@@ -454,7 +455,7 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
    locations derived from the pool/channel keys over RPC. This is slower but preserves the
    privacy property; iterating public events or global storage does not.
 
-4. **Sequential indexing is enforced — no gaps.** Channel/subchannel note indices must be contiguous. This is what makes auditor tracing complete and prevents hidden transactions.
+4. **Sequential indexing is enforced, no gaps.** Channel/subchannel note indices must be contiguous. This is what makes auditor tracing complete and prevents hidden transactions.
 
 5. **Salt types are not uniform across encryption hash functions.** The audit flagged this as an integration risk and it was acknowledged, not resolved. Off-chain code that assumes one salt type will produce mismatched hashes and silently fail to locate notes. Verify against the source repo per call site.
 
@@ -466,16 +467,16 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 **What Erebus hides:** the existence of the channel, the participants, the terms, the amounts, the cadence of interaction.
 
-**What Erebus does not hide:** that *someone* interacted with the pool at some time. Anonymity-set strength depends on total pool usage — which is currently small, since STRK20 shipped June 2026. Be honest about this in any pitch.
+**What Erebus does not hide:** that *someone* interacted with the pool at some time. Anonymity-set strength depends on total pool usage, which is currently small, since STRK20 shipped June 2026. Be honest about this in any pitch.
 
 **Trust assumptions:**
-- The threshold auditor system holds the encrypted viewing keys. This is a deliberate compliance tradeoff, not a bug — but it is a trust assumption and should be stated plainly.
+- The threshold auditor system holds the encrypted viewing keys. This compliance design adds a trust assumption that must be stated plainly.
 - The production Discovery Service is an availability dependency. It cannot read note
   contents. The Rust MVP can fall back to slower keyed contract reads, so an indexer outage
   costs latency and RPC load rather than making note discovery cryptographically impossible.
 - **The proving service sees the viewing key.** The transaction it proves carries
   `[user_addr, viewing_key, ...actions]` as calldata, so the operator can decrypt that
-  user's note amounts and see their channel structure. It *cannot* spend — the invocation
+  user's note amounts and see their channel structure. It *cannot* spend, the invocation
   is signed by the user's account over that exact calldata, so it cannot forge a different
   action set. This is a confidentiality exposure, not a theft vector, and it is what OHTTP
   is for: the relay learns who is asking, the gateway learns what is asked, neither learns
@@ -487,9 +488,9 @@ These come from the audited `starkware-libs/starknet-privacy` implementation. Vi
 
 ---
 
-## 7. The "messaging" nuance — read this before pitching
+## 7. The "messaging" nuance: read this before pitching
 
-The channel primitive is designed to carry **notes** — encrypted transaction state — not arbitrary free-text messages.
+The channel primitive is designed to carry **notes**, encrypted transaction state, not arbitrary free-text messages.
 
 **Live correction 2026-07-31:** the original four-note mechanism works mechanically but is
 not confidential. The pool stores each client-chosen salt verbatim in the public high bits
@@ -499,18 +500,18 @@ chunks. See friction.md F30.
 **Wire-v2 correction 2026-07-31:** new Rust channels encrypt and authenticate the canonical
 400-bit message before fragmentation. Five notes provide 595 payload bits: 528 for the
 50-byte ciphertext plus 128-bit tag, 8 for the version marker, and 59 canonical zero bits.
-Existing wire-v1 channels remain readable but are deliberately read-only. Wire v2 is green
+Existing wire-v1 channels remain readable but are intentionally read-only. Wire v2 is green
 offline and still needs a fresh live run and independent review before the privacy target is
 claimed as production evidence.
 
-**How, concretely** — this is narrower than the sentence above implies, and the detail
+**How, concretely**, this is narrower than the sentence above implies, and the detail
 matters. A note has no payload field. Its only client-writable space is the salt, capped
 at `2 ≤ salt < 2^120`. We therefore:
 
-- pin bit 119 to `1` and carry payload in bits 0–118 — **119 usable bits per note**, and
+- pin bit 119 to `1` and carry payload in bits 0–118. **119 usable bits per note**, and
   every salt stays in the contract's valid range;
 - compress `OfferTerms` to **320 bits** (`token` is implied by the subchannel, `nonce` by
-  the note index, `memoHash` truncated to 128 bits) — **400 bits** with framing (type 8,
+  the note index, `memoHash` truncated to 128 bits). **400 bits** with framing (type 8,
   `replyTo` 32, `createdAt` 40);
 - encrypt with AES-256-GCM-SIV under an HKDF-derived directional key, authenticating the
   chain, pool, token and message index as context;
@@ -526,12 +527,12 @@ differing amounts would leak their difference. Zero-amount notes have no varianc
 immune; the settlement note must keep its random salt, and the accept-commitment therefore
 lives in its own data note within the same action set.
 
-### It could carry prose. It shouldn't. — *revised 2026-07-26*
+### It could carry prose. It shouldn't.: *revised 2026-07-26*
 
 An earlier version of this section claimed the primitive simply cannot carry arbitrary
 messages. That was wrong, and we disproved it ourselves: **the salt lane is
 content-agnostic.** Nothing about it cares whether the bits are an `OfferTerms` or ASCII.
-We use 400 bits because that is what an offer needs, not because it is a ceiling — notes
+We use 400 bits because that is what an offer needs, not because it is a ceiling, notes
 are unbounded in count, so you could write as many as you like.
 
 Do not repeat the "it's impossible" claim. Someone will call it, correctly. The real
@@ -543,33 +544,33 @@ argument is cost:
 | Cost per note | one permanent storage felt, one event, **one subchannel index burned forever** |
 | A 280-character message | ~2,240 bits → **19 notes**, 19 dead slots |
 | Latency | ~29 s per round (one proof), regardless of note count |
-| Bidirectional | channels are directional — chat needs two channels and two subchannels |
+| Bidirectional | channels are directional: chat needs two channels and two subchannels |
 | Reclaim | none. `use_note` rejects zero amounts, so data notes can never be nullified |
 
 You are paying one permanent storage slot per fifteen bytes, in a privacy pool, forever.
 It works. It is the most expensive messaging medium you could build.
 
 So: **structured state transitions are what fits the cost envelope.** Prose chat would be
-an off-chain layer keyed off the same shared secret — honest further work, not something
+an off-chain layer keyed off the same shared secret, honest further work, not something
 STRK20 gives us free.
 
 **Action:** confirm this framing with StarkWare early. If their mental model is literal
-encrypted chat, correct it before the demo, not during it — and make the *economic*
+encrypted chat, correct it before the demo, not during it, and make the *economic*
 argument, not the impossibility one.
 
 ---
 
 ## 8. Open questions
 
-Answered 2026-07-25 — evidence in [docs/friction.md](./docs/friction.md).
+Answered 2026-07-25, evidence in [docs/friction.md](./docs/friction.md).
 
 - [x] **Which network?** **Sepolia.** Pool v2.0 live at `0x0254a6…0d91`, verified on-chain
   (`get_version()` = `'2.0'`, `proof_validity_blocks` = 450, fee = 0). Mainnet has no
-  deployment — upstream's mainnet env file is entirely `TODO_` placeholders. (F4)
+  deployment, upstream's mainnet env file is entirely `TODO_` placeholders. (F4)
 - [x] **Proof generation time?** **~29 s per transaction** (vendor figure, 12-core/46 GiB).
-  Per *transaction*, so notes batch — but each negotiation round is its own proof. (F7)
+  Per *transaction*, so notes batch, but each negotiation round is its own proof. (F7)
 - [x] **Can subchannel writes carry arbitrary structured payloads?** **Not in a payload
-  field — there isn't one.** A note is `(packed_value: felt252, token: ContractAddress)`
+  field, there isn't one.** A note is `(packed_value: felt252, token: ContractAddress)`
   and `ClientAction` has no payload variant. But the note salt is client-chosen and
   round-trips verbatim, giving 119 usable bits per note, and notes are unbounded in count.
   So arbitrary payloads *are* carryable by fragmentation, at one permanently-burned
@@ -583,17 +584,17 @@ Answered 2026-07-25 — evidence in [docs/friction.md](./docs/friction.md).
   the **pool identity key** and the channels for them, and takes a **scoped session key**
   via account abstraction to produce the account signature. Three things that decision
   carries:
-  - **The pool key is not the custody boundary — the session key is.** Spending needs both
+  - **The pool key is not the custody boundary, the session key is.** Spending needs both
     `user_private_key` *and* an account signature (`privacy.cairo:207`). Holding the pool
     key alone cannot move funds. Once Erebus can also sign for the account, it holds both
     halves, and the session key's scope is the only remaining limit.
   - **"Agents bring their own wallet" has an asterisk.** Session keys are an account-contract
-    feature, not a Starknet guarantee — Argent and Braavos have them, a plain OZ account
+    feature, not a Starknet guarantee. Argent and Braavos have them, a plain OZ account
     does not. The pool is agnostic (all three routes in `assert_valid_signature` delegate to
     the agent's own account), so the agent's wallet choice decides whether this works.
   - **Pool-key loss is unrecoverable.** Identity derives from it
-    (`hashes.cairo:56-60`). StarkWare's *Enclave* project — "trusted operators securely
-    store offchain secrets, such as STRK20 viewing keys" — is the obvious candidate rather
+    (`hashes.cairo:56-60`). StarkWare's *Enclave* project. "trusted operators securely
+    store offchain secrets, such as STRK20 viewing keys", is the obvious candidate rather
     than building custody ourselves.
 
   **Not an MVP blocker.** The demo provisions both agents itself and holds both accounts
@@ -609,7 +610,7 @@ Still open, and not on the original list:
 - [ ] **The deployed pool is a newer build than the README's contracts table.** Its ABI
   includes `ComputeAndInvoke`, which `PRIVACY-0.14.3-RC.0` lacks. Which prover/discovery
   versions match it? (F4)
-- [ ] **Shielding requires a screening attestation** — and this is now the only hard
+- [ ] **Shielding requires a screening attestation**, and this is now the only hard
   external dependency left. The live pool has a non-zero screener key, so any action set
   with a deposit needs a screener signature fresh within 300 s. Self-hosting does *not*
   supply it: `proof-interceptor` relays a signature from elliptic-proxy, it does not
