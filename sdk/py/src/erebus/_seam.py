@@ -1,21 +1,18 @@
-"""The subprocess seam to ``erebus-cli``.
+"""Subprocess binding to ``erebus-cli``.
 
-Decided 2026-07-30 over PyO3 (ARCHITECTURE §3). Everything in this module is transport:
-build a JSON request, run the binary, parse one JSON envelope, raise or return.
+The project chose this design over PyO3 on 2026-07-30 (ARCHITECTURE §3). This module builds
+a JSON request, runs the binary, and parses one JSON envelope.
 
-**Nothing here computes anything.** No hashing, no felt arithmetic, no salt encoding, no
-entropy. If a change to this file needs a known-answer test, the change is wrong — see the
-tripwire in ``erebus/__init__.py``.
+This module contains no hashing, felt arithmetic, salt encoding, or entropy generation. A
+known-answer test here means that protocol logic crossed the binding boundary. See
+``erebus/__init__.py``.
 
-Key material never passes through this process. :class:`SeamConfig` carries *paths* to two
-key files; the Rust binary opens them. That is the reason subprocess won: the agent's Python
-heap, where model-driven and third-party framework code runs, never holds a pool private key
-at all.
+:class:`SeamConfig` contains paths to two key files. The Rust binary opens them. The Python
+heap never holds a pool private key.
 
 Protocol 2, 2026-08-01. Every method except ``version`` and ``generate_pool_key`` carries
-the same nine-field config block, because ``erebus-cli`` is one-shot and holds nothing
-between invocations. Channel state lives in ``state_dir`` and is addressed by an opaque
-handle.
+the same nine-field configuration because ``erebus-cli`` keeps no process state. Channel
+state lives in ``state_dir`` behind an opaque handle.
 """
 
 from __future__ import annotations
@@ -29,9 +26,7 @@ from typing import Any
 
 __all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable"]
 
-#: How long a call may take. A write is a preflight, a proof (~20 s), a fee estimate, a
-#: submission and a receipt wait, so this is generous. Short enough that a hung child does
-#: not hang an agent forever.
+#: A write includes preflight, a ~20 s proof, fee estimation, submission, and receipt polling.
 DEFAULT_TIMEOUT_SECONDS = 300
 
 
@@ -41,11 +36,10 @@ class SeamUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class ErebusError(Exception):
-    """A structured failure from the Rust client.
+    """Structured failure from the Rust client.
 
     ``code`` is a ``SettlementErrorCode`` (ARCHITECTURE §4). ``retryable`` is the only
-    field agent logic should branch on — an agent cannot sensibly act on twelve distinct
-    codes, but it can always act on "is another attempt worth making".
+    field for retry decisions. Agents do not need separate retry logic for every code.
     """
 
     code: str
@@ -60,12 +54,10 @@ class ErebusError(Exception):
 class SeamConfig:
     """Operator configuration, re-sent on every call.
 
-    The two ``*_key_file`` fields are **paths**. Putting a key value here would defeat the
-    reason this seam is a subprocess, and no code path accepts one.
+    The two ``*_key_file`` fields are paths. No code path accepts key values.
 
-    ``rpc_url`` deserves care. The ``compile_actions`` preflight sends the pool private key
-    as calldata, so a public third-party RPC sees it. Acceptable for a throwaway testnet
-    identity, not for anything else.
+    The ``compile_actions`` preflight sends the pool private key to ``rpc_url`` as calldata.
+    Use an operator-controlled endpoint outside throwaway testnet use.
     """
 
     rpc_url: str
@@ -123,7 +115,7 @@ class Seam:
         :raises ErebusError: the Rust side returned a structured failure.
         :raises SeamUnavailable: the binary could not be run, or answered with something
             that is not a single JSON envelope. That is a broken install rather than a
-            protocol error, so it is deliberately a different exception type.
+            protocol error, so it uses a different exception type.
         """
         request: dict[str, Any] = {"method": method}
         if params is not None:
@@ -146,9 +138,8 @@ class Seam:
         try:
             envelope = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            # Exit status is deliberately not consulted here: the envelope is
-            # authoritative, and a non-JSON stdout means the binary is not the one we
-            # think it is.
+            # The envelope is authoritative. Non-JSON stdout indicates the wrong or broken
+            # binary, regardless of exit status.
             raise SeamUnavailable(
                 f"{method} did not return a JSON envelope "
                 f"(exit {completed.returncode}): {completed.stdout!r}{completed.stderr!r}"
@@ -175,19 +166,17 @@ class Seam:
     # --- Calls that carry no operator configuration -------------------------------
 
     def version(self) -> dict[str, Any]:
-        """Liveness check. Touches no key material, so it is safe to call at startup."""
+        """Checks liveness without reading key material."""
         return self.call("version")
 
     def generate_pool_key(self, path: str | Path) -> dict[str, Any]:
         """Creates a pool identity key file and returns its path and public half.
 
-        The private value is never returned and never crosses this process. Entropy comes
-        from the Rust binary: a key generated here would be a cryptographic decision taken
-        in the wrong place.
+        The private value stays on disk. The Rust binary supplies the entropy.
         """
         return self.call("generate_pool_key", {"path": str(path)})
 
-    # --- The seven interface methods, plus the administrative shield ---------------
+    # --- The seven interface methods, plus administrative/read helpers --------------
 
     def open_channel(self, counterparty: str) -> dict[str, Any]:
         return self.call("open_channel", self._with_config({"counterparty": counterparty}))
@@ -206,6 +195,10 @@ class Seam:
     def read_channel_state(self, handle: str) -> dict[str, Any]:
         return self.call("read_channel_state", self._with_config({"handle": handle}))
 
+    def balance(self) -> dict[str, Any]:
+        """Returns note denominations from Rust without computing them in Python."""
+        return self.call("balance", self._with_config({}))
+
     def accept_and_settle(self, handle: str, offer_id: str) -> dict[str, Any]:
         return self.call(
             "accept_and_settle", self._with_config({"handle": handle, "offer_id": offer_id})
@@ -219,8 +212,7 @@ class Seam:
     def reveal(self, viewing_key: dict[str, Any]) -> dict[str, Any]:
         """Reconstructs a record from a bearer grant.
 
-        The grant travels through opaquely. Reading or reshaping it here would make this
-        package a second opinion on the disclosure format.
+        This method passes the grant without reading or changing its format.
         """
         return self.call("reveal", self._with_config({"viewing_key": viewing_key}))
 

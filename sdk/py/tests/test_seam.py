@@ -1,18 +1,13 @@
-"""Tests for the subprocess seam.
+"""Subprocess binding tests.
 
-**Read the assertions before adding one.** Nothing here asserts a computed value, and that
-is the tripwire, not an accident: if a test in this package ever needs to check that some
-number came out right, this package has started computing something and has become a third
-implementation of the protocol (``erebus/__init__.py``, CLAUDE.md).
+These tests do not assert computed values. Such an assertion would mean that Python has
+become another protocol implementation (``erebus/__init__.py``, CLAUDE.md).
 
-So these assert three things only — a call got through, a result came back with the shape
-the contract promises, and a failure arrived as a structured error rather than a crash. The
-*correctness* of anything inside those results is pinned on the Rust side, against Cairo
-reference vectors, where there is exactly one implementation to be wrong.
+The tests cover transport, response shape, and structured errors. Rust tests check computed
+values against Cairo reference vectors.
 
-Nothing here touches the chain either. ``version`` and ``generate_pool_key`` are local, and
-the config-bearing calls are given inputs that fail argument parsing before any RPC happens.
-A suite that needed a funded testnet account would stop being run.
+These tests do not touch the chain. ``version`` and ``generate_pool_key`` are local. Other
+calls fail argument parsing before an RPC call.
 """
 
 from __future__ import annotations
@@ -37,11 +32,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def key_files(tmp_path: Path) -> tuple[Path, Path]:
-    """Two keys on disk, the way an operator supplies them.
-
-    Note what the test does *not* do: hand either key to Python. It writes files and passes
-    paths, which is the whole custody argument for this seam.
-    """
+    """Writes two operator keys to disk and returns their paths."""
     pool = tmp_path / "pool.key"
     pool.write_text("0x1234567890abcdef\n")
     pool.chmod(0o600)
@@ -85,19 +76,41 @@ def test_version_round_trips(seam: Seam) -> None:
 def test_generate_pool_key_returns_a_path_and_a_public_key(seam: Seam, tmp_path: Path) -> None:
     result = seam.generate_pool_key(tmp_path / "fresh.key")
 
-    # Shape, not value. What the key *should* be is a cryptographic decision made in Rust;
-    # asserting anything about it here would make this package a second opinion on entropy.
+    # Check response shape only. Rust owns entropy generation and value checks.
     assert result["pool_key_file"] == str(tmp_path / "fresh.key")
     assert result["public_key"].startswith("0x")
 
 
 def test_generate_pool_key_never_returns_the_private_value(seam: Seam, tmp_path: Path) -> None:
-    """The one property that matters about this call: the secret stays on disk."""
+    """Checks that the secret stays on disk."""
     path = tmp_path / "secret.key"
     result = seam.generate_pool_key(path)
     private = path.read_text().strip()
 
     assert private not in json.dumps(result)
+
+
+def test_balance_is_a_transport_only_configured_call(
+    seam: Seam, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: dict[str, object] = {}
+
+    def answer(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.update(json.loads(kwargs["input"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(
+            args=[str(CLI)],
+            returncode=0,
+            stdout='{"ok":true,"result":{"notes":["100"],"total":"100","pending":[]}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", answer)
+    result = seam.balance()
+
+    assert sent["method"] == "balance"
+    assert isinstance(sent["params"], dict)
+    assert "config" in sent["params"]  # type: ignore[operator]
+    assert set(result) == {"notes", "total", "pending"}
 
 
 # --- Failures arrive as structure, not as crashes -------------------------------
@@ -121,8 +134,7 @@ def test_a_malformed_argument_raises_rather_than_returning_garbage(seam: Seam) -
 
 
 def test_the_retryable_flag_survives_the_seam(seam: Seam) -> None:
-    """The one field agent logic branches on. If it were dropped or defaulted somewhere in
-    transit, every failure would look permanent and retry logic would silently never run."""
+    """Checks that transport preserves the retry decision."""
     with pytest.raises(ErebusError) as caught:
         seam.call("no_such_method")
 
@@ -136,8 +148,7 @@ def test_an_unknown_method_does_not_hang_or_crash(seam: Seam) -> None:
 
 
 def test_a_config_free_seam_refuses_calls_that_need_one() -> None:
-    """Constructing without config is legal, because keygen and version do not need one.
-    Using it for a protocol call must fail as a broken setup, not as a protocol error."""
+    """A binding without configuration supports only local methods."""
     bare = Seam(binary=CLI)
     bare.version()
 
@@ -154,9 +165,7 @@ def test_a_missing_binary_is_distinguishable_from_a_protocol_error() -> None:
 
 
 def test_non_json_output_is_reported_as_a_broken_install(tmp_path: Path) -> None:
-    """A binary that answers with something other than one JSON envelope is the wrong
-    binary, not a failing call — so it must not surface as ErebusError, which agent code
-    would treat as an ordinary protocol failure and possibly retry forever."""
+    """Non-JSON output indicates a broken installation, not a protocol error."""
     fake = tmp_path / "erebus-cli"
     fake.write_text("#!/bin/sh\necho 'this is not json'\n")
     fake.chmod(0o755)
@@ -169,10 +178,7 @@ def test_non_json_output_is_reported_as_a_broken_install(tmp_path: Path) -> None
 
 
 def test_neither_key_is_passed_through_python(seam: Seam, key_files: tuple[Path, Path]) -> None:
-    """The custody claim, asserted rather than asserted-in-prose.
-
-    The request Python sends must contain each key file's *path* and never its contents.
-    """
+    """Requests contain key-file paths and never key contents."""
     pool, account = key_files
     sent: dict[str, object] = {}
     original = subprocess.run
