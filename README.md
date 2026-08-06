@@ -4,7 +4,7 @@
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
-The target is an **Eleusis** — an encrypted channel that hides the negotiation and its
+The target is an **Eleusis**, an encrypted channel that hides the negotiation and its
 relationship graph. Atomic shielded settlement and scoped reconstruction now work live;
 the Rust SDK now encrypts/authenticates negotiation payloads in wire v2, but that new wire
 has not yet been exercised on-chain or independently reviewed.
@@ -23,7 +23,7 @@ across five salt chunks.
 Its Rust KATs, tamper tests, legacy reads and full offline suite pass; a fresh live v2 run,
 cross-language peer implementation and security review remain. See [F30](./docs/friction.md).
 
-Target is **Starknet Sepolia** — privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
+Target is **Starknet Sepolia**, privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
 Mainnet has no STRK20 deployment yet. Where the stack has fought us is logged honestly in
 [docs/friction.md](./docs/friction.md); the largest constraint so far is that a pool note
 has no payload field, so negotiation state is carried in note salts at 119 bits each.
@@ -40,7 +40,7 @@ Agent-to-agent commerce is arriving on rails that are transparent by default.
 
 None of them hide *who is dealing with whom, how often, and for how much.*
 
-That gap is not theoretical. Recent work on agent interoperability metadata shows that an observer of the A2A/MCP communication graph can recover an interaction's task class well above chance from metadata alone — from the opening of a workflow — and then front-run the pending action at machine speed. Encrypting the payload does not fix this. The leak is the graph, not the message.
+That gap is not theoretical. Recent work on agent interoperability metadata shows that an observer of the A2A/MCP communication graph can recover an interaction's task class well above chance from metadata alone, from the opening of a workflow, and then front-run the pending action at machine speed. Encrypting the payload does not fix this. The leak is the graph, not the message.
 
 No business runs procurement in public. No trading desk wants its counterparty cadence observable. As agents start transacting autonomously, the transparent-by-default rail becomes the blocker.
 
@@ -52,10 +52,10 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Relationship privacy — target, not current** | Keyed storage locations hide efficient lookup, but the current structured salts are public in transaction calldata. Message and relationship privacy are not yet demonstrated. |
+| **Relationship privacy: target, not current** | Keyed storage locations hide efficient lookup, but the current structured salts are public in transaction calldata. Message and relationship privacy are not yet demonstrated. |
 | **Atomic negotiate → settle** | The accepted offer and the shielded payment are one proven state transition. No "agreed but never paid" gap, no separate payment hop. |
-| **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record — terms and payment — to a specific counterparty without exposing anything to the public or leaking data about unrelated users. |
-| **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end — STRK20 ships no paymaster of its own, so this rides on a third party. |
+| **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record: terms and payment: to a specific counterparty without exposing anything to the public or leaking data about unrelated users. |
+| **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end: STRK20 ships no paymaster of its own, so this rides on a third party. |
 
 ## Why Starknet, why STRK20
 
@@ -65,12 +65,20 @@ It provides four things existing rails do not:
   derived from the sender's pool key and both addresses/public identity data, then encrypted
   to the recipient through the pool's channel-info flow. Encrypting Erebus's salt payload is
   still our own wire-design responsibility.
-- **Compliance is native.** Viewing keys are registered encrypted on-chain under a threshold auditor system — the path Tornado Cash never had.
+- **Compliance is native.** Viewing keys are registered encrypted on-chain under a threshold auditor system, the path Tornado Cash never had.
 - **Account abstraction is native**, which is what makes agents first-class actors rather than bolted-on EOAs.
 
 ## Architecture
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for full diagrams, the interface contract, and the data model.
+
+![Erebus system overview, the stack from agent to pool, the three layers, one deal end to
+end, how an offer becomes five notes, the note grid, who sees what, and what the system does
+and does not claim](./docs/assets/erebus-overview.excalidraw.svg)
+
+*One-page map of the whole system. Open the image full size to read the panels, or
+[open it in Excalidraw](https://excalidraw.com/#json=Tgsd4uNGRqrH3wp-E1sfu,AZOvD7vZCyhVtwX6fmibRQ)
+to pan and zoom.*
 
 ```
 Agent A ─┐
@@ -84,35 +92,35 @@ Agent B ─┘                                          │                     
 ## Repo layout
 
 ```
-/sdk/rs         Rust client — primary implementation, holds all key material
-/sdk/ts         TypeScript — differential-test oracle only, ships nothing
-/sdk/py         Thin binding over /sdk/rs — no protocol logic
-/contracts      Cairo — conformance probes against the upstream pool
+/sdk/rs         Rust client: primary implementation, holds all key material
+/sdk/ts         TypeScript: differential-test oracle only, ships nothing
+/sdk/py         Thin binding over /sdk/rs: no protocol logic
+/contracts      Cairo: conformance probes against the upstream pool
 /mcp-server     MCP server (Python) exposing Erebus tools to any agent framework
 /agents         Reference agents demonstrating the loop (Python)
 /docs           Specs, protocol notes, integration guides
 ```
 
-The call path is `agents → mcp-server → sdk/py → sdk/rs → Starknet` — **Python above the
+The call path is `agents → mcp-server → sdk/py → sdk/rs → Starknet`. **Python above the
 binding, Rust below it.** Key material never crosses upward, which makes that boundary an
 enforced one rather than a convention.
 
 **On the Rust client.** Upstream ships a TypeScript SDK and a Rust `discovery-core` crate.
-`discovery-core` covers reads — hashes, storage slots, ECDH, decryption. There is no Rust
+`discovery-core` covers reads, hashes, storage slots, ECDH, decryption. There is no Rust
 write side: nothing builds `ClientAction`s, serialises calldata, signs, or calls the
 prover. Erebus's Rust client fills that gap and is useful outside this project. The
-TypeScript implementation is kept as the oracle it is differential-tested against —
+TypeScript implementation is kept as the oracle it is differential-tested against.
 there's no written spec for the wire format, so two agreeing implementations is the
 strongest correctness signal on offer.
 
 **On Python above it.** The official `mcp` SDK is first-class, so the tool layer has no
 reason to be TypeScript. `/sdk/py` exists only to reach Rust from Python; it is
-deliberately not a third client, because a third implementation is a third place for a
+not a third client, because a third implementation is a third place for a
 wrong hash preimage to hide silently.
 
 ## Brand vocabulary
 
-Used in docs, marketing, and conversation. **Not** in the API surface — see [CLAUDE.md](./CLAUDE.md) for the naming policy.
+Used in docs, marketing, and conversation. **Not** in the API surface, see [CLAUDE.md](./CLAUDE.md) for the naming policy.
 
 | Term | Meaning |
 |---|---|
@@ -126,8 +134,8 @@ Used in docs, marketing, and conversation. **Not** in the API surface — see [C
 
 ## Team
 
-- **Poulav Bhowmick** — protocol, Cairo, Starknet. StarkWare track winner at ETHIndia 2024; Starknet Foundation grantee; Ethereum Protocol Fellow.
-- **Ishita** — agents, orchestration, ML. Multi-agent systems, x402 and ERC-8004 agent-payment infrastructure.
+- **Poulav Bhowmick**, protocol, Cairo, Starknet. StarkWare track winner at ETHIndia 2024; Starknet Foundation grantee; Ethereum Protocol Fellow.
+- **Ishita**, agents, orchestration, ML. Multi-agent systems, x402 and ERC-8004 agent-payment infrastructure.
 
 ## License
 
