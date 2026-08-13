@@ -38,7 +38,7 @@ def main() -> int:
                 print(f"  pending {amount:>20}  = {amount / 1e18:.4f}")
             print("it becomes spendable once it is proving_block_lag blocks deep")
             return 0
-        print("no unspent notes — this identity cannot settle anything yet")
+        print("no unspent notes; this identity cannot settle anything yet")
         print("fund it with: agent.sh <env> fund <amount_wei>")
         return 0
 

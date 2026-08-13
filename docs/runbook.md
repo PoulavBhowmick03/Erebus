@@ -261,14 +261,14 @@ For prompts and the full two-agent sequence, use [agent-brief.md](./agent-brief.
 
 | step | tx | result |
 |---|---|---|
-| A shield | `0x5f57eb…b9e2` | block 12715064, fee 3.04 STRK |
-| B shield | `0x10c3376c…77e0` | registered |
-| A `open_channel` → B |: | `ch_a8f81fdc…2d59` |
-| A `propose_offer` |: | `ch_a8f81fdc…2d59:us:0` |
+| A shield | `0x5f57eb...b9e2` | block 12715064, fee 3.04 STRK |
+| B shield | `0x10c3376c...77e0` | registered |
+| A `open_channel` → B |: | `ch_a8f81fdc...2d59` |
+| A `propose_offer` |: | `ch_a8f81fdc...2d59:us:0` |
 | `read_channel_state` |: | offer returned, all fields exact |
-| B `open_channel` → A |: | `ch_c4d09ef1…5aab` |
+| B `open_channel` → A |: | `ch_c4d09ef1...5aab` |
 | B `counter_offer` |: | 1 STRK counter returned and A read it |
-| A `accept_and_settle` | `0x44289c…84bb7` | accepted on L2; nullifier exists |
+| A `accept_and_settle` | `0x44289c...84bb7` | accepted on L2; nullifier exists |
 | independent `reveal` | read-only | full offers, acceptance and exact payment reconstructed |
 
 Screening never came up. StarkWare's prover mints the attestation via its

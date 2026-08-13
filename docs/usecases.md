@@ -59,7 +59,7 @@ The current client verifies registration before it opens a channel
 
 ## Information and trust boundaries
 
-“Private” has a different meaning for each observer.
+"Private" has a different meaning for each observer.
 
 | Observer | What the observer receives | Important limit |
 |---|---|---|
@@ -337,14 +337,14 @@ Use this description:
 
 Do not say these things:
 
-- “Erebus hides that a negotiation happened.” The current wire shape is identifiable.
-- “Erebus provides fair exchange.” It does not prove off-chain delivery.
-- “The viewing grant proves both parties and their policy.” Participant metadata is not
+- "Erebus hides that a negotiation happened." The current wire shape is identifiable.
+- "Erebus provides fair exchange." It does not prove off-chain delivery.
+- "The viewing grant proves both parties and their policy." Participant metadata is not
   independently authenticated by the current reveal path.
-- “The grant is access-controlled for the named grantee.” It is a bearer secret.
-- “This is a Rust rewrite of the Starknet privacy SDK.” It is a selective client.
-- “This is production-ready.” Wire-v2 live evidence and security review remain open.
-- “Self-hosting the prover removes every trust assumption.” The write RPC and pool auditor
+- "The grant is access-controlled for the named grantee." It is a bearer secret.
+- "This is a Rust rewrite of the Starknet privacy SDK." It is a selective client.
+- "This is production-ready." Wire-v2 live evidence and security review remain open.
+- "Self-hosting the prover removes every trust assumption." The write RPC and pool auditor
   remain in the confidentiality model.
 
 ## STRK20 references

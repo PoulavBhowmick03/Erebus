@@ -174,7 +174,7 @@ amount = encrypted_amount - mask mod 2^128
 
 See `sdk/rs/src/decrypt.rs:103` and `sdk/rs/src/hashes.rs:186`.
 
-Therefore, “encrypted value at a secret-derived location” means specifically:
+Therefore, "encrypted value at a secret-derived location" means specifically:
 
 - The **amount** is additively masked.
 - The **salt** occupies the high bits of the stored field and is public once the
@@ -234,10 +234,10 @@ STRK20 spend marker   = owner-secret-derived nullifier
 | Trusted setup            | No circuit-specific trusted ceremony                                   | Groth16 keys are circuit-specific and require a production ceremony       |
 | Current maturity         | STRK20 is deployed; Erebus remains pre-MVP                             | WIP testnet reference implementation, unaudited                           |
 
-## What “variable ordered action sequence” means
+## What "variable ordered action sequence" means
 
-STRK20 does not prove only one hard-coded equation such as “two notes become two
-notes.” It proves the execution of a list of typed client actions.
+STRK20 does not prove only one hard-coded equation such as "two notes become two
+notes." It proves the execution of a list of typed client actions.
 
 The action families are:
 
@@ -254,7 +254,7 @@ phase 7: InvokeExternal / ComputeAndInvoke
 
 See `sdk/rs/src/actions.rs:36`.
 
-“Variable” means that the list can contain different numbers of actions. For
+"Variable" means that the list can contain different numbers of actions. For
 example, a private payment could be:
 
 ```text
@@ -303,7 +303,7 @@ accept-and-settle operation can consume several payment notes and create:
 All of those writes share one action set and one proof. See
 `sdk/rs/src/channel.rs:515`.
 
-## What “fixed 2-input/2-output JoinSplit” means
+## What "fixed 2-input/2-output JoinSplit" means
 
 SPP's base Circom template is parameterized by `nIns` and `nOuts`, but the
 transaction entry points, proving keys, and deployed verifier currently pin

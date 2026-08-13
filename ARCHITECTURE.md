@@ -508,7 +508,7 @@ claimed as production evidence.
 matters. A note has no payload field. Its only client-writable space is the salt, capped
 at `2 ≤ salt < 2^120`. We therefore:
 
-- pin bit 119 to `1` and carry payload in bits 0–118. **119 usable bits per note**, and
+- pin bit 119 to `1` and carry payload in bits 0-118. **119 usable bits per note**, and
   every salt stays in the contract's valid range;
 - compress `OfferTerms` to **320 bits** (`token` is implied by the subchannel, `nonce` by
   the note index, `memoHash` truncated to 128 bits). **400 bits** with framing (type 8,
@@ -564,7 +564,7 @@ argument, not the impossibility one.
 
 Answered 2026-07-25, evidence in [docs/friction.md](./docs/friction.md).
 
-- [x] **Which network?** **Sepolia.** Pool v2.0 live at `0x0254a6…0d91`, verified on-chain
+- [x] **Which network?** **Sepolia.** Pool v2.0 live at `0x0254a6...0d91`, verified on-chain
   (`get_version()` = `'2.0'`, `proof_validity_blocks` = 450, fee = 0). Mainnet has no
   deployment, upstream's mainnet env file is entirely `TODO_` placeholders. (F4)
 - [x] **Proof generation time?** **~29 s per transaction** (vendor figure, 12-core/46 GiB).

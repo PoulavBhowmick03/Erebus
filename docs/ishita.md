@@ -194,7 +194,7 @@ disagree, the enum is right and this section is stale.
 One JSON object in on stdin, one out on stdout:
 
 ```json
-{ "method": "propose_offer", "params": { "config": { … }, "handle": "…", "terms": { … } } }
+{ "method": "propose_offer", "params": { "config": { ... }, "handle": "...", "terms": { ... } } }
 ```
 
 **Every method except `version` carries the same `config` block.** The CLI is one-shot and
@@ -203,9 +203,9 @@ state is recovered from `state_dir` by handle. All nine fields are required:
 
 ```json
 "config": {
-  "rpc_url":           "…",   "prover_url":     "…",
-  "pool_address":      "0x…", "chain_id":       "0x…",
-  "account_address":   "0x…", "token":          "0x…",
+  "rpc_url":           "...",   "prover_url":     "...",
+  "pool_address":      "0x...", "chain_id":       "0x...",
+  "account_address":   "0x...", "token":          "0x...",
   "pool_key_file":     "/path/to/pool.key",
   "account_key_file":  "/path/to/account.key",
   "state_dir":         "/path/to/state"
@@ -229,7 +229,7 @@ contents, stop, that is the architecture violation the guardrails mean.
 | `reveal`             | `viewing_key` _(no handle: see below)_                             |
 | `shield`             | `amount`: administrative funding, not part of the negotiation loop |
 
-`terms` is `{ "amount": "…", "token": "0x…", "deadline": <number>, "memo_hash": "…" }`.
+`terms` is `{ "amount": "...", "token": "0x...", "deadline": <number>, "memo_hash": "..." }`.
 `amount` and `memo_hash` take decimal or `0x` hex; `token` is hex only. `deadline` is a JSON
 number, not a string.
 
@@ -280,7 +280,7 @@ settlement still needs one fresh live run after the payer/payee guard landed.
 
 ### I2.2: Record the demo
 
-2–3 minutes. Not longer. StarkWare asked for validation, not a product launch.
+2-3 minutes. Not longer. StarkWare asked for validation, not a product launch.
 
 - [ ] Show the two agents negotiating autonomously
 - [ ] Show that an observer sees nothing on-chain

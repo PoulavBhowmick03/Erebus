@@ -1,0 +1,17 @@
+{
+  "note": "Public calldata-shaped positive control from the known-broken live wire-v1 acceptance documented in friction F30.",
+  "expected": {
+    "message_type": "accept",
+    "reply_to": 0,
+    "created_at": 1785480617,
+    "amount": 1000000000000000000,
+    "deadline": 1785566954,
+    "memo_hash": "0x5678"
+  },
+  "calldata": [
+    "0x80000000000000000000000000567800000000000000000000000000000001",
+    "0xed674ec8000000000000d4db2dd40000000000000000000000000000000002",
+    "0x81a9b116a40000000000000000378200000000000000000000000000000003",
+    "0x80000000000000000000180000000000000000000000000000000000000004"
+  ]
+}

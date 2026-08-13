@@ -76,7 +76,7 @@ What the Rust milestone does **not** cover:
 
 |                  | Answer                                                                                                                                    | Consequence                                             |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| **P0.1** network | **Sepolia.** Pool v2.0 at `0x0254a6…0d91`, verified on-chain. Mainnet has no deployment at all.                                           | Not a preference: the only option.                     |
+| **P0.1** network | **Sepolia.** Pool v2.0 at `0x0254a6...0d91`, verified on-chain. Mainnet has no deployment at all.                                           | Not a preference: the only option.                     |
 | **P0.2** payload | **No payload field.** A note is `(packed_value: felt252, token: ContractAddress)`. The salt is public and carries 119 client-chosen bits. | Wire v2: 5 authenticated-encryption chunks per message. |
 
 **Decided:**
@@ -115,7 +115,7 @@ What the Rust milestone does **not** cover:
 
 2. ~~**Which prover / discovery tags match the deployed class hash.**~~ **CLOSED
    2026-07-31.** The shield's proof validated on-chain against the live pool, which is a
-   stronger answer than the matrix could give, the matrix pins RC.0 → `0x52107f…633`,
+   stronger answer than the matrix could give, the matrix pins RC.0 → `0x52107f...633`,
    which is not what is live, and chasing that discrepancy would have been wasted effort.
    _Lesson worth keeping: for a version-compatibility question, one transaction beats any
    amount of documentation archaeology._
@@ -351,12 +351,12 @@ derives a slot nobody wrote to and the note is simply "not found", with no error
       TS oracle, 8 KATs green _(`sdk/rs/src/actions.rs`, vectors in
       `tests/fixtures/ts-clientaction-serde.json`). Includes a `NoteSalt` newtype for the
       `(1, 2^120)` bound and a `phase()` mapping, phase order is intentionally not variant
-      order, see friction.md F15._ **Unreviewed, written by Claude, needs your pass.**
+      order, see friction.md F15._ **Not yet line-reviewed.**
 - [x] **`INVOKE_TXN_V3` construction**, tx hash KAT'd against starknet.js, 5 tests green
       _(`sdk/rs/src/tx.rs`, vectors in `tests/fixtures/starknetjs-invoke-v3-txhash.json`).
       Covers the `proof_facts` branch both ways, it is a privacy-specific extension to the
       v3 preimage, so no off-the-shelf Starknet crate hashes this correctly. friction.md F16._
-      **Unreviewed, written by Claude, needs your pass.**
+      **Not yet line-reviewed.**
 - [x] **Signing**. Stark ECDSA, 7 KATs _(`sdk/rs/src/signing.rs`)_. `starknet-crypto`'s
       RFC-6979 derivation matches `@scure/starknet` exactly, so signatures are byte-identical
       to starknet.js, not merely valid. Both directions pinned: ours verify under their keys,
@@ -440,7 +440,7 @@ directional.
       subchannel into **one action set, one proof** _(`sdk/rs/src/channel.rs`)_. 9 tests.
       `setup` skips registration for a returning identity, since the viewing key is
       immutable and a second `SetViewingKey` reverts on the WriteOnce.
-      **Unreviewed, written by Claude.**
+      **Not yet line-reviewed.**
 - [x] **`FeltEntropy` distinct from `NoteSalt`**, constraint 5 (non-uniform salt types)
       made a compile error rather than a comment. Channel-level `random`/`salt` are
       `felt252` with a non-zero requirement; note salts are 120-bit `u128`. Mixing them was
@@ -448,7 +448,7 @@ directional.
 - [x] **Read side implemented**. `sdk/rs/src/decrypt.rs` (5 decrypt functions, 12 KATs in
       `tests/decrypt_conformance.rs`) and `sdk/rs/src/read.rs` (`ChannelReader`, transcript
       walk, both-direction `reconstruct`, 9 tests in `tests/read_path.rs`). 4 mutations
-      checked. **Unreviewed, written by Claude.**
+      checked. **Not yet line-reviewed.**
 
       *Decision recorded: implemented rather than importing `discovery-core`.* It pins
       `starknet-core`/`crypto`/`providers` to a `software-mansion/starknet-rust` fork by git
@@ -507,7 +507,7 @@ Cairo is written for this. SDK-side encoding plus direct `ClientAction` construc
   `deadline` 64 + `memoHash` 128. `token` is dropped, the subchannel _is_ the token.
   `nonce` is dropped, the note index already orders and uniquely identifies.
 - **119 bits per note, not 120.** The contract requires `2 ≤ salt < 2^120`, so a chunk
-  landing on 0 or 1 would be rejected. Bit 119 is pinned to 1; payload occupies bits 0–118.
+  landing on 0 or 1 would be rejected. Bit 119 is pinned to 1; payload occupies bits 0-118.
   Salt is then always in `[2^119, 2^120)` and always valid.
 - AES-256-GCM-SIV encrypts/authenticates the 400-bit plaintext. HKDF scopes the key and
   derived nonce to chain, pool, directional channel key, token and message index.
@@ -538,7 +538,7 @@ Cairo is written for this. SDK-side encoding plus direct `ClientAction` construc
       Caught a real disagreement on the first run, friction.md **F19**, the TS accepts memo
       hashes above the STARK prime and the Rust rejects them, which bites anyone who passes
       a SHA-256 or Keccak digest. **Needs an interface decision, not a codec fix.**
-      **Unreviewed, written by Claude.**
+      **Not yet line-reviewed.**
       _Also: the ASCII layout table in `wire.ts` module docs is wrong, it puts the header
       in note 0, but the packing puts it in note 3. The Rust module docs carry the corrected
       table and a test pins it._
@@ -553,13 +553,13 @@ Cairo is written for this. SDK-side encoding plus direct `ClientAction` construc
       remembered: the policy layer cannot reach key material because nothing returns it.
       Also pins that channels are directional (A→B ≠ B→A), sharing a key between the two
       directions would put both parties' messages at the same slots.
-      **Unreviewed, written by Claude.**
+      **Not yet line-reviewed.**
 - [x] Contiguous indexing, with a negative test. `SubchannelCursor` is now the single index
       allocator per subchannel _(`sdk/rs/src/subchannel.rs`, 9 tests in
       `tests/index_contiguity.rs`, 3 mutations checked)_. It mirrors **both** contract rules,
       which turn out to be one rule: `INDEX_NOT_SEQUENTIAL` (`privacy.cairo:737-746`) plus
       write-once `NON_ZERO_VALUE` (`:932-946`) means the index space is an allocator, not a
-      parameter. **Unreviewed, written by Claude.**
+      parameter. **Not yet line-reviewed.**
 
       *Found a real bug doing this.* `_client_apply_actions` (`:755-777`) applies each
       `WriteOnce` as it walks, so the contiguity check on a note **sees notes the same action
@@ -569,7 +569,7 @@ Cairo is written for this. SDK-side encoding plus direct `ClientAction` construc
       sorting creations ascending. Inferred from source, not yet observed on-chain, verify
       at P2.0. Written up as **F21**.
 
-- [ ] **INVALIDATED BY F29: “a second deal opens a new channel” is impossible.** The pool's
+- [ ] **INVALIDATED BY F29: "a second deal opens a new channel" is impossible.** The pool's
       channel key has no index and its marker is WriteOnce, so a pair has one directional
       channel forever. Combined with Erebus's terminal settlement rule, the current client
       lets a pair trade exactly once. This does not block the one-deal MVP, but it is the
@@ -586,7 +586,7 @@ Cairo is written for this. SDK-side encoding plus direct `ClientAction` construc
       _(`sdk/rs/src/negotiation.rs`, 10 tests in `tests/negotiation_state.rs`, 3 mutations
       checked)_. Enforces: expiry by deadline, settle-once, you cannot accept your own offer,
       an `Accept` is not itself acceptable, and a `reply_to` pointing at a message that was
-      never seen is refused at record time. **Unreviewed, written by Claude.**
+      never seen is refused at record time. **Not yet line-reviewed.**
 
       **These rules have no backstop.** Everywhere else in the SDK a mistake reverts on-chain
      , a bad index, a malformed set. Here the pool has no `status`, `deadline` or `replyTo`,
@@ -645,7 +645,7 @@ Three rounds ≈ 90 s of proving before settlement even starts.
 - [ ] Measure whether it scales with action count, matters for the 5-note wire-v2 message
 - [ ] Record the real number in `friction.md` and revise the demo script around it
 
-**Why it matters:** a 2–3 minute recording cannot show several rounds in real time at ~29 s
+**Why it matters:** a 2-3 minute recording cannot show several rounds in real time at ~29 s
 per proof. Decide with Ishita whether the demo shows fewer rounds, is time-compressed in the
 edit, or is honest about the wait.
 
@@ -707,13 +707,13 @@ The core novelty. Acceptance and shielded transfer must be one proven state tran
       note, then the five-note acceptance record, in one `ActionSet` → one proof. 12 tests.
       Rejects a non-`Accept` record, a zero payment, an unfunded settlement, and a payment
       index colliding with the record's range (they share one subchannel index space).
-      **Unreviewed, written by Claude.**
+      **Not yet line-reviewed.**
 - [x] **`RandomSalt` vs structured salt as distinct types** _(`sdk/rs/src/actions.rs`)_.
       Settlement is the first action set mixing value-bearing and data notes, so "structured
       salts only on zero-amount notes" had to stop being a rule and become a signature.
       `value_note` will not accept a wire salt. Mutation-tested.
 - [x] **Live atomic success:** acceptance record, exact 1 STRK payment note and spent
-      nullifier landed through one proof in transaction `0x44289c…84bb7`. Both identities
+      nullifier landed through one proof in transaction `0x44289c...84bb7`. Both identities
       reconstruct the same settled book. A intentionally invalid proof remains an offline
       negative test rather than a live transaction.
 - [x] Return a `SettlementReceipt` with offer id, transaction hash, spent nullifiers and
@@ -736,7 +736,7 @@ state untouched.
 - [x] Reconstruct the full record: participants, all offers, and settlement.
       `disclosure::reveal` _(`sdk/rs/src/disclosure.rs`, 12 tests in `tests/disclosure.rs`)_.
       Attributes every message to an address, and keeps `agreed_amount` and `paid_amount`
-      separate so an auditor can check they match. **Unreviewed, written by Claude.**
+      separate so an auditor can check they match. **Not yet line-reviewed.**
 - [x] Verify no leakage about unrelated users or channels, pinned three ways: a grant for
       A↔B reveals nothing of A↔C, nothing of a second token between the same parties, and
       confers no spending authority (a nullifier needs the pool key, which no grant carries).

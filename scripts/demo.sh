@@ -67,8 +67,8 @@ if call "$ENV_A" read_channel_state "{\"handle\":\"$HANDLE\"}" \
 
 This pair has already settled, and the channel is terminal.
 
-There is exactly one channel per (sender, recipient) pair — the pool derives the channel
-key without an index and writes its marker WriteOnce — so this is not a state you can
+There is exactly one channel per (sender, recipient) pair. The pool derives the channel
+key without an index and writes its marker WriteOnce, so this is not a state you can
 clear locally. To run the demo again, create a third identity (docs/runbook.md §1) and
 point ENV_B at it.
 MSG
@@ -96,7 +96,7 @@ import json, sys
 amount, deadline = int(sys.argv[1]), int(sys.argv[2])
 offers = json.loads(sys.argv[3])["result"]["offers"]
 if not offers:
-    sys.exit("FAIL: transcript empty after a successful write — the note ids are misderived")
+    sys.exit("FAIL: transcript empty after a successful write; the note ids are misderived")
 t = offers[-1]["terms"]
 assert t["amount"] == amount, f'amount {t["amount"]} != {amount}'
 assert t["deadline"] == deadline, f'deadline {t["deadline"]} != {deadline}'

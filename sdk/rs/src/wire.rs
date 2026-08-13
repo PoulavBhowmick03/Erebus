@@ -153,7 +153,7 @@ pub enum WireError {
     #[error("replyTo 2^32-1 is reserved as the 'no reply' sentinel")]
     ReservedReplyTo,
     /// A salt lacked the pinned format flag, so it is not an Erebus data note.
-    #[error("salt at slot {0} is missing the format flag — not an Erebus data note")]
+    #[error("salt at slot {0} is missing the format flag, so it is not an Erebus data note")]
     MissingFlag(usize),
     /// The type code did not name a known message type.
     #[error("unknown message type code: {0}")]

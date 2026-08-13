@@ -93,7 +93,7 @@ fn invocation(f: &Fixture) -> InvokeV3 {
     }
 }
 
-/// The whole point: sign the invocation we build, and get the SDK's bytes back.
+/// Sign the invocation we build, and get the SDK's bytes back.
 #[test]
 fn we_reproduce_the_sdk_signature_exactly() {
     let f = load();

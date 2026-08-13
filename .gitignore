@@ -22,3 +22,10 @@ contracts/target/
 .vscode/
 .agents/
 .claude/
+
+# Personal working notes and generated study aids. Not part of the project.
+MISSION.md
+NOTES.md
+RESOURCES.md
+lessons/
+reference/

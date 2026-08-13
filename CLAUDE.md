@@ -117,7 +117,7 @@ StarkWare asked for an MVP to validate the loop. Not a product. The failure mode
 **In scope:**
 - Two agents, one channel, offer/counter/accept, one atomic shielded settlement, one viewing-key reveal.
 - MCP server exposing the tools.
-- A 2–3 minute recorded demo of the happy path.
+- A 2-3 minute recorded demo of the happy path.
 - An honest written list of where the stack fought us.
 
 **Out of scope, do not build these:**

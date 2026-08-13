@@ -2,7 +2,7 @@
 name = "erebus-sdk"
 version = "0.0.0"
 edition = "2021"
-description = "Rust client for Erebus — private agent coordination on STRK20"
+description = "Rust client for Erebus: private agent coordination on STRK20"
 license = "Apache-2.0"
 
 [dependencies]

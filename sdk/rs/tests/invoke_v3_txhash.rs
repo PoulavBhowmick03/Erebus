@@ -155,7 +155,7 @@ fn proof_facts_change_the_hash() {
     assert_ne!(
         without.transaction_hash(),
         with.transaction_hash(),
-        "adding proof facts must change the hash — otherwise the proof is not bound to the tx"
+        "adding proof facts must change the hash, otherwise the proof is not bound to the tx"
     );
 }
 

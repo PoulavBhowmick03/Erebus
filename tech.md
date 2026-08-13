@@ -1,9 +1,14 @@
 # Erebus Rust SDK and MCP server: source-grounded technical explanation
 
-This document describes the repository as checked on 2026-08-05. A citation such as
-[`sdk/rs/src/client.rs:575-646`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L575-L646) means the claim is visible at those source lines. “I’m
-inferring…” marks reasoning that the code does not state directly. Operational test results
-are labelled as execution evidence rather than disguised as source facts.
+> **Stale as of 2026-08-07.** This describes the tree at 2026-08-05, before change-note
+> settlement and before the live wire-v2 run. Settlement semantics in §"Payments" are
+> out of date. Read it for orientation and check every current behaviour against source.
+> [ARCHITECTURE.md](./ARCHITECTURE.md) is the maintained document.
+
+A citation such as
+[`sdk/rs/src/client.rs:575-646`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L575-L646) means the claim is visible at those source lines. "Inferred"
+marks reasoning that the code does not state directly. Test results are labelled as
+execution evidence rather than presented as source facts.
 
 ## Orientation: what Erebus is and how one deal works
 
@@ -33,7 +38,7 @@ and how access to that transcript can be delegated ([`sdk/rs/src/wire.rs:1-45`](
    `apply_actions`. The Rust client models the pool's ten action variants and their Cairo
    serialization ([`sdk/rs/src/actions.rs:288-434`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L288-L434)).
 2. **Erebus is the application protocol over those primitives.** It gives five consecutive
-   zero-value notes the meaning “one offer, counter, or acceptance,” defines reply and expiry
+   zero-value notes the meaning "one offer, counter, or acceptance," defines reply and expiry
    rules, and combines the final acceptance with the payment spend/create actions
    ([`sdk/rs/src/wire.rs:21-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L21-L35), [`sdk/rs/src/negotiation.rs:163-193`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L163-L193),
    [`sdk/rs/src/channel.rs:515-610`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L515-L610)).
@@ -47,7 +52,7 @@ The distinction matters when explaining security. STRK20 proves validity of the 
 private-note transition. Erebus's Rust client checks the application meaning. For example,
 it checks that the payment amount equals the accepted amount before asking for that proof
 ([`sdk/rs/src/channel.rs:545-555`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L545-L555)). The pool does not independently understand that a group of
-zero-value notes means “Alice accepted Bob's offer”; that interpretation lives in the Erebus
+zero-value notes means "Alice accepted Bob's offer"; that interpretation lives in the Erebus
 wire decoder and negotiation state machine ([`sdk/rs/src/read.rs:175-230`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L175-L230),
 [`sdk/rs/src/negotiation.rs:163-193`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L163-L193)).
 
@@ -151,7 +156,7 @@ itself evidence that the Rust, prover, RPC, or pool path ran.
 Wire v2 encrypts and authenticates negotiation contents before placing ciphertext fragments
 in public salts ([`sdk/rs/src/wire.rs:3-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L3-L17), [`sdk/rs/src/wire.rs:29-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L29-L35)). Note discovery is
 keyed: someone without the channel key cannot directly compute the locations the reader asks
-for ([`sdk/rs/src/read.rs:7-19`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L7-L19)). **I'm inferring the observer consequence from those two
+for ([`sdk/rs/src/read.rs:7-19`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L7-L19)). **Inferred, not stated by the code: the observer consequence follows from those two
 mechanisms:** an observer without the channel key cannot decode the fixed offer fields or use
 the Erebus reader to locate the transcript; verify this claim against a transaction trace and
 an independent wire-v2 review, neither of which the code itself supplies.
@@ -193,7 +198,7 @@ authenticates who issued the grant ([`sdk/rs/src/disclosure.rs:106-146`](https:/
 
 ### Why it is designed this way: choices and tradeoffs
 
-This table records the reasons stated by the source and architecture notes. “Cost” means a
+This table records the reasons stated by the source and architecture notes. "Cost" means a
 mechanical consequence of the choice, not a recommendation that the choice was right or wrong.
 
 | Design choice | Why the repository chose it | What the choice provides | Concrete cost or limit |
@@ -205,8 +210,8 @@ mechanical consequence of the choice, not a recommendation that the choice was r
 | Use directional channel keys and token-specific subchannels | This follows the pool's channel construction: the sender derives a key using its private key, while the recipient learns it through encrypted channel information ([`sdk/rs/src/channel.rs:19-24`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L19-L24)). Token is already part of the subchannel, so it need not occupy message bits ([`sdk/rs/src/channel.rs:282-295`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L282-L295)). | A reader holding one directional key learns only that direction and token-scoped note locations ([`sdk/rs/src/read.rs:99-110`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L99-L110)). | A complete negotiation requires two channel keys and both parties to establish reverse directions; a disclosure grant must carry both ([`sdk/rs/src/disclosure.rs:24-30`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L24-L30)). |
 | Use keyed discovery with contiguous indices instead of event scanning | The note ID is derived from the channel key, token, and index, so an authorized reader can request exact slots without enumerating everyone else's notes ([`sdk/rs/src/read.rs:7-19`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L7-L19), [`sdk/rs/src/read.rs:149-172`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L149-L172)). Contiguity makes the first absent slot a sound end marker ([`sdk/rs/src/read.rs:21-25`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L21-L25)). | Discovery does not require publishing an index that maps all pool activity into relationships ([`sdk/rs/src/channel.rs:26-30`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L26-L30)). | Every writer must serialize allocation and never create gaps; a gap makes later notes undiscoverable, while direct RPC discovery costs repeated reads ([`sdk/rs/src/channel.rs:265-269`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L265-L269), [`sdk/rs/src/read.rs:149-172`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/read.rs#L149-L172)). |
 | Put acceptance and payment in one action set | The design wants no committed acceptance without its corresponding payment. One action set shares one proof and one `apply_actions` transition ([`sdk/rs/src/channel.rs:515-523`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L515-L523)). | Both state changes land or neither does, and the Rust builder enforces the pool's spend-before-create phase ordering before proving ([`sdk/rs/src/channel.rs:521-523`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L521-L523), [`sdk/rs/src/action_set.rs:121-177`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L121-L177)). | Atomicity alone does not show that the terms and payment agree, so Rust must perform a separate equality check ([`sdk/rs/src/channel.rs:545-555`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L545-L555)). Settlement also leaves the message cursor off-grid, making the current channel a one-deal channel ([`sdk/rs/src/channel.rs:613-623`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L613-L623)). |
-| Require an exact subset of existing notes and create no change | This is the behavior implemented by the MVP selector and settlement construction: it selects notes totalling exactly the offer and creates only the recipient payment note ([`sdk/rs/src/client.rs:819-860`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L860)). **I could not find a source comment establishing that no-change was chosen as a cryptographic necessity; treat it as an MVP implementation limit, not an STRK20 requirement.** | The settlement builder avoids introducing a second owner change note and another allocation path ([`sdk/rs/src/client.rs:819-860`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L860)). | A payer can own enough total value and still be unable to settle. For example, a single larger note cannot pay a smaller price ([`sdk/rs/src/client.rs:819-829`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L829)). |
-| Implement the write path in Rust while retaining TypeScript as an oracle | The crate states that upstream Rust covers discovery but not action building, Cairo serialization, signing, or proving; it also states that silent cryptographic divergence requires known-answer tests ([`sdk/rs/src/lib.rs:3-20`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L3-L20)). | The agent's critical protocol and key-handling path runs in Rust, while fixtures pin agreement with independent Cairo, TypeScript, and starknet.js behavior ([`sdk/rs/tests/cairo_conformance.rs:1-13`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/cairo_conformance.rs#L1-L13), [`sdk/rs/tests/wire_codec.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L1-L10), [`sdk/rs/tests/clientaction_serde.rs:1-11`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/clientaction_serde.rs#L1-L11)). | **I'm inferring the maintenance cost from the duplicated implementations:** every upstream format change must be detected and reconciled in Rust and the fixtures; verify this by updating the pinned sibling revision and rerunning the differential tests. |
+| Require an exact subset of existing notes and create no change | This is the behavior implemented by the MVP selector and settlement construction: it selects notes totalling exactly the offer and creates only the recipient payment note ([`sdk/rs/src/client.rs:819-860`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L860)). **No source comment establishes that no-change was chosen as a cryptographic necessity; treat it as an MVP implementation limit, not an STRK20 requirement.** | The settlement builder avoids introducing a second owner change note and another allocation path ([`sdk/rs/src/client.rs:819-860`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L860)). | A payer can own enough total value and still be unable to settle. For example, a single larger note cannot pay a smaller price ([`sdk/rs/src/client.rs:819-829`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L819-L829)). |
+| Implement the write path in Rust while retaining TypeScript as an oracle | The crate states that upstream Rust covers discovery but not action building, Cairo serialization, signing, or proving; it also states that silent cryptographic divergence requires known-answer tests ([`sdk/rs/src/lib.rs:3-20`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L3-L20)). | The agent's critical protocol and key-handling path runs in Rust, while fixtures pin agreement with independent Cairo, TypeScript, and starknet.js behavior ([`sdk/rs/tests/cairo_conformance.rs:1-13`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/cairo_conformance.rs#L1-L13), [`sdk/rs/tests/wire_codec.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L1-L10), [`sdk/rs/tests/clientaction_serde.rs:1-11`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/clientaction_serde.rs#L1-L11)). | **Inferred, not stated by the code: the maintenance cost follows from the duplicated implementations.** every upstream format change must be detected and reconciled in Rust and the fixtures; verify this by updating the pinned sibling revision and rerunning the differential tests. |
 | Encode invariants in Rust types and builders | The code separates `RandomSalt` from `NoteSalt`, makes `ActionSet` constructible only through its validating builder, and keeps the pool secret behind `PoolIdentity` without an accessor ([`sdk/rs/src/actions.rs:25-104`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L25-L104), [`sdk/rs/src/action_set.rs:97-177`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L97-L177), [`sdk/rs/src/channel.rs:98-123`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L98-L123)). | Invalid salt use, phase regression, duplicate invoke phases, and key leakage through the ordinary API become harder or impossible to express ([`sdk/rs/src/action_set.rs:131-177`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L131-L177), [`sdk/rs/src/channel.rs:7-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L7-L17)). | Low-level action structs remain public, so a caller bypassing the high-level constructors can still assemble some semantically dangerous values; the type protection is strongest on the intended `Channel`/`Client` path ([`sdk/rs/src/actions.rs:164-286`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L164-L286), [`sdk/rs/src/channel.rs:502-512`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L502-L512)). |
 | Put a one-shot subprocess between Python agents and Rust | Key-file values need not enter Python, Rust can own its Tokio runtime, and the seam can return an explicit JSON error envelope instead of maintaining a PyO3 ABI ([`sdk/py/src/erebus/_seam.py:59-92`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py#L59-L92), [`sdk/py/src/erebus/_seam.py:95-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py#L95-L165), [`sdk/rs/src/bin/erebus_cli.rs:429-450`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L429-L450); rationale recorded at [`ARCHITECTURE.md:184-221`](https://github.com/PoulavBhowmick03/Erebus/blob/main/ARCHITECTURE.md#L184-L221)). | The agent layer passes public data, paths, and opaque handles while protocol derivations and keys remain below the process boundary ([`mcp-server/src/erebus_mcp/config.py:41-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L41-L57), [`sdk/rs/src/channel.rs:7-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L7-L17)). | Each call pays process startup and JSON serialization; state that an in-process library would retain in memory instead requires a protected filesystem store ([`sdk/py/src/erebus/_seam.py:95-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py#L95-L165), [`sdk/rs/src/state.rs:192-248`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L192-L248)). |
 | Persist opaque handles with an exclusive lease and commit after chain success | A one-shot CLI must recover channel keys and the next note index across processes, while concurrent calls must not allocate the same slot ([`sdk/rs/src/state.rs:192-248`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L192-L248), [`sdk/rs/src/state.rs:425-446`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L425-L446)). | Agent-visible handles reveal no channel key, per-handle locking serializes cursor changes, and atomic replacement avoids partial state files ([`sdk/rs/src/state.rs:192-225`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L192-L225), [`sdk/rs/src/state.rs:400-446`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L400-L446)). | The local OS account and state directory become trust and availability boundaries. A crash after chain inclusion but before `commit` can leave local state stale; the current test suite does not exercise that recovery case, as recorded later in Part 5. |
@@ -218,20 +223,20 @@ mechanical consequence of the choice, not a recommendation that the choice was r
 
 ### The one-sentence framing to use
 
-**Say this:** “The Rust crate is an Erebus-specific STRK20 client: it independently implements
+**Say this:** "The Rust crate is an Erebus-specific STRK20 client: it independently implements
 the selected privacy-pool write, read, proving, signing, and RPC primitives needed for the
 Erebus flow, pins those primitives against Cairo/TypeScript/starknet.js oracles, and adds an
 original two-party negotiation, persistence, and selective-disclosure protocol; it is not a
-full port or drop-in replacement for StarkWare’s TypeScript SDK.” The crate’s own module
+full port or drop-in replacement for StarkWare's TypeScript SDK." The crate's own module
 documentation says that upstream `discovery-core` covers reads while no upstream Rust write
 side builds `ClientAction`s, serializes calldata, signs, or calls the prover
 ([`sdk/rs/src/lib.rs:3-20`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L3-L20)); the high-level Rust surface is seven negotiation methods, not the
 upstream general-purpose transfer API ([`sdk/rs/src/client.rs:538-573`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L538-L573)).
 
-Do **not** call it “our Rust rewrite of the Starknet privacy SDK.” Upstream exports a broad
+Do **not** call it "our Rust rewrite of the Starknet privacy SDK." Upstream exports a broad
 `createPrivateTransfers` API, discovery/indexer providers, history, OHTTP, and classifiers
 ([`../starknet-privacy/sdk/src/index.ts:1-52`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/sdk/src/index.ts#L1-L52)), whereas this crate exposes only its nineteen
-modules and one CLI ([`sdk/rs/src/lib.rs:22-42`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L22-L42), [`sdk/rs/Cargo.toml:38-40`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/Cargo.toml#L38-L40)). “Rewrite” therefore
+modules and one CLI ([`sdk/rs/src/lib.rs:22-42`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L22-L42), [`sdk/rs/Cargo.toml:38-40`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/Cargo.toml#L38-L40)). "Rewrite" therefore
 overstates compatibility and understates the original protocol layered above the pool.
 
 ### What is a port or compatibility reimplementation
@@ -256,7 +261,7 @@ overstates compatibility and understates the original protocol layered above the
   ([`sdk/rs/src/calldata.rs:25-82`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/calldata.rs#L25-L82), [`sdk/rs/src/execution.rs:132-239`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L132-L239);
   [`../starknet-privacy/sdk/src/internal/proof-invocation-factory.ts:88-195`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/sdk/src/internal/proof-invocation-factory.ts#L88-L195);
   [`../starknet-privacy/sdk/src/internal/private-transfers.ts:94-136`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/sdk/src/internal/private-transfers.ts#L94-L136)).
-- Wire v1 is a port of this repository’s TypeScript salt codec, not an upstream STRK20
+- Wire v1 is a port of this repository's TypeScript salt codec, not an upstream STRK20
   primitive ([`sdk/rs/src/wire.rs:1-5`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L1-L5), [`sdk/ts/src/channel/wire.ts:1-46`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/channel/wire.ts#L1-L46)).
 
 ### What is original Erebus protocol work
@@ -268,8 +273,8 @@ envelope ([`sdk/rs/src/wire.rs:7-45`](https://github.com/PoulavBhowmick03/Erebus
 direction-aware IDs, and terminal settlement that the pool does not know about
 ([`sdk/rs/src/negotiation.rs:163-193`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L163-L193), [`sdk/rs/src/negotiation.rs:231-272`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L231-L272)).
 
-The following are also original client/protocol machinery: `ActionSetBuilder`’s early mirror
-of pool phase/replay constraints ([`sdk/rs/src/action_set.rs:1-28`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L1-L28)), `SubchannelCursor`’s
+The following are also original client/protocol machinery: `ActionSetBuilder`'s early mirror
+of pool phase/replay constraints ([`sdk/rs/src/action_set.rs:1-28`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L1-L28)), `SubchannelCursor`'s
 contiguous allocator ([`sdk/rs/src/subchannel.rs:1-32`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/subchannel.rs#L1-L32)), atomic accept-plus-payment composition
 ([`sdk/rs/src/channel.rs:515-610`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L515-L610)), opaque-handle state and lease/commit persistence
 ([`sdk/rs/src/state.rs:174-228`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L174-L228), [`sdk/rs/src/state.rs:425-446`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L425-L446)), a two-direction bearer viewing
@@ -279,7 +284,7 @@ grant ([`sdk/rs/src/disclosure.rs:45-88`](https://github.com/PoulavBhowmick03/Er
 
 ### What upstream functionality was intentionally not ported
 
-The Rust high-level client does not expose upstream’s general action compiler, arbitrary open
+The Rust high-level client does not expose upstream's general action compiler, arbitrary open
 notes, withdrawals, private swaps/DeFi invokes, compute-and-invoke flow, discovery service,
 history/indexing, OHTTP, paymasters, or general change construction. Although the low-level
 Rust enum can serialize all ten Cairo variants, the frozen high-level trait exposes only
@@ -292,12 +297,12 @@ general note selection/change, multi-token negotiation, paymasters, and producti
 The TypeScript static-static ECDH helper in this repository was not ported into the active
 Rust path. It describes a planned off-chain shared secret ([`sdk/ts/src/crypto/channel-secret.ts:1-29`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/crypto/channel-secret.ts#L1-L29)),
 while the Rust protocol uses the directional channel key that the Cairo pool derives from the
-sender’s private key and sends to the recipient via ephemeral-static ECDH
+sender's private key and sends to the recipient via ephemeral-static ECDH
 ([`sdk/rs/src/hashes.rs:74-93`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L93), [`sdk/rs/src/decrypt.rs:152-175`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L152-L175)).
 
 ### Documentation disagreements
 
-- [`CLAUDE.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/CLAUDE.md) and [`sdk/rs/README.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/README.md) still call the Python seam “protocol 1”
+- [`CLAUDE.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/CLAUDE.md) and [`sdk/rs/README.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/README.md) still call the Python seam "protocol 1"
   ([`CLAUDE.md:93-97`](https://github.com/PoulavBhowmick03/Erebus/blob/main/CLAUDE.md#L93-L97), [`sdk/rs/README.md:117-121`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/README.md#L117-L121)), but the current Python and Rust code both
   say and return protocol 2 ([`sdk/py/src/erebus/_seam.py:15-18`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py#L15-L18),
   [`sdk/rs/src/bin/erebus_cli.rs:202-210`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L202-L210)). The running code wins.
@@ -306,7 +311,7 @@ sender’s private key and sends to the recipient via ephemeral-static ECDH
   ([`sdk/ts/src/interface.ts:39-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/interface.ts#L39-L57), [`sdk/ts/src/interface.ts:151-172`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/interface.ts#L151-L172)). Current Rust carries a
   128-bit `memo_hash`, no offer nonce/withdrawal, and returns a bearer grant
   ([`sdk/rs/src/client.rs:938-1079`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L938-L1079)). Each language compiler obeys its source, but the repo says
-  `/sdk/ts` “ships nothing,” so it is not the current product contract ([`README.md:84-90`](https://github.com/PoulavBhowmick03/Erebus/blob/main/README.md#L84-L90)).
+  `/sdk/ts` "ships nothing," so it is not the current product contract ([`README.md:84-90`](https://github.com/PoulavBhowmick03/Erebus/blob/main/README.md#L84-L90)).
 - [`ARCHITECTURE.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/ARCHITECTURE.md) says the system hides existence, participants, and cadence
   ([`ARCHITECTURE.md:466-476`](https://github.com/PoulavBhowmick03/Erebus/blob/main/ARCHITECTURE.md#L466-L476)), while the later README calls relationship privacy a target and
   the fingerprint test proves the fifth salt is distinguishable ([`README.md:51-58`](https://github.com/PoulavBhowmick03/Erebus/blob/main/README.md#L51-L58),
@@ -315,37 +320,37 @@ sender’s private key and sends to the recipient via ephemeral-static ECDH
 
 ### Four source comments worth quoting verbatim
 
-> “`discovery-core` covers the *read* side, hashes, storage slots, decryption, note discovery
+> "`discovery-core` covers the *read* side, hashes, storage slots, decryption, note discovery
 >, but there is no Rust write side: nothing builds `ClientAction`s, serialises Cairo calldata,
-> signs the invoke, or calls the proving service. This crate is that gap.”
+> signs the invoke, or calls the proving service. This crate is that gap."
 
-That is the crate’s own scope claim ([`sdk/rs/src/lib.rs:5-9`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L5-L9)).
+That is the crate's own scope claim ([`sdk/rs/src/lib.rs:5-9`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L5-L9)).
 
-> “The invocation handed to `starknet_proveTransaction` carries the pool private key in
-> plaintext at `calldata[5]`, verified, not assumed.”
+> "The invocation handed to `starknet_proveTransaction` carries the pool private key in
+> plaintext at `calldata[5]`, verified, not assumed."
 
 That is the custody boundary ([`sdk/rs/src/prover.rs:3-11`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/prover.rs#L3-L11)).
 
-> “Atomicity puts the acceptance and the payment in one proof, so both land or neither does.
-> It says nothing about them *agreeing*.”
+> "Atomicity puts the acceptance and the payment in one proof, so both land or neither does.
+> It says nothing about them *agreeing*."
 
 That is why the amount comparison is separate from atomic composition
 ([`sdk/rs/src/channel.rs:545-555`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L545-L555)).
 
-> “Keep the returned lease alive through any async operation that uses or advances its
-> cursor.”
+> "Keep the returned lease alive through any async operation that uses or advances its
+> cursor."
 
 That is the ownership/concurrency rule for persistent channel state
 ([`sdk/rs/src/state.rs:230-232`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L230-L232)).
 
 ## 1. Module map and reading order
 
-Read these in the order below. “Depends on” names the important protocol dependency, not
+Read these in the order below. "Depends on" names the important protocol dependency, not
 every imported standard-library item.
 
 | Order | File and layer | Responsibility; public surface; key dependencies |
 |---:|---|---|
-| 1 | [`lib.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs): crate boundary | Declares the crate’s purpose, forbids unsafe code, and exports all nineteen library modules ([`sdk/rs/src/lib.rs:1-42`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L1-L42)). |
+| 1 | [`lib.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs): crate boundary | Declares the crate's purpose, forbids unsafe code, and exports all nineteen library modules ([`sdk/rs/src/lib.rs:1-42`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L1-L42)). |
 | 2 | [`hashes.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs): cryptographic primitives | Exposes Poseidon `hash` plus fifteen Cairo-compatible derivations; depends only on Starknet felt/Poseidon primitives ([`sdk/rs/src/hashes.rs:18-20`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L18-L20), [`sdk/rs/src/hashes.rs:69-263`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L69-L263)). |
 | 3 | [`actions.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs): Cairo wire model | Defines salt/entropy newtypes, ten action-input structs, `ClientAction`, phase lookup, and Cairo serialization; depends on felts and the Cairo enum/field order ([`sdk/rs/src/actions.rs:25-162`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L25-L162), [`sdk/rs/src/actions.rs:164-434`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L164-L434)). |
 | 4 | [`action_set.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs): local protocol invariants | Exposes `ActionSet`, `ActionSetBuilder`, and `ActionSetError`; depends on action phase and replay-protection classification ([`sdk/rs/src/action_set.rs:30-178`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L30-L178)). |
@@ -379,16 +384,16 @@ composition imports and the fact that `Client` owns `Executor` and `StateStore`
 
 Every row below is `poseidon_hash_many` over the listed felt sequence
 ([`sdk/rs/src/hashes.rs:69-72`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L69-L72)). Tags are ASCII short strings right-aligned as big-endian bytes
-in a felt ([`sdk/rs/src/hashes.rs:21-49`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L21-L49)). “Observer” statements are explicit inferences from
+in a felt ([`sdk/rs/src/hashes.rs:21-49`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L21-L49)). "Observer" statements are explicit inferences from
 the listed inputs, not claims made by a security proof.
 
 | Derivation | Exact preimage and upstream Cairo | Derived from / explicitly not derived from | Who can compute; wrong-preimage symptom |
 |---|---|---|---|
-| Channel key | `H('CHANNEL_KEY_TAG:V1', sender_addr, sender_private_key, recipient_addr, recipient_public_key)` ([`sdk/rs/src/hashes.rs:74-93`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L93); [`../starknet-privacy/packages/privacy/src/hashes.cairo:114-132`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L114-L132)) | Includes the sender’s pool secret and both endpoint identities; **not** an ECDH result, token, pool address, chain ID, or channel index ([`sdk/rs/src/hashes.rs:74-93`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L93)). | The sender can derive it; the recipient learns it from encrypted channel info ([`sdk/rs/src/decrypt.rs:152-175`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L152-L175)). I’m inferring that an observer without the sender secret cannot compute it. Verify the cryptographic assumption against Poseidon preimage resistance. A wrong value makes channel markers/subchannels/note IDs disagree; preflight may reject `INVALID_CHANNEL`, or the recipient may silently search empty note IDs ([`../starknet-privacy/packages/privacy/src/privacy.cairo:441-445`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L441-L445); [`sdk/rs/tests/read_path.rs:245-275`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/read_path.rs#L245-L275)). |
+| Channel key | `H('CHANNEL_KEY_TAG:V1', sender_addr, sender_private_key, recipient_addr, recipient_public_key)` ([`sdk/rs/src/hashes.rs:74-93`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L93); [`../starknet-privacy/packages/privacy/src/hashes.cairo:114-132`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L114-L132)) | Includes the sender's pool secret and both endpoint identities; **not** an ECDH result, token, pool address, chain ID, or channel index ([`sdk/rs/src/hashes.rs:74-93`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L93)). | The sender can derive it; the recipient learns it from encrypted channel info ([`sdk/rs/src/decrypt.rs:152-175`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L152-L175)). Inferred: an observer without the sender secret cannot compute it. Verify the cryptographic assumption against Poseidon preimage resistance. A wrong value makes channel markers/subchannels/note IDs disagree; preflight may reject `INVALID_CHANNEL`, or the recipient may silently search empty note IDs ([`../starknet-privacy/packages/privacy/src/privacy.cairo:441-445`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L441-L445); [`sdk/rs/tests/read_path.rs:245-275`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/read_path.rs#L245-L275)). |
 | Channel marker | `H('CHANNEL_MARKER_TAG:V1', channel_key, sender_addr, recipient_addr, recipient_public_key)` ([`sdk/rs/src/hashes.rs:95-110`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L95-L110); [`../starknet-privacy/packages/privacy/src/hashes.cairo:150-168`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L150-L168)) | Not token-, pool-, chain-, or index-scoped. | Anyone with the channel key and public identities can compute it. A wrong marker is loud when `open_subchannel` reads `channel_exists` and raises `INVALID_CHANNEL` ([`../starknet-privacy/packages/privacy/src/privacy.cairo:441-445`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L441-L445)). |
 | Subchannel ID | `H('SUBCHANNEL_ID_TAG:V1', channel_key, index, 0)`; the trailing zero is mandatory ([`sdk/rs/src/hashes.rs:112-123`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L112-L123); [`../starknet-privacy/packages/privacy/src/hashes.cairo:170-178`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L170-L178)) | Not derived from token or recipient; token is encrypted in the record stored at this ID. | A channel-key holder can enumerate indices. A wrong ID makes `get_subchannel_info` look empty and discovery stop or skip the token ([`sdk/rs/src/client.rs:428-442`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L428-L442), [`sdk/rs/src/client.rs:471-486`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L471-L486)). |
 | Subchannel marker | `H('SUBCHANNEL_MARKER_TAG:V1', channel_key, recipient_addr, recipient_public_key, token)` ([`sdk/rs/src/hashes.rs:125-140`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L125-L140); [`../starknet-privacy/packages/privacy/src/hashes.cairo:180-198`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L180-L198)) | Token- and recipient-bound; not index-, chain-, or pool-bound. | A channel-key holder with public metadata can compute it. A wrong marker makes note creation or spending fail `SUBCHANNEL_NOT_FOUND` ([`../starknet-privacy/packages/privacy/src/privacy.cairo:595-604`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L595-L604), [`../starknet-privacy/packages/privacy/src/privacy.cairo:730-734`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L730-L734)). |
-| Note ID | `H('NOTE_ID_TAG:V1', channel_key, token, index, 0)` ([`sdk/rs/src/hashes.rs:142-151`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L142-L151); [`../starknet-privacy/packages/privacy/src/hashes.cairo:200-210`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L200-L210)) | Not amount-, salt-, sender-, recipient-, chain-, or pool-derived. | A channel-key holder can seek exact slots; an outsider cannot efficiently derive them without the key. A wrong read-side preimage is the canonical silent “not found” failure because `get_note` receives the wrong ID ([`sdk/rs/src/client.rs:355-372`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L355-L372)); a wrong write action can instead fail a subchannel/contiguity check during compile ([`../starknet-privacy/packages/privacy/src/privacy.cairo:605-617`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L605-L617), [`../starknet-privacy/packages/privacy/src/privacy.cairo:736-751`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L736-L751)). |
+| Note ID | `H('NOTE_ID_TAG:V1', channel_key, token, index, 0)` ([`sdk/rs/src/hashes.rs:142-151`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L142-L151); [`../starknet-privacy/packages/privacy/src/hashes.cairo:200-210`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L200-L210)) | Not amount-, salt-, sender-, recipient-, chain-, or pool-derived. | A channel-key holder can seek exact slots; an outsider cannot efficiently derive them without the key. A wrong read-side preimage is the canonical silent "not found" failure because `get_note` receives the wrong ID ([`sdk/rs/src/client.rs:355-372`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L355-L372)); a wrong write action can instead fail a subchannel/contiguity check during compile ([`../starknet-privacy/packages/privacy/src/privacy.cairo:605-617`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L605-L617), [`../starknet-privacy/packages/privacy/src/privacy.cairo:736-751`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L736-L751)). |
 | Nullifier | `H('NULLIFIER_TAG:V1', channel_key, token, index, 0, owner_private_key)` ([`sdk/rs/src/hashes.rs:153-168`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L153-L168); [`../starknet-privacy/packages/privacy/src/hashes.cairo:224-236`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L224-L236)) | Adds spending authority to the note locator; not amount- or salt-derived. | Only a holder of both channel key and owner pool secret can compute it. This is why a viewing grant cannot spend ([`sdk/rs/src/channel.rs:462-471`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L462-L471)). A locally wrong nullifier falsely classifies spentness; actual `UseNote` compilation recomputes the Cairo nullifier from the owner secret, so the eventual symptom can be a double-spend `NON_ZERO_VALUE`, not necessarily silence ([`sdk/rs/src/client.rs:501-517`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L501-L517); [`../starknet-privacy/packages/privacy/src/privacy.cairo:616-628`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L616-L628), [`../starknet-privacy/packages/privacy/src/privacy.cairo:932-946`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L932-L946)). |
 | Outgoing channel ID | `H('OUTGOING_CHANNEL_ID_TAG:V1', sender_addr, sender_private_key, index, 0)` ([`sdk/rs/src/hashes.rs:170-184`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L170-L184); [`../starknet-privacy/packages/privacy/src/hashes.cairo:134-148`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L134-L148)) | Sender-secret and index scoped; not recipient- or channel-key-derived. | The sender can enumerate its own outgoing records; a public observer cannot without the secret. A wrong ID makes outgoing-channel counting stop early or recovery read the wrong slot ([`sdk/rs/src/client.rs:292-310`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L292-L310); [`sdk/rs/src/decrypt.rs:186-200`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L186-L200)). |
 | Encrypted-amount mask | `H('ENC_AMOUNT_TAG:V1', channel_key, token, index, 0, felt(salt_u128))` ([`sdk/rs/src/hashes.rs:186-199`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L186-L199); [`../starknet-privacy/packages/privacy/src/hashes.cairo:212-222`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L212-L222)) | Includes a bounded note salt; not owner secret or amount. Only the low 128 hash bits mask the amount with wrapping arithmetic ([`sdk/rs/src/decrypt.rs:115-137`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L115-L137)). | A channel-key holder decrypts; public salt alone is insufficient. Wrong key/preimage returns plausible garbage without authentication ([`sdk/rs/src/decrypt.rs:21-27`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L21-L27); [`sdk/rs/tests/decrypt_conformance.rs:104-125`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/decrypt_conformance.rs#L104-L125)). |
@@ -400,7 +405,7 @@ the listed inputs, not claims made by a security proof.
 | Auditor user-address mask | `H('ENC_USER_ADDR_TAG:V1', shared_x)` ([`sdk/rs/src/hashes.rs:246-249`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L246-L249); [`../starknet-privacy/packages/privacy/src/hashes.cairo:70-74`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L70-L74)) | Auditor ECDH shared x only. | Used upstream for encrypted withdrawal identity, not by the high-level Erebus flow ([`../starknet-privacy/packages/privacy/src/privacy.cairo:505-523`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L505-L523)). |
 | Identity key | `H('IDENTITY_KEY_TAG:V1', user_addr, user_private_key, contract_address)` ([`sdk/rs/src/hashes.rs:251-263`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L251-L263); [`../starknet-privacy/packages/privacy/src/hashes.cairo:48-60`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L48-L60)) | Pool-contract scoped; not channel/recipient/token-derived. | A pool-secret holder can compute it. The Rust crate pins it for conformance but its high-level client does not call it; verify any future use against the upstream call site rather than inferring one ([`sdk/rs/src/hashes.rs:251-263`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L251-L263)). |
 
-The repository’s statement that “every failure mode … is silent” is too broad
+The repository's statement that "every failure mode ... is silent" is too broad
 ([`CLAUDE.md:159-163`](https://github.com/PoulavBhowmick03/Erebus/blob/main/CLAUDE.md#L159-L163)). Wrong locator hashes and unauthenticated additive masks are silent, but
 wire-v2 context/key/tag mistakes raise `Authentication`, invalid ephemeral points raise
 `InvalidEphemeralPubkey`, phase mistakes fail the builder, and several bad markers revert in
@@ -411,7 +416,7 @@ instead of a type/crypto error.**
 
 ### 2.2 Salt lanes and the confidentiality invariant
 
-There are three Rust types because “salt” names different protocol roles:
+There are three Rust types because "salt" names different protocol roles:
 
 | Type | Valid range and permitted uses | Invariant it enforces |
 |---|---|---|
@@ -420,7 +425,7 @@ There are three Rust types because “salt” names different protocol roles:
 | `RandomSalt` | Wraps a valid `NoteSalt` derived from caller-supplied CSPRNG bytes; it is accepted only by value-note constructors ([`sdk/rs/src/actions.rs:122-162`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L122-L162), [`sdk/rs/src/channel.rs:502-512`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L502-L512)). | Makes it impossible to pass a structured wire salt to a value-bearing note without breaking the type boundary. |
 
 The bug prevented by the split is mask reuse/predictability. The amount cipher is additive and
-its mask depends on `(channel_key, token, index, salt)`; the code’s own comment warns that
+its mask depends on `(channel_key, token, index, salt)`; the code's own comment warns that
 using a structured/predictable salt on value notes can let an observer compare ciphertexts,
 whereas structured salts are confined to zero-amount notes ([`sdk/rs/src/actions.rs:122-132`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L122-L132),
 [`sdk/rs/src/channel.rs:414-421`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L414-L421), [`sdk/rs/src/decrypt.rs:115-137`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L115-L137)). `Channel::data_note` hardcodes
@@ -444,7 +449,7 @@ must fit 40 bits; amount and memo already occupy full `u128`; deadline occupies 
 ([`sdk/rs/src/wire.rs:320-345`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L320-L345)). The Rust API accepts only a 128-bit memo hash, while its helper
 for a felt intentionally keeps the low 128 bits ([`sdk/rs/src/wire.rs:231-242`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L231-L242)). This differs
 from the repository TypeScript v1 helper, which silently masks any larger bigint
-([`sdk/ts/src/channel/wire.ts:119-155`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/channel/wire.ts#L119-L155)); Rust’s public CLI parses a `u128`, so oversized input is
+([`sdk/ts/src/channel/wire.ts:119-155`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/channel/wire.ts#L119-L155)); Rust's public CLI parses a `u128`, so oversized input is
 rejected rather than silently truncated ([`sdk/rs/src/bin/erebus_cli.rs:324-334`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L324-L334)). That is the
 F19 hardening ([`docs/friction.md:706-732`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L706-L732)).
 
@@ -479,7 +484,7 @@ confidentiality/authentication, not traffic-flow or sender-account privacy.
 
 | Upstream TS/Cairo function or primitive | Rust equivalent | Why rewritten rather than called; parity/divergence |
 |---|---|---|
-| Cairo `compute_*` functions in [`hashes.cairo`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo) | `hashes::{compute_channel_key, …}` ([`sdk/rs/src/hashes.rs:74-263`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L263)) | Rust needs them in-process for construction and keyed discovery. Cairo is the KAT oracle; upstream `discovery-core` duplicates many but brings a conflicting git-fork dependency graph ([`sdk/rs/src/decrypt.rs:6-19`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L6-L19)). Translation, except Rust preserves exact heterogeneous salt types. |
+| Cairo `compute_*` functions in [`hashes.cairo`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo) | `hashes::{compute_channel_key, ...}` ([`sdk/rs/src/hashes.rs:74-263`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L74-L263)) | Rust needs them in-process for construction and keyed discovery. Cairo is the KAT oracle; upstream `discovery-core` duplicates many but brings a conflicting git-fork dependency graph ([`sdk/rs/src/decrypt.rs:6-19`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L6-L19)). Translation, except Rust preserves exact heterogeneous salt types. |
 | Cairo additive encryption/decryption formulas and upstream `discovery-core` decryption | `decrypt::{unpack_note,note_amount,packed_value,channel_info,subchannel_token,outgoing_recipient_addr}` ([`sdk/rs/src/decrypt.rs:103-200`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/decrypt.rs#L103-L200)) | Needed in-process without importing the forked provider stack. Same Cairo fixture is the oracle ([`sdk/rs/tests/decrypt_conformance.rs:1-11`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/decrypt_conformance.rs#L1-L11)). |
 | Cairo `ClientAction` enum and TS `serializeClientActions` | Rust input structs, `ClientAction`, `serialize_actions` ([`sdk/rs/src/actions.rs:164-434`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/actions.rs#L164-L434)) | Required for a Node-free Rust write path. The TS SDK supplies byte-for-byte Serde fixtures because Cairo emits no direct vector ([`sdk/rs/tests/clientaction_serde.rs:1-11`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/clientaction_serde.rs#L1-L11)). |
 | Cairo phase/replay checks in `main`/`assert_and_advance_phase` | `ActionSetBuilder` ([`sdk/rs/src/action_set.rs:121-178`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L121-L178)) | Deliberate type/construction hardening: fail before proving rather than after. Token balance is intentionally still left to Cairo because the builder lacks consumed amounts ([`sdk/rs/src/action_set.rs:24-28`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/action_set.rs#L24-L28)). |
@@ -489,7 +494,7 @@ confidentiality/authentication, not traffic-flow or sender-account privacy.
 | Upstream `ProvingService.proveTransaction` | `ProvingService::prove_transaction` ([`sdk/rs/src/prover.rs:142-220`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/prover.rs#L142-L220)) | Node-free async HTTP, typed response, and bounded retry policy. It preserves the upstream JSON-RPC method/shape, not protocol behavior invented by Erebus ([`../starknet-privacy/sdk/src/internal/proving-service.ts:120-290`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/sdk/src/internal/proving-service.ts#L120-L290)). |
 | Upstream `PrivateTransfers.buildExecuteResult` screening suffix and output slicing | `calldata::screening_suffix`, `execution::server_actions` ([`sdk/rs/src/calldata.rs:55-82`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/calldata.rs#L55-L82), [`sdk/rs/src/execution.rs:323-343`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L323-L343)) | Needed for direct Rust submission. It mirrors stripping the class-hash prefix and appending `Option<ScreeningAttestation>` ([`../starknet-privacy/sdk/src/internal/private-transfers.ts:102-136`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/sdk/src/internal/private-transfers.ts#L102-L136)). |
 | Starknet provider/account submission | Minimal `StarknetRpc` plus Rust `SignedInvokeV3` wire ([`sdk/rs/src/rpc.rs:1-8`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/rpc.rs#L1-L8), [`sdk/rs/src/rpc.rs:24-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/rpc.rs#L24-L165)) | A full account SDK would not remove the custom proof-facts hash and would introduce a second transaction model ([`sdk/rs/src/rpc.rs:1-5`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/rpc.rs#L1-L5)). This is a narrow partial client, not a provider replacement. |
-| Local TS wire-v1 pack/unpack | Rust `encode_legacy_message`/`decode_legacy_message` ([`sdk/rs/src/wire.rs:501-534`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L501-L534)) | Differential oracle for Erebus’s original format, retained read-only. Constants/salts/note indices match TS fixtures ([`sdk/rs/tests/wire_codec.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L1-L10), [`sdk/rs/tests/wire_codec.rs:102-134`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L102-L134)). |
+| Local TS wire-v1 pack/unpack | Rust `encode_legacy_message`/`decode_legacy_message` ([`sdk/rs/src/wire.rs:501-534`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L501-L534)) | Differential oracle for Erebus's original format, retained read-only. Constants/salts/note indices match TS fixtures ([`sdk/rs/tests/wire_codec.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L1-L10), [`sdk/rs/tests/wire_codec.rs:102-134`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L102-L134)). |
 | No upstream counterpart | Wire v2 ([`sdk/rs/src/wire.rs:383-499`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L383-L499)) | Erebus-specific authenticated encryption and migration behavior. It currently has a Rust KAT/round-trip/tamper suite but no second implementation ([`sdk/rs/tests/wire_codec.rs:6-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L6-L10)). |
 | No upstream counterpart | `Channel`, `OfferBook`, `ViewingGrant`, `StateStore`, high-level `Client` | These define negotiation semantics, atomic composition, selective disclosure, persistence, and the application API ([`sdk/rs/src/channel.rs:164-253`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L164-L253), [`sdk/rs/src/negotiation.rs:147-302`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L147-L302), [`sdk/rs/src/disclosure.rs:45-270`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L45-L270), [`sdk/rs/src/state.rs:174-446`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L174-L446), [`sdk/rs/src/client.rs:538-935`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L538-L935)). Category: original Erebus protocol behavior. |
 | Local TS static-static ECDH | No active Rust equivalent | It is planned off-chain transport crypto, while current v2 derives from the on-chain directional channel key ([`sdk/ts/src/crypto/channel-secret.ts:1-29`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/crypto/channel-secret.ts#L1-L29), [`sdk/rs/src/wire.rs:383-407`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L383-L407)). This is an unported/unused path, not missing parity in the active protocol. |
@@ -511,7 +516,7 @@ confidentiality/authentication, not traffic-flow or sender-account privacy.
    branches; this is a privacy-stack extension that must agree with the deployed RPC/prover,
    not standard starknet.js behavior to assume universally ([`sdk/rs/src/tx.rs:172-193`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/tx.rs#L172-L193),
    [`sdk/rs/tests/invoke_v3_txhash.rs:129-161`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/invoke_v3_txhash.rs#L129-L161)).
-5. The Rust grant returns a self-contained bearer package, correcting the older TS interface’s
+5. The Rust grant returns a self-contained bearer package, correcting the older TS interface's
    `void` return and local-handle-dependent reveal shape ([`sdk/rs/src/client.rs:565-572`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L565-L572),
    [`sdk/ts/src/interface.ts:151-172`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/ts/src/interface.ts#L151-L172), [`docs/friction.md:922-936`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L922-L936)).
 
@@ -552,16 +557,16 @@ not chain, unless `EREBUS_BACKEND=seam` selects Rust ([`mcp-server/src/server.py
 value is passed to a tool; only configured file paths reach the seam
 ([`mcp-server/src/server.py:46-66`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L46-L66)).
 
-The repository’s reference [`agents/`](https://github.com/PoulavBhowmick03/Erebus/tree/main/agents) demo does **not** traverse MCP or Rust: it directly uses
+The repository's reference [`agents/`](https://github.com/PoulavBhowmick03/Erebus/tree/main/agents) demo does **not** traverse MCP or Rust: it directly uses
 `MockErebusClient` and says so ([`agents/src/erebus_agents/agent.py:1-7`](https://github.com/PoulavBhowmick03/Erebus/blob/main/agents/src/erebus_agents/agent.py#L1-L7),
-[`agents/src/erebus_agents/agent.py:27-45`](https://github.com/PoulavBhowmick03/Erebus/blob/main/agents/src/erebus_agents/agent.py#L27-L45)). That distinction matters when answering “what did
-the agent demo validate?” It validates policy/mock behavior, not this transport chain.
+[`agents/src/erebus_agents/agent.py:27-45`](https://github.com/PoulavBhowmick03/Erebus/blob/main/agents/src/erebus_agents/agent.py#L27-L45)). That distinction matters when answering "what did
+the agent demo validate?" It validates policy/mock behavior, not this transport chain.
 
 **MCP server → [`sdk/py`](https://github.com/PoulavBhowmick03/Erebus/tree/main/sdk/py).** `SeamErebusClient` reshapes Python dataclasses into seam dictionaries
 and offloads each blocking child process with `asyncio.to_thread`, keeping the MCP event loop
 responsive ([`mcp-server/src/erebus_mcp/seam_client.py:1-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L1-L17),
-[`mcp-server/src/erebus_mcp/seam_client.py:94-109`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L94-L109)). Therefore the premise “async is confined to
-Rust” is false: Python uses async for server concurrency, while Rust owns asynchronous protocol
+[`mcp-server/src/erebus_mcp/seam_client.py:94-109`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L94-L109)). Therefore the premise "async is confined to
+Rust" is false: Python uses async for server concurrency, while Rust owns asynchronous protocol
 I/O and receipt/prover waiting. Python performs no hashes, felt arithmetic, salt encoding, or
 proof logic ([`mcp-server/src/erebus_mcp/seam_client.py:1-12`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L1-L12)).
 
@@ -575,7 +580,7 @@ not enter Python; the CLI opens their paths ([`sdk/py/src/erebus/_seam.py:10-18`
 Protocol 1 was the earlier seam documented in stale prose. Current protocol 2 adds one-shot
 configuration on every call, opaque state handles, `balance`, key generation, and structured
 responses; `version` returns `protocol: 2` ([`sdk/rs/src/bin/erebus_cli.rs:27-82`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L27-L82),
-[`sdk/rs/src/bin/erebus_cli.rs:202-306`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L202-L306)). The CLI’s Tokio main reads stdin to EOF, deserializes
+[`sdk/rs/src/bin/erebus_cli.rs:202-306`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L202-L306)). The CLI's Tokio main reads stdin to EOF, deserializes
 one request, awaits one dispatch, prints one envelope, and exits nonzero on failure
 ([`sdk/rs/src/bin/erebus_cli.rs:429-450`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/bin/erebus_cli.rs#L429-L450)).
 
@@ -640,7 +645,7 @@ advance/persist the cursor and block ([`sdk/rs/src/client.rs:688-695`](https://g
 
 **3. Counter.** The client attaches the reverse directional channel, verifies that `reply_to`
 names a counterparty offer/counter, writes a `Counter` whose `reply_to` is the opposite
-direction’s note-grid message index, then executes/commits exactly as for an offer
+direction's note-grid message index, then executes/commits exactly as for an offer
 ([`sdk/rs/src/client.rs:698-764`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L698-L764)). Direction is part of `OfferId` because note indices collide
 across the two independent subchannels ([`sdk/rs/src/negotiation.rs:95-139`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L95-L139),
 [`sdk/rs/src/negotiation.rs:163-187`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L163-L187)). Deadlines and reply validity are client semantics; Cairo
@@ -657,11 +662,11 @@ leaving the cursor off-grid and making the current subchannel one-deal-only
 ([`sdk/rs/src/channel.rs:613-653`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L613-L653)). The client checks recorded and paid amounts match before
 construction ([`sdk/rs/src/channel.rs:545-555`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L545-L555)).
 
-**5. Every write’s execution pipeline.** `Executor::execute` selects an older proving block,
+**5. Every write's execution pipeline.** `Executor::execute` selects an older proving block,
 calls the pool view `compile_actions`, builds/signs the pool-as-account virtual invocation,
 asks `starknet_proveTransaction`, extracts the unique pool L2→L1 message, and rejects it if
 its serialized server actions differ from the preflight ([`sdk/rs/src/execution.rs:143-182`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L143-L182)). It
-then checks proof age, appends screening data, wraps `apply_actions` in the operator account’s
+then checks proof age, appends screening data, wraps `apply_actions` in the operator account's
 single-call calldata, estimates the proof-carrying transaction, signs/submits it, and waits for
 an accepted or reverted receipt ([`sdk/rs/src/execution.rs:184-264`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L184-L264)). The prover receives the
 pool virtual invoke and returns proof, proof facts, L2→L1 messages, and optional screening
@@ -679,8 +684,8 @@ actions as an L2→L1 message but does not call the server-side storage applicat
 fail `assert_valid_os_call` because caller must be zero and tx version v3; more importantly,
 submitting the virtual account transaction would publish the pool secret and would not execute
 the proof-validated `apply_actions` transition ([`../starknet-privacy/packages/privacy/src/utils.cairo:561-576`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/utils.cairo#L561-L576),
-[`../starknet-privacy/packages/privacy/src/privacy.cairo:782-839`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L782-L839)). Calling it “local simulation
-only” is shorthand: it is executed by the prover’s virtual Starknet OS, not by this SDK as the
+[`../starknet-privacy/packages/privacy/src/privacy.cairo:782-839`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L782-L839)). Calling it "local simulation
+only" is shorthand: it is executed by the prover's virtual Starknet OS, not by this SDK as the
 real state-changing transaction.
 
 **Phase order.** Cairo maps deposit to phase 3, note use to 4, note creation to 5, withdrawal
@@ -742,7 +747,7 @@ everything beyond it becomes unreachable through this discovery algorithm.
 | [`settlement.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/settlement.rs) | Acceptance/payment split, create-before-spend, missing inputs, amount mismatch, salt-lane mix-up, or index collision ([`sdk/rs/tests/settlement.rs:1-6`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/settlement.rs#L1-L6), [`sdk/rs/tests/settlement.rs:90-354`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/settlement.rs#L90-L354)). |
 | [`index_contiguity.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/index_contiguity.rs) | Gaps, overwrite, failed-reservation cursor burns, off-grid messages, or illegal post-settlement message ([`sdk/rs/tests/index_contiguity.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/index_contiguity.rs#L1-L10), [`sdk/rs/tests/index_contiguity.rs:85-261`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/index_contiguity.rs#L85-L261)). |
 | [`wire_codec.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs) | V1 compatibility drift and v2 round-trip, KAT, tamper, context, padding, retry, flag, range, or redaction failure ([`sdk/rs/tests/wire_codec.rs:1-10`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L1-L10), [`sdk/rs/tests/wire_codec.rs:102-367`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_codec.rs#L102-L367)). |
-| [`wire_v2_fingerprint.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs) | Detects today’s fifth-salt traffic fingerprint; the desired indistinguishability property remains ignored ([`sdk/rs/tests/wire_v2_fingerprint.rs:1-5`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs#L1-L5), [`sdk/rs/tests/wire_v2_fingerprint.rs:31-75`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs#L31-L75)). |
+| [`wire_v2_fingerprint.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs) | Detects today's fifth-salt traffic fingerprint; the desired indistinguishability property remains ignored ([`sdk/rs/tests/wire_v2_fingerprint.rs:1-5`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs#L1-L5), [`sdk/rs/tests/wire_v2_fingerprint.rs:31-75`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/wire_v2_fingerprint.rs#L31-L75)). |
 | [`read_path.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/read_path.rs) | Writer/reader slot drift, torn messages, v1 migration loss, wrong-key behavior, settlement-note placement, or direction/author reconstruction errors ([`sdk/rs/tests/read_path.rs:1-7`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/read_path.rs#L1-L7), [`sdk/rs/tests/read_path.rs:122-407`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/read_path.rs#L122-L407)). |
 | [`negotiation_state.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/negotiation_state.rs) | Expiry boundary, own/unknown/non-offer acceptance, dangling replies, countered-offer semantics, and repeat settlement ([`sdk/rs/tests/negotiation_state.rs:1-6`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/negotiation_state.rs#L1-L6), [`sdk/rs/tests/negotiation_state.rs:61-191`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/negotiation_state.rs#L61-L191)). |
 | [`disclosure.rs`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/disclosure.rs) | Incomplete reconstruction, wrong attribution/payment comparison, cross-token/counterparty leakage, half grant, serialization corruption, or spending-key leakage ([`sdk/rs/tests/disclosure.rs:1-9`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/disclosure.rs#L1-L9), [`sdk/rs/tests/disclosure.rs:181-495`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/tests/disclosure.rs#L181-L495)). |
@@ -767,7 +772,7 @@ failed, producing a deceptive partial success ([`docs/friction.md:406-424`](http
 failed immediately, before a network run; the fix right-aligns up to 31 bytes in a 32-byte
 buffer and calls `Felt::from_bytes_be` ([`docs/friction.md:426-434`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L426-L434),
 [`sdk/rs/src/hashes.rs:25-40`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L25-L40)). Without the KAT, read/write parties using different tags would
-derive different secret slots and report absence, which is exactly why “it compiles” has almost
+derive different secret slots and report absence, which is exactly why "it compiles" has almost
 no evidentiary value for these formulas.
 
 ### What is not covered
@@ -780,10 +785,10 @@ prover ([`sdk/rs/tests/prover_live.rs:1-16`](https://github.com/PoulavBhowmick03
 cryptographic authorization, because `grantee` is metadata and the grant is bearer
 ([`docs/friction.md:928-936`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L928-L936)).
 
-I could not find a test for a crash after chain inclusion but before `lease.commit`, a fully
+There is no test for a crash after chain inclusion but before `lease.commit`, a fully
 successful screening-attested deposit against live infrastructure, non-Unix permission
 enforcement, large/reorging discovery, or a malicious grant holder recomputing the unkeyed
-checksum after editing participant metadata. I’m inferring these gaps from the relevant code
+checksum after editing participant metadata. Inferred from the relevant code
 paths. Verify by adding fault-injection/live tests around `Client` receipt→commit boundaries,
 screening responses, and `grant_checksum_v2` ([`sdk/rs/src/client.rs:688-695`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L688-L695),
 [`sdk/rs/src/disclosure.rs:290-307`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L290-L307)).
@@ -835,7 +840,7 @@ newtype claim.
 
 ### Async, ownership, and lifetimes in this code
 
-Network waits live in Rust’s `reqwest`/Tokio clients and the high-level async trait: RPC,
+Network waits live in Rust's `reqwest`/Tokio clients and the high-level async trait: RPC,
 proving, maturity, fee, submission, and receipt polling all borrow `&self` across `.await`
 ([`sdk/rs/src/prover.rs:177-220`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/prover.rs#L177-L220), [`sdk/rs/src/rpc.rs:33-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/rpc.rs#L33-L165),
 [`sdk/rs/src/execution.rs:105-264`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L105-L264), [`sdk/rs/src/client.rs:538-573`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L538-L573)). `Client` owns cloned,
@@ -850,8 +855,8 @@ the OS lock remains held while client methods await maturity, reads, proving, su
 receipt ([`sdk/rs/src/state.rs:230-280`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L230-L280), [`sdk/rs/src/state.rs:425-446`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L425-L446);
 [`sdk/rs/src/client.rs:648-695`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L648-L695)). No borrowed `&mut StoredChannel` escapes its owning lease, and
 commit consumes the lease, so code cannot accidentally commit twice. The cost is head-of-line
-blocking: one slow proof serializes every operation on that handle. I’m inferring that this is
-intentional retry/cursor safety from the “keep lease alive through any async operation” doc
+blocking: one slow proof serializes every operation on that handle. Inferred: this is
+intentional retry/cursor safety from the "keep lease alive through any async operation" doc
 comment. Verify with maintainers if concurrent read-only access is desired
 ([`sdk/rs/src/state.rs:230-232`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/state.rs#L230-L232)).
 
@@ -862,10 +867,10 @@ passes a short-lived borrowing closure to reconstruction ([`sdk/rs/src/client.rs
 split avoids an async trait object and lets crypto/state-machine tests run with ordinary maps.
 
 Python async is orchestration rather than protocol ownership: `asyncio.to_thread` prevents the
-blocking subprocess from freezing MCP’s event loop ([`mcp-server/src/erebus_mcp/seam_client.py:8-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L8-L17),
-[`mcp-server/src/erebus_mcp/seam_client.py:105-109`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L105-L109)). Thus “async confined to Rust” should be
-rephrased as “protocol I/O, cryptography, state mutation, and transaction lifecycle are
-implemented once in Rust; Python only schedules a blocking process adapter.”
+blocking subprocess from freezing MCP's event loop ([`mcp-server/src/erebus_mcp/seam_client.py:8-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L8-L17),
+[`mcp-server/src/erebus_mcp/seam_client.py:105-109`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L105-L109)). Thus "async confined to Rust" should be
+rephrased as "protocol I/O, cryptography, state mutation, and transaction lifecycle are
+implemented once in Rust; Python only schedules a blocking process adapter."
 
 ### Error taxonomy
 
@@ -893,7 +898,7 @@ creation occurs after receipt ([`sdk/rs/src/client.rs:623-644`](https://github.c
 
 ## 7. Where the upstream stack fought us
 
-This section separates upstream feedback from Erebus’s own design mistakes. [`docs/friction.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md)
+This section separates upstream feedback from Erebus's own design mistakes. [`docs/friction.md`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md)
 contains two entries numbered F31, traffic fingerprinting and AEAD choice, which is an editorial
 collision, not one issue ([`docs/friction.md:990-1020`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L990-L1020), [`docs/friction.md:1086-1122`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1086-L1122)).
 
@@ -908,10 +913,10 @@ collision, not one issue ([`docs/friction.md:990-1020`](https://github.com/Poula
   [`../starknet-privacy/packages/privacy/src/hashes.cairo:77-112`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L77-L112),
   [`../starknet-privacy/packages/privacy/src/hashes.cairo:212-222`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/hashes.cairo#L212-L222)). Named newtypes in the
   upstream ABI/spec would make the distinction visible.
-- Upstream’s encrypted-note view returns token zero by design/storage layout, while a naïve
+- Upstream's encrypted-note view returns token zero by design/storage layout, while a naïve
   client expects the requested token echoed; the live path initially treated this as a bug
   ([`docs/friction.md:1126-1184`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1126-L1184), [`sdk/rs/src/client.rs:1306-1336`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/client.rs#L1306-L1336)). A typed `EncryptedNote` view
-  with “token implied by subchannel” documentation would prevent the misread.
+  with "token implied by subchannel" documentation would prevent the misread.
 - `proof_facts` extends v3 transaction hashing but is absent from ordinary account models, and
   prover failures can collapse to bare `-32603`/contract errors ([`docs/friction.md:577-608`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L577-L608),
   [`docs/friction.md:736-774`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L736-L774)). A versioned public transaction schema and structured prover
@@ -948,9 +953,9 @@ legible without weakening it.
 
 Auditor registration escrows the entire pool private key, not a relationship-scoped read key
 ([`../starknet-privacy/packages/privacy/src/privacy.cairo:317-354`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L317-L354)). This is a defensible
-compliance model but materially stronger disclosure than Erebus’s bearer grant. The API name
-`SetViewingKey` does not communicate “encrypt my spending/decryption root key to the pool
-auditor”; explicit custody language would.
+compliance model but materially stronger disclosure than Erebus's bearer grant. The API name
+`SetViewingKey` does not communicate "encrypt my spending/decryption root key to the pool
+auditor"; explicit custody language would.
 
 ### Operational blockers
 
@@ -967,7 +972,7 @@ rules enforced by the pool ([`../starknet-privacy/packages/privacy/src/privacy.c
 approval, gas, maturity, and proof validity form one operational chain; a maintained testnet
 runbook and disposable funded fixture identity would make end-to-end validation reproducible.
 
-Gas and latency multiply with the protocol’s fixed shapes: every offer/counter is five note
+Gas and latency multiply with the protocol's fixed shapes: every offer/counter is five note
 creations and settlement adds spends plus six creations ([`sdk/rs/src/channel.rs:414-438`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L414-L438),
 [`sdk/rs/src/channel.rs:577-610`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L577-L610)). Current gas evidence and proof timing are snapshot-specific,
 not production guarantees ([`docs/friction.md:1188-1221`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1188-L1221), [`docs/friction.md:1407-1427`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1407-L1427)).
@@ -1004,13 +1009,13 @@ or a separate verifiable receipt circuit.
 The viewing grant is a bearer secret. `grantee` is metadata, not encryption or authorization;
 any holder can read the scoped relationship ([`docs/friction.md:922-936`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L922-L936)). Its Poseidon checksum
 covers scope and keys, but it is unkeyed and recomputable by a holder
-([`sdk/rs/src/disclosure.rs:290-307`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L290-L307)). I’m inferring that it detects accidental corruption but
+([`sdk/rs/src/disclosure.rs:290-307`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L290-L307)). Inferred: it detects accidental corruption but
 does not authenticate the grantor or prevent intentional metadata edits. Verify with a test that
 edits fields and recomputes the checksum. Cryptographic grantee binding needs encryption to
 the grantee public key or a signed/attested capability.
 
 The grant differs from STRK20 `SetViewingKey` in authority and scope. `SetViewingKey` encrypts
-the identity’s **pool private key** to the configured auditor, which can consequently derive
+the identity's **pool private key** to the configured auditor, which can consequently derive
 all channels/nullifiers protected by that identity; the Erebus grant shares only two channel
 keys and cannot derive owner-secret nullifiers ([`../starknet-privacy/packages/privacy/src/privacy.cairo:317-354`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L317-L354),
 [`sdk/rs/src/channel.rs:462-471`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L462-L471)). The former is pool-wide auditor escrow; the latter is
@@ -1026,18 +1031,18 @@ would be needed for relationship privacy.
 
 ### What a disclosed record proves versus asserts
 
-Chain proof facts prove that the pool’s virtual execution produced the exact server actions
+Chain proof facts prove that the pool's virtual execution produced the exact server actions
 accepted by `apply_actions` ([`../starknet-privacy/packages/privacy/src/privacy.cairo:804-839`](https://github.com/starkware-libs/starknet-privacy/blob/3dfe66fe2b59d7b95709ec719547fa88b8ef63f9/packages/privacy/src/privacy.cairo#L804-L839)).
 The grant holder can decrypt on-chain notes into messages and a payment amount, and can check
-the latter equals the acceptance’s claimed amount ([`sdk/rs/src/disclosure.rs:234-270`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L234-L270),
+the latter equals the acceptance's claimed amount ([`sdk/rs/src/disclosure.rs:234-270`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L234-L270),
 [`sdk/rs/src/disclosure.rs:309-337`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L309-L337)).
 
-The meanings “offer,” “counter,” “deadline,” “participants,” and “accepted offer” are local
+The meanings "offer," "counter," "deadline," "participants," and "accepted offer" are local
 interpretations of encrypted salt bytes and grant metadata; the pool circuit does not assert
 them ([`sdk/rs/src/wire.rs:19-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L19-L35), [`sdk/rs/src/negotiation.rs:163-272`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/negotiation.rs#L163-L272)). No grantor signature or
 ZK receipt binds the disclosed participant metadata and negotiation policy to the settlement.
-So a “verified bound outcome covering membership, disclosure policy, and settlement
-consistency” is **not yet** exposed. It would require a signed or ZK-verifiable record that
+So a "verified bound outcome covering membership, disclosure policy, and settlement
+consistency" is **not yet** exposed. It would require a signed or ZK-verifiable record that
 commits to participant identities, canonical terms/policy, the exact proven settlement actions,
 and the disclosure authorization.
 
@@ -1159,7 +1164,7 @@ and the disclosure authorization.
   fragmented zero-value negotiation message ([`sdk/rs/src/wire.rs:7-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L7-L17)).
 - **Shielding:** depositing a public token amount and creating a private encrypted self-note in
   one balanced/replay-protected action set ([`sdk/rs/src/channel.rs:329-365`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/channel.rs#L329-L365)).
-- **Viewing grant:** a bearer package with both directional channel keys and one token’s scope;
+- **Viewing grant:** a bearer package with both directional channel keys and one token's scope;
   it reads one relationship but carries no owner pool key ([`sdk/rs/src/disclosure.rs:45-88`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/disclosure.rs#L45-L88)).
 - **Proving block:** the historical block against which virtual execution is proved; recent
   writes must mature into that view and the result must be submitted before expiry
@@ -1205,7 +1210,7 @@ The exact construction and phase sort are at [`sdk/rs/src/channel.rs:527-610`](h
 
 ### Five-minute spoken version
 
-“This is not a Rust rewrite of the whole StarkWare SDK. It is a narrow Rust client for one
+"This is not a Rust rewrite of the whole StarkWare SDK. It is a narrow Rust client for one
 application flow. It reproduces the privacy-pool hashes, note decryption, Cairo action
 serialization, proof invocation, transaction hash, signing, prover RPC, and final submission
 that this flow needs. Above those pieces it adds its own offer, counter, acceptance,
@@ -1218,7 +1223,7 @@ account keys. Python sends file paths through a one-request subprocess seam. Rus
 keys, owns the state, and performs the network lifecycle ([`sdk/py/src/erebus/_seam.py:1-18`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py#L1-L18),
 [`sdk/rs/src/execution.rs:132-239`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/execution.rs#L132-L239)).
 
-The underlying pool is note based. A note’s location is a Poseidon hash of a secret channel
+The underlying pool is note based. A note's location is a Poseidon hash of a secret channel
 key, token, and index. Spending does not erase it; it writes an owner-secret nullifier. Notes
 must be created at contiguous indices, so clients find them by deriving index zero upward and
 stopping at the first empty slot ([`sdk/rs/src/hashes.rs:142-168`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/hashes.rs#L142-L168),
@@ -1259,15 +1264,15 @@ in Rust, match upstream byte-for-byte oracles, and run the full offline executio
 It also gives concrete feedback on what makes the privacy stack hard to adopt: missing
 language-neutral specifications, strong endpoint custody assumptions, external prover and
 screening operations, proving latency, and metadata leakage ([`sdk/rs/src/lib.rs:11-20`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/lib.rs#L11-L20),
-[`docs/friction.md:436-538`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L436-L538), [`docs/friction.md:1295-1427`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1295-L1427)).”
+[`docs/friction.md:436-538`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L436-L538), [`docs/friction.md:1295-1427`](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md#L1295-L1427))."
 
 ## 11. MCP server: the agent-facing control and policy layer
 
 ### 11.0 Scope boundary and one-sentence framing
 
-**Use this sentence:** “The MCP server is an identity-bound Python adapter that presents the
+**Use this sentence:** "The MCP server is an identity-bound Python adapter that presents the
 negotiation client as nine agent-callable tools, applies payer/payee policy and exact-payment
-preflights, and delegates real protocol execution through the Python subprocess seam to Rust.”
+preflights, and delegates real protocol execution through the Python subprocess seam to Rust."
 The identity and role are fixed when the module loads, the nine tools are registered against one
 client, and the seam backend forwards calls rather than implementing hashes, field arithmetic, or
 salt encoding ([`mcp-server/src/server.py:28-40`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L28-L40), [`mcp-server/src/server.py:42-76`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L42-L76),
@@ -1368,8 +1373,7 @@ The Python validator checks that the CLI and key paths exist, but it does not ch
 is executable, key-file permissions are `0600`, the state directory exists, or the endpoints are
 reachable ([`mcp-server/src/erebus_mcp/config.py:117-140`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L117-L140)). The launcher adds an executable check
 for the CLI, while identity provisioning creates identity/state directories as `0700` and the env
-file as `0600` ([`scripts/erebus-mcp.sh:55-59`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/erebus-mcp.sh#L55-L59), [`scripts/new-identity.sh:97-119`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/new-identity.sh#L97-L119)). **I could not
-find an MCP-startup check that rejects overly broad key-file permissions.**
+file as `0600` ([`scripts/erebus-mcp.sh:55-59`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/erebus-mcp.sh#L55-L59), [`scripts/new-identity.sh:97-119`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/new-identity.sh#L97-L119)). **There is no MCP-startup check that rejects overly broad key-file permissions.**
 
 The launcher defaults the backend to `seam`, while direct [`server.py`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py) startup defaults it to
 `mock` ([`scripts/erebus-mcp.sh:50-53`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/erebus-mcp.sh#L50-L53), [`mcp-server/src/erebus_mcp/config.py:79-81`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L79-L81)). This is a
@@ -1390,7 +1394,7 @@ viewing grants, channel state, and disclosed records ([`mcp-server/src/erebus_mc
 traceback state; the source records that freezing this exception caused `FrozenInstanceError`
 ([`mcp-server/src/erebus_mcp/interface.py:165-184`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L165-L184)).
 
-`NoteBalance.can_pay` answers exact subset-sum, not total-balance sufficiency. It mirrors Rust’s
+`NoteBalance.can_pay` answers exact subset-sum, not total-balance sufficiency. It mirrors Rust's
 search bounds by considering at most 256 notes and returning false when reachable states reach
 100,000 ([`mcp-server/src/erebus_mcp/interface.py:57-92`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L57-L92)). This is why one note worth 1 STRK does
 not advertise a 0.7 STRK payment as possible when settlement creates no change
@@ -1399,7 +1403,7 @@ not advertise a 0.7 STRK payment as possible when settlement creates no change
 `SettlementErrorCode` separates non-retryable offer/state/payment errors, potentially retryable
 screening/prover/submission errors, counterparty screening rejection, an opaque proof failure,
 and seam-level invalid-request/identity errors ([`mcp-server/src/erebus_mcp/interface.py:135-162`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L135-L162)).
-`ErebusError` carries code, message, and the backend’s retryability decision
+`ErebusError` carries code, message, and the backend's retryability decision
 ([`mcp-server/src/erebus_mcp/interface.py:165-184`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L165-L184)).
 
 ### 11.5 Tool ledger: what an agent can call
@@ -1413,14 +1417,14 @@ schema exposes the meaning of amount, token, deadline, and memo hash directly
 
 | Tool | Input and result | MCP policy before delegation | Real backend operation |
 |---|---|---|---|
-| `open_channel` | Takes a counterparty address and returns an opaque `channel_handle` ([`mcp-server/src/erebus_mcp/tools.py:89-96`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L89-L96)). | None beyond backend errors ([`mcp-server/src/erebus_mcp/tools.py:89-96`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L89-L96)). | Calls seam `open_channel`, which returns the CLI’s handle ([`mcp-server/src/erebus_mcp/seam_client.py:111-113`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L111-L113)). |
+| `open_channel` | Takes a counterparty address and returns an opaque `channel_handle` ([`mcp-server/src/erebus_mcp/tools.py:89-96`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L89-L96)). | None beyond backend errors ([`mcp-server/src/erebus_mcp/tools.py:89-96`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L89-L96)). | Calls seam `open_channel`, which returns the CLI's handle ([`mcp-server/src/erebus_mcp/seam_client.py:111-113`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L111-L113)). |
 | `propose_offer` | Takes handle, base-unit amount, token address, Unix deadline, and 128-bit memo hash; returns `offer_id` ([`mcp-server/src/erebus_mcp/tools.py:98-117`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L98-L117)). | A server configured exactly as `payer` rejects an amount that is not payable by an exact note subset; `payee` and `both` skip this proposal preflight ([`mcp-server/src/erebus_mcp/tools.py:106-113`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L106-L113)). | Converts amount and memo hash to decimal strings, then invokes seam proposal ([`mcp-server/src/erebus_mcp/seam_client.py:115-117`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L115-L117), [`mcp-server/src/erebus_mcp/seam_client.py:196-208`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L196-L208)). |
 | `counter_offer` | Adds `reply_to` to the offer fields and returns a new `offer_id` ([`mcp-server/src/erebus_mcp/tools.py:119-141`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L119-L141)). | A pure payer gets the same exact-payability preflight; the doc states that countering does not revoke the previous offer ([`mcp-server/src/erebus_mcp/tools.py:128-137`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L128-L137)). | Invokes seam counter with the reference and wire terms ([`mcp-server/src/erebus_mcp/seam_client.py:119-125`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L119-L125)). |
 | `get_note_balance` | Optionally accepts a proposed amount and returns spendable denominations, total, pending denominations, and `can_pay_exactly` when requested ([`mcp-server/src/erebus_mcp/tools.py:60-69`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L60-L69), [`mcp-server/src/erebus_mcp/tools.py:143-154`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L143-L154)). | Read-only planning helper; pending notes are reported but not counted as spendable ([`mcp-server/src/erebus_mcp/interface.py:66-71`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L66-L71), [`mcp-server/src/erebus_mcp/tools.py:143-150`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L143-L150)). | Calls seam `balance` and converts amount strings to Python integers ([`mcp-server/src/erebus_mcp/seam_client.py:137-142`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L137-L142)). |
 | `read_channel_state` | Takes a handle and returns offers plus an optional settlement ([`mcp-server/src/erebus_mcp/tools.py:156-168`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L156-L168)). | None beyond backend errors ([`mcp-server/src/erebus_mcp/tools.py:156-168`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L156-L168)). | Calls seam read; the adapter can map a `settlement` object if present, although the current CLI read result is documented as carrying settled status rather than reconstructed settlement details ([`mcp-server/src/erebus_mcp/seam_client.py:127-135`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L127-L135)). |
 | `accept_and_settle` | Takes handle and offer id; returns offer id, transaction hash, nullifiers, and proving time ([`mcp-server/src/erebus_mcp/tools.py:170-206`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L170-L206)). | Rejects a `payee` process immediately. Otherwise it reads the offer, preflights its exact amount when found, and then delegates; unknown offers fall through so the backend returns its authoritative error ([`mcp-server/src/erebus_mcp/tools.py:179-197`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L179-L197)). | Calls seam atomic acceptance and maps the receipt ([`mcp-server/src/erebus_mcp/seam_client.py:144-153`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L144-L153)). |
 | `wait_for_offers` | Takes handle, expected count, and a default 300-second timeout; returns state plus `timed_out` ([`mcp-server/src/erebus_mcp/tools.py:208-240`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L208-L240)). | Polls every five seconds using monotonic time; timeout is a successful result, not an error ([`mcp-server/src/erebus_mcp/tools.py:37-39`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L37-L39), [`mcp-server/src/erebus_mcp/tools.py:218-240`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L218-L240)). | Repeatedly invokes the same read method; there is no push-subscription backend ([`mcp-server/src/erebus_mcp/tools.py:212-240`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L212-L240)). |
-| `grant_viewing_key` | Takes handle and grantee metadata; returns channel id, grantee, and bearer `viewing_key` ([`mcp-server/src/erebus_mcp/tools.py:242-256`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L256)). | Warns through its tool description that delivery is the caller’s responsibility and possession grants read access ([`mcp-server/src/erebus_mcp/tools.py:243-247`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L243-L247)). | Passes through the Rust-owned grant fields without parsing the secret ([`mcp-server/src/erebus_mcp/seam_client.py:155-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L155-L165)). |
+| `grant_viewing_key` | Takes handle and grantee metadata; returns channel id, grantee, and bearer `viewing_key` ([`mcp-server/src/erebus_mcp/tools.py:242-256`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L256)). | Warns through its tool description that delivery is the caller's responsibility and possession grants read access ([`mcp-server/src/erebus_mcp/tools.py:243-247`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L243-L247)). | Passes through the Rust-owned grant fields without parsing the secret ([`mcp-server/src/erebus_mcp/seam_client.py:155-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L155-L165)). |
 | `reveal` | Takes the three grant fields and returns channel, participants, offers, and optional settlement ([`mcp-server/src/erebus_mcp/tools.py:258-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L258-L273)). | Reconstructs a `ViewingKeyGrant`; no grantor-local channel state is required at the MCP layer ([`mcp-server/src/erebus_mcp/tools.py:258-264`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L258-L264)). | Passes the complete grant dictionary to the seam and maps the disclosed record ([`mcp-server/src/erebus_mcp/seam_client.py:167-179`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L167-L179)). |
 
 There are therefore seven negotiation/disclosure methods from the frozen interface, plus the
@@ -1431,10 +1435,10 @@ added ([`mcp-server/tests/test_tools.py:44-78`](https://github.com/PoulavBhowmic
 ### 11.6 Why payer and payee roles exist
 
 The crucial semantic rule is stated in the source: `accept_and_settle` spends the **calling
-identity’s** private notes ([`mcp-server/src/erebus_mcp/config.py:28-34`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L28-L34),
-[`mcp-server/src/erebus_mcp/tools.py:170-178`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L170-L178)). Therefore a seller/payee does not “accept” the
-buyer’s offer in the ordinary marketplace sense. The payee authors or counters with the final
-offer, and the payer accepts that payee-authored offer so the payer’s notes fund settlement
+identity's** private notes ([`mcp-server/src/erebus_mcp/config.py:28-34`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L28-L34),
+[`mcp-server/src/erebus_mcp/tools.py:170-178`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L170-L178)). Therefore a seller/payee does not "accept" the
+buyer's offer in the ordinary marketplace sense. The payee authors or counters with the final
+offer, and the payer accepts that payee-authored offer so the payer's notes fund settlement
 ([`mcp-server/src/erebus_mcp/tools.py:128-132`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L128-L132),
 [`mcp-server/src/erebus_mcp/tools.py:179-184`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L179-L184)).
 
@@ -1458,9 +1462,9 @@ or a cryptographic identity attribute; it is local MCP policy selected by the la
 environment ([`scripts/erebus-mcp.sh:20-25`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/erebus-mcp.sh#L20-L25), [`scripts/erebus-mcp.sh:50-53`](https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/erebus-mcp.sh#L50-L53)).
 
 The preflight is also not a concurrency guarantee. It reads channel state, then note balance,
-then invokes settlement as separate awaits ([`mcp-server/src/erebus_mcp/tools.py:186-197`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L186-L197)). **I’m
-inferring from that sequence that another concurrent operation could change state between those
-steps; verify the final safety behavior in Rust’s `Client::accept_and_settle` and state lease code.**
+then invokes settlement as separate awaits ([`mcp-server/src/erebus_mcp/tools.py:186-197`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L186-L197)). **I'm
+inferred from that sequence: another concurrent operation could change state between those
+steps; verify the final safety behavior in Rust's `Client::accept_and_settle` and state lease code.**
 The MCP preflight improves agent feedback; it cannot replace the lower-layer validation.
 
 ### 11.7 End-to-end real calls
@@ -1483,14 +1487,14 @@ The MCP preflight improves agent feedback; it cannot replace the lower-layer val
 
 #### Reading, deciding, and settling
 
-1. `read_channel_state` returns all mapped offers. `_offer` requires the CLI payload’s offer id,
+1. `read_channel_state` returns all mapped offers. `_offer` requires the CLI payload's offer id,
    channel id, proposer, terms, status, creation time, and optional reply id
    ([`mcp-server/src/erebus_mcp/seam_client.py:62-80`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L62-L80),
    [`mcp-server/src/erebus_mcp/seam_client.py:127-135`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L127-L135)).
-2. The MCP serializer intentionally omits each offer’s `channel_id` because the surrounding tool
+2. The MCP serializer intentionally omits each offer's `channel_id` because the surrounding tool
    call is already scoped by a channel handle; that omission is visible in `_offer_to_json`
    ([`mcp-server/src/erebus_mcp/tools.py:276-289`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L276-L289)). **This rationale is an inference from the
-   output shape; I could not find a source comment stating why the field is dropped.**
+   output shape; No source comment states why the field is dropped.**
 3. `accept_and_settle` first enforces role, reads the channel, finds the requested offer, and checks
    exact payability when the offer exists ([`mcp-server/src/erebus_mcp/tools.py:170-197`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L170-L197)).
 4. The real adapter calls the seam and returns the Rust receipt fields without interpreting the
@@ -1500,11 +1504,11 @@ The MCP preflight improves agent feedback; it cannot replace the lower-layer val
 #### Grant and reveal
 
 1. `grant_viewing_key` receives a channel handle and named grantee, delegates to Rust, and returns
-   the grant’s channel id, grantee, and bearer secret ([`mcp-server/src/erebus_mcp/tools.py:242-256`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L256)).
-2. The adapter’s comment is explicit: “The grant is a bearer secret: whoever holds it can read
-   this one relationship” ([`mcp-server/src/erebus_mcp/seam_client.py:155-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L155-L165)).
+   the grant's channel id, grantee, and bearer secret ([`mcp-server/src/erebus_mcp/tools.py:242-256`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L256)).
+2. The adapter's comment is explicit: "The grant is a bearer secret: whoever holds it can read
+   this one relationship" ([`mcp-server/src/erebus_mcp/seam_client.py:155-165`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L155-L165)).
 3. `reveal` accepts all three fields from any caller, rebuilds the grant object, and invokes the
-   seam without needing the grantor’s local handle state ([`mcp-server/src/erebus_mcp/tools.py:258-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L258-L273)).
+   seam without needing the grantor's local handle state ([`mcp-server/src/erebus_mcp/tools.py:258-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L258-L273)).
 4. Python maps the disclosed participants, offers, and settlement but performs no cryptographic
    grant verification itself ([`mcp-server/src/erebus_mcp/seam_client.py:167-179`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L167-L179)).
 
@@ -1534,7 +1538,7 @@ The mock does **not** model concurrent writers. It performs read-modify-write wi
 path and atomic replacement, and its doc comment says it assumes sequential calls
 ([`mcp-server/src/erebus_mcp/mock_client.py:7-14`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L7-L14),
 [`mcp-server/src/erebus_mcp/mock_client.py:123-131`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L123-L131)). Two simultaneous mock processes could race,
-overwrite each other, or contend for the same temporary path. **I’m inferring those failure modes
+overwrite each other, or contend for the same temporary path. **Inferred failure modes
 from the unlocked read/modify/replace sequence; reproduce them with concurrent mock writes before
 treating the exact symptom as verified.**
 
@@ -1547,7 +1551,7 @@ returns its code, message, and retryability in a JSON object ([`mcp-server/src/e
 returns `ok: false` with `OFFER_UNKNOWN`, while the MCP result has `is_error == false`
 ([`mcp-server/tests/test_tools.py:222-248`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L222-L248)).
 
-The seam adapter catches only the Python seam’s `ErebusError` in `_run`; another exception, such as
+The seam adapter catches only the Python seam's `ErebusError` in `_run`; another exception, such as
 a missing response field or a programming error, escapes and becomes an MCP-level tool failure
 ([`mcp-server/src/erebus_mcp/seam_client.py:105-109`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L105-L109),
 [`mcp-server/src/erebus_mcp/tools.py:47-52`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L47-L52)). This preserves structured expected failures without
@@ -1556,7 +1560,7 @@ silently classifying arbitrary bugs as protocol errors.
 If Rust adds an error code that the MCP enum does not know, `_translate` maps its code to
 `PROOF_FAILED` but preserves the message and `retryable` flag
 ([`mcp-server/src/erebus_mcp/seam_client.py:47-59`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L47-L59)). This keeps the agent from crashing, but loses
-the new code’s identity. The adapter test fixes that current fallback behavior
+the new code's identity. The adapter test fixes that current fallback behavior
 ([`mcp-server/tests/test_seam_client.py:157-169`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L157-L169)).
 
 ### 11.10 Mock backend: what it models and what it does not
@@ -1574,7 +1578,7 @@ It models these application rules:
 - one settled channel rejects later proposals and counters
   ([`mcp-server/src/erebus_mcp/mock_client.py:198-208`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L198-L208),
   [`mcp-server/src/erebus_mcp/mock_client.py:227-237`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L227-L237));
-- a counter must reference the other party’s known, unexpired, open offer, and the prior offer is
+- a counter must reference the other party's known, unexpired, open offer, and the prior offer is
   marked `countered` without being revoked ([`mcp-server/src/erebus_mcp/mock_client.py:238-285`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L238-L285));
 - deadlines are computed client-side at read/accept time
   ([`mcp-server/src/erebus_mcp/mock_client.py:174-179`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L174-L179),
@@ -1586,7 +1590,7 @@ It models these application rules:
 
 It does **not** model Poseidon derivations, encryption, action serialization, proving, screening,
 RPC behavior, account signing, gas, chain reverts, block maturity, reorgs, or contract execution;
-its own module describes it as “minus locking and crypto,” and its receipts and grants are locally
+its own module describes it as "minus locking and crypto," and its receipts and grants are locally
 fabricated ([`mcp-server/src/erebus_mcp/mock_client.py:7-14`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L7-L14),
 [`mcp-server/src/erebus_mcp/mock_client.py:358-386`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L358-L386)). Therefore a passing two-agent mock demo proves
 MCP transport and application policy, not privacy-pool compatibility or testnet settlement.
@@ -1597,7 +1601,7 @@ hook ([`mcp-server/src/erebus_mcp/mock_client.py:16-24`](https://github.com/Poul
 [`mcp-server/src/erebus_mcp/mock_client.py:106-121`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L106-L121)).
 
 There is also a concrete search divergence: `NoteBalance.can_pay` stops after 256 notes or 100,000
-reachable sums, while the mock’s internal `_select_exact_indices` has no such limits
+reachable sums, while the mock's internal `_select_exact_indices` has no such limits
 ([`mcp-server/src/erebus_mcp/interface.py:73-92`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L73-L92),
 [`mcp-server/src/erebus_mcp/mock_client.py:423-436`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L423-L436)). Tool-level payer acceptance preflights through
 the bounded `NoteBalance`, so normal MCP calls are conservative; direct mock-client calls can
@@ -1615,9 +1619,9 @@ The source comment claiming that two identities in one Python process would put 
 the same heap is not literally supported by this implementation: `SeamErebusClient` stores a
 `Seam`, while `SeamConfig` is constructed from key **paths**, and this module does not open either
 file ([`mcp-server/src/erebus_mcp/seam_client.py:94-103`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/seam_client.py#L94-L103),
-[`mcp-server/src/server.py:51-65`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L51-L65), [`mcp-server/src/erebus_mcp/config.py:41-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L41-L57)). **I’m inferring that
+[`mcp-server/src/server.py:51-65`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L51-L65), [`mcp-server/src/erebus_mcp/config.py:41-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L41-L57)). **Inferred: that
 one-process-per-identity still reduces authority and configuration mix-up risk, but the stated
-“both key values in the Python heap” rationale should be corrected or verified against
+"both key values in the Python heap" rationale should be corrected or verified against
 [`sdk/py/src/erebus/_seam.py`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/py/src/erebus/_seam.py).**
 
 MCP does carry sensitive disclosure material. The grant tool returns `viewing_key`, and reveal
@@ -1649,11 +1653,11 @@ protects the protocol stream by sending provisioning logs and validation errors 
 
 ### 11.13 Source disagreements and defects to say out loud
 
-1. **“The server holds no key material” needs qualification.** It does not open pool/account key
+1. **"The server holds no key material" needs qualification.** It does not open pool/account key
    files, but it does handle a bearer viewing key in grant/reveal payloads
    ([`mcp-server/src/server.py:15-18`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L15-L18), [`mcp-server/src/erebus_mcp/config.py:41-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L41-L57),
-   [`mcp-server/src/erebus_mcp/tools.py:242-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L273)). Say “Python does not load spending-key file
-   contents” instead of “the MCP server handles no secrets.”
+   [`mcp-server/src/erebus_mcp/tools.py:242-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L273)). Say "Python does not load spending-key file
+   contents" instead of "the MCP server handles no secrets."
 
 2. **The multi-identity heap comment conflicts with the implemented seam boundary.** The comments
    say two identities would place both pool keys in one heap, but the Python objects shown here
@@ -1664,7 +1668,7 @@ protects the protocol stream by sending provisioning logs and validation errors 
 3. **`DisclosedSettlement.is_consistent` treats missing payment evidence as success.** It returns
    true when `paid_amount` is `None` ([`mcp-server/src/erebus_mcp/interface.py:102-112`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L102-L112)), and MCP
    exports that boolean ([`mcp-server/src/erebus_mcp/tools.py:292-299`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L292-L299)). This means
-   `is_consistent: true` can mean either “amounts match” or “no paid amount was supplied.” **That
+   `is_consistent: true` can mean either "amounts match" or "no paid amount was supplied." **That
    is a weakness, not a proof of settlement consistency; the API should use a tri-state/optional
    result or return false for missing evidence.**
 
@@ -1692,18 +1696,17 @@ protects the protocol stream by sending provisioning logs and validation errors 
 |---|---|---|
 | `test_happy_path_end_to_end` | Two direct mock clients converge on a handle, exchange proposal/counter, consume payer notes, make a synthetic grant, and reveal a consistent mock record ([`mcp-server/tests/test_mock_client.py:31-67`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_mock_client.py#L31-L67)). | No MCP transport, Rust, cryptography, prover, RPC, or chain is involved ([`mcp-server/src/erebus_mcp/mock_client.py:7-14`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L7-L14)). |
 | Mock rejection tests | Cover post-settlement writes, expiry, double settlement, payer direction, exact note consumption, self-acceptance, unknown counters, and representative injected error groups ([`mcp-server/tests/test_mock_client.py:70-192`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_mock_client.py#L70-L192)). | Injected prover/screening/amount errors prove propagation only, not that real upstream conditions produce them ([`mcp-server/src/erebus_mcp/mock_client.py:16-24`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L16-L24), [`mcp-server/src/erebus_mcp/mock_client.py:108-121`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L108-L121)). |
-| Seam adapter tests | Cover offer/balance mapping, absence of settlement detail on ordinary read, reveal settlement mapping, disagreeing amounts, known and unknown errors, wide-integer string encoding, and opaque grant passthrough ([`mcp-server/tests/test_seam_client.py:69-195`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L69-L195)). | The seam is a stub and “nothing here reaches a chain” ([`mcp-server/tests/test_seam_client.py:1-12`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L1-L12), [`mcp-server/tests/test_seam_client.py:47-62`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L47-L62)). |
+| Seam adapter tests | Cover offer/balance mapping, absence of settlement detail on ordinary read, reveal settlement mapping, disagreeing amounts, known and unknown errors, wide-integer string encoding, and opaque grant passthrough ([`mcp-server/tests/test_seam_client.py:69-195`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L69-L195)). | The seam is a stub and "nothing here reaches a chain" ([`mcp-server/tests/test_seam_client.py:1-12`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L1-L12), [`mcp-server/tests/test_seam_client.py:47-62`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L47-L62)). |
 | MCP discovery test | Starts the server through stdio with the official client and asserts the exact nine tools and descriptions ([`mcp-server/tests/test_tools.py:1-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L1-L17), [`mcp-server/tests/test_tools.py:44-78`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L44-L78)). | It starts the default mock backend, not the seam ([`mcp-server/tests/test_tools.py:20-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L20-L35)). |
-| MCP policy tests | Verify `can_pay_exactly`, reject an unpayable payer-authored offer without writing state, and structurally deny payee settlement ([`mcp-server/tests/test_tools.py:81-138`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L81-L138)). | They do not test role `both`, concurrent state changes, or Rust’s final enforcement ([`mcp-server/tests/test_tools.py:20-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L20-L35)). |
-| Two-server MCP test | Runs separate payer and payee MCP subprocesses against shared mock state, has the payee author the offer, settles from the buyer, consumes the buyer’s mock note, and exposes settlement to the seller ([`mcp-server/tests/test_tools.py:141-190`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L141-L190)). | It proves topology and policy, not on-chain atomicity, key isolation, or privacy ([`mcp-server/src/erebus_mcp/mock_client.py:7-14`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L7-L14)). |
+| MCP policy tests | Verify `can_pay_exactly`, reject an unpayable payer-authored offer without writing state, and structurally deny payee settlement ([`mcp-server/tests/test_tools.py:81-138`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L81-L138)). | They do not test role `both`, concurrent state changes, or Rust's final enforcement ([`mcp-server/tests/test_tools.py:20-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L20-L35)). |
+| Two-server MCP test | Runs separate payer and payee MCP subprocesses against shared mock state, has the payee author the offer, settles from the buyer, consumes the buyer's mock note, and exposes settlement to the seller ([`mcp-server/tests/test_tools.py:141-190`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L141-L190)). | It proves topology and policy, not on-chain atomicity, key isolation, or privacy ([`mcp-server/src/erebus_mcp/mock_client.py:7-14`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/mock_client.py#L7-L14)). |
 | Structured-error MCP test | Proves application failure remains machine-readable and is not flagged as an MCP transport error ([`mcp-server/tests/test_tools.py:222-248`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L222-L248)). | It covers one mock `OFFER_UNKNOWN` path, not every real seam error code. |
 
-I could not find MCP tests for `wait_for_offers`, invalid configuration, launcher provisioning,
+There are no MCP tests for `wait_for_offers`, invalid configuration, launcher provisioning,
 file permissions, concurrent tool calls, real `server.py → Seam → erebus-cli` execution, or live
 testnet calls; the MCP test directory contains only the mock, seam-adapter, and stdio-mock files
 listed above ([`mcp-server/tests/test_mock_client.py:1-192`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_mock_client.py#L1-L192),
-[`mcp-server/tests/test_seam_client.py:1-195`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L1-L195), [`mcp-server/tests/test_tools.py:1-252`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L1-L252)). I also could
-not find a test for `paid_amount=None` combined with the exported `is_consistent` value
+[`mcp-server/tests/test_seam_client.py:1-195`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L1-L195), [`mcp-server/tests/test_tools.py:1-252`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L1-L252)). There is also no test for `paid_amount=None` combined with the exported `is_consistent` value
 ([`mcp-server/src/erebus_mcp/interface.py:102-112`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L102-L112),
 [`mcp-server/src/erebus_mcp/tools.py:292-299`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L292-L299)).
 
@@ -1720,7 +1723,7 @@ on-chain transaction, because the full MCP transport tests use `MockErebusClient
 tests use `StubSeam` ([`mcp-server/tests/test_tools.py:20-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_tools.py#L20-L35),
 [`mcp-server/tests/test_seam_client.py:47-62`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/tests/test_seam_client.py#L47-L62)). Closing that evidence gap requires a test or
 recorded run that launches [`server.py`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py) with `EREBUS_BACKEND=seam`, invokes the real CLI, and verifies
-the resulting transaction and disclosed record against Starknet; **I could not find that test in
+the resulting transaction and disclosed record against Starknet. **That test is not in
 [`mcp-server/tests/`](https://github.com/PoulavBhowmick03/Erebus/tree/main/mcp-server/tests).**
 
 Before production, the MCP-specific work visible from this source is: fix the missing-payment
@@ -1732,21 +1735,21 @@ transport test ([`mcp-server/src/erebus_mcp/interface.py:102-112`](https://githu
 
 ### 11.16 Two-minute spoken explanation
 
-“The MCP server is the agent-facing control layer, not another implementation of the privacy
+"The MCP server is the agent-facing control layer, not another implementation of the privacy
 protocol. One process is configured with one Starknet identity, one payer/payee role, and either a
 mock backend or the real Python-to-Rust seam. It exposes nine tools: open, propose, counter, read,
 balance planning, accept and settle, wait, grant, and reveal ([`mcp-server/src/server.py:28-76`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L28-L76),
 [`mcp-server/src/erebus_mcp/tools.py:89-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L89-L273)).
 
-The most important policy rule is that accepting spends the caller’s notes. A seller therefore
-leaves the final seller-authored offer and the buyer’s payer process accepts it. This is written in
+The most important policy rule is that accepting spends the caller's notes. A seller therefore
+leaves the final seller-authored offer and the buyer's payer process accepts it. This is written in
 the server instructions and, more importantly, enforced by disabling settlement on a payee-role
 server. The payer also checks that an exact subset of its private note denominations can pay the
 amount, because this settlement path creates no change ([`mcp-server/src/server.py:30-39`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/server.py#L30-L39),
 [`mcp-server/src/erebus_mcp/tools.py:71-87`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L71-L87), [`mcp-server/src/erebus_mcp/tools.py:170-197`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L170-L197)).
 
 On the real path, Python does not calculate Poseidon hashes, salts, proofs, or Starknet
-transactions. It turns tool arguments into the seam’s dictionaries, moves the blocking subprocess
+transactions. It turns tool arguments into the seam's dictionaries, moves the blocking subprocess
 call onto a worker thread, and maps the Rust result back into stable Python objects. Pool and
 account key-file contents are opened below this layer, although their paths are present in Python
 configuration ([`mcp-server/src/erebus_mcp/config.py:41-57`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/config.py#L41-L57),
@@ -1770,4 +1773,4 @@ contents, but the MCP host sees the returned viewing key, so transcript handling
 part of the trust boundary. Also, the current Python consistency helper treats a missing payment
 amount as consistent; that must not be presented as verified settlement consistency
 ([`mcp-server/src/erebus_mcp/tools.py:242-273`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/tools.py#L242-L273),
-[`mcp-server/src/erebus_mcp/interface.py:102-112`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L102-L112)).”
+[`mcp-server/src/erebus_mcp/interface.py:102-112`](https://github.com/PoulavBhowmick03/Erebus/blob/main/mcp-server/src/erebus_mcp/interface.py#L102-L112))."

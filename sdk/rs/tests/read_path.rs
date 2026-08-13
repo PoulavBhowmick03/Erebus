@@ -265,7 +265,7 @@ fn the_wrong_channel_key_reads_as_an_empty_channel() {
             .transcript(&storage.source())
             .expect("reads")
             .is_empty(),
-        "a wrong key must not find anything — and must not error either"
+        "a wrong key must not find anything, and must not error either"
     );
 }
 

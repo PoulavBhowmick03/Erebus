@@ -110,7 +110,7 @@ class SellerPolicy:
         offer = _latest_open_offer(state, self.identity)
         if offer is None:
             raise ValueError(
-                "SellerPolicy.decide called with no open offer to react to — "
+                "SellerPolicy.decide called with no open offer to react to. "
                 "the buyer proposes first; this policy never opens"
             )
 

@@ -1,32 +1,45 @@
 # Erebus
 
-**Target: negotiate in darkness, settle in silence.**
+**Negotiate in darkness, settle in silence.**
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
-The target is an **Eleusis**, an encrypted channel that hides the negotiation and its
-relationship graph. Atomic shielded settlement and scoped reconstruction now work live;
-the Rust SDK now encrypts/authenticates negotiation payloads in wire v2, but that new wire
-has not yet been exercised on-chain or independently reviewed.
+Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
+exchange structured offers over it, and settle atomically through the shielded pool. Either
+side can hand a third party a viewing key afterwards and let them reconstruct that one
+relationship.
 
 ---
 
 ## Status
 
-**Pre-MVP.** The complete Rust happy path has run on Sepolia: two-sided negotiation, atomic
-settlement and bearer-grant disclosure. Nothing here is production-ready. Do not put real
-value through it.
+**Testnet.** The full loop runs on Sepolia: two-sided negotiation, atomic settlement and
+bearer-grant disclosure, driven autonomously by two agents through MCP. It is not
+production-hardened and has had no external review. Do not put real value through it.
 
 The first live transaction exposed wire-v1 terms because salts are public. Wire v2 replaces
 that format with AES-256-GCM-SIV ciphertext and a 128-bit authentication tag, fragmented
 across five salt chunks.
-Its Rust KATs, tamper tests, legacy reads and full offline suite pass; a fresh live v2 run,
-cross-language peer implementation and security review remain. See [F30](./docs/friction.md).
 
-Target is **Starknet Sepolia**, privacy pool v2.0 at `0x0254a6…0d91`, verified on-chain.
-Mainnet has no STRK20 deployment yet. Where the stack has fought us is logged honestly in
-[docs/friction.md](./docs/friction.md); the largest constraint so far is that a pool note
-has no payload field, so negotiation state is carried in note salts at 119 bits each.
+Wire v2 has since run end to end on Sepolia. Two fresh identities negotiated and settled
+autonomously through two role-bound MCP servers, transaction
+`0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3`, block 13095252.
+`scripts/observer.py` was then pointed at that transaction's public calldata with no channel
+key and recovered nothing. The same tool run against the wire-v1 settlement
+`0x44289c...84bb7` recovers the full acceptance, which is what makes the negative result
+worth anything. Details in [F30](./docs/friction.md).
+
+Still outstanding: a second implementation of wire v2 (`sdk/ts` is on v1), an independent
+security review, and traffic-shape privacy ([F31](./docs/friction.md)).
+
+Target is **Starknet Sepolia**, privacy pool v2.0 at `0x0254a6...0d91`, verified on-chain.
+A mainnet pool went live at `0x040337b1...812a` with an identical class hash, so porting is a
+configuration change rather than a re-derivation, but it charges a 6 STRK protocol fee per
+`apply_actions` where Sepolia charges nothing. Nothing has run on mainnet yet.
+
+Where the stack has fought us is logged in [docs/friction.md](./docs/friction.md). The
+largest constraint so far is that a pool note has no payload field, so negotiation state is
+carried in note salts at 119 bits each.
 
 ---
 
@@ -38,11 +51,11 @@ Agent-to-agent commerce is arriving on rails that are transparent by default.
 - **MCP** (Linux Foundation) exposes tools to agents. No payment, no privacy.
 - **x402 / AP2 / MPP** settle payments. All transparent on-chain or through card rails.
 
-None of them hide *who is dealing with whom, how often, and for how much.*
+All three leave the relationship itself in the open: who is dealing with whom, how often, at what size.
 
-That gap is not theoretical. Recent work on agent interoperability metadata shows that an observer of the A2A/MCP communication graph can recover an interaction's task class well above chance from metadata alone, from the opening of a workflow, and then front-run the pending action at machine speed. Encrypting the payload does not fix this. The leak is the graph, not the message.
+An observer who can see the A2A or MCP communication graph learns a lot from metadata alone. Message timing, message sizes and the identity of the endpoints are enough to classify what kind of workflow is running and to act on a pending transaction before it lands. Encrypting the payload does not close that, because the leak is in the graph rather than in the message.
 
-No business runs procurement in public. No trading desk wants its counterparty cadence observable. As agents start transacting autonomously, the transparent-by-default rail becomes the blocker.
+Procurement teams and trading desks both treat counterparty cadence as confidential, and for the same reason. As agents start transacting autonomously without a human approving each step, a transparent-by-default rail stops being an inconvenience and starts being the blocker.
 
 ## What Erebus does
 
@@ -52,9 +65,9 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Relationship privacy: target, not current** | Keyed storage locations hide efficient lookup, but the current structured salts are public in transaction calldata. Message and relationship privacy are not yet demonstrated. |
-| **Atomic negotiate → settle** | The accepted offer and the shielded payment are one proven state transition. No "agreed but never paid" gap, no separate payment hop. |
-| **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record: terms and payment: to a specific counterparty without exposing anything to the public or leaking data about unrelated users. |
+| **Message privacy: live. Traffic privacy: partial** | Wire v2 encrypts the negotiation payload under AES-256-GCM-SIV, so an observer with no key recovers no terms. The fifth salt still has a fixed 59-bit shape that fingerprints Erebus traffic, so an observer can count and time deals without reading them. See [F31](./docs/friction.md). |
+| **Atomic negotiate to settle** | The accepted offer and the shielded payment are one proven state transition. There is no "agreed but never paid" gap and no separate payment hop. |
+| **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record (terms and payment) to a specific counterparty, without exposing anything to the public or leaking data about unrelated users. |
 | **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end: STRK20 ships no paymaster of its own, so this rides on a third party. |
 
 ## Why Starknet, why STRK20
@@ -66,7 +79,7 @@ It provides four things existing rails do not:
   to the recipient through the pool's channel-info flow. Encrypting Erebus's salt payload is
   still our own wire-design responsibility.
 - **Compliance is native.** Viewing keys are registered encrypted on-chain under a threshold auditor system, the path Tornado Cash never had.
-- **Account abstraction is native**, which is what makes agents first-class actors rather than bolted-on EOAs.
+- **Account abstraction is native.** An agent can hold and use an account without a human signing each transaction.
 
 ## Architecture
 
@@ -109,9 +122,9 @@ enforced one rather than a convention.
 `discovery-core` covers reads, hashes, storage slots, ECDH, decryption. There is no Rust
 write side: nothing builds `ClientAction`s, serialises calldata, signs, or calls the
 prover. Erebus's Rust client fills that gap and is useful outside this project. The
-TypeScript implementation is kept as the oracle it is differential-tested against.
-there's no written spec for the wire format, so two agreeing implementations is the
-strongest correctness signal on offer.
+TypeScript implementation is kept as the oracle it is differential-tested against. There is
+no written spec for the wire format, so two agreeing implementations is the strongest
+correctness signal on offer.
 
 **On Python above it.** The official `mcp` SDK is first-class, so the tool layer has no
 reason to be TypeScript. `/sdk/py` exists only to reach Rust from Python; it is
@@ -139,4 +152,5 @@ Used in docs, marketing, and conversation. **Not** in the API surface, see [CLAU
 
 ## License
 
-TBD before any public release.
+Apache-2.0. See [LICENSE](./LICENSE). Matches `starkware-libs/starknet-privacy`, whose
+primitives this composes.

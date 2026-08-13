@@ -189,7 +189,7 @@ class MockErebusClient:
         if channel["settlement"] is not None:
             raise ErebusError(
                 code=SettlementErrorCode.INDEX_CONFLICT,
-                message="channel already settled — one subchannel is one deal",
+                message="channel already settled; one subchannel is one deal",
                 retryable=False,
             )
         seq = channel["next_seq"].get(self._identity, 0)
@@ -218,7 +218,7 @@ class MockErebusClient:
         if channel["settlement"] is not None:
             raise ErebusError(
                 code=SettlementErrorCode.INDEX_CONFLICT,
-                message="channel already settled — one subchannel is one deal",
+                message="channel already settled; one subchannel is one deal",
                 retryable=False,
             )
         offers = [self._offer_from_dict(d) for d in channel["offers"]]

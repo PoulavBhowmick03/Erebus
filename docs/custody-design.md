@@ -19,7 +19,7 @@ keys". Separating those two meanings resolves most of the question.
 
 The account key and pool key are distinct, but the complete Rust MVP handles both locally:
 the proof invocation needs an account-valid signature, and the final invoke must also be
-signed. “Does not appear in prover calldata” means the prover cannot steal it; it does not
+signed. "Does not appear in prover calldata" means the prover cannot steal it; it does not
 mean the client can execute without a signer.
 
 The Rust seam now provisions the pool key with `generate_pool_key`: OS entropy goes directly
@@ -84,8 +84,8 @@ validation and review remain.
 The invoke path is built for AMM swaps, where the swap parameters being public is fine and
 only the *identity* needs hiding. Erebus needs the opposite.
 
-The anonymizer route is the documented escape hatch for anything beyond the four actions.
-does not change this. Its own summary: *"What this hides: the user's address behind the
+The anonymizer route is the documented escape hatch for anything beyond the four actions,
+and it does not change this. Its own summary: *"What this hides: the user's address behind the
 DeFi action. What may stay public: the amounts and the app activity itself."* Identity
 hiding, not data transport.
 
@@ -149,7 +149,7 @@ service and never sees either key.
 - **Cost:** each agent operator needs prover access. A shared prover sees pool keys (F14), so
   either they run their own (Pathfinder + prover) or accept that exposure.
 - **Cost:** the MVP uses a local account-key file because no wallet/session signer is wired
-  yet. “Agents use whatever Starknet wallet they have” is post-MVP work, not a current
+  yet. "Agents use whatever Starknet wallet they have" is post-MVP work, not a current
   property. The pool key remains separate and Erebus's local state manages channel secrets
   derived from it.
 

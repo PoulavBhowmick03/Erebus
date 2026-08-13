@@ -6,12 +6,12 @@
 //! all three PASS against upstream.
 
 //!
-//! 1. `probe_offer_terms_does_not_fit_in_a_note` — the ARCHITECTURE §4 `OfferTerms`
+//! 1. `probe_offer_terms_does_not_fit_in_a_note`. The ARCHITECTURE §4 `OfferTerms`
 //!    struct is 5 field elements; a note's whole client-writable surface is 120 bits.
-//! 2. `probe_note_salt_is_a_120_bit_payload_lane` — the note salt IS a real payload
+//! 2. `probe_note_salt_is_a_120_bit_payload_lane`. The note salt IS a real payload
 //!    lane: it round-trips verbatim through storage, and a zero-amount note (a pure
 //!    data note, no deposit, nothing to settle) is accepted.
-//! 3. `probe_note_salt_rejects_a_full_felt_payload` — one bit over 120 and the write
+//! 3. `probe_note_salt_rejects_a_full_felt_payload`. One bit over 120 and the write
 //!    path rejects it at `assert_valid`.
 
 use core::num::traits::Zero;
@@ -81,7 +81,7 @@ fn probe_offer_terms_does_not_fit_in_a_note() {
 
 /// The note salt is a genuine 120-bit lane: the sender picks it, the contract writes it
 /// verbatim into the high 120 bits of `packed_value`, and the recipient reads it back
-/// from `get_note(note_id)` — a keyed read, not a scan.
+/// from `get_note(note_id)`, a keyed read rather than a scan.
 ///
 /// `amount: 0` is deliberate. `CreateEncNoteInputValid` allows a zero amount, and the
 /// token balance ledger nets to zero, so this note moves no value and needs no deposit.

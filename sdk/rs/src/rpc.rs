@@ -214,7 +214,7 @@ pub enum RpcError {
     ///
     /// `data` contains the revert reason for code 40 (`CONTRACT_ERROR`). Without it, the
     /// message only says `Contract error`. F20 was diagnosed without this detail.
-    #[error("Starknet RPC error {code}: {message}{}", .data.as_ref().map(|d| format!(" — {d}")).unwrap_or_default())]
+    #[error("Starknet RPC error {code}: {message}{}", .data.as_ref().map(|d| format!(": {d}")).unwrap_or_default())]
     Rpc {
         /// RPC error code.
         code: i64,
