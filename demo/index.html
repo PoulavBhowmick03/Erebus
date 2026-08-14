@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Erebus demo: private negotiation, atomic shielded settlement, and selective disclosure for AI agents."
+    />
+    <title>Erebus | Private agent settlement</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="#top" aria-label="Erebus home">
+        <span class="mark" aria-hidden="true"></span>
+        EREBUS
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#demo">Demo</a>
+        <a href="#proof">Evidence</a>
+        <a href="#privacy">Privacy</a>
+        <a class="source-link" href="https://github.com/PoulavBhowmick03/Erebus">Source</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <p class="eyebrow">STRK20 PRIVATE SPRINT / 2026</p>
+        <h1>Agents negotiate privately.<br /><span>Settlement follows the agreement.</span></h1>
+        <p class="lede">
+          Erebus carries encrypted offers through STRK20 notes, settles the accepted offer
+          atomically, and lets either party disclose one relationship later.
+        </p>
+        <div class="hero-actions">
+          <a class="primary-button" href="#demo">Run the browser demo</a>
+          <a class="text-link" href="https://github.com/PoulavBhowmick03/Erebus#architecture">
+            Read the architecture <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+        <dl class="status-strip" aria-label="Project status">
+          <div><dt>Protocol</dt><dd>STRK20 v2.0</dd></div>
+          <div><dt>Wire</dt><dd>AES-256-GCM-SIV</dd></div>
+          <div><dt>SDK</dt><dd>Rust</dd></div>
+          <div><dt>Network</dt><dd id="network-status">Sepolia proven</dd></div>
+        </dl>
+      </section>
+
+      <section class="demo-section" id="demo">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">REFERENCE AGENT FLOW</p>
+            <h2>Watch one deal move through Erebus</h2>
+          </div>
+          <p>
+            This browser simulation mirrors <code>agents/src/erebus_agents/demo.py</code>.
+            It does not submit a transaction or use a wallet.
+          </p>
+        </div>
+
+        <div class="demo-grid">
+          <aside class="deal-card">
+            <div class="agent-row">
+              <div class="agent buyer"><span>B</span><div><small>BUYER AGENT</small><strong>0xbuyer</strong></div></div>
+              <span class="route" aria-hidden="true">··········</span>
+              <div class="agent seller"><span>S</span><div><small>SELLER AGENT</small><strong>0xseller</strong></div></div>
+            </div>
+
+            <label for="budget">Buyer budget <output id="budget-output">1,000</output></label>
+            <input id="budget" type="range" min="800" max="1400" step="50" value="1000" />
+
+            <label for="reserve">Seller reserve <output id="reserve-output">800</output></label>
+            <input id="reserve" type="range" min="500" max="1200" step="50" value="800" />
+
+            <button class="primary-button run-button" id="run-demo" type="button">
+              Run negotiation
+            </button>
+            <p class="run-note" id="run-note">No keys or funds are used in this simulation.</p>
+          </aside>
+
+          <section class="terminal-card" aria-live="polite" aria-label="Negotiation transcript">
+            <div class="terminal-bar">
+              <span><i></i><i></i><i></i></span>
+              <strong>erebus / agent transcript</strong>
+              <span id="terminal-state">READY</span>
+            </div>
+            <ol id="transcript">
+              <li class="idle-line"><span>00</span>Set the policies and run the negotiation.</li>
+            </ol>
+          </section>
+        </div>
+
+        <section class="reveal-card" id="reveal-card" hidden>
+          <div>
+            <p class="eyebrow">KLEIDOUCHOS VIEW</p>
+            <h3>The public sees ciphertext. The auditor sees this record.</h3>
+          </div>
+          <dl>
+            <div><dt>Channel</dt><dd>ch_0xbuyer_0xseller</dd></div>
+            <div><dt>Participants</dt><dd>0xbuyer ↔ 0xseller</dd></div>
+            <div><dt>Agreed</dt><dd id="agreed-amount">1,000</dd></div>
+            <div><dt>Paid</dt><dd id="paid-amount">1,000</dd></div>
+            <div><dt>Record check</dt><dd class="success">consistent</dd></div>
+          </dl>
+        </section>
+      </section>
+
+      <section class="proof-section" id="proof">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">VERIFIABLE EVIDENCE</p>
+            <h2>Follow the transactions, not the claim</h2>
+          </div>
+          <p>Live hashes are linked to an explorer when a network run is complete.</p>
+        </div>
+
+        <div class="evidence-grid">
+          <article class="evidence-card featured">
+            <p class="card-number">01</p>
+            <h3>Wire v2 settlement</h3>
+            <p>Two role-bound agents negotiated and settled on Starknet Sepolia.</p>
+            <a href="https://sepolia.voyager.online/tx/0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3">
+              View transaction <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+          <article class="evidence-card pending" id="mainnet-evidence">
+            <p class="card-number">02</p>
+            <h3>Mainnet pool calls</h3>
+            <p>The sprint manifest does not contain three verified mainnet transactions yet.</p>
+            <span>Pending</span>
+          </article>
+          <article class="evidence-card">
+            <p class="card-number">03</p>
+            <h3>Observer control</h3>
+            <p>Wire v1 reveals terms. The same observer cannot recover wire v2 terms without the key.</p>
+            <a href="https://github.com/PoulavBhowmick03/Erebus/blob/main/scripts/observer.py">
+              Read the test <span aria-hidden="true">↗</span>
+            </a>
+          </article>
+        </div>
+      </section>
+
+      <section class="privacy-section" id="privacy">
+        <div>
+          <p class="eyebrow">PRIVACY BOUNDARY</p>
+          <h2>What is hidden and what is still visible</h2>
+          <p>
+            Wire v2 encrypts offer terms. It does not hide transaction timing, pool usage,
+            or the current fixed shape of the fifth salt.
+          </p>
+          <a class="text-link" href="https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md">
+            Read the friction log <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+        <table>
+          <thead><tr><th>Observer</th><th>Offer terms</th><th>Traffic shape</th></tr></thead>
+          <tbody>
+            <tr><td>Public chain reader</td><td class="success">Hidden</td><td class="warning">Visible</td></tr>
+            <tr><td>Channel party</td><td>Readable</td><td>Visible</td></tr>
+            <tr><td>Viewing-key holder</td><td>Readable for one channel</td><td>Visible</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer>
+      <span>EREBUS / APACHE-2.0</span>
+      <span>Built on Starknet and STRK20</span>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
