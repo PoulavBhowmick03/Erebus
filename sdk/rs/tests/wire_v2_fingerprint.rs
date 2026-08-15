@@ -1,11 +1,25 @@
 //! Does wire v2 hide *that* a negotiation happened, as well as what it said?
 //!
 //! Encryption answered the second question (F30). This asks the first, because the observer
-//! in `scripts/observer.py` never needed to decode anything to find Erebus traffic — its
-//! first filter was a structural property of the salts.
+//! in `scripts/observer.py` identifies Erebus traffic from salt structure without decoding.
 
 use erebus_sdk::wire::{encode_message, MessageType, WireContext, WireMessage};
 use starknet_types_core::felt::Felt;
+
+// This pins the public observer fixture to the Rust
+// implementation without changing the wire or using the channel key in the observer.
+#[test]
+fn observer_v2_fixture_matches_the_rust_encoder_byte_for_byte() {
+    let salts = encode_message(&context(0), &message(500)).expect("encode");
+    let expected = [
+        0x00dd_aa87_98e0_1766_7cab_e10a_9dab_cfd9u128,
+        0x00d1_bf5c_7a72_2b84_da07_250e_c0ef_fc20,
+        0x0086_06b1_59b6_205b_7b8c_77bd_bb2b_9efd,
+        0x009b_5686_6232_ede3_f950_1f9a_69b1_7188,
+        0x0080_0000_0000_0000_002c_2099_c8fc_7578,
+    ];
+    assert_eq!(salts.map(|salt| salt.get()), expected);
+}
 
 fn context(index: u32) -> WireContext {
     WireContext {

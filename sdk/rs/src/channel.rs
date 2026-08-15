@@ -84,6 +84,17 @@ pub enum ChannelError {
         /// Exclusive end of the acceptance record.
         acceptance_end: u32,
     },
+    /// Two outputs target the same note slot in one channel.
+    #[error("two settlement outputs target note index {index} in channel {channel_key:#x}")]
+    OutputIndexCollision {
+        /// Channel containing the duplicate slot.
+        channel_key: Felt,
+        /// Duplicate note index.
+        index: u32,
+    },
+    /// A present change output carried no value.
+    #[error("a change output must move a non-zero amount")]
+    ZeroChange,
 }
 
 /// An agent's identity inside the pool.
@@ -497,6 +508,21 @@ impl Channel {
         payment: Payment,
         acceptance: Acceptance,
     ) -> Result<ActionSet, ChannelError> {
+        self.accept_and_settle_with_change(token, spend, payment, acceptance, None)
+    }
+
+    /// Builds an atomic acceptance, payment, and optional payer-owned change output.
+    ///
+    /// Unreviewed. The payment uses the counterparty channel. Retained value uses the payer
+    /// self-channel. Both value notes require [`RandomSalt`].
+    pub fn accept_and_settle_with_change(
+        &self,
+        token: Felt,
+        spend: &[OwnedNote],
+        payment: Payment,
+        acceptance: Acceptance,
+        change: Option<ChangeOutput>,
+    ) -> Result<ActionSet, ChannelError> {
         if acceptance.message.message_type != MessageType::Accept {
             return Err(ChannelError::NotAnAcceptance(
                 acceptance.message.message_type,
@@ -508,11 +534,11 @@ impl Channel {
         if spend.is_empty() {
             return Err(ChannelError::NothingToSpend);
         }
-        // Atomicity puts the acceptance and the payment in one proof, so both land or
-        // neither does. It says nothing about them *agreeing*. Without this check the SDK
-        // will happily write "accepted at 900" alongside a note carrying 800, and the
-        // counterparty ends up underpaid holding a valid on-chain acceptance — which is the
-        // exact failure Erebus claims to remove, reintroduced one level up.
+        if matches!(change, Some(output) if output.amount == 0) {
+            return Err(ChannelError::ZeroChange);
+        }
+        // Atomicity does not make the accepted amount equal the payment. Without this check,
+        // the SDK can record 900 and pay 800 in the same proof.
         if payment.amount != acceptance.message.amount {
             return Err(ChannelError::AmountMismatch {
                 agreed: acceptance.message.amount,
@@ -540,6 +566,27 @@ impl Channel {
         )?;
         let mut builder = ActionSetBuilder::new();
 
+        // A payer can receive funds without ever opening a self-channel. If its first
+        // retained value is settlement change, open that channel and token subchannel in
+        // this same action set before the spend/create phases.
+        if let Some(ChangeOutput {
+            channel,
+            setup: Some(setup),
+            ..
+        }) = change
+        {
+            builder.push(channel.open_channel(
+                setup.channel_index,
+                setup.channel_random,
+                setup.channel_salt,
+            ))?;
+            builder.push(channel.open_subchannel(
+                setup.subchannel_index,
+                token,
+                setup.subchannel_salt,
+            ))?;
+        }
+
         // Phase 4: consume the inputs.
         for note in spend {
             builder.push(ClientAction::UseNote(UseNoteInput {
@@ -551,25 +598,40 @@ impl Channel {
 
         // Phase 5: the creations, **in ascending index order**.
         //
-        // Order matters here and it is not obvious. `compile_actions` runs the set through
-        // `compile_and_panic`, and `_client_apply_actions` applies each `WriteOnce` as it
-        // walks (`privacy.cairo:761`) — so the contiguity check on note `n` sees notes this
-        // same set created earlier. Emitting the payment before a lower-indexed acceptance
-        // record would fail `INDEX_NOT_SEQUENTIAL` against a slot the set was about to fill.
-        //
-        // Sorting is the SDK doing its job rather than papering over a caller error: the
-        // caller picks *which* indices, there is only one legal order to write them in.
-        let mut creates: Vec<(u32, ClientAction)> = Vec::with_capacity(1 + NOTES_PER_MESSAGE);
+        // `_client_apply_actions` applies each `WriteOnce` in order (`privacy.cairo:761`). A
+        // payment before a lower-indexed acceptance fails `INDEX_NOT_SEQUENTIAL`. Sort the
+        // selected indices into the only valid write order.
+        let mut creates: Vec<(Felt, u32, ClientAction)> = Vec::with_capacity(2 + NOTES_PER_MESSAGE);
         creates.push((
+            self.channel_key,
             payment.index,
             self.value_note(token, payment.index, payment.amount, payment.salt),
         ));
         for (slot, salt) in salts.iter().enumerate() {
             let index = acceptance_first + slot as u32;
-            creates.push((index, self.data_note(token, index, *salt)));
+            creates.push((self.channel_key, index, self.data_note(token, index, *salt)));
         }
-        creates.sort_by_key(|(index, _)| *index);
-        for (_, action) in creates {
+        if let Some(output) = change {
+            creates.push((
+                output.channel.channel_key,
+                output.index,
+                output
+                    .channel
+                    .value_note(token, output.index, output.amount, output.salt),
+            ));
+        }
+        // Contiguity is per subchannel. Order each channel group so an earlier slot is
+        // created before a later slot in the same action set.
+        creates.sort_by_key(|(channel_key, index, _)| (channel_key.to_bytes_be(), *index));
+        for pair in creates.windows(2) {
+            if pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1 {
+                return Err(ChannelError::OutputIndexCollision {
+                    channel_key: pair[0].0,
+                    index: pair[0].1,
+                });
+            }
+        }
+        for (_, _, action) in creates {
             builder.push(action)?;
         }
 
@@ -593,10 +655,28 @@ impl Channel {
         salt: RandomSalt,
         message: &WireMessage,
     ) -> Result<(u32, ActionSet), ChannelError> {
+        self.settle_next_with_change(token, cursor, spend, amount, salt, message, None)
+    }
+
+    /// Allocates the outgoing acceptance/payment slots and includes optional change.
+    ///
+    /// The change index belongs to its own channel cursor and must already be the next free
+    /// slot there. This method advances only the outgoing negotiation cursor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn settle_next_with_change(
+        &self,
+        token: Felt,
+        cursor: &mut SubchannelCursor,
+        spend: &[OwnedNote],
+        amount: u128,
+        salt: RandomSalt,
+        message: &WireMessage,
+        change: Option<ChangeOutput>,
+    ) -> Result<(u32, ActionSet), ChannelError> {
         let message_index = cursor.next_message_index()?;
         let payment_index = message_index * NOTES_PER_MESSAGE as u32 + NOTES_PER_MESSAGE as u32;
 
-        let set = self.accept_and_settle(
+        let set = self.accept_and_settle_with_change(
             token,
             spend,
             Payment {
@@ -608,6 +688,7 @@ impl Channel {
                 message_index,
                 message: *message,
             },
+            change,
         )?;
 
         cursor.reserve_message()?;
@@ -648,6 +729,63 @@ pub struct Acceptance {
     pub message_index: u32,
     /// The acceptance message. Must be [`MessageType::Accept`].
     pub message: WireMessage,
+}
+
+/// Parameters needed when settlement change opens the payer's self-channel.
+#[derive(Debug, Clone, Copy)]
+pub struct ChangeChannelSetup {
+    /// Position among the payer's outgoing channels.
+    pub channel_index: u32,
+    /// Encrypts channel information for the payer-as-recipient.
+    pub channel_random: FeltEntropy,
+    /// One-time entropy for the channel information.
+    pub channel_salt: FeltEntropy,
+    /// Token subchannel index. The single-token client uses zero.
+    pub subchannel_index: u32,
+    /// Encrypts the token stored in the subchannel.
+    pub subchannel_salt: FeltEntropy,
+}
+
+/// Payer-owned value retained when selected inputs exceed the payment.
+///
+/// [`RandomSalt`] prevents a structured salt on the value-bearing change note.
+#[derive(Debug, Clone, Copy)]
+pub struct ChangeOutput {
+    channel: Channel,
+    amount: u128,
+    index: u32,
+    salt: RandomSalt,
+    setup: Option<ChangeChannelSetup>,
+}
+
+impl ChangeOutput {
+    /// Change written to an existing payer self-channel.
+    pub fn existing(channel: Channel, amount: u128, index: u32, salt: RandomSalt) -> Self {
+        Self {
+            channel,
+            amount,
+            index,
+            salt,
+            setup: None,
+        }
+    }
+
+    /// Change that opens the payer self-channel in the settlement action set.
+    pub fn opening(
+        channel: Channel,
+        amount: u128,
+        salt: RandomSalt,
+        setup: ChangeChannelSetup,
+    ) -> Self {
+        Self {
+            channel,
+            amount,
+            // Zero is the only contiguous index in a new subchannel.
+            index: 0,
+            salt,
+            setup: Some(setup),
+        }
+    }
 }
 
 /// Everything a first conversation needs to be set up.

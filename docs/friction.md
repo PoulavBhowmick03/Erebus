@@ -204,7 +204,7 @@ accepted offer is bound on-chain at settlement, via A's salt lane or B's calldat
 - Costs: we build the transport. It is currently out of scope and unbuilt.
 - Buys: the payload constraint stops mattering; offer structure becomes free.
 
-### Resolution: decided 2026-07-25: the salt lane
+### Resolution: the salt lane, decided 2026-07-25
 
 > **Invalidated as a privacy resolution on 2026-07-31.** The lane carries data, but the
 > salts are public in `packed_value`. See F30.
@@ -224,7 +224,7 @@ Self-contained `reveal` survives.
 
 **One earlier objection of ours turned out to be wrong.** We flagged salt-reuse as a
 reason not to touch the salt at all. It only bites on notes whose amount varies:
-`enc_amount = (H(…, salt) + amount) mod 2^128` is an additive one-time pad, so reusing a
+`enc_amount = (H(..., salt) + amount) mod 2^128` is an additive one-time pad, so reusing a
 mask across two _different_ amounts lets an observer subtract the ciphertexts and recover
 the difference. Data notes are always `amount = 0`, so there is no variance and nothing to
 learn. The rule is narrow: **structured salts on data notes, random salts on value notes.**
@@ -232,7 +232,7 @@ learn. The rule is narrow: **structured salts on data notes, random salts on val
 **Wire format v1.** 320 bits per message after compression (`token` dropped, the
 subchannel is the token; `nonce` dropped, the note index orders and uniquely
 identifies). 119 usable bits per note, not 120: the contract requires
-`2 ≤ salt < 2^120`, so bit 119 is pinned to 1 and payload occupies bits 0–118, keeping
+`2 ≤ salt < 2^120`, so bit 119 is pinned to 1 and payload occupies bits 0-118, keeping
 every salt in `[2^119, 2^120)`. Fixed width at 4 notes per message (1 header + 3
 payload), all in one action set, one proof per round.
 
@@ -369,7 +369,7 @@ This works because phase ordering lets `SetViewingKey`(0), `OpenChannel`(1),
 action set, and the whole thing rides one proof.
 
 Consequence for the demo: cold shield + settle is **2 proofs, ~58 s** (F7), not five
-sequential transactions. before we design the recording around it.
+sequential transactions. Design the recording around that.
 
 Friction is that this is discoverable only by reading `ExecuteOptions`, the by-example
 docs show the manual sequence, so the obvious path is the slow one. Both are in
@@ -482,8 +482,8 @@ throwaway key and printing the calldata that would go to `starknet_proveTransact
 
 ```
 [0] 0x1          array_len = 1 call
-[1] 0x254a6b…d91 to = pool address
-[2] 0x360f87…192 selector = compile_actions
+[1] 0x254a6b...d91 to = pool address
+[2] 0x360f87...192 selector = compile_actions
 [3] 0x3          inner_calldata_len
 [4] 0xdeadbeef   user_addr        (the address passed in)
 [5] 0xcafebabe   user_private_key (the pool key passed in, verbatim)
@@ -496,7 +496,7 @@ shows the separation between confidentiality and custody described in §5.
 
 **The prover is not the only recipient.** The mandatory preflight calls
 `compile_actions(user_addr, user_private_key, actions)` through Starknet JSON-RPC, so that
-RPC endpoint receives the pool key too. “Self-host the prover” is incomplete unless the
+RPC endpoint receives the pool key too. "Self-host the prover" is incomplete unless the
 write path also uses an operator-controlled Pathfinder/RPC. Public RPC remains fine for
 keyed discovery reads, which carry derived ids rather than the private key.
 
@@ -522,8 +522,8 @@ design the `OfferTerms` riding in the note salts.
 calls the parameter `user_private_key`. The SDK fills it from `user.viewingKey`
 (`proof-invocation-factory.ts:132`) and the type is `ViewingKey`, which reads as a
 read-only capability rather than a secret. Separately, the repo warns that
-`__validate__`/`__execute__` are simulation-only _because_ the key is in the calldata.
-our own CLAUDE.md constraint 1, which reads as "so keep it local", without ever saying
+`__validate__`/`__execute__` are simulation-only _because_ the key is in the calldata. That
+is our own CLAUDE.md constraint 1, and it reads as "so keep it local" without ever saying
 that the same calldata is the payload of the remote proving call.
 
 **Bearing on P0.1.** This is the argument that self-hosting the prover is not a stopgap
@@ -557,7 +557,7 @@ two-limb encoding. Get it wrong and every subsequent field shifts by one, the sa
 in the index slot, the note is written somewhere nobody reads, and nothing anywhere errors.
 
 **3. The TS `ClientAction` types are generated, not authored.**
-`sdk/src/internal/client-actions.ts` is marked `AUTO-GENERATED … Generated from
+`sdk/src/internal/client-actions.ts` is marked `AUTO-GENERATED ... Generated from
 sdk/src/internal/abi.ts`. So the oracle's authority derives from the ABI, and a fixture
 generated today silently stops describing the deployed pool if upstream regenerates against
 a newer ABI. The vectors need regenerating whenever the sibling checkout moves, that is a
@@ -620,7 +620,7 @@ It does not fit, and the reason is worth recording because it is a statement abo
 privacy stack currently considers a use case.
 
 `STRK20_ACTION` in starknet.js 10.5.3 is four variants
-(`@starknet-io/starknet-types-0103/…/wallet-api/components.d.ts:187-227`. 404 on npmjs,
+(`@starknet-io/starknet-types-0103/.../wallet-api/components.d.ts:187-227`. 404 on npmjs,
 installs transitively with `starknet`):
 
 ```ts
@@ -800,11 +800,11 @@ list_. The whole sub-call then panics so the state is discarded and the `ServerA
 recovered from the panic data. The consequence is not obvious from any single line: **the
 contiguity check on note `n` can see notes that the same action set created earlier.**
 
-So a set is not an unordered bag of actions. Creating note 8 before notes 4–7 in the same
+So a set is not an unordered bag of actions. Creating note 8 before notes 4-7 in the same
 set fails `INDEX_NOT_SEQUENTIAL` against slots that set was about to fill. Our
 `accept_and_settle` emitted the payment note first regardless of index, which is correct
 only when the payment happens to be the lowest index. The tests passed because the fixture
-put the payment at 4 and the record at 8–11, the one ordering that hides the bug.
+put the payment at 4 and the record at 8-11, the one ordering that hides the bug.
 
 _Inferred from the source, not yet observed on-chain._ Nothing has run against Sepolia, so
 this is a reading of `compile_and_panic` rather than a reproduction. It is recorded because
@@ -987,7 +987,7 @@ terminal-`settled` rule and is the first thing to revisit after the MVP.
 
 ---
 
-## F31: Wire v2 hides what was negotiated, not that a negotiation happened (P1.3)
+Hi hello check one two three hi hello what I want you to do is that I have Fable five turned on for this function I want you to be completely honest with me completely honest with me## F31: Wire v2 hides what was negotiated, not that a negotiation happened (P1.3)
 
 Wire v2 closed F30 by encrypting the message under AES-256-GCM-SIV before fragmentation.
 Content confidentiality holds. Traffic confidentiality does not.
@@ -1130,7 +1130,7 @@ on-chain `propose_offer` succeeded:
 
 ```
 INVALID_REQUEST: privacy-pool protocol mismatch: get_note returned token 0x0,
-                 expected 0x4718f5a…938d
+                 expected 0x4718f5a...938d
 ```
 
 The write had worked. The read rejected it.
@@ -1187,7 +1187,7 @@ on-chain contact, not for reading more carefully next time.
 
 ## F27: A proof-carrying `apply_actions` costs ~3 STRK in gas, and the salt lane pays it per message (P1.1)
 
-First real shield, 2026-07-31 (tx `0x5f57eb…b9e2`). It worked, and the number that came
+First real shield, 2026-07-31 (tx `0x5f57eb...b9e2`). It worked, and the number that came
 back with it is a cost-model problem nobody had priced:
 
 ```
@@ -1196,7 +1196,7 @@ pool get_fee_amount()      0
 ```
 
 So the pool takes no protocol fee on Sepolia, the whole 3 STRK is Starknet gas for
-verifying a STARK proof on-chain. That is roughly 30–60x an ordinary transfer.
+verifying a STARK proof on-chain. That is roughly 30-60x an ordinary transfer.
 
 **Why this lands on the salt lane specifically.** Wire v2 is 5 zero-amount
 notes in one action set, which is one `apply_actions`, which is one proof. So the unit of
@@ -1210,9 +1210,9 @@ state transitions into one action set was previously an emission-order correctne
 (F21). It is now also the only lever on cost.
 
 **Worth cross-checking against StarkWare's own number.** Their internal Private
-Sub-Accounts write-up quotes “a fee of 4 STRK per tx” through the privacy pool, close
+Sub-Accounts write-up quotes "a fee of 4 STRK per tx" through the privacy pool, close
 enough to what we measured that they are probably describing the same thing, gas rather
-than a pool fee, which the phrase “fee … through the privacy pool” obscures. If so, this
+than a pool fee, which the phrase "fee ... through the privacy pool" obscures. If so, this
 cost is inherent to the primitive rather than to Erebus.
 
 **Unknown, and it matters more than the number does:** whether mainnet is comparable.
@@ -1222,7 +1222,7 @@ until that is read off mainnet.
 
 ---
 
-## F26: “Two keys” is not enough setup guidance (P0.4)
+## F26: "Two keys" is not enough setup guidance (P0.4)
 
 The protocol needs two unrelated secrets for one identity. The account key belongs to a
 deployed, funded Starknet account and authorizes transactions; the pool key is locally chosen
@@ -1265,8 +1265,8 @@ class hash  0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d
 get_version()                → '2.0'
 get_proof_validity_blocks()  → 450
 get_fee_amount()             → 0          (no STRK fee per apply_actions)
-get_auditor_public_key()     → 0x1d17f9…bb2   (non-zero: disclosure configured)
-get_screener_public_key()    → 0x62f1e7…552   (non-zero: screening configured: see F6)
+get_auditor_public_key()     → 0x1d17f9...bb2   (non-zero: disclosure configured)
+get_screener_public_key()    → 0x62f1e7...552   (non-zero: screening configured: see F6)
 ```
 
 Class hash agreed by two independent public RPCs (`api.cartridge.gg`, `drpc.org`).
@@ -1281,7 +1281,7 @@ address and no mainnet one. So Sepolia isn't a preference, it's the only deploym
 **Open, needs resolving before P1.1:** the README compatibility matrix lists the
 Privacy Pool at tag `PRIVACY-0.14.3-RC.0` with class hash
 `0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633`. The live Sepolia
-pool is `0x67dddd…554d`. **a different build**. The matrix says "All components in a
+pool is `0x67dddd...554d`. **a different build**. The matrix says "All components in a
 row are tested together. Use matching revisions when deploying." We need to know which
 prover and discovery-service tags pair with the deployed pool, not with RC.0.
 `get_version()` returns `'2.0'` for both, so the version string does not disambiguate.
@@ -1346,7 +1346,7 @@ real. And it still does not buy the deposit leg, see F6.
 ## F6: The live pool is screening-enabled: shielding needs an attestation (P0.1 → P1.1)
 
 > **RESOLVED 2026-07-31, and the resolution is the friction, not the mechanism.** A 1 STRK
-> shield (`0x5f57eb…b9e2`) was accepted on the first attempt. StarkWare's prover runs a
+> shield (`0x5f57eb...b9e2`) was accepted on the first attempt. StarkWare's prover runs a
 > `proof-interceptor` with `SCREENING_URL` configured, so the attestation was minted,
 > relayed and packed without us doing anything or asking anyone.
 >
@@ -1417,7 +1417,7 @@ transaction and its own proof. A three-round negotiation is ~90 s of proving bef
 any settlement.
 
 This directly answers ARCHITECTURE §8 open question 2 and constrains the demo. A live
-2–3 minute recording cannot show many negotiation rounds in real time.
+2-3 minute recording cannot show many negotiation rounds in real time.
 
 Also relevant: `provingBlockId` must be `currentBlock - 10`, because notes mature 10
 blocks after creation and a head-based proof can be invalidated by an L2 reorg. Proofs
@@ -1485,7 +1485,7 @@ cryptography, it was in what the interface declined to say.
 
 ---
 
-## F33: “Accept” means “pay”, and the autonomous seller nearly paid the buyer (2026-08-01)
+## F33: "Accept" means "pay", and the autonomous seller nearly paid the buyer (2026-08-01)
 
 The first real two-agent MCP negotiation reached the seller's 0.7 STRK reserve. The seller
 then called `accept_and_settle` on the buyer's offer and got `INSUFFICIENT_NOTES`: it held
@@ -1494,7 +1494,7 @@ one 1 STRK note and could not make an exact 0.7 subset.
 That denomination error prevented a worse transaction. `Client::accept_and_settle` selects
 and nullifies the **caller's** owned notes, and disclosure reconstructs the payment note from
 the accepting party's outgoing channel. The seller was about to pay the buyer. The natural
-language verb “accept” hid the payment direction, while the old mock recorded a settlement
+language verb "accept" hid the payment direction, while the old mock recorded a settlement
 without owning or consuming notes, so every offline agent test endorsed the reversed flow.
 
 The MCP boundary now makes both constraints structural:
@@ -1510,3 +1510,94 @@ The MCP boundary now makes both constraints structural:
 This does not add change-making. It prevents an impossible or backwards negotiation from
 reaching the chain and says what the operator must fix before trying again. A corrected live
 MCP settlement is still required; the regression suite proves the guard, not a new receipt.
+
+---
+
+## F34: Public calldata proves the v1 break, but is not a typed note stream (2026-08-07)
+
+The adversarial observer needed a positive control before a wire-v2 "no recovery" result
+meant anything. The static v1 fixture recovers the exact live acceptance from F30, while
+the v2 fixture does not recover a plausible transcript without the channel key. Content and
+shape are separate: the v2 fifth-salt pattern still classifies the traffic.
+
+The rough edge is extraction. Final `apply_actions` calldata contains compiled server
+actions, including repeated public `packed_value`s for a storage write and its event; it is
+not a typed list of client notes. The harness therefore preserves first-seen salt order and
+deduplicates repeats. That is sufficient for the known live transaction and the fixed
+controls, but a intentionally repeated 119-bit chunk could be collapsed. A documented,
+versioned server-action decoder or RPC projection of created notes would remove that
+heuristic without giving the observer any private information.
+
+---
+
+## F35: Change is a second channel cursor inside one atomic action set (2026-08-07)
+
+A selected input can exceed the payment, but returning the surplus is not "add another
+output beside the payment." The payment belongs in the payer-to-payee channel; change must
+be addressed to the payer's self-channel. Those two outputs therefore use independent
+contiguous note-index spaces even though they share one action set, proof, and phase order.
+
+The client now resolves the self-channel's next free slot at the same proving block used for
+input selection. If the payer has only received notes and never shielded, settlement opens
+the self-channel and token subchannel before consuming inputs, then creates payment,
+acceptance data notes, and random-salt change in phase order. What fought the implementation
+was that `CreateEncNoteInput` carries recipient fields but no explicit channel key: the pool
+derives the destination channel internally, so output ownership has to be represented by a
+separate `Channel` value off-chain and indexed independently.
+
+---
+
+## F36: `open_channel` needs an ERC20 allowance, and only `shield` documents one (2026-08-07)
+
+**What we were trying to do.** Run the first live wire-v2 negotiation between two fresh
+identities, driven through two role-bound MCP servers.
+
+**What the stack did instead.** The very first write, `open_channel`, failed with Starknet RPC
+error 41 and a nested `"Insufficient ERC20 allowance"` raised by the pool. Nothing in the
+runbook connects channel opening to an allowance: §2 documents `approve` as a prerequisite of
+`shield`, and both identities had already shielded successfully, so the natural reading is
+that the approve step is behind you once you are registered. The original approve was for
+exactly 1 STRK (`0xde0b6b3a7640000`) and the shield consumed all of it, leaving zero.
+
+**Whether we worked around it.** Yes. Approve the pool generously from each account, then wait
+for the approve to reach proving depth before retrying, the same F20 trap applies, because
+the client proves against `head - 10` and an approve newer than that is invisible to the
+simulation. After that the channel opened on the first attempt.
+
+**The cost of the failure mode is asymmetric and worth stating.** The error arrived as an RPC
+rejection rather than an on-chain revert, so nothing was consumed and the pair survived. Had
+it reverted on-chain instead, F29 would have burned that pair of addresses permanently, since
+a channel key has no index and its marker is `WriteOnce`. A missing allowance is a trivial
+misconfiguration one step away from destroying an identity pair.
+
+**What would have made it easier.** A preflight that checks allowance alongside registration,
+balance and RPC head, and reports the shortfall before any proof is generated, this is the
+`doctor` command in the roadmap's T10. Failing that, one line in runbook §2 saying the approve
+is consumed by the shield and must be renewed, sized for the number of writes you intend.
+
+---
+
+## F37: The MCP `memo_hash` field advertises 128 bits that a JSON client cannot reach (2026-08-07)
+
+**What we were trying to do.** Call `propose_offer` with a realistic truncated-digest
+`memo_hash`, as the tool description instructs: "a 128-bit int (truncate your own hash to the
+low 128 bits before calling)".
+
+**What the stack did instead.** Rejected it. An MCP client that emits a large integer as a
+JSON number produces a float in scientific notation, and Pydantic refuses it:
+`Unable to parse input string as an integer, exceeded maximum size`. JSON has one numeric
+type and IEEE-754 doubles carry 53 bits of mantissa, so the top of the documented 128-bit
+range is simply not addressable by a conforming JSON-RPC caller. The failure is at the schema
+boundary and says nothing about hashes, so the natural next move is to retry with a different
+large number, which fails identically.
+
+**Whether we worked around it.** Yes, by passing a value small enough to survive as an exact
+integer. That is fine for a demo and useless for a real memo commitment, which is the whole
+point of the field.
+
+**What would have made it easier.** Accept the field as a hex string and parse it server-side,
+the way every other felt-shaped argument in this API already travels. The tool description
+should also say what it currently does not: that this field is not a digest and any real hash
+must be truncated, which silently destroys collision resistance, relevant because T19 still
+owes a published `memo_hash` preimage convention, and this is an argument for that convention
+specifying a string encoding.
