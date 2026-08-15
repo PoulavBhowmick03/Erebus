@@ -4,7 +4,7 @@
 //! [`crate::state::StateStore`], while the two private signing values are read from local
 //! files for each operation and dropped when the call returns.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
 use crate::actions::{FeltEntropy, RandomSalt};
-use crate::channel::{Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity, SetupParams};
+use crate::channel::{
+    ChangeChannelSetup, ChangeOutput, Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity,
+    SetupParams,
+};
 use crate::decrypt;
 use crate::disclosure::{self, ViewingGrant};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
@@ -29,8 +32,8 @@ use crate::subchannel::SubchannelCursor;
 use crate::wire::{MessageType, WireMessage, WireVersion};
 
 const MAX_DISCOVERY_ITEMS: u64 = 4096;
-const MAX_EXACT_SELECTION_NOTES: usize = 256;
-const MAX_EXACT_SELECTION_STATES: usize = 100_000;
+const MAX_SELECTION_NOTES: usize = 256;
+const MAX_SELECTION_STATES: usize = 100_000;
 
 /// Construction inputs for the high-level client.
 #[derive(Debug, Clone)]
@@ -161,16 +164,12 @@ impl Client {
 
     /// The unspent note denominations this identity holds, largest first.
     ///
-    /// A negotiating agent needs this *before* it names a price. Settlement spends an exact
-    /// subset of notes and mints no change, so what is payable is not "anything up to the
-    /// total" but "any subset sum" — an agent holding one 1 STRK note can pay 1 STRK and
-    /// nothing else. Agreeing a price first and discovering that second is the failure this
-    /// exists to prevent.
+    /// Settlement can select inputs above the price and return payer-owned change. Any
+    /// positive amount up to the spendable total is payable. Denominations show the selected
+    /// input value and possible change.
     ///
-    /// Reported in two parts because a note is not spendable the moment it lands. Settlement
-    /// simulates against `head - proving_block_lag`, so a deposit newer than that cannot be
-    /// spent yet; reporting one total would make a just-funded identity look unfunded, which
-    /// is exactly the wrong thing to tell an agent deciding whether to fund again.
+    /// A new note is not immediately spendable. Settlement simulates at
+    /// `head - proving_block_lag`, so the result separates spendable and newer notes.
     pub async fn note_balance(&self) -> Result<NoteBalance, ClientError> {
         let (_, pool_key) = self.pool_identity()?;
         let provable = self.executor.wait_until_provable(0).await?;
@@ -248,15 +247,23 @@ impl Client {
         identity: &PoolIdentity,
         self_channel_key: Felt,
     ) -> Result<bool, ClientError> {
+        self.self_channel_open_at(identity, self_channel_key, &BlockId::Latest)
+            .await
+    }
+
+    async fn self_channel_open_at(
+        &self,
+        identity: &PoolIdentity,
+        self_channel_key: Felt,
+        block: &BlockId,
+    ) -> Result<bool, ClientError> {
         let marker = hashes::compute_channel_marker(
             self_channel_key,
             identity.address(),
             identity.address(),
             identity.public_key(),
         );
-        let result = self
-            .view("channel_exists", &[marker], &BlockId::Latest)
-            .await?;
+        let result = self.view("channel_exists", &[marker], block).await?;
         Ok(one_felt("channel_exists", &result)? != Felt::ZERO)
     }
 
@@ -287,11 +294,19 @@ impl Client {
         identity: &PoolIdentity,
         pool_key: Felt,
     ) -> Result<u32, ClientError> {
+        self.outgoing_channel_count_at(identity, pool_key, &BlockId::Latest)
+            .await
+    }
+
+    async fn outgoing_channel_count_at(
+        &self,
+        identity: &PoolIdentity,
+        pool_key: Felt,
+        block: &BlockId,
+    ) -> Result<u32, ClientError> {
         for index in 0..MAX_DISCOVERY_ITEMS {
             let id = hashes::compute_outgoing_channel_id(identity.address(), pool_key, index);
-            let result = self
-                .view("get_outgoing_channel_info", &[id], &BlockId::Latest)
-                .await?;
+            let result = self.view("get_outgoing_channel_info", &[id], block).await?;
             require_len("get_outgoing_channel_info", &result, 2)?;
             if result[0] == Felt::ZERO {
                 return u32::try_from(index).map_err(|_| {
@@ -810,16 +825,63 @@ impl ErebusClient for Client {
         let available = self
             .discover_owned_notes(pool_key, lease.state().token, &spend_block)
             .await?;
-        let selected = select_exact_notes(&available, offer.amount).ok_or_else(|| {
+        let selected = select_notes(&available, offer.amount).ok_or_else(|| {
             let mut held: Vec<u128> = available.iter().map(|note| note.amount).collect();
             held.sort_unstable_by(|a, b| b.cmp(a));
             ClientError::InsufficientNotes {
                 required: offer.amount,
-                total: held.iter().sum(),
+                total: held
+                    .iter()
+                    .fold(0u128, |total, amount| total.saturating_add(*amount)),
                 held,
             }
         })?;
-        let spend: Vec<OwnedNote> = selected.iter().map(|note| note.note).collect();
+        let spend: Vec<OwnedNote> = selected.notes.iter().map(|note| note.note).collect();
+        let change = if selected.change == 0 {
+            None
+        } else {
+            let self_counterparty = Counterparty {
+                address: identity.address(),
+                public_key: identity.public_key(),
+            };
+            let self_channel = Channel::derive(
+                self.config.chain_id,
+                self.config.pool_address,
+                &identity,
+                self_counterparty,
+            );
+            let self_channel_key = self_channel.key();
+            if self
+                .self_channel_open_at(&identity, self_channel_key, &spend_block)
+                .await?
+            {
+                let change_index = self
+                    .next_free_note_index(self_channel_key, lease.state().token, &spend_block)
+                    .await?;
+                Some(ChangeOutput::existing(
+                    self_channel,
+                    selected.change,
+                    change_index,
+                    random_salt(),
+                ))
+            } else {
+                let channel_index = self
+                    .outgoing_channel_count_at(&identity, pool_key, &spend_block)
+                    .await?;
+                Some(ChangeOutput::opening(
+                    self_channel,
+                    selected.change,
+                    random_salt(),
+                    ChangeChannelSetup {
+                        channel_index,
+                        channel_random: entropy(),
+                        channel_salt: entropy(),
+                        subchannel_index: 0,
+                        subchannel_salt: entropy(),
+                    },
+                ))
+            }
+        };
 
         let state = lease.state();
         let channel = Channel::from_key_with_version(
@@ -841,13 +903,14 @@ impl ErebusClient for Client {
             deadline: offer.deadline,
             memo_hash: offer.memo_hash,
         };
-        let (_, actions) = channel.settle_next(
+        let (_, actions) = channel.settle_next_with_change(
             state.token,
             &mut cursor,
             &spend,
             offer.amount,
             random_salt(),
             &acceptance,
+            change,
         )?;
         let receipt = self
             .executor
@@ -861,7 +924,11 @@ impl ErebusClient for Client {
         Ok(SettlementReceipt {
             offer_id: Some(offer_id),
             tx_hash: hex(receipt.transaction_hash),
-            nullifiers: selected.iter().map(|note| hex(note.nullifier)).collect(),
+            nullifiers: selected
+                .notes
+                .iter()
+                .map(|note| hex(note.nullifier))
+                .collect(),
             proved_at: receipt.proving_block,
         })
     }
@@ -1076,13 +1143,34 @@ struct ValueNote {
     nullifier: Felt,
 }
 
-fn select_exact_notes(notes: &[ValueNote], target: u128) -> Option<Vec<ValueNote>> {
+#[derive(Debug)]
+struct NoteSelection {
+    notes: Vec<ValueNote>,
+    change: u128,
+}
+
+/// Chooses a sufficient subset with the least surplus found by its bounded search.
+fn select_notes(notes: &[ValueNote], target: u128) -> Option<NoteSelection> {
     if target == 0 {
-        return Some(Vec::new());
+        return Some(NoteSelection {
+            notes: Vec::new(),
+            change: 0,
+        });
     }
-    let notes = &notes[..notes.len().min(MAX_EXACT_SELECTION_NOTES)];
-    let mut sums: HashMap<u128, Vec<usize>> = HashMap::from([(0, Vec::new())]);
-    for (index, note) in notes.iter().enumerate() {
+    let mut notes = notes.to_vec();
+    notes.sort_by_key(|note| std::cmp::Reverse(note.amount));
+    if notes
+        .iter()
+        .fold(0u128, |total, note| total.saturating_add(note.amount))
+        < target
+    {
+        return None;
+    }
+
+    let search_len = notes.len().min(MAX_SELECTION_NOTES);
+    let mut sums: BTreeMap<u128, Vec<usize>> = BTreeMap::from([(0, Vec::new())]);
+    let mut best: Option<(u128, Vec<usize>)> = None;
+    for (index, note) in notes[..search_len].iter().enumerate() {
         let snapshot: Vec<(u128, Vec<usize>)> = sums
             .iter()
             .map(|(sum, picks)| (*sum, picks.clone()))
@@ -1091,20 +1179,41 @@ fn select_exact_notes(notes: &[ValueNote], target: u128) -> Option<Vec<ValueNote
             let Some(next) = sum.checked_add(note.amount) else {
                 continue;
             };
-            if next > target || sums.contains_key(&next) {
+            picks.push(index);
+            if next >= target {
+                let replace = best.as_ref().is_none_or(|(best_sum, best_picks)| {
+                    next < *best_sum || (next == *best_sum && picks.len() < best_picks.len())
+                });
+                if replace {
+                    best = Some((next, picks));
+                }
                 continue;
             }
-            picks.push(index);
-            if next == target {
-                return Some(picks.into_iter().map(|pick| notes[pick]).collect());
-            }
-            sums.insert(next, picks);
-            if sums.len() >= MAX_EXACT_SELECTION_STATES {
-                return None;
+            if !sums.contains_key(&next) && sums.len() < MAX_SELECTION_STATES {
+                sums.insert(next, picks);
             }
         }
     }
-    None
+
+    let (selected_total, picks) = match best {
+        Some(selection) => selection,
+        None => {
+            let mut total = 0u128;
+            let mut picks = Vec::new();
+            for (index, note) in notes.iter().enumerate() {
+                total = total.saturating_add(note.amount);
+                picks.push(index);
+                if total >= target {
+                    break;
+                }
+            }
+            (total, picks)
+        }
+    };
+    Some(NoteSelection {
+        notes: picks.into_iter().map(|pick| notes[pick]).collect(),
+        change: selected_total - target,
+    })
 }
 
 fn accepted_block(receipt: &crate::execution::ExecutionReceipt) -> Result<u64, ClientError> {
@@ -1316,8 +1425,8 @@ fn check_note_token(packed: Felt, stored: Felt, expected: Felt) -> Result<(), Cl
         }
     } else if stored != Felt::ZERO {
         return Err(ClientError::Protocol(format!(
-            "encrypted note carries token {stored:#x}, expected zero — \
-             the derived note id landed on an open note"
+            "encrypted note carries token {stored:#x}, expected zero. \
+             The derived note id landed on an open note"
         )));
     }
     Ok(())
@@ -1454,14 +1563,11 @@ pub enum ClientError {
     /// State already records terminal settlement.
     #[error("this channel is already settled")]
     AlreadySettled,
-    /// Available private notes cannot sum exactly to the payment.
+    /// Available private notes do not cover the payment.
     ///
-    /// Carries the holdings because the amount is the negotiable thing: an agent told only
-    /// what it needs can do nothing, whereas one told what it holds can counter at a number
-    /// it can actually pay. Settlement spends an exact subset and mints no change note, so
-    /// "enough value" is not the same as "payable".
+    /// Includes holdings so an agent can calculate and fund the shortfall.
     #[error(
-        "no exact set of unspent notes sums to {required}; holding {} note(s) worth {total} in total ({})",
+        "unspent notes do not cover {required}; holding {} note(s) worth {total} in total ({})",
         held.len(),
         if held.is_empty() { "none".to_owned() } else { held.iter().map(u128::to_string).collect::<Vec<_>>().join(", ") }
     )]
@@ -1530,7 +1636,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_note_selection_never_burns_change() {
+    fn note_selection_prefers_an_exact_subset_then_returns_change() {
         let note = |index, amount| ValueNote {
             note: OwnedNote {
                 channel_key: Felt::ONE,
@@ -1541,9 +1647,15 @@ mod tests {
             nullifier: Felt::from(index),
         };
         let notes = [note(1, 7), note(2, 5), note(3, 3)];
-        let selected = select_exact_notes(&notes, 8).expect("5 + 3");
-        assert_eq!(selected.iter().map(|note| note.amount).sum::<u128>(), 8);
-        assert!(select_exact_notes(&notes, 6).is_none());
+        let exact = select_notes(&notes, 8).expect("5 + 3");
+        assert_eq!(exact.notes.iter().map(|note| note.amount).sum::<u128>(), 8);
+        assert_eq!(exact.change, 0);
+
+        let with_change = select_notes(&[note(4, 5)], 3).expect("5 covers 3");
+        assert_eq!(with_change.notes.len(), 1);
+        assert_eq!(with_change.notes[0].amount, 5);
+        assert_eq!(with_change.change, 2);
+        assert!(select_notes(&notes, 16).is_none());
     }
 
     #[test]

@@ -5,9 +5,10 @@
 //! neither. Anything that let them split would reintroduce exactly the failure Erebus
 //! claims to remove: a counterparty holding an acceptance and no money.
 
-use erebus_sdk::actions::{ClientAction, RandomSalt};
+use erebus_sdk::actions::{ClientAction, FeltEntropy, RandomSalt};
 use erebus_sdk::channel::{
-    Acceptance, Channel, ChannelError, Counterparty, OwnedNote, Payment, PoolIdentity,
+    Acceptance, ChangeChannelSetup, ChangeOutput, Channel, ChannelError, Counterparty, OwnedNote,
+    Payment, PoolIdentity,
 };
 use erebus_sdk::wire::{MessageType, WireMessage};
 use starknet_types_core::felt::Felt;
@@ -42,6 +43,13 @@ fn salt() -> RandomSalt {
     RandomSalt::from_entropy([
         0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
         0x58,
+    ])
+}
+
+fn change_salt() -> RandomSalt {
+    RandomSalt::from_entropy([
+        0x31, 0x7a, 0xc4, 0x0d, 0x91, 0xee, 0x62, 0x58, 0xa3, 0x16, 0xb9, 0x44, 0x73, 0x20, 0xd5,
+        0x8f,
     ])
 }
 
@@ -86,7 +94,7 @@ fn settle(
 
 // --- Atomicity ------------------------------------------------------------------
 
-/// The whole point: one action set, so one proof, so both legs or neither.
+/// One action set means one proof, which means both legs land or neither does.
 #[test]
 fn acceptance_and_payment_land_in_one_action_set() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
@@ -216,6 +224,143 @@ fn exactly_one_note_carries_value() {
         .filter(|a| matches!(a, ClientAction::CreateEncNote(n) if n.amount > 0))
         .count();
     assert_eq!(valued, 1);
+}
+
+/// The selector test in `client.rs` proves the selected
+/// input is one note worth 5. This composition test proves the same atomic settlement pays
+/// 3 to Bob and creates payer-owned change worth 2 with no gap in either channel.
+#[test]
+fn one_five_value_note_pays_three_and_retains_two_as_change() {
+    let outgoing = Channel::derive(chain(), pool(), &alice(), bob());
+    let payer = Counterparty {
+        address: alice().address(),
+        public_key: alice().public_key(),
+    };
+    let self_channel = Channel::derive(chain(), pool(), &alice(), payer);
+    let mut acceptance = accept_message();
+    acceptance.amount = 3;
+
+    let set = outgoing
+        .accept_and_settle_with_change(
+            token(),
+            &[OwnedNote {
+                channel_key: self_channel.key(),
+                token: token(),
+                index: 0,
+            }],
+            Payment {
+                amount: 3,
+                index: 5,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 0,
+                message: acceptance,
+            },
+            Some(ChangeOutput::existing(self_channel, 2, 1, change_salt())),
+        )
+        .expect("5 is conserved as payment 3 plus change 2");
+
+    let value_notes: Vec<_> = set
+        .actions()
+        .iter()
+        .filter_map(|action| match action {
+            ClientAction::CreateEncNote(note) if note.amount > 0 => Some(note),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(value_notes.len(), 2);
+    assert_eq!(value_notes.iter().map(|note| note.amount).sum::<u128>(), 5);
+
+    let payment = value_notes
+        .iter()
+        .find(|note| note.recipient_addr == bob().address)
+        .expect("Bob receives payment");
+    assert_eq!(
+        (payment.amount, payment.index, payment.salt),
+        (3, 5, salt().salt())
+    );
+
+    let change = value_notes
+        .iter()
+        .find(|note| note.recipient_addr == alice().address())
+        .expect("Alice retains change");
+    assert_eq!(
+        (change.amount, change.index, change.salt),
+        (2, 1, change_salt().salt())
+    );
+
+    let outgoing_indices: Vec<u32> = set
+        .actions()
+        .iter()
+        .filter_map(|action| match action {
+            ClientAction::CreateEncNote(note) if note.recipient_addr == bob().address => {
+                Some(note.index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outgoing_indices, vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(change.index, 1, "self-channel index 0 is the spent 5 note");
+}
+
+#[test]
+fn first_change_opens_the_self_channel_at_note_zero_before_spending() {
+    let outgoing = Channel::derive(chain(), pool(), &alice(), bob());
+    let payer = Counterparty {
+        address: alice().address(),
+        public_key: alice().public_key(),
+    };
+    let self_channel = Channel::derive(chain(), pool(), &alice(), payer);
+    let mut acceptance = accept_message();
+    acceptance.amount = 3;
+    let entropy = |value| FeltEntropy::new(Felt::from(value)).expect("non-zero entropy");
+
+    let set = outgoing
+        .accept_and_settle_with_change(
+            token(),
+            &inputs(),
+            Payment {
+                amount: 3,
+                index: 5,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 0,
+                message: acceptance,
+            },
+            Some(ChangeOutput::opening(
+                self_channel,
+                2,
+                change_salt(),
+                ChangeChannelSetup {
+                    channel_index: 1,
+                    channel_random: entropy(11),
+                    channel_salt: entropy(12),
+                    subchannel_index: 0,
+                    subchannel_salt: entropy(13),
+                },
+            )),
+        )
+        .expect("opening self-channel can share the settlement action set");
+
+    assert!(matches!(set.actions()[0], ClientAction::OpenChannel(_)));
+    assert!(matches!(set.actions()[1], ClientAction::OpenSubchannel(_)));
+    assert!(matches!(set.actions()[2], ClientAction::UseNote(_)));
+    let change = set
+        .actions()
+        .iter()
+        .find_map(|action| match action {
+            ClientAction::CreateEncNote(note)
+                if note.recipient_addr == alice().address() && note.amount == 2 =>
+            {
+                Some(note)
+            }
+            _ => None,
+        })
+        .expect("payer change note");
+    assert_eq!(change.index, 0, "new self-subchannel must start at zero");
+    assert_eq!(change.salt, change_salt().salt());
 }
 
 #[test]

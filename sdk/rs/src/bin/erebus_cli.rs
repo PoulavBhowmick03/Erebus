@@ -414,6 +414,7 @@ fn channel_error_code(error: &ChannelError) -> (&'static str, bool) {
         | ChannelError::AmountMismatch { .. } => ("AMOUNT_MISMATCH", false),
         ChannelError::NothingToSpend => ("INSUFFICIENT_NOTES", false),
         ChannelError::IndexCollision { .. }
+        | ChannelError::OutputIndexCollision { .. }
         | ChannelError::Index(
             IndexError::NotSequential { .. }
             | IndexError::AlreadyWritten { .. }
@@ -422,6 +423,7 @@ fn channel_error_code(error: &ChannelError) -> (&'static str, bool) {
         ) => ("INDEX_CONFLICT", false),
         ChannelError::Wire(WireError::FieldTooWide { .. })
         | ChannelError::Wire(_)
+        | ChannelError::ZeroChange
         | ChannelError::ActionSet(_) => ("INVALID_REQUEST", false),
     }
 }
