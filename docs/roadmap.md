@@ -56,7 +56,7 @@ that distinction clear.
 
 ## 3. Current evidence
 
-This section records what exists on 2026-08-14. Later sections describe the missing work.
+This section records what exists on 2026-08-16. Later sections describe the missing work.
 
 ### Committed and working
 
@@ -78,15 +78,30 @@ This section records what exists on 2026-08-14. Later sections describe the miss
 
 ### Active but not shipped
 
-The current working tree contains an uncommitted change-note implementation:
+The change-note implementation merged to `main` on 2026-08-15 as `8dd9b74`, via PR #14 from
+branch `change_output_payback`.
 
 - `sdk/rs/src/client.rs::select_notes` selects sufficient inputs.
 - `sdk/rs/src/channel.rs::accept_and_settle_with_change` creates payer-owned change.
-- Settlement tests cover `5 STRK -> 3 STRK payment + 2 STRK change`.
-- The observer and friction log also contain uncommitted changes.
+- `ChangeOutput::existing` writes to an open payer self-channel.
+- `ChangeOutput::opening` opens the self-channel and token subchannel in the same action set.
+- Settlement tests cover `5 STRK -> 3 STRK payment + 2 STRK change`, and both change branches.
+- The `ErebusClient` trait signature is unchanged, so agent-side mocks need no update.
+- The commit also carries the observer and friction-log changes, against Phase 0 step 1.
 
-This work is not a product feature until Poulav reviews it and both sides update the shared
-interface. The MCP server, mock, reference agents, and guides still require exact note sums.
+This is not yet a product feature. The MCP server, mock, reference agents, and guides still
+require exact note sums, so the stack above the SDK now describes settlement behavior the SDK
+no longer has. One `Unreviewed` marker remains, on `accept_and_settle_with_change` at
+`sdk/rs/src/channel.rs:516`. `select_notes` and the client-side change block were reviewed
+before the merge.
+
+Two behavior changes ride along and are not only about change:
+
+- `select_notes` previously failed when its subset search hit the state cap. It now falls
+  through to a greedy largest-first selection, so a settlement that once errored can succeed
+  with a larger input set.
+- A settlement now emits a seventh note when the payer holds no exact subset, and six when it
+  does. This is a new public observable. See §4.
 
 ### Not proven
 
@@ -114,6 +129,13 @@ pool key. The route matches the [STRK20 SDK model](https://strk20-by-example.org
 | Spent-note identity | Public shield and unshield amounts |
 | Channel content without a grant | The fixed fifth-salt shape in wire v2 |
 | Other relationships outside a scoped grant | Pool usage and proof-bearing transaction size |
+| Change amount and change-note content | Whether a settlement created payer change |
+
+The change note added on `change_output_payback` widens the last row. A settlement creates six
+notes when the payer holds an exact subset and seven when it does not, so note count leaks one
+bit about the payer's holdings on every deal. The amounts stay private. This compounds the
+fifth-salt shape already listed above, because both let a reader classify and count Erebus
+transactions without reading one. Record it against F31 rather than as a separate finding.
 
 The prover and preflight RPC receive the pool key in `compile_actions` calldata. They can
 derive the identity history. The submitted `apply_actions` transaction does not contain that
@@ -243,6 +265,29 @@ The pool charged 6 STRK per `apply_actions` during the 2026-08-14 audit.
 The configured mainnet account has no contract and no balance. The sprint guide still does
 not publish the mainnet proving-service URL.
 
+A 2026-08-16 search found no published mainnet proving service anywhere: not in the upstream
+README, not in `strk20-by-example.org`, not in either Starknet launch post. The endpoints
+Erebus holds are `alpha-sepolia` hosts and cannot serve mainnet. Q3 may therefore have no
+answer, so the plan needs a second branch.
+
+The second branch is self-hosting. Upstream publishes the prover as a container in its
+compatibility matrix, `ghcr.io/starkware-libs/starknet-privacy/transaction-prover:PRIVACY-0.14.3-RC.2`,
+with the discovery service and proof interceptor at the same tag. The cost is the footnote
+under that table: the prover needs a Pathfinder node at `PATHFINDER_STORAGE_STATE_TRIES=10000`.
+A mainnet Pathfinder sync takes days of wall clock and hundreds of gigabytes of disk, which is
+longer than any other open item and cannot be compressed by adding effort. If Q3 comes back
+empty, this sync is the critical path and must start the same day.
+
+Self-hosting does not remove deposit screening. See Q2.
+
+The SDK has no allowance path. There is no `approve`, no `allowance`, and no `fee_amount`
+anywhere in `sdk/rs`. `apply_actions` is the only state-changing entrypoint the pool exposes,
+and it calls `collect_fee` before applying anything, which is a `transfer_from` against the
+caller. Sepolia charges zero, so this never surfaced. On mainnet, a missing allowance reverts
+with a bare `Contract error`, the same shape as F20. `sdk/rs/src/execution.rs:192` submits a
+single call, so Phase 1 step 6 is either a separate standing-approval transaction or a new
+multicall path, not a configuration flag. That choice is unmade.
+
 | Missing item | Blocker | Required result |
 |---|---|---|
 | Three transactions | No funded signer and no mainnet prover URL | Fund, deploy, submit, and inspect three successful pool calls |
@@ -280,7 +325,22 @@ starts.
 | Q2 | Can an operator receive screening access for a self-hosted prover? | Self-hosted proving does not make deposits work alone | Poulav to StarkWare |
 | Q3 | What are the supported mainnet prover and discovery URLs? | The sprint and mainnet canary depend on them | Poulav to StarkWare |
 | Q4 | Which pool, prover, ABI, and SDK revisions form one supported set? | Version drift can cause silent note failures | Poulav to StarkWare |
+| Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below | Poulav to StarkWare |
 | Q5 | Which relayer or paymaster path supports direct SDK operators? | Submission unlinkability depends on it | Both to StarkWare or AVNU |
+
+Q4 has a partial answer as of 2026-08-16. Upstream's compatibility matrix documents the
+Privacy Pool at class hash
+`0x52107fadffab71bdcbb6b2ccb68ba3e1b5558d94036538053e159d3076ad633`, tag `PRIVACY-0.14.3-RC.0`.
+The live mainnet pool at `0x040337b1...812a` is class
+`0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d`, read over RPC on
+2026-08-16. Sepolia runs the same class. Upstream therefore documents a pool class deployed on
+neither network, so selecting a prover image by matching the published matrix would pair
+Erebus against the wrong pool version. Sepolia and mainnet sharing one class is the useful half
+of this: the mainnet port is configuration, not re-derivation, and no hash preimage,
+storage slot, or calldata layout changes.
+
+The local `starknet-privacy` checkout is behind upstream `main` and a `PRIVACY-0.14.3-RC.5` tag
+now exists. Refresh it before pinning any revision.
 
 ## 7. Delivery plan
 
@@ -315,19 +375,25 @@ Owners: Poulav handles mainnet. Ishita handles the recording. Both review public
 
 Work:
 
-1. Get the mainnet proving-service URL from the sprint support channel.
-2. Put an Alchemy key in local configuration, or use the documented public RPC.
-3. Fund the configured mainnet address within the D8 limit.
-4. Deploy the Starknet account.
-5. Read the pool fee again before approval.
-6. Approve the pool for all deposits and pool fees in the planned calls.
-7. Submit registration plus shield, then two small top-ups.
-8. Make sure that all three receipts succeeded and include pool events.
-9. Put the three hashes in `strk20.json`.
-10. Add the hashes to the demo evidence section.
-11. Record the three-minute walkthrough from `docs/demo-video-script.md`.
-12. Upload the video and put its URL in `strk20.json`.
-13. Make sure that the hub shows all four requirements after its refresh.
+1. Ask the sprint support channel for the mainnet proving-service URL and for Q4a. Send this
+   on the day the phase starts, before any other step. The latency is external, and the
+   answer may be that no hosted mainnet prover exists.
+2. If no hosted prover exists, start the Pathfinder mainnet sync the same day and stand up the
+   prover container against it. That sync is the longest lead time in the sprint. See §5.7.
+3. Put an Alchemy key in local configuration, or use the documented public RPC.
+4. Fund the configured mainnet address within the D8 limit.
+5. Deploy the Starknet account.
+6. Read the pool fee again before approval.
+7. Choose the allowance mechanism, standing approval or per-settlement multicall, and build
+   it. The SDK has none today. See §5.7.
+8. Approve the pool for all deposits and pool fees in the planned calls.
+9. Submit registration plus shield, then two small top-ups.
+10. Make sure that all three receipts succeeded and include pool events.
+11. Put the three hashes in `strk20.json`.
+12. Add the hashes to the demo evidence section.
+13. Record the three-minute walkthrough from `docs/demo-video-script.md`.
+14. Upload the video and put its URL in `strk20.json`.
+15. Make sure that the hub shows all four requirements after its refresh.
 
 Exit:
 
@@ -610,7 +676,9 @@ Exit:
 ## 8. Dependency order
 
 ```text
-Mainnet access -> sprint transactions -> video and final manifest
+Proving path -> mainnet access -> sprint transactions -> video and final manifest
+  (proving path = hosted prover URL, or Pathfinder mainnet sync -> prover container)
+Pool allowance -> mainnet access
 
 Change-note review -> shared interface decision -> MCP and agent alignment
                      -> cross-layer settlement test
@@ -662,12 +730,14 @@ security. The other covers product integration, release, and operator feedback.
 
 - [x] Public repository and Apache-2.0 license.
 - [x] Public browser demo and GitHub Website field.
-- [ ] Mainnet prover URL.
+- [ ] Mainnet proving path: a hosted URL, or a self-hosted prover on a synced mainnet Pathfinder.
+- [ ] STRK allowance to the pool, in code and on the funded account.
 - [ ] Funded and deployed mainnet account.
 - [ ] Three verified mainnet pool transactions.
 - [ ] Public three-minute video.
 - [ ] Complete `strk20.json` visible on the hub.
-- [ ] Review and split the current uncommitted protocol work.
+- [x] Merge the change-note work. Merged 2026-08-15 as `8dd9b74`.
+- [ ] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`.
 - [ ] Align change-making across Rust, Python, MCP, mock, and agents.
 - [ ] Make missing payment evidence fail closed.
 - [ ] Fix wide `memo_hash` transport.

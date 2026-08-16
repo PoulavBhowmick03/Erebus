@@ -512,8 +512,7 @@ impl Channel {
     }
 
     /// Builds an atomic acceptance, payment, and optional payer-owned change output.
-    ///
-    /// Unreviewed. The payment uses the counterparty channel. Retained value uses the payer
+    /// The payment uses the counterparty channel. Retained value uses the payer
     /// self-channel. Both value notes require [`RandomSalt`].
     pub fn accept_and_settle_with_change(
         &self,
