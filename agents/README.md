@@ -20,9 +20,10 @@ are available, pass `--latency 29` to rehearse timing before recording the demo.
 ## What's here
 
 - `policy.py`. `BuyerPolicy` / `SellerPolicy`. Pure, deterministic decision logic, no I/O.
-Threshold rules only. The buyer only names exact-payable amounts; the seller never accepts
-because the accepting identity pays, and confirms agreement by countering at the buyer's
-amount so the buyer can accept a seller-authored offer.
+Threshold rules only. The buyer only names amounts at or below its spendable total (settlement
+covers the price and returns change); the seller never accepts because the accepting identity
+pays, and confirms agreement by countering at the buyer's amount so the buyer can accept a
+seller-authored offer.
 - `agent.py`. `run_negotiation()`: opens a channel, runs the negotiation loop bounded by
   `max_rounds`, settles or walks away, grants a viewing key, and reveals as a genuine
   third party (a fresh identity with no relationship to either agent) to prove the record

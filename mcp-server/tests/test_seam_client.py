@@ -80,8 +80,6 @@ def test_balance_amount_strings_map_to_note_denominations() -> None:
     assert balance.spendable == [100, 150]
     assert balance.pending == [25]
     assert balance.total == 250
-    assert balance.can_pay(250)
-    assert not balance.can_pay(125)
 
 
 def test_read_channel_state_carries_no_settlement_object() -> None:

@@ -57,23 +57,23 @@ class BuyerPolicy:
         state: ChannelState,
         round_index: int,
         token: str,
-        payable_amounts: set[int],
+        spendable_total: int,
         memo_hash: int = 0,
     ) -> NegotiationDecision:
         counter = _latest_open_offer(state, self.identity)
         now = int(time.time())
         deadline = now + self.deadline_seconds
 
-        payable = sorted(amount for amount in payable_amounts if 0 < amount <= self.budget)
-        if not payable:
+        affordable = min(self.budget, spendable_total)
+        if affordable <= 0:
             return NegotiationDecision(action=NegotiationAction.WALK)
 
         if counter is not None:
-            if counter.terms.amount <= self.budget and counter.terms.amount in payable_amounts:
+            if counter.terms.amount <= affordable:
                 return NegotiationDecision(action=NegotiationAction.ACCEPT, reply_to=counter.offer_id)
             if round_index >= self.max_rounds:
                 return NegotiationDecision(action=NegotiationAction.WALK)
-            amount = _closest_payable(payable, min(counter.terms.amount, self.budget))
+            amount = min(counter.terms.amount, affordable)
             terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
             return NegotiationDecision(
                 action=NegotiationAction.COUNTER, terms=terms, reply_to=counter.offer_id
@@ -82,9 +82,9 @@ class BuyerPolicy:
         # No seller offer exists yet, so open the negotiation.
         if round_index >= self.max_rounds:
             return NegotiationDecision(action=NegotiationAction.WALK)
-        opening_amount = int(self.budget * 0.8)  # anchor below budget, leave room to move
+        opening_amount = max(1, min(affordable, int(affordable * 0.8)))
         terms = OfferTerms(
-            amount=_closest_payable(payable, opening_amount),
+            amount=opening_amount,
             token=token,
             deadline=deadline,
             memo_hash=memo_hash,
@@ -135,9 +135,3 @@ class SellerPolicy:
         return NegotiationDecision(
             action=NegotiationAction.COUNTER, terms=terms, reply_to=offer.offer_id
         )
-
-
-def _closest_payable(payable: list[int], preferred: int) -> int:
-    """Best payable bid at or below ``preferred``, else the smallest affordable amount."""
-    at_or_below = [amount for amount in payable if amount <= preferred]
-    return max(at_or_below) if at_or_below else min(payable)

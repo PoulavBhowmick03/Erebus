@@ -1,27 +1,14 @@
 #!/usr/bin/env python3
 """Print amounts that an identity can pay.
 
-Settlement spends an exact subset of notes and mints no change note, so the spendable
-amounts are subset sums, not every amount below the total. One 1 STRK note can pay 1 STRK
-but not 0.9 STRK. The output gives an agent the payable set before negotiation.
+Settlement spends notes covering the price and returns any excess as a new change note, so
+any positive amount up to the total is payable.
 
 Reads the `result` object of a `balance` request on stdin.
 """
 
 import json
 import sys
-
-# Limit output when the number of subset sums grows.
-MAX_LISTED = 24
-
-
-def subset_sums(notes: list[int]) -> list[int]:
-    """Every amount an exact-subset spend can produce, excluding the empty set."""
-    reachable = {0}
-    for note in notes:
-        reachable |= {existing + note for existing in reachable}
-    reachable.discard(0)
-    return sorted(reachable)
 
 
 def main() -> int:
@@ -49,10 +36,7 @@ def main() -> int:
     for amount in pending:
         print(f"pend  {amount:>22}  = {amount / 1e18:.4f}  (maturing)")
 
-    payable = subset_sums(notes)
-    shown = ", ".join(f"{amount / 1e18:.4f}" for amount in payable[:MAX_LISTED])
-    suffix = "" if len(payable) <= MAX_LISTED else f", … ({len(payable)} total)"
-    print(f"payable exactly: {shown}{suffix}")
+    print(f"payable: 0 < amount <= {total / 1e18:.4f}")
     return 0
 
 
