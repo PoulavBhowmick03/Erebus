@@ -214,6 +214,59 @@ fn a_key_value_field_is_rejected_not_ignored() {
     assert_eq!(response["error"]["code"], "INVALID_REQUEST");
 }
 
+fn offer_with_memo(name: &str, memo_hash: &str) -> (serde_json::Value, bool) {
+    let request = serde_json::json!({
+        "method": "propose_offer",
+        "params": {
+            "config": config(name, "/definitely/not/a/pool-key", "/definitely/not/an/account-key"),
+            "handle": "ch_0000000000000000000000000000000000000000000000000000000000000001",
+            "terms": {
+                "amount": "1000",
+                "token": "0x7042",
+                "deadline": 4_102_444_800u64,
+                "memo_hash": memo_hash
+            }
+        }
+    });
+    run(&request.to_string())
+}
+
+/// A caller commits to an off-chain memo by its digest. SHA-256 is 256 bits, wider than
+/// `felt252` and far wider than the 128 bits the wire carries, so the CLI has to accept the
+/// whole thing and truncate. Requiring a pre-truncated value pushed a wire rule up into the
+/// agent and rejected every real digest.
+#[test]
+fn a_full_width_memo_digest_is_accepted_rather_than_rejected_as_malformed() {
+    let (response, ok) = offer_with_memo(
+        "memo-wide",
+        "0xffeeddccbbaa997788776655443322119abcdef0123456789abcdef012345678",
+    );
+    assert!(!ok, "no key files exist, so the call still fails");
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains("memo_hash"),
+        "the digest must survive parsing and fail later on identity, got: {message}"
+    );
+}
+
+/// Truncation is silent, but malformed input is not. A caller who sends prose or a typo gets
+/// told which field, rather than having it quietly become some other number.
+#[test]
+fn a_malformed_memo_hash_names_the_field() {
+    for bad in ["0x", "0xnothex", "0x12g4"] {
+        let (response, ok) = offer_with_memo("memo-bad", bad);
+        assert!(!ok, "{bad}");
+        assert_eq!(response["error"]["code"], "INVALID_REQUEST", "{bad}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("memo_hash"),
+            "{bad}"
+        );
+    }
+}
+
 #[test]
 fn legacy_open_channel_shape_fails_loudly() {
     let (response, ok) = run(r#"{"method":"open_channel","params":{

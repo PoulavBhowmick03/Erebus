@@ -11,7 +11,8 @@
 use erebus_sdk::actions::NoteSalt;
 use erebus_sdk::wire::{
     decode_legacy_message, decode_message, encode_legacy_message, encode_message,
-    legacy_note_index_for_message, note_index_for_message, truncate_memo_hash, MessageType,
+    legacy_note_index_for_message, note_index_for_message, truncate_memo_hash,
+    truncate_memo_hash_bytes, MessageType,
     WireContext, WireError, WireMessage, CAPACITY_BITS, LEGACY_CAPACITY_BITS,
     LEGACY_NOTES_PER_MESSAGE, MESSAGE_BITS, NOTES_PER_MESSAGE, PAYLOAD_BITS_PER_NOTE,
 };
@@ -358,6 +359,53 @@ fn memo_hash_truncation_keeps_the_low_128_bits() {
         truncate_memo_hash(felt),
         u128_of("0x9abcdef0123456789abcdef012345678")
     );
+}
+
+/// A real digest is 256 bits, above the `felt252` modulus, so it cannot reach the wire
+/// through a `Felt`. The byte form is what a caller passing SHA-256 output actually needs.
+#[test]
+fn a_whole_digest_truncates_to_the_same_low_bits_as_a_felt() {
+    let digest: [u8; 32] = [
+        0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+        0x00, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34,
+        0x56, 0x78,
+    ];
+    assert_eq!(
+        truncate_memo_hash_bytes(&digest),
+        u128_of("0x9abcdef0123456789abcdef012345678"),
+        "the low 16 bytes are kept, the high 16 are dropped"
+    );
+
+    // The same 256-bit value cannot survive a Felt round trip, which is why the byte entry
+    // point exists rather than being a convenience wrapper.
+    let wide = "0xffeeddccbbaa997788776655443322119abcdef0123456789abcdef012345678";
+    match Felt::from_hex(wide) {
+        Err(_) => {}
+        Ok(felt) => assert_ne!(
+            felt.to_bytes_be().as_slice(),
+            &digest[..],
+            "a 256-bit digest does not fit felt252 and must not appear to"
+        ),
+    }
+
+    // Narrower input is left-padded, so a short memo and the same value inside a wide digest
+    // agree rather than shifting.
+    assert_eq!(truncate_memo_hash_bytes(&[0x01, 0x02]), 0x0102);
+    assert_eq!(truncate_memo_hash_bytes(&[]), 0);
+}
+
+/// Both entry points implement one rule. If they ever disagree, the wire silently commits to
+/// a different memo than the caller believes it did.
+#[test]
+fn the_felt_and_byte_truncations_agree_wherever_both_are_defined() {
+    for value in ["0x0", "0x1", "0xdeadbeef", "0x1bc16d674ec80000"] {
+        let felt = Felt::from_hex(value).expect("parses");
+        assert_eq!(
+            truncate_memo_hash(felt),
+            truncate_memo_hash_bytes(&felt.to_bytes_be()),
+            "{value}"
+        );
+    }
 }
 
 /// The header is in the last salt. The TypeScript module's ASCII table incorrectly places it

@@ -229,10 +229,24 @@ pub struct WireMessage {
 /// commits to an off-chain memo. A collision can support a false memo claim, but cannot
 /// authorize a spend.
 pub fn truncate_memo_hash(memo_hash: Felt) -> u128 {
-    let bytes = memo_hash.to_bytes_le();
+    truncate_memo_hash_bytes(&memo_hash.to_bytes_be())
+}
+
+/// Truncates a memo hash of any width to the low 128 bits carried on the wire.
+///
+/// Takes big-endian bytes rather than a [`Felt`] because the common input is a whole digest
+/// and a `felt252` cannot hold one: SHA-256 produces 256 bits, above the field modulus, so
+/// parsing a real digest into a `Felt` either fails or wraps to a different value.
+///
+/// Truncation is a wire rule and belongs here. Asking a caller to pre-truncate puts a
+/// protocol detail in a layer that must not hold one, and gives every caller its own chance
+/// to take the wrong end of the digest. Shorter input is left-padded, so a 64-bit memo and
+/// the same value inside a 256-bit digest agree.
+pub fn truncate_memo_hash_bytes(digest: &[u8]) -> u128 {
     let mut low = [0u8; 16];
-    low.copy_from_slice(&bytes[..16]);
-    u128::from_le_bytes(low)
+    let take = digest.len().min(16);
+    low[16 - take..].copy_from_slice(&digest[digest.len() - take..]);
+    u128::from_be_bytes(low)
 }
 
 /// First note index of message `message_index` within a subchannel.
