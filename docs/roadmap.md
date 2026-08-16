@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-14.
+Last source audit: 2026-08-16.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -54,6 +54,12 @@ deadline.
 The sprint entry can finish without production readiness. The README and demo must keep
 that distinction clear.
 
+**D14 changes what the sprint entry can reach.** The owners decided on 2026-08-16 to stay on
+Sepolia. The hub requires at least three mainnet hashes and scores a working mainnet product
+at 30%, so an entry without them is incomplete against the published rules regardless of how
+good the Sepolia evidence is. The rest of this document plans for that decision rather than
+around it: mainnet work is recorded, deferred, and kept ready to execute if D14 reverses.
+
 ## 3. Current evidence
 
 This section records what exists on 2026-08-16. Later sections describe the missing work.
@@ -72,7 +78,9 @@ This section records what exists on 2026-08-16. Later sections describe the miss
 - `wait_for_offers` reduces agent tool calls, but it still polls the chain.
 - The public demo runs at `https://erebus-private-agents.vercel.app`.
 - The repository is public and uses Apache-2.0.
-- The current working tree passes 197 Rust tests, with 3 ignored tests.
+- The Rust client grants and reads the pool's STRK allowance, and `agent.sh fund` sizes its
+  approval as deposit plus the live fee.
+- The current working tree passes 202 Rust tests, with 3 ignored tests.
 - The current working tree passes 53 Python tests and 38 TypeScript tests.
 - Clippy and rustdoc pass with warnings denied.
 
@@ -102,6 +110,41 @@ Two behavior changes ride along and are not only about change:
   with a larger input set.
 - A settlement now emits a seventh note when the payer holds no exact subset, and six when it
   does. This is a new public observable. See §4.
+
+The pool-allowance path merged to `main` on 2026-08-16 as `79bf78e`, via PR #15 from branch
+`feat/approve_call`. It exists because the pool pulls both deposits and its own fee with
+`transfer_from` against the caller, so a standing allowance is a precondition for every charged
+write on either network, Sepolia included.
+
+- `sdk/rs/src/erc20.rs` builds `approve` and `allowance` calldata and reads `u256` returns.
+  Selectors are pinned against `starknet_py`, which shares no code with this crate.
+- `Executor::submit_call` submits a signed account call with no proof, for calls that are not
+  pool state transitions. It must never carry pool calldata.
+- `Client::approve_pool` and `Client::pool_allowance`. The spender is always the configured
+  pool and is not a parameter, so approving anything else is unrepresentable.
+- `AllowanceReport::covers(writes, deposits)` answers whether the standing allowance covers a
+  planned run. Fees and deposits share one budget.
+- `erebus-cli` gains `approve` and `allowance`.
+- `scripts/agent.sh fund` reads the live fee and approves deposit plus fee. It previously
+  approved the deposit alone, which was correct only while the fee was zero.
+- Amounts are `u128`, so an unbounded approval is not expressible through the SDK.
+
+This is reachable only from `erebus-cli` and the scripts. The Python seam and the MCP server
+expose neither method, which is deliberate: provisioning is operator install work, in the same
+category as `shield`. See §11 for the decision not to make either an agent tool.
+
+Two live readings taken while building it, both still open:
+
+- The Sepolia identity in `.env`, `0x032bb394...c805`, has a **zero** allowance against a
+  2 STRK fee. Its next charged write fails.
+- The identity that submitted the wire-v2 settlement, `0x23ad2a76...b948`, holds 94 STRK of
+  allowance. Sepolia runs have been spending down an old over-approval rather than working
+  because the amounts were right.
+
+Neither has been exercised through the merged code. Sepolia charges 2 STRK, so a Sepolia run
+exercises `collect_fee`, the allowance, and `submit_call` under the same mechanics mainnet
+uses, differing only in the number. Under D14 that run is the only validation this path will
+get, which makes it a required step rather than a convenience.
 
 ### Not proven
 
@@ -163,7 +206,8 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| Change support is uncommitted | Rust selects sufficient notes and builds payer change | Review, commit, and run the same behavior through MCP and agents |
+| Change support stops at the SDK | Merged in Rust; MCP, mock, agents, and guides still require exact sums | Run the same behavior through the Python seam, MCP, and agents |
+| The allowance path is untested against a live fee | Merged in Rust; no Sepolia run has exercised `collect_fee` through it | Approve and settle once on Sepolia, and record the receipt |
 | One deal per channel | Settlement breaks the fixed five-note message grid | Add framed entries and deal identifiers in the final wire |
 | One directional channel per sender and recipient | STRK20 derives a channel key without an index | Reuse both directional channels for framed deals, or use fresh identities |
 | Wire fingerprint | The fifth salt contains 59 fixed spare bits | Randomize the spare bits without weakening decoding |
@@ -187,6 +231,7 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 | No protocol negotiation | The seam assumes protocol 2 | Refuse incompatible CLI versions at startup |
 | Timeout is global | Each call uses one 300-second limit | Use operation-specific timeouts and report the failed stage |
 | Key-path safety relies on convention | Python can access the named files | Add permission checks and secret-leak regression tests |
+| `CLAUDE.md` contradicts the source | It says the binding stays on protocol 1; `_seam.py` passes opaque handles and a `state_dir`, which is protocol 2 | Correct `CLAUDE.md`, since agents read it as authoritative |
 
 The Python SDK must stay a binding. It must not add hashes, salts, felt arithmetic, note
 selection, signing, or cryptography.
@@ -197,7 +242,8 @@ selection, signing, or cryptography.
 |---|---|---|
 | Exact-note rules conflict with Rust change | `_require_payable` uses exact subset sums | Agree on the interface and update all tool behavior together |
 | Missing payment looks consistent | `paid_amount is None` returns `True` | Return an unknown result, or fail closed |
-| Wide `memo_hash` values fail at JSON clients | The tool schema uses a JSON integer | Accept a canonical hex string and parse it in Rust |
+| Wide `memo_hash` values fail at JSON clients | The tool schema uses a JSON integer. The Rust half is done: the CLI now accepts a whole digest as hex and truncates through `wire::truncate_memo_hash_bytes` | Change the tool schema to a canonical hex string, and stop telling agents to truncate their own hash |
+| Amounts above 2^53 lose precision at JSON clients | `OfferTerms.amount` and `memo_hash` serialize as JSON numbers. 1 STRK is 1e18, well past the JSON safe-integer range, so any JavaScript MCP host reading `read_channel_state` silently rounds | Serialize both as decimal strings, as `balance` already does. This changes the frozen interface, so it needs both owners |
 | `wait_for_offers` accepts invalid limits | Counts and timeouts have no range checks | Reject zero and negative values before polling |
 | Polling remains expensive | Each poll repeats note reads | Add discovery subscriptions after Q3 publishes a supported endpoint |
 | Concurrency behavior is unproven | `asyncio.to_thread` starts independent calls | Reproduce overlaps, serialize writes, and add concurrency tests |
@@ -256,47 +302,62 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 | No secret-safe log policy | Viewing grants and paths can enter logs | Redact grants, keys, authorization headers, and RPC secrets |
 | No release provenance | GitHub has source only | Publish checksums, build metadata, and a software bill of materials |
 
-### 5.7 Mainnet and sprint delivery
+### 5.7 Sprint delivery, and mainnet as deferred work
+
+D14 puts the sprint on Sepolia. This section states what that costs, then keeps the mainnet
+findings intact so the decision stays reversible.
+
+#### What the sprint entry can and cannot reach under D14
+
+| Requirement | Status under D14 |
+|---|---|
+| Public repository and licence | Met |
+| Public demo URL | Met, `https://erebus-private-agents.vercel.app` |
+| Registered in `registry.json` | Met, PR merged 2026-08-14 |
+| Three mainnet pool transactions | **Not reachable.** The hub verifies each hash on mainnet |
+| Public three-minute video | Reachable. Sepolia evidence only |
+| Complete `strk20.json` | Partial. `transactions` stays empty |
+
+Thirty percent of the score is a working mainnet product, and the transaction check is
+mechanical rather than a judgement call. Sepolia evidence does not substitute. The entry is
+therefore incomplete by construction, and the remaining work is to make the Sepolia evidence
+as strong as it can be and to say plainly in the video and README which network it ran on. An
+entry that overstates its network is worse than one that is honestly partial.
+
+#### Sepolia is not free either
+
+`get_fee_amount` read 2 STRK on Sepolia on 2026-08-16, not the 0 recorded in `.env.example`
+and repeated through these documents. It was zero when those notes were written.
+`apply_actions` is the only state-changing entrypoint the pool exposes, and it calls
+`collect_fee` before applying anything, a `transfer_from` against the caller. So Sepolia needs
+a standing allowance too, and a missing one reverts with a bare `Contract error`, the shape of
+F20. The allowance path is built and merged; see §3 and D12.
+
+This is the useful half of the fee discovery: every mechanic the mainnet path needs is
+exercised by a Sepolia run, at 2 STRK instead of 6.
+
+#### Mainnet findings, retained
 
 The mainnet pool is
-`0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`.
-The pool charged 6 STRK per `apply_actions` during the 2026-08-14 audit.
-
-The configured mainnet account has no contract and no balance. The sprint guide still does
-not publish the mainnet proving-service URL.
+`0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`, charging 6 STRK per
+`apply_actions`. The configured mainnet account has no contract and no balance.
 
 A 2026-08-16 search found no published mainnet proving service anywhere: not in the upstream
 README, not in `strk20-by-example.org`, not in either Starknet launch post. The endpoints
-Erebus holds are `alpha-sepolia` hosts and cannot serve mainnet. Q3 may therefore have no
-answer, so the plan needs a second branch.
+Erebus holds are `alpha-sepolia` hosts and cannot serve mainnet, so Q3 may have no answer.
 
-The second branch is self-hosting. Upstream publishes the prover as a container in its
+The alternative is self-hosting. Upstream publishes the prover as a container in its
 compatibility matrix, `ghcr.io/starkware-libs/starknet-privacy/transaction-prover:PRIVACY-0.14.3-RC.2`,
 with the discovery service and proof interceptor at the same tag. The cost is the footnote
 under that table: the prover needs a Pathfinder node at `PATHFINDER_STORAGE_STATE_TRIES=10000`.
-A mainnet Pathfinder sync takes days of wall clock and hundreds of gigabytes of disk, which is
-longer than any other open item and cannot be compressed by adding effort. If Q3 comes back
-empty, this sync is the critical path and must start the same day.
+A mainnet Pathfinder sync takes days of wall clock and hundreds of gigabytes of disk. That lead
+time is why D14 exists, and it is also why reversing D14 late is not possible: the sync has to
+start days before the first mainnet transaction, not on the day it is wanted.
 
 Self-hosting does not remove deposit screening. See Q2.
 
-The SDK has no allowance path. There is no `approve`, no `allowance`, and no `fee_amount`
-anywhere in `sdk/rs`. `apply_actions` is the only state-changing entrypoint the pool exposes,
-and it calls `collect_fee` before applying anything, which is a `transfer_from` against the
-caller. Sepolia charges zero, so this never surfaced. On mainnet, a missing allowance reverts
-with a bare `Contract error`, the same shape as F20. `sdk/rs/src/execution.rs:192` submits a
-single call, so Phase 1 step 6 is either a separate standing-approval transaction or a new
-multicall path, not a configuration flag. That choice is unmade.
-
-| Missing item | Blocker | Required result |
-|---|---|---|
-| Three transactions | No funded signer and no mainnet prover URL | Fund, deploy, submit, and inspect three successful pool calls |
-| Demo video | No recording exists | Record the public demo and the verified mainnet receipts |
-| Final manifest | Transaction and video fields are empty | Update `strk20.json` and wait for the hub refresh |
-| Mainnet evidence on demo | The page shows a pending card | Add the three Voyager links after submission |
-
-Three calls require at least 18 STRK in pool fees. Deployment, approval, deposits, and gas
-need more funds. The current operating budget is about 30 STRK for the minimum run.
+Budget if D14 reverses: three calls need at least 18 STRK in pool fees, plus deployment,
+approval, deposits, and gas. D8 sets about 30 STRK for a minimum run.
 
 ## 6. Decisions for Poulav and Ishita
 
@@ -316,6 +377,9 @@ starts.
 | D9 | External review target | Final wire only, or wire v2 plus final wire | Poulav | Before audit booking |
 | D10 | Skill distribution | Erebus repo only, upstream skill repo, or both | Ishita | Before `v0.1.0` |
 | D11 | Support model | Best effort, named maintainer, or funded maintenance | Both | Before `v1.0` |
+| D12 | Pool allowance mechanism | Standing approval, decided 2026-08-16 | Poulav | Decided, built |
+| D13 | Who provisions allowance and notes | Operator at install; not an agent tool | Both | Before the operator product |
+| D14 | Sprint network | Sepolia only, decided 2026-08-16 | Both | Decided. Reversing needs days of Pathfinder lead time |
 
 ### External questions
 
@@ -323,9 +387,9 @@ starts.
 |---|---|---|---|
 | Q1 | Can `compile_actions` avoid receiving the full pool key? | This decides the long-term custody model | Poulav to StarkWare |
 | Q2 | Can an operator receive screening access for a self-hosted prover? | Self-hosted proving does not make deposits work alone | Poulav to StarkWare |
-| Q3 | What are the supported mainnet prover and discovery URLs? | The sprint and mainnet canary depend on them | Poulav to StarkWare |
+| Q3 | What are the supported mainnet prover and discovery URLs? | Deferred by D14. Still blocks the mainnet canary and `v1.0` | Poulav to StarkWare |
 | Q4 | Which pool, prover, ABI, and SDK revisions form one supported set? | Version drift can cause silent note failures | Poulav to StarkWare |
-| Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below | Poulav to StarkWare |
+| Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below. Applies to Sepolia too | Poulav to StarkWare |
 | Q5 | Which relayer or paymaster path supports direct SDK operators? | Submission unlinkability depends on it | Both to StarkWare or AVNU |
 
 Q4 has a partial answer as of 2026-08-16. Upstream's compatibility matrix documents the
@@ -346,61 +410,69 @@ now exists. Refresh it before pinning any revision.
 
 ### Phase 0: Make the working tree reviewable
 
-Target: 2026-08-14 to 2026-08-15.
+Target: 2026-08-14 to 2026-08-15. Mostly complete on 2026-08-16.
 
 Owner: Poulav. Ishita reviews the shared interface changes.
 
 Work:
 
-1. Split the change-note patch from observer and documentation edits.
-2. Remove accidental prose corruption from `docs/friction.md`.
-3. Review `select_notes` bounds, overflow behavior, fallback behavior, and input ordering.
+1. ~~Split the change-note patch from observer and documentation edits.~~ Not done. `2c91448`
+   carried the observer and documentation edits with the protocol change, and `94a1b4c` did
+   the same. Both merged. Not worth unpicking; do it for the next protocol commit.
+2. ~~Remove accidental prose corruption from `docs/friction.md`.~~ Done.
+3. ~~Review `select_notes` bounds, overflow behavior, fallback behavior, and input ordering.~~
+   Done. Its `Unreviewed` marker was cleared before the merge.
 4. Review change-channel setup, note indices, salts, phase ordering, and collision checks.
-5. Record the shared interface decision for change-making.
-6. Update the test baseline in one status document.
-7. Create tracked issues for every accepted roadmap item.
+   **Open.** This is the last `Unreviewed` marker, at `sdk/rs/src/channel.rs:516`. The claim
+   to confirm is that contiguity is per subchannel, which is what makes it safe to interleave
+   two channels' notes in one action set. Check `_client_apply_actions` in `privacy.cairo`.
+5. Record the shared interface decision for change-making. **Open.** Owed to Ishita, and it
+   blocks all of phase 2.
+6. ~~Update the test baseline in one status document.~~ Done: 202 Rust, 53 Python, 38 TypeScript.
+7. Create tracked issues for every accepted roadmap item. **Open.**
 
 Exit:
 
-- Each protocol change has a small commit and focused tests.
-- No unrelated prose and protocol change share one commit.
-- Poulav removes each `Unreviewed` marker only after a line review.
-- Ishita accepts the changed balance and settlement result shapes.
+- Each protocol change has a small commit and focused tests. Partly: tests yes, small no.
+- No unrelated prose and protocol change share one commit. **Missed on both commits.**
+- Poulav removes each `Unreviewed` marker only after a line review. One marker left.
+- Ishita accepts the changed balance and settlement result shapes. **Open.**
 
-### Phase 1: Complete the sprint entry
+### Phase 1: Complete the sprint entry on Sepolia
 
-Target: 2026-08-14 to 2026-08-17.
+Target: 2026-08-16 to 2026-08-24. Rewritten for D14.
 
-Owners: Poulav handles mainnet. Ishita handles the recording. Both review public claims.
+Owners: Poulav handles the chain run. Ishita handles the recording. Both review public claims.
+
+The mainnet steps this phase used to carry are now §5.7's deferred block. What remains is
+making the Sepolia evidence complete and honest.
 
 Work:
 
-1. Ask the sprint support channel for the mainnet proving-service URL and for Q4a. Send this
-   on the day the phase starts, before any other step. The latency is external, and the
-   answer may be that no hosted mainnet prover exists.
-2. If no hosted prover exists, start the Pathfinder mainnet sync the same day and stand up the
-   prover container against it. That sync is the longest lead time in the sprint. See §5.7.
-3. Put an Alchemy key in local configuration, or use the documented public RPC.
-4. Fund the configured mainnet address within the D8 limit.
-5. Deploy the Starknet account.
-6. Read the pool fee again before approval.
-7. Choose the allowance mechanism, standing approval or per-settlement multicall, and build
-   it. The SDK has none today. See §5.7.
-8. Approve the pool for all deposits and pool fees in the planned calls.
-9. Submit registration plus shield, then two small top-ups.
-10. Make sure that all three receipts succeeded and include pool events.
-11. Put the three hashes in `strk20.json`.
-12. Add the hashes to the demo evidence section.
-13. Record the three-minute walkthrough from `docs/demo-video-script.md`.
-14. Upload the video and put its URL in `strk20.json`.
-15. Make sure that the hub shows all four requirements after its refresh.
+1. Read the live fee and current allowance for each identity that will write.
+2. Size the approval from the planned write count. `AllowanceReport::covers` answers it, and
+   fees and deposits draw on one budget.
+3. Approve the pool from `0x032bb394...c805`, which currently reads zero.
+4. Run one full negotiation and settlement end to end, through the MCP servers, on the merged
+   change-note and allowance code. This is the first run of either against a non-zero fee.
+5. Confirm the receipt succeeded and contains pool events.
+6. Point `scripts/observer.py` at the new settlement with no key and record what it recovers.
+7. Run a viewing-key disclosure against the same deal and record the reconstruction.
+8. Rewrite the demo video script. The previous one at `docs/demo-video-script.md` was deleted
+   on 2026-08-16 and it described a mainnet section that will not exist.
+9. Record the three-minute walkthrough. State the network out loud and on screen.
+10. Upload the video and put its URL in `strk20.json`.
+11. Put the Sepolia transaction hashes in the demo evidence section, labelled as Sepolia.
+12. Say in the README and on the demo page that no mainnet transaction exists.
 
 Exit:
 
-- `transactions` contains three verified mainnet hashes.
+- One negotiation and settlement recorded end to end on current `main`.
 - `demo_video` and `demo_url` are public without login.
-- `contracts` remains empty unless Erebus deploys a contract.
-- The public demo labels its simulated flow and live evidence separately.
+- `transactions` stays empty, because the hub verifies mainnet only. That gap is stated
+  rather than papered over.
+- The public demo labels its simulated flow, its Sepolia evidence, and its absent mainnet
+  evidence as three separate things.
 
 ### Phase 2: Align Rust, Python, MCP, and agents
 
@@ -522,7 +594,8 @@ Work:
 
 1. Freeze the interface and release candidate.
 2. Run the full local gate from a clean checkout.
-3. Run one low-value mainnet canary through the release artifacts.
+3. Run one low-value canary through the release artifacts. Sepolia while D14 holds. A
+   `v0.1.0` released without a mainnet canary must say so in its release notes.
 4. Make sure that the demo, README, roadmap, and manifest use the same evidence.
 5. Publish install steps, current limits, recovery limits, and trust assumptions.
 6. Tag `v0.1.0` and publish signed release artifacts.
@@ -676,9 +749,11 @@ Exit:
 ## 8. Dependency order
 
 ```text
-Proving path -> mainnet access -> sprint transactions -> video and final manifest
-  (proving path = hosted prover URL, or Pathfinder mainnet sync -> prover container)
-Pool allowance -> mainnet access
+Sepolia allowance -> live settlement run -> observer and disclosure evidence
+                     -> video -> sprint entry            (the D14 path)
+
+Pathfinder mainnet sync -> prover container -> mainnet access -> mainnet transactions
+  (deferred by D14; days of lead time, so reversing D14 late is not possible)
 
 Change-note review -> shared interface decision -> MCP and agent alignment
                      -> cross-layer settlement test
@@ -730,17 +805,23 @@ security. The other covers product integration, release, and operator feedback.
 
 - [x] Public repository and Apache-2.0 license.
 - [x] Public browser demo and GitHub Website field.
-- [ ] Mainnet proving path: a hosted URL, or a self-hosted prover on a synced mainnet Pathfinder.
-- [ ] STRK allowance to the pool, in code and on the funded account.
-- [ ] Funded and deployed mainnet account.
-- [ ] Three verified mainnet pool transactions.
-- [ ] Public three-minute video.
-- [ ] Complete `strk20.json` visible on the hub.
-- [x] Merge the change-note work. Merged 2026-08-15 as `8dd9b74`.
+- [x] Registered in the sprint `registry.json`. Merged 2026-08-14.
+- [x] Merge the change-note work. Merged 2026-08-15 as `8dd9b74`, PR #14.
+- [x] Merge the pool-allowance path. Merged 2026-08-16 as `79bf78e`, PR #15.
+- [ ] Grant the Sepolia allowance to `0x032bb394...c805`, which reads zero.
+- [ ] One full Sepolia run on merged code, with a receipt, observer output, and a disclosure.
+- [ ] Rewrite the demo video script, deleted 2026-08-16.
+- [ ] Public three-minute video that names its network.
+- [ ] `strk20.json` with the video URL, and an explicit note that `transactions` is empty.
 - [ ] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`.
+- [ ] Record the change-making interface decision with Ishita.
 - [ ] Align change-making across Rust, Python, MCP, mock, and agents.
 - [ ] Make missing payment evidence fail closed.
-- [ ] Fix wide `memo_hash` transport.
+- [ ] Fix wide `memo_hash` transport. Rust half done 2026-08-16; MCP schema still a JSON int.
+- [ ] Decide whether `amount` and `memo_hash` serialize as strings. Interface change, both owners.
+
+Deferred by D14, not cancelled: mainnet proving path, funded mainnet account, three mainnet
+transactions. See §5.7.
 
 ### P1: Technical-preview release
 

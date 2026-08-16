@@ -134,7 +134,7 @@ impl TermsParams {
             amount: u128_value("amount", &self.amount)?,
             token: felt("token", &self.token)?,
             deadline: self.deadline,
-            memo_hash: u128_value("memo_hash", &self.memo_hash)?,
+            memo_hash: memo_hash_value("memo_hash", &self.memo_hash)?,
         })
     }
 }
@@ -338,6 +338,34 @@ fn felt(field: &'static str, value: &str) -> Result<Felt, CliError> {
         field,
         value: value.to_owned(),
     })
+}
+
+/// Parses a memo hash of any width and truncates it to the 128 bits the wire carries.
+///
+/// Accepts a whole digest as hex, `0x` optional, of any length. A caller passing a SHA-256
+/// digest gets the same 128 bits `truncate_memo_hash` would produce, without having to know
+/// that rule or which end to cut. Decimal is still accepted up to `u128` so existing callers
+/// keep working.
+///
+/// Truncation is silent because it is the wire's documented behaviour rather than an error:
+/// the value that reaches the chain is always 128 bits. Results report what was committed,
+/// so a caller can compare.
+fn memo_hash_value(field: &'static str, value: &str) -> Result<u128, CliError> {
+    let bad = || CliError::BadValue {
+        field,
+        value: value.to_owned(),
+    };
+    let Some(hex) = value.strip_prefix("0x") else {
+        // No prefix: decimal, as before. A bare hex digest without `0x` is ambiguous with
+        // decimal, so it is not guessed at.
+        return value.parse().map_err(|_| bad());
+    };
+    if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(bad());
+    }
+    // Only the low 128 bits survive, so take the last 32 hex digits and let the rest go.
+    let low = &hex[hex.len().saturating_sub(32)..];
+    u128::from_str_radix(low, 16).map_err(|_| bad())
 }
 
 fn u128_value(field: &'static str, value: &str) -> Result<u128, CliError> {
