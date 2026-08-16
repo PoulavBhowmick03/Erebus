@@ -322,23 +322,27 @@ class MockErebusClient:
         if self._effective_status(target, now) == OfferStatus.EXPIRED:
             raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=offer_id, retryable=False)
 
-        selected = _select_exact_indices(self._spendable_notes, target.terms.amount)
+        selected = _select_notes(self._spendable_notes, target.terms.amount)
         if selected is None:
             held = sorted(self._spendable_notes, reverse=True)
             rendered = ", ".join(str(amount) for amount in held) or "none"
             raise ErebusError(
                 code=SettlementErrorCode.INSUFFICIENT_NOTES,
                 message=(
-                    f"no exact set of unspent notes sums to {target.terms.amount}; "
-                    f"holding {len(held)} note(s) worth {sum(held)} in total ({rendered})"
+                    f"total spendable value {sum(held)} is below {target.terms.amount}; "
+                    f"holding {len(held)} note(s) ({rendered})"
                 ),
                 retryable=False,
             )
+        indices, change = selected
 
-        # The acceptor is the payer. The original mock did not consume its notes, so a seller
-        # could appear to settle without the Rust client spending seller funds.
-        for index in sorted(selected, reverse=True):
+        # The acceptor is the payer. Consuming its notes here is the piece the original mock
+        # omitted, which let a seller-side settlement look valid even though the real Rust
+        # client would spend the seller's funds.
+        for index in sorted(indices, reverse=True):
             del self._spendable_notes[index]
+        if change > 0:
+            self._spendable_notes.append(change)
 
         # Acceptance and payment share one action set and proof (ARCHITECTURE §4). There is
         # no accepted-but-unsettled state.
@@ -405,17 +409,21 @@ class MockErebusClient:
         )
 
 
-def _select_exact_indices(notes: list[int], target: int) -> list[int] | None:
-    """Returns one exact subset by index, or ``None`` when the denomination is impossible."""
+def _select_notes(notes: list[int], target: int) -> tuple[list[int], int] | None:
+    """Returns indices covering ``target`` plus the surplus, or ``None`` if short."""
+    if target <= 0:
+        return [], 0
+    if sum(notes) < target:
+        return None
     reachable: dict[int, list[int]] = {0: []}
     for index, note in enumerate(notes):
         additions: dict[int, list[int]] = {}
         for subtotal, selected in reachable.items():
             candidate = subtotal + note
-            if candidate > target or candidate in reachable or candidate in additions:
+            if candidate in reachable or candidate in additions:
                 continue
             additions[candidate] = [*selected, index]
         reachable.update(additions)
-        if target in reachable:
-            return reachable[target]
-    return None
+    covering = [total for total in reachable if total >= target]
+    best_total = min(covering)
+    return reachable[best_total], best_total - target

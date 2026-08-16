@@ -50,7 +50,7 @@ async def run_negotiation(
             buyer_state,
             round_index,
             token,
-            _payable_amounts(buyer_balance.spendable),
+            buyer_balance.total,
         )
         _log_event("buyer_decision", round=round_index, action=buyer_decision.action.value)
 
@@ -101,12 +101,3 @@ async def run_negotiation(
         settled=record.settlement is not None,
     )
     return record
-
-
-def _payable_amounts(notes: list[int]) -> set[int]:
-    """All exact subset sums for the small MVP note set."""
-    reachable = {0}
-    for note in notes:
-        reachable |= {subtotal + note for subtotal in reachable}
-    reachable.discard(0)
-    return reachable

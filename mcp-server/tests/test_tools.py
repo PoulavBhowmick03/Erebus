@@ -18,7 +18,10 @@ SERVER_PATH = REPO_ROOT / "mcp-server" / "src" / "server.py"
 
 
 def _server_params(
-    store_path: Path, role: str = "payer", identity: str = "0xbuyer"
+    store_path: Path,
+    role: str = "payer",
+    identity: str = "0xbuyer",
+    spendable_notes: str = "100,150",
 ) -> StdioServerParameters:
     return StdioServerParameters(
         command="uv",
@@ -29,7 +32,7 @@ def _server_params(
             "PROVING_SERVICE_URL": "http://unused.invalid",
             "EREBUS_MOCK_STORE_PATH": str(store_path),
             "EREBUS_MOCK_LATENCY_SECONDS": "0",
-            "EREBUS_MOCK_SPENDABLE_NOTES": "100,150",
+            "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
             "EREBUS_SETTLEMENT_ROLE": role,
         },
     )
@@ -77,15 +80,14 @@ def test_the_protocol_and_payment_planning_methods_are_exposed_with_descriptions
     asyncio.run(run())
 
 
-def test_balance_reports_exact_payability(tmp_path):
+def test_balance_total(tmp_path):
     async def run():
         async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                payable = _structured(await session.call_tool("get_note_balance", {"amount": 250}))
-                unpayable = _structured(await session.call_tool("get_note_balance", {"amount": 125}))
-                assert payable["result"]["can_pay_exactly"] is True
-                assert unpayable["result"]["can_pay_exactly"] is False
+                balance = _structured(await session.call_tool("get_note_balance", {}))
+                assert balance["result"]["spendable_notes"] == [150, 100]
+                assert balance["result"]["total"] == 250
 
     asyncio.run(run())
 
@@ -101,7 +103,7 @@ def test_payer_cannot_write_an_offer_it_cannot_later_settle(tmp_path):
                     "propose_offer",
                     {
                         "channel_handle": handle,
-                        "amount": 125,
+                        "amount": 300,
                         "token": "0xtoken",
                         "deadline": 9999999999,
                         "memo_hash": 0,
@@ -165,10 +167,8 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
                         await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
-                        payable = _structured(
-                            await buyer.call_tool("get_note_balance", {"amount": 150})
-                        )
-                        assert payable["result"]["can_pay_exactly"] is True
+                        payable = _structured(await buyer.call_tool("get_note_balance", {}))
+                        assert payable["result"]["total"] >= 150
 
                         settled = _structured(
                             await buyer.call_tool(
@@ -185,6 +185,57 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
                 assert state["result"]["settlement"]["agreed_amount"] == 150
+
+    asyncio.run(run())
+
+
+def test_mcp_settle_change(tmp_path):
+    """The cross-layer case exact-subset settlement couldn't do at all: buyer holds one 5
+    note, seller asks 3. Through the real MCP call path, not mock_client directly."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        seller_params = _server_params(store, role="payee", identity="0xseller", spendable_notes="")
+        buyer_params = _server_params(store, role="payer", identity="0xbuyer", spendable_notes="5")
+        async with stdio_client(seller_params) as (seller_read, seller_write):
+            async with ClientSession(seller_read, seller_write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                proposed = await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 3,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                offer_id = _structured(proposed)["result"]["offer_id"]
+
+                async with stdio_client(buyer_params) as (buyer_read, buyer_write):
+                    async with ClientSession(buyer_read, buyer_write) as buyer:
+                        await buyer.initialize()
+                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+                        payable = _structured(await buyer.call_tool("get_note_balance", {}))
+                        assert payable["result"]["total"] == 5
+
+                        settled = _structured(
+                            await buyer.call_tool(
+                                "accept_and_settle",
+                                {"channel_handle": handle, "offer_id": offer_id},
+                            )
+                        )
+                        assert settled["ok"] is True
+
+                        balance = _structured(await buyer.call_tool("get_note_balance", {}))
+                        assert balance["result"]["spendable_notes"] == [2]
+
+                state = _structured(
+                    await seller.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["settlement"]["agreed_amount"] == 3
 
     asyncio.run(run())
 

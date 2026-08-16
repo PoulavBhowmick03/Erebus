@@ -52,23 +52,19 @@ def register_tools(
             "error": {"code": code.value, "message": message, "retryable": False},
         }
 
-    def _balance_json(balance: NoteBalance, amount: int | None = None) -> dict[str, Any]:
-        result: dict[str, Any] = {
+    def _balance_json(balance: NoteBalance) -> dict[str, Any]:
+        return {
             "spendable_notes": balance.spendable,
             "total": balance.total,
             "pending_notes": balance.pending,
         }
-        if amount is not None:
-            result["requested_amount"] = amount
-            result["can_pay_exactly"] = balance.can_pay(amount)
-        return result
 
     async def _require_payable(amount: int) -> dict[str, Any] | None:
         outcome = await _call(client.note_balance())
         if not outcome["ok"]:
             return outcome
         balance = outcome["result"]
-        if balance.can_pay(amount):
+        if 0 < amount <= balance.total:
             return None
         pending = (
             f"; pending notes: {balance.pending}" if balance.pending else ""
@@ -76,9 +72,8 @@ def register_tools(
         return _error(
             SettlementErrorCode.INSUFFICIENT_NOTES,
             "this payer cannot name or accept an unpayable amount: "
-            f"no exact subset of {balance.spendable} sums to {amount}{pending}. "
-            "Use get_note_balance before negotiating; total value is not enough because "
-            "settlement creates no change note.",
+            f"total spendable value {balance.total} is below {amount}{pending}. "
+            "Use get_note_balance before negotiating.",
         )
 
     @server.tool()
@@ -98,9 +93,9 @@ def register_tools(
         deadline as a unix timestamp, memo_hash as a 128-bit int (truncate your own hash to
         the low 128 bits before calling because this field does not fit a full digest).
 
-        If this server is configured as payer, the amount must be exactly payable from its
-        current note denominations; call get_note_balance first. Payee offers are asks and
-        do not spend the payee's notes."""
+        If this server is configured as payer, the amount must not exceed its total
+        spendable note value (call get_note_balance first); settlement returns any excess
+        as change. Payee offers are asks and do not spend the payee's notes."""
         if settlement_role is SettlementRole.PAYER:
             failure = await _require_payable(amount)
             if failure is not None:
@@ -123,8 +118,8 @@ def register_tools(
         """Write a counter-offer replying to a specific offer_id from the other party.
         Does not withdraw the offer you're replying to. It stays acceptable until it
         expires or is settled. Use a short deadline instead of trying to retract. A payer
-        may only counter with an exactly payable amount; a payee uses this to leave the
-        final seller-authored offer that the payer will accept."""
+        may only counter at or below its total spendable note value; a payee uses this to
+        leave the final seller-authored offer that the payer will accept."""
         if settlement_role is SettlementRole.PAYER:
             failure = await _require_payable(amount)
             if failure is not None:
@@ -136,16 +131,15 @@ def register_tools(
         return outcome
 
     @server.tool()
-    async def get_note_balance(amount: int | None = None) -> dict[str, Any]:
+    async def get_note_balance() -> dict[str, Any]:
         """Read this identity's private payment denominations without moving value.
 
-        Pass a proposed payment amount to receive can_pay_exactly. Settlement consumes an
-        exact subset and creates no change: holding one 1 STRK note cannot pay 0.7 STRK.
-        A payer must call this before naming or accepting a price. Pending notes are already
-        on-chain but cannot be used until they reach the proving block."""
+        Any positive amount up to `total` is payable — settlement returns the excess as
+        change. A payer must call this before naming or accepting a price. Pending notes
+        are already on-chain but cannot be used until they reach the proving block."""
         outcome = await _call(client.note_balance())
         if outcome["ok"]:
-            outcome["result"] = _balance_json(outcome["result"], amount)
+            outcome["result"] = _balance_json(outcome["result"])
         return outcome
 
     @server.tool()
@@ -165,12 +159,11 @@ def register_tools(
     @server.tool()
     async def accept_and_settle(channel_handle: str, offer_id: str) -> dict[str, Any]:
         """PAYER ONLY: accept an offer and pay it from this calling identity's private
-        notes, atomically. The offer's author receives the payment. A supplier/payee must
-        never call this; leave a final payee-authored offer for the buyer to accept.
+        notes, atomically; any excess comes back as a change note in the payer's own
+        channel. A supplier/payee must never call this; leave a final payee-authored offer
+        for the buyer to accept.
 
-        This closes the channel: one channel is one deal. The server checks that the exact
-        amount is payable before invoking Rust; total balance alone is insufficient because
-        settlement creates no change note."""
+        This closes the channel: one channel is one deal."""
         if settlement_role is SettlementRole.PAYEE:
             return _error(
                 SettlementErrorCode.INVALID_REQUEST,

@@ -131,6 +131,19 @@ def test_acceptor_is_the_payer_and_exact_notes_are_consumed(clients):
     asyncio.run(run())
 
 
+def test_settlement_change(clients):
+    buyer, seller = clients
+
+    async def run():
+        handle = await buyer.open_channel("0xseller")
+        offer_id = await seller.propose_offer(handle, _terms(amount=120))
+        await buyer.accept_and_settle(handle, offer_id)
+        balance = await buyer.note_balance()
+        assert sorted(balance.spendable) == [30, 100]
+
+    asyncio.run(run())
+
+
 def test_accepting_your_own_offer_is_rejected(clients):
     buyer, _ = clients
 

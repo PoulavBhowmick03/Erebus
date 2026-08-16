@@ -55,38 +55,12 @@ class SettlementReceipt:
 
 @dataclass(frozen=True)
 class NoteBalance:
-    """Private note denominations available to the payer.
-
-    Settlement consumes an exact subset and creates no change note. ``total`` and
-    :meth:`can_pay` answer different questions. One 1 STRK note cannot pay 0.7 STRK exactly.
-    """
-
     spendable: list[int]
     pending: list[int]
 
     @property
     def total(self) -> int:
         return sum(self.spendable)
-
-    def can_pay(self, amount: int) -> bool:
-        """Whether some exact subset of spendable notes sums to ``amount``."""
-        if amount <= 0:
-            return False
-        # Match sdk/rs/src/client.rs::select_exact_notes and its resource caps. The planner
-        # must not claim that Rust can pay an amount that its bounded search rejects.
-        reachable = {0}
-        for note in self.spendable[:256]:
-            additions = {
-                subtotal + note
-                for subtotal in reachable
-                if subtotal + note <= amount and subtotal + note not in reachable
-            }
-            reachable |= additions
-            if amount in reachable:
-                return True
-            if len(reachable) >= 100_000:
-                return False
-        return False
 
 
 @dataclass(frozen=True)

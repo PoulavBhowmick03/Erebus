@@ -99,15 +99,14 @@ Nothing about the server is shared between them.
 
 ### Payment denominations
 
-`get_note_balance(amount)` reports the caller's spendable note denominations and whether an
-exact subset pays `amount`. Payer-role servers apply the same check before every proposal,
-counter and settlement, so an autonomous buyer cannot spend several proof rounds agreeing
-to a price it cannot pay. Payee-role proposals are asks and therefore do not inspect the
-payee's notes.
+`get_note_balance()` reports the caller's spendable note denominations and total. Payer-role
+servers check `amount <= total` before every proposal, counter and settlement, so an
+autonomous buyer cannot spend several proof rounds agreeing to a price it cannot pay.
+Payee-role proposals are asks and therefore do not inspect the payee's notes.
 
-This is a preflight, not change-making. The MVP pool transition creates no change note: one
-1 STRK note cannot pay 0.7 STRK. Add denominations before the agent session with
-`scripts/agent.sh <payer-env> fund <amount>`.
+Settlement covers the price from whatever notes it selects and returns any excess as a new
+change note, so any positive amount up to `total` is payable. Add denominations before the
+agent session with `scripts/agent.sh <payer-env> fund <amount>`.
 
 ## Using it from outside this repository
 
