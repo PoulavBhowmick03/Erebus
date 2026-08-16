@@ -26,6 +26,7 @@ pub mod channel;
 pub mod client;
 pub mod decrypt;
 pub mod disclosure;
+pub mod erc20;
 pub mod execution;
 pub mod hashes;
 pub mod keys;

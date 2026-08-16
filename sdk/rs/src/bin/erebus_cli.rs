@@ -70,6 +70,13 @@ enum Request {
         config: ConfigParams,
         viewing_key: ViewingKeyGrant,
     },
+    Approve {
+        config: ConfigParams,
+        amount: String,
+    },
+    Allowance {
+        config: ConfigParams,
+    },
     /// Administrative funding helper required before a buyer can settle.
     Shield {
         config: ConfigParams,
@@ -289,6 +296,18 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let client = config.build()?;
             serialize(client.reveal(viewing_key).await?)
         }
+        Request::Approve { config, amount } => {
+            let client = config.build()?;
+            serialize(client.approve_pool(u128_value("amount", &amount)?).await?)
+        }
+        Request::Allowance { config } => {
+            let client = config.build()?;
+            let report = client.pool_allowance().await?;
+            serialize(serde_json::json!({
+                "allowance": report.allowance.to_string(),
+                "fee_per_write": report.fee_per_write.to_string(),
+            }))
+        }
         Request::Shield { config, amount } => {
             let client = config.build()?;
             serialize(client.shield(u128_value("amount", &amount)?).await?)
@@ -340,6 +359,7 @@ fn client_error_response(error: &ClientError) -> Response {
         | ClientError::InvalidOfferId(_)
         | ClientError::AmbiguousReverseChannel(_)
         | ClientError::Protocol(_)
+        | ClientError::Erc20(_)
         | ClientError::DiscoveryLimit(_) => ("INVALID_REQUEST", false),
         ClientError::KeyFile { .. }
         | ClientError::InvalidKey { .. }

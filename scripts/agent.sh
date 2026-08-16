@@ -14,8 +14,10 @@
 #   agent.sh <env> fund      <amount>                      -> approve + shield one note
 #   agent.sh <env> whoami                                  -> this identity's address
 #
-# Check `balance` before naming a price. Settlement spends an exact subset and creates no
-# change. One 1 STRK note can pay 1 STRK but not 0.9 STRK.
+# Check `balance` before naming a price. Settlement selects inputs that cover the price and
+# returns the remainder as payer-owned change, so any amount up to the spendable total is
+# payable. A standing pool allowance is a precondition for every charged write: see the
+# `approve` and `allowance` methods on erebus-cli.
 #
 # <env> is a file of KEY=VALUE lines: the repo .env for agent A, ~/.erebus-b/env for B, and
 # so on. It names the key files by path. Key values never appear in any argument here.
@@ -139,10 +141,21 @@ for network, accounts in json.loads(path.read_text()).items():
 sys.exit("no sncast account matches " + sys.argv[1] + "; set SNCAST_ACCOUNT")
 ' "$me")}"
 
-    low=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) & ((1<<128)-1)))' "$amount")
-    high=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) >> 128))' "$amount")
+    # The pool pulls twice from this account in the shield transaction: the deposit itself,
+    # and `collect_fee` before it applies anything (privacy.cairo:790). One allowance covers
+    # both, so approving only the deposit is short by exactly the fee. That was invisible
+    # while Sepolia charged nothing; it charges 2 STRK now and mainnet charges 6, and the
+    # shortfall surfaces as a bare Contract error naming nothing, which is F20 again.
+    #
+    # Read the fee rather than hard-coding it: it is pool storage that `set_fee_amount` can
+    # change, and it already differs per network.
+    fee=$(call allowance '{}' | field fee_per_write)
+    approve_amount=$(python3 -c 'import sys;print(int(sys.argv[1])+int(sys.argv[2]))' "$amount" "$fee")
 
-    echo "approving $amount for pool $pool as sncast account '$account'" >&2
+    low=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) & ((1<<128)-1)))' "$approve_amount")
+    high=$(python3 -c 'print(hex(int(__import__("sys").argv[1]) >> 128))' "$approve_amount")
+
+    echo "approving $approve_amount ($amount deposit + $fee fee) for pool $pool as sncast account '$account'" >&2
     tx=$(sncast --account "$account" invoke --url "$rpc" \
         --contract-address "$token" --function approve \
         --calldata "$pool" "$low" "$high" \

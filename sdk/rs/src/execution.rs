@@ -235,6 +235,61 @@ impl Executor {
         })
     }
 
+    /// Submits one signed account call that carries no proof.
+    ///
+    /// This is not a shortcut around [`Self::execute`] and must never be used for pool state
+    /// transitions. The pool's only state-changing entrypoint is `apply_actions`, which
+    /// verifies a proof; a call arriving here with pool calldata would simply revert. What it
+    /// exists for is the ERC-20 `approve` that has to land *before* a charged `apply_actions`,
+    /// which is an ordinary token call with no actions, no simulation, and no prover.
+    ///
+    /// Read `account_private_key` from its file immediately before calling. Not retained.
+    pub async fn submit_call(
+        &self,
+        account_private_key: Felt,
+        target: Felt,
+        entrypoint: &str,
+        call_calldata: &[Felt],
+    ) -> Result<CallReceipt, ExecutionError> {
+        let account_calldata = calldata::single_call(target, entrypoint, call_calldata);
+        let nonce = self
+            .rpc
+            .nonce(self.config.account_address, &BlockId::Latest)
+            .await?;
+
+        // Same two-pass shape as `execute`: estimate with a zero signature under
+        // SKIP_VALIDATE, then sign the invoke that carries the resulting bounds.
+        let estimate = submission_invoke(
+            &self.config,
+            account_calldata.clone(),
+            nonce,
+            ResourceBounds::default(),
+            Vec::new(),
+        )
+        .with_signature(Signature {
+            r: Felt::ZERO,
+            s: Felt::ZERO,
+        });
+        let bounds = self.rpc.estimate_bounds(&estimate, &BlockId::Latest).await?;
+
+        let invoke = submission_invoke(
+            &self.config,
+            account_calldata,
+            nonce,
+            bounds,
+            Vec::new(),
+        );
+        let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
+        let transaction = invoke.with_signature(signature);
+        let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;
+        let receipt = self.wait_for_receipt(transaction_hash).await?;
+
+        Ok(CallReceipt {
+            transaction_hash,
+            receipt,
+        })
+    }
+
     async fn wait_for_receipt(&self, transaction_hash: Felt) -> Result<Receipt, ExecutionError> {
         let started = Instant::now();
         loop {
@@ -357,6 +412,18 @@ pub struct ExecutionReceipt {
     pub transaction_hash: Felt,
     /// Historical block used by both preflight and proof.
     pub proving_block: u64,
+    /// Accepted Starknet receipt.
+    pub receipt: Receipt,
+}
+
+/// Result of a proofless account call.
+///
+/// Carries no proving block because [`Executor::submit_call`] anchors nothing: there is no
+/// simulation and no historical read, so there is no block for a caller to wait behind.
+#[derive(Debug)]
+pub struct CallReceipt {
+    /// Submitted transaction.
+    pub transaction_hash: Felt,
     /// Accepted Starknet receipt.
     pub receipt: Receipt,
 }

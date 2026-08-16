@@ -19,6 +19,7 @@ use crate::channel::{
 };
 use crate::decrypt;
 use crate::disclosure::{self, ViewingGrant};
+use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
 use crate::hashes;
 use crate::negotiation::{
@@ -159,6 +160,58 @@ impl Client {
             tx_hash: hex(receipt.transaction_hash),
             nullifiers: Vec::new(),
             proved_at: receipt.proving_block,
+        })
+    }
+
+    /// Grants the pool a standing STRK allowance against this account.
+    ///
+    /// Required before any charged `apply_actions`, because the pool pulls both deposits and
+    /// its own fee with `transfer_from` against the caller. See [`crate::erc20`] for why, and
+    /// friction.md F20 for what the missing allowance looks like from the outside.
+    ///
+    /// The spender is always the configured pool. There is no parameter for it: an agent that
+    /// could name its own spender could be talked into approving one, and no Erebus flow needs
+    /// to approve anything else.
+    ///
+    /// This overwrites any existing allowance rather than adding to it, which is what ERC-20
+    /// `approve` does. Read [`Self::pool_allowance`] first if the current value matters.
+    pub async fn approve_pool(&self, amount: u128) -> Result<ApprovalReceipt, ClientError> {
+        let account_key = read_key(&self.config.account_key_file, "account key")?;
+        let calldata = erc20::approve_calldata(self.config.pool_address, amount);
+        let receipt = self
+            .executor
+            .submit_call(account_key, self.config.token, "approve", &calldata)
+            .await?;
+        Ok(ApprovalReceipt {
+            tx_hash: hex(receipt.transaction_hash),
+            approved: amount,
+        })
+    }
+
+    /// The pool's current STRK allowance against this account, and the fee it charges.
+    ///
+    /// Both are live reads. The fee is pool storage that `set_fee_amount` can change, and it
+    /// already differs by network, so nothing should hard-code it.
+    pub async fn pool_allowance(&self) -> Result<AllowanceReport, ClientError> {
+        let allowance = self
+            .executor
+            .rpc()
+            .call_contract(
+                self.config.token,
+                "allowance",
+                &erc20::allowance_calldata(self.config.account_address, self.config.pool_address),
+                &BlockId::Latest,
+            )
+            .await?;
+        // `get_fee_amount` returns a bare `u128`, not a `u256`.
+        let fee = self.view("get_fee_amount", &[], &BlockId::Latest).await?;
+        let fee = one_felt("get_fee_amount", &fee)?;
+
+        Ok(AllowanceReport {
+            allowance: erc20::parse_u256("allowance", &allowance)?,
+            fee_per_write: u128::try_from(fee).map_err(|_| {
+                ClientError::Protocol(format!("get_fee_amount returned {fee:#x}, wider than u128"))
+            })?,
         })
     }
 
@@ -1064,6 +1117,37 @@ pub struct ChannelState {
     pub settled: bool,
 }
 
+/// Result of granting the pool an allowance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalReceipt {
+    /// The `approve` transaction.
+    pub tx_hash: String,
+    /// The allowance now standing, in token base units.
+    pub approved: u128,
+}
+
+/// What the pool may currently pull, and what each write costs.
+///
+/// `allowance` covers deposits and fees together, because both are `transfer_from` against the
+/// same account. A settlement that also shields therefore needs headroom for both.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AllowanceReport {
+    /// Standing allowance granted to the pool.
+    pub allowance: u128,
+    /// Live `get_fee_amount`. Zero on a pool that charges nothing.
+    pub fee_per_write: u128,
+}
+
+impl AllowanceReport {
+    /// Whether the standing allowance covers `writes` charged calls plus `deposits` of value.
+    pub fn covers(&self, writes: u32, deposits: u128) -> bool {
+        self.fee_per_write
+            .checked_mul(u128::from(writes))
+            .and_then(|fees| fees.checked_add(deposits))
+            .is_some_and(|needed| self.allowance >= needed)
+    }
+}
+
 /// What an identity can pay now, and what it will be able to pay shortly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteBalance {
@@ -1506,6 +1590,9 @@ pub enum ClientError {
     /// Caller input was malformed.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// An ERC-20 return value was malformed.
+    #[error(transparent)]
+    Erc20(#[from] Erc20Error),
     /// A key file could not be read.
     #[error("cannot read {kind} file {}: {source}", path.display())]
     KeyFile {
@@ -1633,6 +1720,36 @@ mod tests {
             InternalOfferId::new(Author::Counterparty, 9)
         );
         assert!(parse_offer_id(&second, &id).is_err());
+    }
+
+    #[test]
+    fn an_allowance_must_cover_every_charged_write_plus_the_deposit() {
+        // Mainnet numbers: 6 STRK per apply_actions.
+        let report = AllowanceReport {
+            allowance: 20_000_000_000_000_000_000,
+            fee_per_write: 6_000_000_000_000_000_000,
+        };
+        assert!(report.covers(3, 0), "18 STRK of fees fits in 20");
+        assert!(!report.covers(4, 0), "24 STRK of fees does not");
+        assert!(
+            !report.covers(3, 3_000_000_000_000_000_000),
+            "the deposit shares the same allowance as the fees"
+        );
+
+        // A pool that charges nothing still needs allowance for the deposit itself.
+        let free = AllowanceReport {
+            allowance: 0,
+            fee_per_write: 0,
+        };
+        assert!(free.covers(9, 0));
+        assert!(!free.covers(0, 1));
+
+        // Overflow is not a pass.
+        let wide = AllowanceReport {
+            allowance: u128::MAX,
+            fee_per_write: u128::MAX,
+        };
+        assert!(!wide.covers(2, 0));
     }
 
     #[test]
