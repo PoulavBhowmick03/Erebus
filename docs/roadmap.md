@@ -201,28 +201,20 @@ pool key. The route matches the [STRK20 SDK model](https://strk20-by-example.org
 
 ### Private and public data
 
-| Private from a public chain reader | Public or visible to infrastructure |
-|---|---|
-| Wire-v2 offer content | The submitting Starknet account |
-| Private transfer amount and recipient | Pool interaction timing and frequency |
-| Spent-note identity | Public shield and unshield amounts |
-| Channel content without a grant | The fixed fifth-salt shape in wire v2 |
-| Other relationships outside a scoped grant | Pool usage and proof-bearing transaction size |
-| Change amount and change-note content | Whether a settlement created payer change |
+**Canonical source: [privacy-model.md](./privacy-model.md).** It carries the per-step and
+per-category leak tables, the four known leaks in severity order, the infrastructure that sees
+the pool key, and what a disclosed record proves versus asserts. Maintain it there; this
+section keeps only what the roadmap needs to plan against.
 
-The change note added on `change_output_payback` widens the last row. A settlement creates six
-notes when the payer holds an exact subset and seven when it does not, so note count leaks one
-bit about the payer's holdings on every deal. The amounts stay private. This compounds the
-fifth-salt shape already listed above, because both let a reader classify and count Erebus
-transactions without reading one. Record it against F31 rather than as a separate finding.
+The four leaks, in the order they should be worked:
 
-The prover and preflight RPC receive the pool key in `compile_actions` calldata. They can
-derive the identity history. The submitted `apply_actions` transaction does not contain that
-key.
-
-The account signing key stays in the Rust process. The Python process passes only its file
-path. The Python process does handle bearer viewing grants, so MCP transcripts belong inside
-the disclosure trust boundary.
+1. **The fifth-salt fingerprint** — 59 zero-filled bits give every message a constant shape.
+   Fix is random padding. F31.
+2. **Submission linkability** — every write is signed by a public account, so the interaction
+   graph is readable without decrypting anything. Needs unlinkable submission; not designed.
+3. **The public funding leg** — shielding is a real ERC-20 transfer. No fix within this design.
+4. **Note count on settlement** — six notes on an exact subset, seven with change, leaking one
+   bit about payer holdings per deal. Fix is a constant-count zero-valued change note.
 
 Deposit screening is enforced by the pool. A self-hosted prover does not remove that
 requirement. Selective disclosure reveals data for a legitimate request, but it does not

@@ -3,6 +3,13 @@
 > **Not yet line-reviewed.** This harness is evidence about the supplied fixtures,
 > not an external cryptographic review or fresh live wire-v2 settlement.
 
+> The overall privacy boundary lives in [privacy-model.md](./privacy-model.md). This file is
+> the harness result only.
+>
+> **Known defect:** the version classifier labels wire-v1 traffic as wire v2. The recovery
+> results below are unaffected — v1 content is recovered and v2 content is not — but the
+> version label the harness prints is not trustworthy.
+
 The no-key observer in `scripts/observer.py` has a positive control: it reconstructs the
 known wire-v1 acceptance from four public salt halves. Against the static wire-v2 fixture,
 the same public recovery attack finds no plausible transcript. The observer therefore does

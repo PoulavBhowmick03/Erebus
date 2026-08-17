@@ -153,6 +153,10 @@ itself evidence that the Rust, prover, RPC, or pool path ran.
 
 ### Privacy scope and limits
 
+**Canonical source: [docs/privacy-model.md](./docs/privacy-model.md)**, which carries the
+per-step and per-category leak tables and the four known leaks in severity order. What follows
+is the source-cited version of the same boundary.
+
 Wire v2 encrypts and authenticates negotiation contents before placing ciphertext fragments
 in public salts ([`sdk/rs/src/wire.rs:3-17`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L3-L17), [`sdk/rs/src/wire.rs:29-35`](https://github.com/PoulavBhowmick03/Erebus/blob/main/sdk/rs/src/wire.rs#L29-L35)). Note discovery is
 keyed: someone without the channel key cannot directly compute the locations the reader asks
