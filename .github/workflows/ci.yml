@@ -1,0 +1,133 @@
+name: CI
+
+# Two things this file is deliberately strict about, both because every failure mode in
+# this protocol is silent:
+#
+# 1. The Python binding tests skip themselves when `erebus-cli` is absent
+#    (`sdk/py/tests/test_seam.py` `pytestmark`). A CI run that never built the binary would
+#    report green while testing nothing, so the python job asserts the binary is present
+#    before pytest runs.
+# 2. Warnings are errors. A wrong hash preimage writes to a storage slot nobody reads and
+#    raises nothing, so the compiler is one of the few places a mistake surfaces cheaply.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rs
+
+      - name: Format
+        working-directory: sdk/rs
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: sdk/rs
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: sdk/rs
+        # Ignored tests are live-prover probes and the F31 fingerprint target. They need a
+        # network and a fix respectively, so they stay out of CI.
+        run: cargo test --all-targets
+
+      - name: Docs
+        working-directory: sdk/rs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Build the CLI the Python binding shells out to
+        working-directory: sdk/rs
+        run: cargo build --bin erebus-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erebus-cli-linux
+          path: sdk/rs/target/debug/erebus-cli
+          if-no-files-found: error
+          retention-days: 7
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    needs: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: erebus-cli-linux
+          path: sdk/rs/target/debug
+
+      - name: Make the CLI executable
+        run: chmod +x sdk/rs/target/debug/erebus-cli
+
+      - name: Assert the binding has something to bind to
+        # Without this, a lost artifact turns every sdk/py test into a silent skip and the
+        # job still reports success.
+        run: |
+          test -x sdk/rs/target/debug/erebus-cli \
+            || { echo "erebus-cli missing; sdk/py tests would skip and CI would pass empty"; exit 1; }
+          ./sdk/rs/target/debug/erebus-cli <<< '{"method":"version"}'
+
+      - name: Install the workspace
+        # Plain `uv sync` skips workspace members' editable installs, so the erebus-*
+        # packages would not be importable. See CLAUDE.md.
+        run: uv sync --all-packages
+
+      - name: Test
+        # -rs reports skips in the log so a silent skip is visible in review even when the
+        # guard above passes.
+        run: uv run pytest -rs
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Not covered, and deliberately not faked with a job that would report green anyway:
+#
+# - `sdk/ts`. It builds against a sibling checkout of `starkware-libs/starknet-privacy`
+#   published to GitHub Packages rather than npmjs (friction F8), so it cannot be built from
+#   a bare checkout. The TypeScript oracle is run by hand during a differential pass. A job
+#   gated on a token that may not exist would look like coverage without being coverage.
+# - Cairo probes. They run inside an upstream checkout under `#[cfg(test)]` and have no
+#   standalone harness here (contracts/README.md).
+# - Anything needing the prover or a funded account. Live probes stay `#[ignore]`d.
