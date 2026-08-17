@@ -100,6 +100,11 @@ impl Executor {
         &self.rpc
     }
 
+    /// The proving service, used by pre-flight reachability checks.
+    pub fn prover(&self) -> &ProvingService {
+        &self.prover
+    }
+
     /// Waits until `state_block` can be observed by the configured historical proof anchor.
     ///
     /// A proof at `head - lag` cannot see a write from block `N` until the head reaches

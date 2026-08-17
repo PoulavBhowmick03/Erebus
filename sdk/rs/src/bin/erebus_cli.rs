@@ -77,6 +77,10 @@ enum Request {
     Allowance {
         config: ConfigParams,
     },
+    /// Read-only pre-flight inspection and reports every fault in one run.
+    Doctor {
+        config: ConfigParams,
+    },
     /// Administrative funding helper required before a buyer can settle.
     Shield {
         config: ConfigParams,
@@ -306,6 +310,18 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             serialize(serde_json::json!({
                 "allowance": report.allowance.to_string(),
                 "fee_per_write": report.fee_per_write.to_string(),
+            }))
+        }
+        Request::Doctor { config } => {
+            let client = config.build()?;
+            let report = client.doctor().await;
+            // A report of faults is a successful inspection. `ok:false` is reserved for the
+            // inspection itself failing, so a caller can tell "I looked and found problems"
+            // apart from "I could not look".
+            serialize(serde_json::json!({
+                "ready": report.ready(),
+                "checks": report.checks,
+                "repairs": report.repairs(),
             }))
         }
         Request::Shield { config, amount } => {

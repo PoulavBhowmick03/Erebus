@@ -19,6 +19,7 @@ use crate::channel::{
 };
 use crate::decrypt;
 use crate::disclosure::{self, ViewingGrant};
+use crate::doctor::{Check, Report};
 use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
 use crate::hashes;
@@ -165,6 +166,223 @@ impl Client {
             selected_input: None,
             change: None,
         })
+    }
+
+    /// Inspects configuration, identity, and chain state before anything is spent.
+    ///
+    /// Read-only and never returns `Err` for a failed inspection: a `doctor` that stops at the
+    /// first problem makes an operator repair and rerun once per fault. Transport failures are
+    /// recorded as checks, so one run reports everything wrong at once.
+    ///
+    /// Ordered so that a failure explains the skips beneath it. Files first because they need
+    /// no network, then the endpoints, then the pool, then this identity's position in it.
+    pub async fn doctor(&self) -> Report {
+        let mut checks = Vec::new();
+
+        checks.push(check_key_file(&self.config.pool_key_file, "pool_key_file"));
+        checks.push(check_key_file(
+            &self.config.account_key_file,
+            "account_key_file",
+        ));
+        checks.push(check_state_dir(&self.config.state_dir));
+
+        let rpc_live = match self.executor.rpc().block_number().await {
+            Ok(block) => {
+                checks.push(Check::pass("rpc", format!("reachable, head is block {block}")));
+                true
+            }
+            Err(error) => {
+                checks.push(Check::fail(
+                    "rpc",
+                    format!("unreachable: {error}"),
+                    "check STARKNET_RPC_URL. Writes need an operator-controlled node, because \
+                     compile_actions sends the pool key as calldata",
+                ));
+                false
+            }
+        };
+
+        checks.push(match self.executor.prover().spec_version().await {
+            Ok(version) => Check::pass("prover", format!("reachable, spec {version}")),
+            Err(error) => Check::fail(
+                "prover",
+                format!("unreachable: {error}"),
+                "check PROVING_SERVICE_URL. Without a prover there is no proof, and \
+                 apply_actions reverts on EMPTY_PROOF_FACTS",
+            ),
+        });
+
+        if !rpc_live {
+            for name in ["chain_id", "pool", "registration", "allowance", "gas_balance"] {
+                checks.push(Check::skipped(name, "needs a reachable RPC"));
+            }
+            return Report { checks };
+        }
+
+        checks.push(self.check_chain_id().await);
+        checks.push(self.check_pool().await);
+        checks.push(self.check_registration().await);
+
+        let (allowance, gas) = self.check_funding().await;
+        checks.push(allowance);
+        checks.push(gas);
+
+        Report { checks }
+    }
+
+    async fn check_chain_id(&self) -> Check {
+        match self.executor.rpc().chain_id().await {
+            Err(error) => Check::skipped("chain_id", format!("could not read: {error}")),
+            Ok(live) if live == self.config.chain_id => {
+                Check::pass("chain_id", format!("{live:#x}, matches configuration"))
+            }
+            Ok(live) => Check::fail(
+                "chain_id",
+                format!(
+                    "configured {:#x} but the RPC serves {live:#x}",
+                    self.config.chain_id
+                ),
+                "point STARKNET_RPC_URL at the configured chain, or fix STARKNET_CHAIN_ID. \
+                 The chain id is part of every channel-key preimage, so a mismatch derives \
+                 slots nobody wrote to and every read returns not-found",
+            ),
+        }
+    }
+
+    async fn check_pool(&self) -> Check {
+        let version = self.view("get_version", &[], &BlockId::Latest).await;
+        let Ok(version) = version.and_then(|values| one_felt("get_version", &values)) else {
+            return Check::fail(
+                "pool",
+                format!("no pool answered at {:#x}", self.config.pool_address),
+                "check POOL_ADDRESS against the deployment for this chain",
+            );
+        };
+        let validity = self
+            .view("get_proof_validity_blocks", &[], &BlockId::Latest)
+            .await
+            .and_then(|values| one_felt("get_proof_validity_blocks", &values))
+            .map(|felt| felt.to_string())
+            .unwrap_or_else(|_| "unknown".to_owned());
+        Check::pass(
+            "pool",
+            format!(
+                "live at {:#x}, version felt {version:#x}, proof validity {validity} blocks",
+                self.config.pool_address
+            ),
+        )
+    }
+
+    async fn check_registration(&self) -> Check {
+        let Ok((identity, _)) = self.pool_identity() else {
+            return Check::skipped("registration", "the pool key file could not be read");
+        };
+        match self.registered_public_key(identity.address()).await {
+            Err(error) => Check::skipped("registration", format!("could not read: {error}")),
+            Ok(registered) if registered == Felt::ZERO => Check::fail(
+                "registration",
+                "this address has no pool public key".to_owned(),
+                "run `shield` once. Registration only happens folded into an action set, and \
+                 an unregistered address cannot be a channel counterparty",
+            ),
+            Ok(registered) if registered != identity.public_key() => Check::fail(
+                "registration",
+                format!(
+                    "the pool holds {registered:#x} for this address, but the key file derives \
+                     {:#x}",
+                    identity.public_key()
+                ),
+                "point POOL_KEY_FILE at the key this address registered with. Registration is \
+                 write-once and cannot be replaced",
+            ),
+            Ok(_) => Check::pass("registration", "registered, and the key file agrees"),
+        }
+    }
+
+    /// Allowance and public gas balance together, because both are read from the same token
+    /// and both fail the same write for reasons an operator will confuse otherwise.
+    async fn check_funding(&self) -> (Check, Check) {
+        let report = match self.pool_allowance().await {
+            Ok(report) => report,
+            Err(error) => {
+                return (
+                    Check::skipped("allowance", format!("could not read: {error}")),
+                    Check::skipped("gas_balance", "the token could not be read"),
+                );
+            }
+        };
+
+        let allowance = if report.fee_per_write == 0 {
+            Check::pass(
+                "allowance",
+                format!(
+                    "{} granted; this pool charges no fee, so only deposits consume it",
+                    report.allowance
+                ),
+            )
+        } else if !report.covers(1, 0) {
+            Check::fail(
+                "allowance",
+                format!(
+                    "{} granted, below the {} fee this pool charges per write",
+                    report.allowance, report.fee_per_write
+                ),
+                "run the `approve` method, sized for the writes you plan plus any deposit. \
+                 Without it apply_actions reverts inside collect_fee with a bare Contract error",
+            )
+        } else if !report.covers(5, 0) {
+            Check::warn(
+                "allowance",
+                format!(
+                    "{} granted, about {} writes at the current {} fee",
+                    report.allowance,
+                    report.allowance / report.fee_per_write,
+                    report.fee_per_write
+                ),
+                "top up with `approve` before a long run. approve replaces the standing \
+                 allowance rather than adding to it",
+            )
+        } else {
+            Check::pass(
+                "allowance",
+                format!(
+                    "{} granted, about {} writes at the current {} fee",
+                    report.allowance,
+                    report.allowance / report.fee_per_write,
+                    report.fee_per_write
+                ),
+            )
+        };
+
+        let gas = match self
+            .executor
+            .rpc()
+            .call_contract(
+                self.config.token,
+                "balanceOf",
+                &erc20::balance_of_calldata(self.config.account_address),
+                &BlockId::Latest,
+            )
+            .await
+            .map_err(ClientError::from)
+            .and_then(|values| Ok(erc20::parse_u256("balanceOf", &values)?))
+        {
+            Err(error) => Check::skipped("gas_balance", format!("could not read: {error}")),
+            Ok(0) => Check::fail(
+                "gas_balance",
+                "this account holds no public token balance".to_owned(),
+                "fund the account. The allowance is permission to pull, not funds to pull \
+                 from, and gas is paid from the same balance",
+            ),
+            Ok(balance) if balance < report.fee_per_write.saturating_mul(3) => Check::warn(
+                "gas_balance",
+                format!("{balance} public balance, a few writes at the current fee"),
+                "fund the account before a long run",
+            ),
+            Ok(balance) => Check::pass("gas_balance", format!("{balance} public balance")),
+        };
+
+        (allowance, gas)
     }
 
     /// Grants the pool a standing STRK allowance against this account.
@@ -1545,6 +1763,69 @@ fn check_note_token(packed: Felt, stored: Felt, expected: Felt) -> Result<(), Cl
         )));
     }
     Ok(())
+}
+
+/// Inspects one private-key file: present, parseable, and not readable by other users.
+///
+/// Permissions are checked because a key file is only a secret while the filesystem says so,
+/// and a mode that widened during a copy or a container build is invisible until it matters.
+fn check_key_file(path: &PathBuf, name: &'static str) -> Check {
+    let display = path.display();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Check::fail(
+            name,
+            format!("{display} cannot be read"),
+            format!("point {name} at an existing key file, or create one with generate_pool_key"),
+        );
+    };
+    if Felt::from_hex(text.trim()).is_err() {
+        return Check::fail(
+            name,
+            format!("{display} does not contain a hex felt"),
+            format!("{name} must hold a single 0x-prefixed felt and nothing else"),
+        );
+    }
+    match file_mode(path) {
+        Some(mode) if mode & 0o077 != 0 => Check::warn(
+            name,
+            format!("{display} is mode {:o}, readable beyond its owner", mode & 0o777),
+            format!("chmod 600 {display}"),
+        ),
+        _ => Check::pass(name, format!("{display} present and owner-only")),
+    }
+}
+
+fn check_state_dir(path: &PathBuf) -> Check {
+    let display = path.display();
+    if !path.is_dir() {
+        return Check::warn(
+            "state_dir",
+            format!("{display} does not exist yet"),
+            "no action needed; the first write creates it with mode 0700".to_owned(),
+        );
+    }
+    match file_mode(path) {
+        Some(mode) if mode & 0o077 != 0 => Check::warn(
+            "state_dir",
+            format!("{display} is mode {:o}, open beyond its owner", mode & 0o777),
+            format!("chmod 700 {display}. Channel state is not key material, but it names \
+                     counterparties and amounts"),
+        ),
+        _ => Check::pass("state_dir", format!("{display} present and owner-only")),
+    }
+}
+
+#[cfg(unix)]
+fn file_mode(path: &PathBuf) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).ok().map(|data| data.permissions().mode())
+}
+
+/// Windows has no mode bits, so the permission arm of these checks is skipped rather than
+/// guessed at. Presence and parseability still apply.
+#[cfg(not(unix))]
+fn file_mode(_path: &PathBuf) -> Option<u32> {
+    None
 }
 
 fn read_key(path: &PathBuf, kind: &'static str) -> Result<Felt, ClientError> {

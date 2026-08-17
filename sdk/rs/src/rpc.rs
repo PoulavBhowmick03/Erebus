@@ -38,6 +38,16 @@ impl StarknetRpc {
             .ok_or_else(|| RpcError::Malformed(format!("block number was not a u64: {value}")))
     }
 
+    /// The chain id this endpoint serves.
+    ///
+    /// Worth reading rather than trusting configuration: pointing a Sepolia key file at a
+    /// mainnet RPC produces valid-looking derivations against the wrong chain, and every
+    /// resulting failure is a "not found" rather than an error.
+    pub async fn chain_id(&self) -> Result<Felt, RpcError> {
+        let value = self.call("starknet_chainId", json!([])).await?;
+        parse_felt("chain_id", &value)
+    }
+
     /// Contract nonce at `block_id`.
     pub async fn nonce(&self, address: Felt, block_id: &BlockId) -> Result<Felt, RpcError> {
         let value = self

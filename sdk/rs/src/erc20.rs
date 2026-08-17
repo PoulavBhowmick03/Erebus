@@ -32,6 +32,14 @@ pub fn allowance_calldata(owner: Felt, spender: Felt) -> Vec<Felt> {
     vec![owner, spender]
 }
 
+/// `balanceOf(account)` calldata.
+///
+/// This reads the *public* token balance, which pays gas and the pool fee. It is unrelated to
+/// the shielded note balance, and an identity can have plenty of one and none of the other.
+pub fn balance_of_calldata(account: Felt) -> Vec<Felt> {
+    vec![account]
+}
+
 /// Reads a Cairo `u256` return value as a `u128`.
 ///
 /// Errors rather than saturating when the high limb is set. An allowance that large did not

@@ -267,6 +267,57 @@ fn a_malformed_memo_hash_names_the_field() {
     }
 }
 
+/// `doctor` exists so an operator learns about a broken setup before paying for a proof. A
+/// version that stopped at the first fault would make that one repair-and-rerun cycle per
+/// fault, so an unreachable endpoint must still produce a full report.
+#[test]
+fn doctor_reports_every_fault_in_one_run_rather_than_stopping_at_the_first() {
+    let request = serde_json::json!({
+        "method": "doctor",
+        "params": {
+            "config": config("doctor", "/definitely/not/a/pool-key", "/definitely/not/an/account-key")
+        }
+    });
+    let (response, ok) = run(&request.to_string());
+
+    // Finding faults is a successful inspection. `ok:false` would mean doctor itself broke.
+    assert!(ok, "an inspection that finds problems still succeeded");
+    let result = &response["result"];
+    assert_eq!(result["ready"], false, "nothing about this config is usable");
+
+    let checks = result["checks"].as_array().expect("checks array");
+    assert!(
+        checks.len() >= 5,
+        "one unreachable RPC must not truncate the report, got {} checks",
+        checks.len()
+    );
+
+    // The missing key files are reachable without a network, so they must be reported even
+    // though every endpoint in this config is dead.
+    let named: Vec<&str> = checks
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect();
+    for expected in ["pool_key_file", "account_key_file", "rpc", "prover"] {
+        assert!(named.contains(&expected), "{expected} missing from {named:?}");
+    }
+
+    // The point of the whole module: every unhealthy check hands back an action.
+    for check in checks {
+        let status = check["status"].as_str().unwrap_or_default();
+        if status == "pass" {
+            assert!(check.get("repair").is_none());
+        } else if status != "skipped" {
+            assert!(
+                check["repair"].as_str().is_some_and(|text| !text.is_empty()),
+                "{} is {status} with no repair instruction",
+                check["name"]
+            );
+        }
+    }
+    assert!(!result["repairs"].as_array().expect("repairs").is_empty());
+}
+
 #[test]
 fn legacy_open_channel_shape_fails_loudly() {
     let (response, ok) = run(r#"{"method":"open_channel","params":{
