@@ -219,3 +219,32 @@ class Seam:
     def shield(self, amount: str) -> dict[str, Any]:
         """Administrative funding helper. Outside the seven negotiation methods."""
         return self.call("shield", self._with_config({"amount": amount}))
+
+    # --- Operator health and repair -------------------------------------------------
+
+    def doctor(self) -> dict[str, Any]:
+        """Inspects the operator configuration and returns what blocks a write.
+
+        Returns ``ready``, ``checks``, and ``repairs``. A report full of faults is still a
+        successful call: ``ok:false`` is reserved for the inspection itself failing, so a
+        caller can tell "I looked and found problems" apart from "I could not look".
+
+        Each unhealthy check carries a ``repair`` string naming one direct action.
+        """
+        return self.call("doctor", self._with_config({}))
+
+    def allowance(self) -> dict[str, Any]:
+        """Reads the pool's ERC-20 allowance and the per-write fee.
+
+        Both values are decimal strings. `apply_actions` charges a fee before applying
+        anything, so an exhausted allowance reverts with a bare `Contract error`.
+        """
+        return self.call("allowance", self._with_config({}))
+
+    def approve(self, amount: str) -> dict[str, Any]:
+        """Grants the pool an ERC-20 allowance. Submits a transaction and costs gas.
+
+        `amount` is a decimal string for the same reason every other amount is: a u128 does
+        not survive a JSON number.
+        """
+        return self.call("approve", self._with_config({"amount": amount}))
