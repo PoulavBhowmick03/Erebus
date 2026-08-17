@@ -330,6 +330,8 @@ interface SettlementReceipt {
   txHash: string;
   nullifiers: string[];
   provedAt: number;
+  selectedInput?: string;    // value of the notes spent; absent for shielding
+  change?: string;           // value returned to the payer; "0" when the notes were exact
 }
 
 interface ViewingKeyGrant {
