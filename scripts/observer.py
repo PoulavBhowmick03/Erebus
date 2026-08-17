@@ -10,8 +10,6 @@ a Sepolia transaction hash or a JSON fixture containing ``calldata``:
 Content recovery and traffic classification are separate findings. This script implements
 the public wire-v1 codec as a positive control. It never receives the wire-v2 channel key.
 The fifth-salt fingerprint uses only the public fixed-zero shape.
-
-Unreviewed.
 """
 
 from __future__ import annotations
