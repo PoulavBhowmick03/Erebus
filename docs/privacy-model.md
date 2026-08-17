@@ -14,9 +14,11 @@ Scope: the wire-v2 path as implemented in `sdk/rs`, on Sepolia. Not a security r
 public chain data cannot recover the amount, token, deadline, memo hash, message type, or
 reply structure of a negotiation, and cannot read the amount or recipient of the settlement.
 
-**Non-claim.** Erebus does not hide that a negotiation happened. It must not be described as
-private in an absolute sense. An observer can identify Erebus pool interactions, count them,
-time them, and attribute each to its submitting Starknet account.
+**Non-claim.** Erebus does not hide that a negotiation happened, and does not hide who it was
+with. It must not be described as private in an absolute sense. An observer can identify
+Erebus pool interactions, count them, time them, attribute each to its submitting Starknet
+account, and — at channel-open time — read the counterparty's address directly out of public
+calldata.
 
 Stated as one sentence, so it is quotable and hard to soften: **Erebus hides the terms, not
 the relationship.**
@@ -30,7 +32,7 @@ The seven steps are the ones in [runbook.md](./runbook.md) and the workflow walk
 | Step | Hidden | Public |
 |---|---|---|
 | 0 · fund | nothing | depositor account, amount, token, timing — the whole ERC-20 leg |
-| 1 · open channel | counterparty identity | submitting account, that a channel marker was written, timing |
+| 1 · open channel | the channel key | **the counterparty's address, in the clear** — plus the submitting account and timing |
 | 2–4 · offer, counter, final offer | amount, token, deadline, memo hash, message type, `replyTo` | submitting account, five salt values per message, note count, timing |
 | 5 · accept and settle | amount paid, recipient, change amount | submitting account, that a settlement occurred, note count (6 or 7) |
 | 6 · grant | everything — local only, no transaction | nothing |
@@ -54,7 +56,33 @@ is already on chain, which is why a grant costs no gas and leaves no trace.
 
 ---
 
-## The four known leaks, in descending severity
+## The five known leaks, in descending severity
+
+### 0. The counterparty address is in public calldata
+
+`open_channel` compiles to three server actions, and the first is
+
+```cairo
+ServerAction::Append(AppendInput { recipient_addr, enc_channel_info })
+```
+
+(`privacy.cairo:405-428` upstream). `recipient_addr` is a plain `ContractAddress` — it is the
+storage map key for the recipient's `EncChannelInfo` vector, so it cannot be hashed. Server
+actions are serialized directly into `apply_actions` calldata, which is public.
+
+The submitting account is public too. So at channel-open time, **"account X opened a channel
+to account Y" is written down in the clear**, once per direction. Since both directions must
+be opened for a conversation to work, the edge is recorded twice.
+
+This is not an inference from timing or padding, and no amount of wire-level encryption
+touches it. It is the strongest argument that relationship privacy needs a design, not a
+patch.
+
+The channel *key* stays private — `enc_channel_info` is encrypted to the recipient, and the
+other two actions write derived slots (`channel_marker`, `outgoing_channel_id`) whose
+preimages include the sender's private key. So an observer learns the edge, not the contents.
+
+Tracked as friction F38.
 
 ### 1. The fifth-salt fingerprint
 
@@ -77,10 +105,17 @@ Every write is an `apply_actions` transaction signed by a public Starknet accoun
 account that opens a channel, the account that writes each offer, and the account that
 settles are all visible and all the same identity across one deal.
 
-Combined with leak 1, an observer who cannot read a single term can still build the
-interaction graph: which accounts negotiate with which, how often, and when.
+Combined with leak 1, an observer who cannot read a single term can still count and time an
+account's deal flow. Combined with leak 0, they do not need to infer the counterparty at all.
 
-**Fix**: unlinkable submission — relayers, or account rotation per deal. Not designed.
+**Fix**: unlinkable submission. The pool permits this today and it needs no protocol change —
+`get_caller_address()` appears exactly once in the entire contract, inside `collect_fee`, and
+nothing binds the transaction submitter to the pool identity whose actions are being applied
+(`privacy.cairo:782-799, 841-852`). The identity lives in the proof; the submitter only pays.
+So a relayer can submit on a participant's behalf.
+
+That hides *who submitted*. It does not hide leak 0's recipient address, so relaying is a
+partial mitigation and not a fix on its own. Not implemented either way.
 
 ### 3. The public funding leg
 

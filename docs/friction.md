@@ -8,6 +8,59 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F38: `open_channel` writes the counterparty's address in public calldata (2026-08-17)
+
+Found while investigating whether a claim-link flow could avoid giving the claim identity its
+own funded Starknet account. Not a bug in the pool — a design consequence we had not written
+down, and had documented the opposite of.
+
+**What we believed.** That the counterparty's identity was hidden, and that relationship
+exposure came from inferring the graph out of timing plus the F31 fingerprint. `roadmap.md`
+§4 listed "private transfer amount and recipient" as private, and the first draft of
+`privacy-model.md` listed "counterparty identity" as hidden at channel-open.
+
+**What the stack actually does.** `open_channel` compiles to three server actions, and the
+first one is (`privacy.cairo:405-428`):
+
+```cairo
+ServerAction::Append(AppendInput { recipient_addr, enc_channel_info })
+```
+
+`recipient_addr` is a plain `ContractAddress`. It has to be: it is the storage map key for the
+recipient's `EncChannelInfo` vector, so it cannot be a hash of anything the writer chooses.
+Server actions are serialized straight into `apply_actions` calldata, which is public. The
+submitting account is public as well.
+
+So the edge is written down: **account X opened a channel to account Y**, in the clear, once
+per direction — and since a conversation needs both directions opened, twice per pair.
+
+**Why we did not notice.** Every privacy analysis we had done was about the *salt lane*, where
+the negotiation content lives, because that is where F30 and F31 bit us. The channel-open
+action carries no negotiation content, so it never got the same scrutiny. The leak is not in
+the part of the wire we designed; it is in the part we inherited and treated as plumbing.
+
+**Whether we worked around it.** No. Nothing at the wire level can help — this is upstream of
+our encryption entirely. Two partial mitigations exist and neither is a fix:
+
+- A relayer can submit on a participant's behalf. The pool permits this today with no protocol
+  change: `get_caller_address()` appears exactly once in the whole contract, in `collect_fee`,
+  and nothing binds the submitter to the pool identity in the proof. That hides the *sender*
+  and leaves `recipient_addr` exposed.
+- Fresh identities per deal make each edge less informative, at the cost of F29's
+  one-channel-per-pair rule biting on every deal instead of once.
+
+**What would have made it easier.** A note in upstream's documentation that `Append` is the one
+server action carrying a caller-supplied address in the clear. The `ServerAction` enum
+documents each variant's mechanics accurately, but nothing flags the privacy asymmetry between
+`Append` and the `WriteOnce` variants beside it, and the asymmetry is not obvious from the
+names.
+
+**Where this bites the product.** It is now the largest single item in relationship privacy,
+and it is upstream of everything we control. Recorded in
+[privacy-model.md](./privacy-model.md) as leak 0, ahead of the fifth-salt fingerprint.
+
+---
+
 ## F1: A note has no payload field (P0.2)
 
 > **Revised 2026-07-26.** This entry originally concluded "notes cannot carry a
@@ -984,42 +1037,6 @@ channel is _our_ decision. Composed, they mean **two agents can transact exactly
 which is not a useful property. The protocol does not require it. Notes can keep being
 appended to a live channel, so the constraint is entirely in our
 terminal-`settled` rule and is the first thing to revisit after the MVP.
-
----
-
-Hi hello check one two three hi hello what I want you to do is that I have Fable five turned on for this function I want you to be completely honest with me completely honest with me## F31: Wire v2 hides what was negotiated, not that a negotiation happened (P1.3)
-
-Wire v2 closed F30 by encrypting the message under AES-256-GCM-SIV before fragmentation.
-Content confidentiality holds. Traffic confidentiality does not.
-
-The envelope is 536 bits (1 marker byte, 50 ciphertext, 16 tag) fragmented into five notes
-of 119 payload bits, which is 595 bits of capacity. The 59 spare bits are zero filled, so
-the fifth salt of every message has bits 60 through 118 clear and bit 119 pinned, whatever
-the message contains. Verified in `tests/wire_v2_fingerprint.rs`. A random 120-bit salt
-matches that shape with probability 2^-59, so the fifth salt almost always identifies an
-Erebus message.
-
-An observer reading pool calldata can therefore still enumerate negotiation messages, count
-rounds, time them, and attribute them to the submitting account, which is public. Deal
-cadence and counterparty timing are commercially useful on their own. A competitor watching
-a supplier does not need the prices to learn when that supplier is closing business.
-
-The marker byte is the same problem in smaller form. It sits outside the ciphertext at a
-fixed offset, and the legitimate reader does not need it because `StoredChannel` already
-carries `wire_version`.
-
-Filling the spare bits with random padding makes the fifth salt uniform over its range. An
-Erebus salt is then distinguishable only by the pinned bit 119, which roughly half of all
-ordinary random pool salts also carry, so messages sit inside a large anonymity set instead
-of standing alone. `every_salt_should_be_indistinguishable_from_a_random_one` is the target,
-kept ignored until then.
-
-The general shape of this is worth keeping. Encrypting a payload is the obvious half of
-confidentiality and the easy half to verify. Padding, framing and length are where the
-information leaks after the cryptography is correct, and none of it shows up in a test that
-only checks that plaintext round-trips.
-
----
 
 ## F30: The salt lane is public calldata, not a private payload lane (P1.3)
 

@@ -206,15 +206,24 @@ per-category leak tables, the four known leaks in severity order, the infrastruc
 the pool key, and what a disclosed record proves versus asserts. Maintain it there; this
 section keeps only what the roadmap needs to plan against.
 
-The four leaks, in the order they should be worked:
+The five leaks, in the order they should be worked:
 
+0. **The counterparty address is in public calldata.** `open_channel` emits
+   `ServerAction::Append(AppendInput { recipient_addr, ... })`, and `recipient_addr` is a
+   plaintext `ContractAddress` because it is a storage map key. The edge "X opened a channel to
+   Y" is written in the clear, twice per pair. Upstream of our encryption; no wire-level fix.
+   F38.
 1. **The fifth-salt fingerprint** — 59 zero-filled bits give every message a constant shape.
    Fix is random padding. F31.
-2. **Submission linkability** — every write is signed by a public account, so the interaction
-   graph is readable without decrypting anything. Needs unlinkable submission; not designed.
+2. **Submission linkability** — every write is signed by a public account. The pool already
+   permits relayed submission (nothing binds submitter to pool identity), which would hide the
+   sender but not leak 0's recipient. Not implemented.
 3. **The public funding leg** — shielding is a real ERC-20 transfer. No fix within this design.
 4. **Note count on settlement** — six notes on an exact subset, seven with change, leaking one
    bit about payer holdings per deal. Fix is a constant-count zero-valued change note.
+
+Leak 0 was found on 2026-08-17 and supersedes the earlier claim that the counterparty was
+private. The relationship-privacy work in Phase 10 is larger than it was scoped as.
 
 Deposit screening is enforced by the pool. A self-hosted prover does not remove that
 requirement. Selective disclosure reveals data for a legitimate request, but it does not
