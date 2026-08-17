@@ -296,5 +296,77 @@ def test_a_settlement_error_comes_back_as_parseable_structured_json(tmp_path):
     asyncio.run(run())
 
 
+def test_a_full_128_bit_memo_hash_survives_a_round_trip_as_hex(tmp_path):
+    """F37: the documented 128-bit range was unreachable by a conforming JSON caller.
+
+    JSON has one numeric type and it is an IEEE-754 double, so a bare number above 2**53 is
+    rounded before the server ever sees it. This value has bits set in the top half and in
+    the low bits, so any rounding in either direction changes it.
+    """
+    memo = 0xDEADBEEF_CAFEBABE_0123456789ABCDEF
+
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                written = await session.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 100,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": f"0x{memo:032x}",
+                    },
+                )
+                assert _structured(written)["ok"] is True
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                returned = state["result"]["offers"][0]["terms"]["memo_hash"]
+
+                # Hex on the way out too: a JSON number would be rounded by the client.
+                assert isinstance(returned, str)
+                assert int(returned, 16) == memo
+
+    asyncio.run(run())
+
+
+def test_an_oversized_or_malformed_memo_hash_is_refused_before_any_write(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                for bad in (f"0x{1 << 128:x}", "not-hex", ""):
+                    body = _structured(
+                        await session.call_tool(
+                            "propose_offer",
+                            {
+                                "channel_handle": handle,
+                                "amount": 100,
+                                "token": "0xtoken",
+                                "deadline": 9999999999,
+                                "memo_hash": bad,
+                            },
+                        )
+                    )
+                    assert body["ok"] is False, f"{bad!r} should be refused"
+                    assert body["error"]["code"] == "INVALID_REQUEST"
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["offers"] == []
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

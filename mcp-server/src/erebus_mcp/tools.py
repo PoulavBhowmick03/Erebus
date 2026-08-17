@@ -59,6 +59,35 @@ def register_tools(
             "pending_notes": balance.pending,
         }
 
+    def _parse_memo_hash(value: int | str) -> int:
+        """Accepts a memo hash as a hex string or an int, returns the int the seam wants.
+
+        JSON has one numeric type and it is an IEEE-754 double, so a client that emits a
+        large `memo_hash` as a bare number loses precision above 2**53 and Pydantic rejects
+        what arrives. The top of the documented 128-bit range was therefore unreachable by a
+        conforming JSON-RPC caller. A hex string carries all 128 bits exactly. See F37.
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("memo_hash is empty")
+            parsed = int(text, 16)
+        else:
+            parsed = value
+        if parsed < 0:
+            raise ValueError(f"memo_hash must not be negative, got {parsed}")
+        if parsed >= 1 << 128:
+            raise ValueError(
+                f"memo_hash must fit 128 bits, got a value of {parsed.bit_length()} bits"
+            )
+        return parsed
+
+    def _memo_hash_or_error(value: int | str) -> tuple[int | None, dict[str, Any] | None]:
+        try:
+            return _parse_memo_hash(value), None
+        except ValueError as e:
+            return None, _error(SettlementErrorCode.INVALID_REQUEST, str(e))
+
     async def _require_payable(amount: int) -> dict[str, Any] | None:
         outcome = await _call(client.note_balance())
         if not outcome["ok"]:
@@ -87,20 +116,28 @@ def register_tools(
 
     @server.tool()
     async def propose_offer(
-        channel_handle: str, amount: int, token: str, deadline: int, memo_hash: int
+        channel_handle: str, amount: int, token: str, deadline: int, memo_hash: int | str
     ) -> dict[str, Any]:
         """Write a new offer into the channel: amount in token base units, token address,
-        deadline as a unix timestamp, memo_hash as a 128-bit int (truncate your own hash to
-        the low 128 bits before calling because this field does not fit a full digest).
+        deadline as a unix timestamp, memo_hash as a hex string such as "0x9f2c..." holding
+        the low 128 bits of your own hash.
+
+        Pass memo_hash as a string. JSON numbers lose precision above 2**53, so a bare
+        number cannot carry the full 128 bits. Truncating a digest to 128 bits leaves about
+        2**64 collision resistance, so this field commits to off-chain detail and is not a
+        substitute for the document itself.
 
         If this server is configured as payer, the amount must not exceed its total
         spendable note value (call get_note_balance first); settlement returns any excess
         as change. Payee offers are asks and do not spend the payee's notes."""
+        memo, failure = _memo_hash_or_error(memo_hash)
+        if failure is not None:
+            return failure
         if settlement_role is SettlementRole.PAYER:
             failure = await _require_payable(amount)
             if failure is not None:
                 return failure
-        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
+        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo)
         outcome = await _call(client.propose_offer(channel_handle, terms))
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -113,18 +150,23 @@ def register_tools(
         amount: int,
         token: str,
         deadline: int,
-        memo_hash: int,
+        memo_hash: int | str,
     ) -> dict[str, Any]:
         """Write a counter-offer replying to a specific offer_id from the other party.
         Does not withdraw the offer you're replying to. It stays acceptable until it
         expires or is settled. Use a short deadline instead of trying to retract. A payer
         may only counter at or below its total spendable note value; a payee uses this to
-        leave the final seller-authored offer that the payer will accept."""
+        leave the final seller-authored offer that the payer will accept.
+
+        Pass memo_hash as a hex string, as in propose_offer."""
+        memo, failure = _memo_hash_or_error(memo_hash)
+        if failure is not None:
+            return failure
         if settlement_role is SettlementRole.PAYER:
             failure = await _require_payable(amount)
             if failure is not None:
                 return failure
-        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo_hash)
+        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo)
         outcome = await _call(client.counter_offer(channel_handle, reply_to, terms))
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -272,7 +314,9 @@ def _offer_to_json(offer: Any) -> dict[str, Any]:
             "amount": offer.terms.amount,
             "token": offer.terms.token,
             "deadline": offer.terms.deadline,
-            "memo_hash": offer.terms.memo_hash,
+            # Hex out for the same reason it comes in as hex: a 128-bit value emitted as a
+            # JSON number is silently rounded by any IEEE-754 client. See F37.
+            "memo_hash": f"0x{offer.terms.memo_hash:032x}",
         },
     }
 
