@@ -1,9 +1,14 @@
 [project]
 name = "erebus-sdk"
-version = "0.0.0"
+version = "0.0.1"
 description = "Thin Python binding over the Erebus Rust client, no protocol logic"
 requires-python = ">=3.11"
-dependencies = []
+# The binding shells out to `erebus-cli`, so an install without it resolves fine and then
+# fails on the first call. The binary ships as its own platform wheel.
+dependencies = ["erebus-cli"]
+
+[tool.uv.sources]
+erebus-cli = { workspace = true }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "erebus",
     "erebus-agents",
+    "erebus-cli",
     "erebus-mcp-server",
     "erebus-sdk",
 ]
@@ -231,7 +232,7 @@ wheels = [
 
 [[package]]
 name = "erebus"
-version = "0.0.0"
+version = "0.0.1"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -246,7 +247,7 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "erebus-agents"
-version = "0.0.0"
+version = "0.0.1"
 source = { editable = "agents" }
 dependencies = [
     { name = "erebus-mcp-server" },
@@ -268,8 +269,13 @@ requires-dist = [
 dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
+name = "erebus-cli"
+version = "0.0.1"
+source = { editable = "packaging/erebus-cli" }
+
+[[package]]
 name = "erebus-mcp-server"
-version = "0.0.0"
+version = "0.0.1"
 source = { editable = "mcp-server" }
 dependencies = [
     { name = "erebus-sdk" },
@@ -292,8 +298,11 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "erebus-sdk"
-version = "0.0.0"
+version = "0.0.1"
 source = { editable = "sdk/py" }
+dependencies = [
+    { name = "erebus-cli" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -301,6 +310,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "erebus-cli", editable = "packaging/erebus-cli" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
