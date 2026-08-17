@@ -160,6 +160,10 @@ impl Client {
             tx_hash: hex(receipt.transaction_hash),
             nullifiers: Vec::new(),
             proved_at: receipt.proving_block,
+            // A shield creates a note from public funds. It selects nothing and returns
+            // nothing, so these are absent rather than zero.
+            selected_input: None,
+            change: None,
         })
     }
 
@@ -974,6 +978,14 @@ impl ErebusClient for Client {
         lease.state_mut().settled = true;
         lease.commit()?;
 
+        // Report from the same selection the action set was built from, not from a fresh
+        // read. A later balance query anchors at a different block and would answer a
+        // different question.
+        let selected_input = selected
+            .notes
+            .iter()
+            .fold(0u128, |total, note| total.saturating_add(note.amount));
+
         Ok(SettlementReceipt {
             offer_id: Some(offer_id),
             tx_hash: hex(receipt.transaction_hash),
@@ -983,6 +995,8 @@ impl ErebusClient for Client {
                 .map(|note| hex(note.nullifier))
                 .collect(),
             proved_at: receipt.proving_block,
+            selected_input: Some(selected_input.to_string()),
+            change: Some(selected.change.to_string()),
         })
     }
 
@@ -1158,6 +1172,11 @@ pub struct NoteBalance {
 }
 
 /// Submitted settlement or administrative shielding receipt.
+///
+/// Amounts are decimal strings, not numbers. A `u128` of token base units routinely exceeds
+/// the JSON safe-integer range: one STRK is 1e18 and 2^53 is about 9.007e15, so any JavaScript
+/// consumer between here and the agent would round the value without erroring. `NoteBalance`
+/// already crosses the CLI boundary as strings for the same reason.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettlementReceipt {
     /// Settled offer; absent for administrative shielding.
@@ -1168,6 +1187,18 @@ pub struct SettlementReceipt {
     pub nullifiers: Vec<String>,
     /// Historical block the proof was anchored to.
     pub proved_at: u64,
+    /// Total value of the notes this settlement spent. Absent for shielding, which spends
+    /// nothing. Always at least the paid amount, because notes are indivisible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_input: Option<String>,
+    /// Value returned to the payer as a change note, `"0"` when the selected notes summed
+    /// exactly to the price. Absent for shielding.
+    ///
+    /// Absent and `"0"` mean different things: absent is "no selection happened", zero is
+    /// "a selection happened and left nothing over". Collapsing them would tell an agent that
+    /// a shield produced exact change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<String>,
 }
 
 /// Intentional secret export for out-of-band delivery.
@@ -1773,6 +1804,73 @@ mod tests {
         assert_eq!(with_change.notes[0].amount, 5);
         assert_eq!(with_change.change, 2);
         assert!(select_notes(&notes, 16).is_none());
+    }
+
+    /// The receipt reports selected input and change as separate numbers. They are only
+    /// meaningful together: value is conserved, so the notes spent must equal what was paid
+    /// plus what came back. If these ever drift, an agent reconciling its own balance from a
+    /// receipt is quietly wrong and nothing errors.
+    #[test]
+    fn selected_input_always_equals_the_paid_amount_plus_change() {
+        let note = |index, amount| ValueNote {
+            note: OwnedNote {
+                channel_key: Felt::ONE,
+                token: Felt::TWO,
+                index,
+            },
+            amount,
+            nullifier: Felt::from(index),
+        };
+        let holdings = [note(1, 7), note(2, 5), note(3, 3), note(4, 1)];
+
+        for target in 1..=16u128 {
+            let Some(selection) = select_notes(&holdings, target) else {
+                assert!(target > 16, "16 is the total, so anything at or under it is payable");
+                continue;
+            };
+            let selected_input = selection
+                .notes
+                .iter()
+                .fold(0u128, |total, note| total.saturating_add(note.amount));
+            assert_eq!(
+                selected_input,
+                target + selection.change,
+                "value is not conserved at target {target}"
+            );
+            assert!(
+                selected_input >= target,
+                "a selection must cover the price at target {target}"
+            );
+        }
+    }
+
+    /// Absent and zero are different facts. A shield selects nothing; a settlement that spent
+    /// exact notes selected something and kept nothing.
+    #[test]
+    fn a_shield_receipt_omits_the_selection_fields_rather_than_zeroing_them() {
+        let shield = SettlementReceipt {
+            offer_id: None,
+            tx_hash: "0x1".to_owned(),
+            nullifiers: Vec::new(),
+            proved_at: 1,
+            selected_input: None,
+            change: None,
+        };
+        let json = serde_json::to_value(&shield).expect("serializes");
+        assert!(json.get("selected_input").is_none());
+        assert!(json.get("change").is_none());
+
+        let settled = SettlementReceipt {
+            selected_input: Some(5_000_000_000_000_000_000u128.to_string()),
+            change: Some("0".to_owned()),
+            ..shield
+        };
+        let json = serde_json::to_value(&settled).expect("serializes");
+        // Strings, not numbers: 5e18 is past the JSON safe-integer range and a JavaScript
+        // consumer would round it without erroring.
+        assert_eq!(json["selected_input"], "5000000000000000000");
+        assert_eq!(json["change"], "0");
+        assert!(json["selected_input"].is_string());
     }
 
     #[test]

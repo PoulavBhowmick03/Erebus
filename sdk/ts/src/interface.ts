@@ -73,6 +73,19 @@ export interface SettlementReceipt {
   nullifiers: string[];
   /** Unix seconds. */
   provedAt: number;
+  /**
+   * Total value of the notes this settlement spent, in token base units.
+   *
+   * A decimal string rather than a number: one STRK is 1e18 and JavaScript's safe integer
+   * range stops at 2^53, so a number would round without erroring. Absent for the
+   * administrative shield helper, which selects nothing.
+   */
+  selectedInput?: string;
+  /**
+   * Value returned to the payer as a change note, `"0"` when the selected notes summed
+   * exactly to the price. Absent for shielding. Absent and `"0"` are different facts.
+   */
+  change?: string;
 }
 
 export interface ChannelState {
