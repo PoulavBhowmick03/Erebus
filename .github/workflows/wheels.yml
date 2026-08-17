@@ -1,0 +1,131 @@
+name: Wheels
+
+# Builds one platform wheel per target, each carrying an `erebus-cli` compiled for that
+# target. The Python binding resolves the binary with `shutil.which`, so the wheel installs
+# it into the environment's script directory rather than importing it.
+#
+# Runs on demand and on a version tag. Not on every push: three cross-builds per commit is
+# a lot of CI time for an artifact nobody consumes until a release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            # manylinux, not the runner's own libc version. A wheel tagged with the build
+            # machine's glibc would refuse to install on anything older.
+            wheel_platform: manylinux_2_17_x86_64.manylinux2014_x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            wheel_platform: macosx_11_0_arm64
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            wheel_platform: macosx_10_12_x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rs
+          key: ${{ matrix.target }}
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build erebus-cli
+        run: |
+          cargo build --release \
+            --bin erebus-cli \
+            --target ${{ matrix.target }} \
+            --manifest-path sdk/rs/Cargo.toml
+
+      - name: Stage the binary
+        run: |
+          mkdir -p packaging/erebus-cli/bin
+          cp "sdk/rs/target/${{ matrix.target }}/release/erebus-cli" \
+             packaging/erebus-cli/bin/erebus-cli
+          chmod +x packaging/erebus-cli/bin/erebus-cli
+
+      - name: Check the binary runs
+        # A cross-built binary that cannot execute is only detectable here. Skipped for the
+        # x86-64 macOS wheel, which is built on an x86-64 runner, so this always runs.
+        run: echo '{"method":"version"}' | packaging/erebus-cli/bin/erebus-cli
+
+      - name: Build the wheel
+        working-directory: packaging/erebus-cli
+        env:
+          EREBUS_WHEEL_PLATFORM: ${{ matrix.wheel_platform }}
+        # --out-dir is not optional: this is a uv workspace member, so without it the wheel
+        # lands in the workspace root's dist/ and every path below misses it.
+        run: uv build --wheel --out-dir dist
+
+      - name: Check the wheel is not tagged `any`
+        # A wheel carrying a compiled binary tagged `py3-none-any` would install on every
+        # platform and fail at the first call. The build hook forces the tag; this checks
+        # the hook actually ran.
+        run: |
+          for w in packaging/erebus-cli/dist/*.whl; do
+            echo "built: $w"
+            case "$w" in
+              *none-any.whl)
+                echo "::error::$w is platform-independent but carries a binary"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Install it into a clean environment and call it
+        run: |
+          uv venv /tmp/canary
+          uv pip install --python /tmp/canary/bin/python packaging/erebus-cli/dist/*.whl
+          test -x /tmp/canary/bin/erebus-cli \
+            || { echo "::error::the binary did not land on PATH"; exit 1; }
+          echo '{"method":"version"}' | /tmp/canary/bin/erebus-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: packaging/erebus-cli/dist/*.whl
+          if-no-files-found: error
+
+  collect:
+    name: Collect and checksum
+    runs-on: ubuntu-latest
+    needs: wheel
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksum
+        run: |
+          cd dist
+          sha256sum *.whl | tee SHA256SUMS
+          echo "--- wheels built ---"
+          ls -1 *.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-all
+          path: dist/
+          if-no-files-found: error
