@@ -124,7 +124,9 @@ def test_acceptor_is_the_payer_and_exact_notes_are_consumed(clients):
         assert excinfo.value.code == SettlementErrorCode.INSUFFICIENT_NOTES
 
         seller_offer = await seller.counter_offer(handle, buyer_offer, _terms(amount=150))
-        await buyer.accept_and_settle(handle, seller_offer)
+        receipt = await buyer.accept_and_settle(handle, seller_offer)
+        assert receipt.selected_input == 150
+        assert receipt.change == 0
         balance = await buyer.note_balance()
         assert balance.spendable == [100]
 
@@ -137,7 +139,9 @@ def test_settlement_change(clients):
     async def run():
         handle = await buyer.open_channel("0xseller")
         offer_id = await seller.propose_offer(handle, _terms(amount=120))
-        await buyer.accept_and_settle(handle, offer_id)
+        receipt = await buyer.accept_and_settle(handle, offer_id)
+        assert receipt.selected_input == 150
+        assert receipt.change == 30
         balance = await buyer.note_balance()
         assert sorted(balance.spendable) == [30, 100]
 

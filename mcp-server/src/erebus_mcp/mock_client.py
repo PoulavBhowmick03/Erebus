@@ -31,6 +31,8 @@ from erebus_mcp.interface import (
     ChannelState,
     DisclosedRecord,
     DisclosedSettlement,
+    DoctorCheck,
+    DoctorReport,
     ErebusError,
     NoteBalance,
     Offer,
@@ -299,6 +301,20 @@ class MockErebusClient:
             pending=sorted(self._pending_notes, reverse=True),
         )
 
+    async def doctor(self) -> DoctorReport:
+        self._maybe_raise_forced()
+        return DoctorReport(
+            ready=True,
+            checks=[
+                DoctorCheck(
+                    name="mock_backend",
+                    status="pass",
+                    detail="mock backend has no chain state to inspect",
+                )
+            ],
+            repairs=[],
+        )
+
     async def accept_and_settle(self, handle: ChannelHandle, offer_id: OfferId) -> SettlementReceipt:
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
@@ -351,6 +367,8 @@ class MockErebusClient:
             tx_hash="0x" + secrets.token_hex(32),
             nullifiers=["0x" + secrets.token_hex(32)],
             proved_at=now,
+            selected_input=target.terms.amount + change,
+            change=change,
         )
         channel["settlement"] = {
             "acceptance": offer_id,

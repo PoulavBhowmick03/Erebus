@@ -27,6 +27,8 @@ from erebus_mcp.interface import (
     ChannelState,
     DisclosedRecord,
     DisclosedSettlement,
+    DoctorCheck,
+    DoctorReport,
     ErebusError,
     NoteBalance,
     Offer,
@@ -71,6 +73,21 @@ def _offer(raw: dict[str, Any]) -> Offer:
         status=OfferStatus(raw["status"]),
         created_at=raw["created_at"],
         reply_to=raw.get("reply_to"),
+    )
+
+
+def _optional_amount(value: str | None) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _receipt(result: dict[str, Any]) -> SettlementReceipt:
+    return SettlementReceipt(
+        tx_hash=result["tx_hash"],
+        nullifiers=result.get("nullifiers", []),
+        proved_at=result["proved_at"],
+        offer_id=result.get("offer_id"),
+        selected_input=_optional_amount(result.get("selected_input")),
+        change=_optional_amount(result.get("change")),
     )
 
 
@@ -133,16 +150,24 @@ class SeamErebusClient:
             pending=[int(amount) for amount in result.get("pending", [])],
         )
 
+    async def doctor(self) -> DoctorReport:
+        result = await self._run(self._seam.doctor)
+        return DoctorReport(
+            ready=result["ready"],
+            checks=[
+                DoctorCheck(
+                    name=c["name"], status=c["status"], detail=c["detail"], repair=c.get("repair")
+                )
+                for c in result.get("checks", [])
+            ],
+            repairs=result.get("repairs", []),
+        )
+
     async def accept_and_settle(
         self, handle: ChannelHandle, offer_id: OfferId
     ) -> SettlementReceipt:
         result = await self._run(self._seam.accept_and_settle, handle, offer_id)
-        return SettlementReceipt(
-            tx_hash=result["tx_hash"],
-            nullifiers=result.get("nullifiers", []),
-            proved_at=result["proved_at"],
-            offer_id=result.get("offer_id"),
-        )
+        return _receipt(result)
 
     async def grant_viewing_key(
         self, handle: ChannelHandle, grantee: PublicKey
@@ -177,12 +202,7 @@ class SeamErebusClient:
         registers it with the pool.
         """
         result = await self._run(self._seam.shield, str(amount))
-        return SettlementReceipt(
-            tx_hash=result["tx_hash"],
-            nullifiers=result.get("nullifiers", []),
-            proved_at=result["proved_at"],
-            offer_id=result.get("offer_id"),
-        )
+        return _receipt(result)
 
 
 def _wire_terms(terms: OfferTerms) -> dict[str, Any]:

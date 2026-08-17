@@ -113,6 +113,79 @@ def test_balance_is_a_transport_only_configured_call(
     assert set(result) == {"notes", "total", "pending"}
 
 
+def test_doctor_is_a_transport_only_configured_call(
+    seam: Seam, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: dict[str, object] = {}
+
+    def answer(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.update(json.loads(kwargs["input"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(
+            args=[str(CLI)],
+            returncode=0,
+            stdout=(
+                '{"ok":true,"result":{"ready":true,"checks":'
+                '[{"name":"rpc_reachable","status":"pass","detail":"reached head 13095252"}],'
+                '"repairs":[]}}'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", answer)
+    result = seam.doctor()
+
+    assert sent["method"] == "doctor"
+    assert isinstance(sent["params"], dict)
+    assert "config" in sent["params"]  # type: ignore[operator]
+    assert set(result) == {"ready", "checks", "repairs"}
+
+
+def test_allowance_is_a_transport_only_configured_call(
+    seam: Seam, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: dict[str, object] = {}
+
+    def answer(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.update(json.loads(kwargs["input"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(
+            args=[str(CLI)],
+            returncode=0,
+            stdout='{"ok":true,"result":{"allowance":"2000000000000000000","fee_per_write":"0"}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", answer)
+    result = seam.allowance()
+
+    assert sent["method"] == "allowance"
+    assert isinstance(sent["params"], dict)
+    assert "config" in sent["params"]  # type: ignore[operator]
+    assert set(result) == {"allowance", "fee_per_write"}
+
+
+def test_approve_sends_amount_and_returns_a_receipt(
+    seam: Seam, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: dict[str, object] = {}
+
+    def answer(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.update(json.loads(kwargs["input"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(
+            args=[str(CLI)],
+            returncode=0,
+            stdout='{"ok":true,"result":{"tx_hash":"0xabc","approved":5000000000000000000}}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", answer)
+    result = seam.approve("5000000000000000000")
+
+    assert sent["method"] == "approve"
+    assert isinstance(sent["params"], dict)
+    assert sent["params"]["amount"] == "5000000000000000000"  # type: ignore[index]
+    assert set(result) == {"tx_hash", "approved"}
+
+
 # --- Failures arrive as structure, not as crashes -------------------------------
 
 

@@ -54,9 +54,9 @@ def register_tools(
 
     def _balance_json(balance: NoteBalance) -> dict[str, Any]:
         return {
-            "spendable_notes": balance.spendable,
-            "total": balance.total,
-            "pending_notes": balance.pending,
+            "spendable_notes": [str(n) for n in balance.spendable],
+            "total": str(balance.total),
+            "pending_notes": [str(n) for n in balance.pending],
         }
 
     def _parse_memo_hash(value: int | str) -> int:
@@ -88,6 +88,26 @@ def register_tools(
         except ValueError as e:
             return None, _error(SettlementErrorCode.INVALID_REQUEST, str(e))
 
+    def _parse_amount(value: int | str) -> int:
+        """Same precision problem as memo_hash: a base-unit amount routinely exceeds
+        2**53, so a bare JSON number can silently round. Accepts a decimal string or int."""
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("amount is empty")
+            parsed = int(text)
+        else:
+            parsed = value
+        if parsed <= 0:
+            raise ValueError(f"amount must be positive, got {parsed}")
+        return parsed
+
+    def _amount_or_error(value: int | str) -> tuple[int | None, dict[str, Any] | None]:
+        try:
+            return _parse_amount(value), None
+        except ValueError as e:
+            return None, _error(SettlementErrorCode.INVALID_REQUEST, str(e))
+
     async def _require_payable(amount: int) -> dict[str, Any] | None:
         outcome = await _call(client.note_balance())
         if not outcome["ok"]:
@@ -116,28 +136,31 @@ def register_tools(
 
     @server.tool()
     async def propose_offer(
-        channel_handle: str, amount: int, token: str, deadline: int, memo_hash: int | str
+        channel_handle: str, amount: int | str, token: str, deadline: int, memo_hash: int | str
     ) -> dict[str, Any]:
-        """Write a new offer into the channel: amount in token base units, token address,
-        deadline as a unix timestamp, memo_hash as a hex string such as "0x9f2c..." holding
-        the low 128 bits of your own hash.
+        """Write a new offer into the channel: amount as a decimal string in token base
+        units (JSON numbers lose precision above 2**53, well under a real STRK amount),
+        token address, deadline as a unix timestamp, memo_hash as a hex string such as
+        "0x9f2c..." holding the low 128 bits of your own hash.
 
-        Pass memo_hash as a string. JSON numbers lose precision above 2**53, so a bare
-        number cannot carry the full 128 bits. Truncating a digest to 128 bits leaves about
-        2**64 collision resistance, so this field commits to off-chain detail and is not a
-        substitute for the document itself.
+        Truncating a digest to 128 bits leaves about 2**64 collision resistance, so
+        memo_hash commits to off-chain detail and is not a substitute for the document
+        itself.
 
         If this server is configured as payer, the amount must not exceed its total
         spendable note value (call get_note_balance first); settlement returns any excess
         as change. Payee offers are asks and do not spend the payee's notes."""
+        parsed_amount, failure = _amount_or_error(amount)
+        if failure is not None:
+            return failure
         memo, failure = _memo_hash_or_error(memo_hash)
         if failure is not None:
             return failure
         if settlement_role is SettlementRole.PAYER:
-            failure = await _require_payable(amount)
+            failure = await _require_payable(parsed_amount)
             if failure is not None:
                 return failure
-        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo)
+        terms = OfferTerms(amount=parsed_amount, token=token, deadline=deadline, memo_hash=memo)
         outcome = await _call(client.propose_offer(channel_handle, terms))
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -147,7 +170,7 @@ def register_tools(
     async def counter_offer(
         channel_handle: str,
         reply_to: str,
-        amount: int,
+        amount: int | str,
         token: str,
         deadline: int,
         memo_hash: int | str,
@@ -158,15 +181,19 @@ def register_tools(
         may only counter at or below its total spendable note value; a payee uses this to
         leave the final seller-authored offer that the payer will accept.
 
-        Pass memo_hash as a hex string, as in propose_offer."""
+        Pass amount as a decimal string and memo_hash as a hex string, as in
+        propose_offer."""
+        parsed_amount, failure = _amount_or_error(amount)
+        if failure is not None:
+            return failure
         memo, failure = _memo_hash_or_error(memo_hash)
         if failure is not None:
             return failure
         if settlement_role is SettlementRole.PAYER:
-            failure = await _require_payable(amount)
+            failure = await _require_payable(parsed_amount)
             if failure is not None:
                 return failure
-        terms = OfferTerms(amount=amount, token=token, deadline=deadline, memo_hash=memo)
+        terms = OfferTerms(amount=parsed_amount, token=token, deadline=deadline, memo_hash=memo)
         outcome = await _call(client.counter_offer(channel_handle, reply_to, terms))
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -182,6 +209,24 @@ def register_tools(
         outcome = await _call(client.note_balance())
         if outcome["ok"]:
             outcome["result"] = _balance_json(outcome["result"])
+        return outcome
+
+    @server.tool()
+    async def doctor() -> dict[str, Any]:
+        """Pre-flight inspection of this identity's configuration and chain state. Always
+        safe to call: every check is a read. `ready: false` means a write will fail right
+        now; each unhealthy check carries a `repair` string naming one direct action."""
+        outcome = await _call(client.doctor())
+        if outcome["ok"]:
+            report = outcome["result"]
+            outcome["result"] = {
+                "ready": report.ready,
+                "checks": [
+                    {"name": c.name, "status": c.status, "detail": c.detail, "repair": c.repair}
+                    for c in report.checks
+                ],
+                "repairs": report.repairs,
+            }
         return outcome
 
     @server.tool()
@@ -232,6 +277,8 @@ def register_tools(
                 "tx_hash": receipt.tx_hash,
                 "nullifiers": receipt.nullifiers,
                 "proved_at": receipt.proved_at,
+                "selected_input": _amount_str(receipt.selected_input),
+                "change": _amount_str(receipt.change),
             }
         return outcome
 
@@ -303,6 +350,10 @@ def register_tools(
         return outcome
 
 
+def _amount_str(value: int | None) -> str | None:
+    return str(value) if value is not None else None
+
+
 def _offer_to_json(offer: Any) -> dict[str, Any]:
     return {
         "offer_id": offer.offer_id,
@@ -311,7 +362,7 @@ def _offer_to_json(offer: Any) -> dict[str, Any]:
         "reply_to": offer.reply_to,
         "created_at": offer.created_at,
         "terms": {
-            "amount": offer.terms.amount,
+            "amount": str(offer.terms.amount),
             "token": offer.terms.token,
             "deadline": offer.terms.deadline,
             # Hex out for the same reason it comes in as hex: a 128-bit value emitted as a
@@ -325,7 +376,7 @@ def _settlement_to_json(settlement: Any) -> dict[str, Any]:
     return {
         "acceptance": settlement.acceptance,
         "accepted_offer": settlement.accepted_offer,
-        "agreed_amount": settlement.agreed_amount,
-        "paid_amount": settlement.paid_amount,
+        "agreed_amount": str(settlement.agreed_amount),
+        "paid_amount": _amount_str(settlement.paid_amount),
         "is_consistent": settlement.is_consistent(),
     }

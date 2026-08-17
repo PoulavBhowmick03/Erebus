@@ -51,6 +51,8 @@ class SettlementReceipt:
     nullifiers: list[str]
     proved_at: int
     offer_id: OfferId | None = None  # absent only for the administrative shield helper
+    selected_input: int | None = None  # total value of notes spent; absent for shielding
+    change: int | None = None  # returned to the payer; 0 if exact, absent for shielding
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,21 @@ class DisclosedRecord:
     participants: list[AgentId]
     offers: list[Offer]
     settlement: DisclosedSettlement | None = None
+
+
+@dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str  # "pass" | "warn" | "fail" | "skipped"
+    detail: str
+    repair: str | None = None  # present only when status is not "pass"
+
+
+@dataclass(frozen=True)
+class DoctorReport:
+    ready: bool  # whether a proof-bearing write can be attempted
+    checks: list[DoctorCheck]
+    repairs: list[str]
 
 
 class SettlementErrorCode(str, Enum):
@@ -173,6 +190,10 @@ class ErebusClient(Protocol):
 
     async def note_balance(self) -> NoteBalance:
         """Return exact spendable and pending note denominations for payment planning."""
+        ...
+
+    async def doctor(self) -> DoctorReport:
+        """Pre-flight inspection of configuration and chain state. Read-only, always safe."""
         ...
 
     async def accept_and_settle(

@@ -92,6 +92,38 @@ def test_read_channel_state_carries_no_settlement_object() -> None:
     assert state.settlement is None
 
 
+def test_accept_and_settle_parses_selected_input_and_change() -> None:
+    seam = StubSeam(
+        accept_and_settle={
+            "offer_id": f"{CHANNEL}:them:0",
+            "tx_hash": "0xabc",
+            "nullifiers": ["0xdef"],
+            "proved_at": 13095252,
+            "selected_input": "5000000000000000000",
+            "change": "2000000000000000000",
+        }
+    )
+    receipt = run(SeamErebusClient(seam).accept_and_settle(CHANNEL, f"{CHANNEL}:them:0"))
+
+    assert receipt.selected_input == 5_000_000_000_000_000_000
+    assert receipt.change == 2_000_000_000_000_000_000
+
+
+def test_accept_and_settle_leaves_missing_change_fields_as_none() -> None:
+    seam = StubSeam(
+        accept_and_settle={
+            "offer_id": f"{CHANNEL}:them:0",
+            "tx_hash": "0xabc",
+            "nullifiers": ["0xdef"],
+            "proved_at": 13095252,
+        }
+    )
+    receipt = run(SeamErebusClient(seam).accept_and_settle(CHANNEL, f"{CHANNEL}:them:0"))
+
+    assert receipt.selected_input is None
+    assert receipt.change is None
+
+
 def test_reveal_reconstructs_the_settlement() -> None:
     seam = StubSeam(
         reveal={

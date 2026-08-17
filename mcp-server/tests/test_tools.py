@@ -66,7 +66,7 @@ def test_the_protocol_and_payment_planning_methods_are_exposed_with_descriptions
                     "grant_viewing_key",
                     "reveal",
                 }
-                assert names - {"wait_for_offers", "get_note_balance"} == {
+                assert names - {"wait_for_offers", "get_note_balance", "doctor"} == {
                     "open_channel",
                     "propose_offer",
                     "counter_offer",
@@ -86,8 +86,22 @@ def test_balance_total(tmp_path):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 balance = _structured(await session.call_tool("get_note_balance", {}))
-                assert balance["result"]["spendable_notes"] == [150, 100]
-                assert balance["result"]["total"] == 250
+                assert balance["result"]["spendable_notes"] == ["150", "100"]
+                assert balance["result"]["total"] == "250"
+
+    asyncio.run(run())
+
+
+def test_doctor_reports_ready(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                report = _structured(await session.call_tool("doctor", {}))
+                assert report["ok"] is True
+                assert report["result"]["ready"] is True
+                assert report["result"]["checks"]
+                assert report["result"]["repairs"] == []
 
     asyncio.run(run())
 
@@ -168,7 +182,7 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                         await buyer.initialize()
                         await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
                         payable = _structured(await buyer.call_tool("get_note_balance", {}))
-                        assert payable["result"]["total"] >= 150
+                        assert int(payable["result"]["total"]) >= 150
 
                         settled = _structured(
                             await buyer.call_tool(
@@ -177,14 +191,16 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                             )
                         )
                         assert settled["ok"] is True
+                        assert settled["result"]["selected_input"] == "150"
+                        assert settled["result"]["change"] == "0"
 
                         balance = _structured(await buyer.call_tool("get_note_balance", {}))
-                        assert balance["result"]["spendable_notes"] == [100]
+                        assert balance["result"]["spendable_notes"] == ["100"]
 
                 state = _structured(
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
-                assert state["result"]["settlement"]["agreed_amount"] == 150
+                assert state["result"]["settlement"]["agreed_amount"] == "150"
 
     asyncio.run(run())
 
@@ -219,7 +235,7 @@ def test_mcp_settle_change(tmp_path):
                         await buyer.initialize()
                         await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
                         payable = _structured(await buyer.call_tool("get_note_balance", {}))
-                        assert payable["result"]["total"] == 5
+                        assert payable["result"]["total"] == "5"
 
                         settled = _structured(
                             await buyer.call_tool(
@@ -228,14 +244,16 @@ def test_mcp_settle_change(tmp_path):
                             )
                         )
                         assert settled["ok"] is True
+                        assert settled["result"]["selected_input"] == "5"
+                        assert settled["result"]["change"] == "2"
 
                         balance = _structured(await buyer.call_tool("get_note_balance", {}))
-                        assert balance["result"]["spendable_notes"] == [2]
+                        assert balance["result"]["spendable_notes"] == ["2"]
 
                 state = _structured(
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
-                assert state["result"]["settlement"]["agreed_amount"] == 3
+                assert state["result"]["settlement"]["agreed_amount"] == "3"
 
     asyncio.run(run())
 
@@ -354,6 +372,74 @@ def test_an_oversized_or_malformed_memo_hash_is_refused_before_any_write(tmp_pat
                                 "token": "0xtoken",
                                 "deadline": 9999999999,
                                 "memo_hash": bad,
+                            },
+                        )
+                    )
+                    assert body["ok"] is False, f"{bad!r} should be refused"
+                    assert body["error"]["code"] == "INVALID_REQUEST"
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["offers"] == []
+
+    asyncio.run(run())
+
+
+def test_a_large_amount_survives_a_round_trip_as_a_decimal_string(tmp_path):
+    """Same problem as memo_hash: 1 STRK is 1e18 base units, well past 2**53."""
+    amount = 1_500_000_000_000_000_000
+
+    async def run():
+        async with stdio_client(
+            _server_params(tmp_path / "store.json", spendable_notes=str(amount))
+        ) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                written = await session.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": str(amount),
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                assert _structured(written)["ok"] is True
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                returned = state["result"]["offers"][0]["terms"]["amount"]
+
+                assert isinstance(returned, str)
+                assert int(returned) == amount
+
+    asyncio.run(run())
+
+
+def test_an_invalid_amount_is_refused_before_any_write(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                for bad in ("0", "-5", "not-a-number", ""):
+                    body = _structured(
+                        await session.call_tool(
+                            "propose_offer",
+                            {
+                                "channel_handle": handle,
+                                "amount": bad,
+                                "token": "0xtoken",
+                                "deadline": 9999999999,
+                                "memo_hash": 0,
                             },
                         )
                     )
