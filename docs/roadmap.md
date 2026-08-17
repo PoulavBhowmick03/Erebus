@@ -84,8 +84,12 @@ This section records what exists on 2026-08-17. Later sections describe the miss
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
 - The current working tree passes 213 Rust tests, with 3 ignored tests.
-- The current working tree passes 56 Python tests and 38 TypeScript tests.
+- The current working tree passes 58 Python tests and 38 TypeScript tests.
 - Clippy and rustdoc pass with warnings denied.
+- CI runs all of the above on every push and pull request, plus a gitleaks history scan.
+  TypeScript is not in it; see §5.6.
+- `docs/privacy-model.md` is the canonical privacy boundary. The roadmap, `tech.md`,
+  `friction.md`, and `privacy-observer-finding.md` point at it rather than restating it.
 
 ### Active but not shipped
 
@@ -329,11 +333,11 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| No continuous integration | Developers run the gate locally | Add Rust, Python, TypeScript, docs, and secret-scan jobs |
+| ~~No continuous integration~~ | Added 2026-08-17 in `.github/workflows/ci.yml`. Rust, Python, and gitleaks | Add TypeScript when the GitHub Packages dependency can be resolved in CI (F8) |
 | Every package is `0.0.0` | No release version exists | Define one version policy and release `v0.1.0` |
 | No install command | Operators build Rust and source the workspace | Make `uvx erebus-mcp-server` install the matching CLI |
 | No compatibility manifest | Pool, prover, and SDK versions can drift | Pin the pool class, ABI, prover protocol, and oracle revision |
-| ~~No `doctor` command~~ | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor` | Wire it into the Python seam, the MCP server, and the operator skill |
+| ~~No `doctor` command~~ | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`, bound through the Python seam the same day | Wire it into the MCP server and the operator skill |
 | No backup and restore process | Key and state loss can be permanent | Add encrypted backup, restore, and state-rebuild procedures |
 | No monitoring | Logs show local events only | Add stage timing, transaction status, retry count, and RPC health |
 | No secret-safe log policy | Viewing grants and paths can enter logs | Redact grants, keys, authorization headers, and RPC secrets |
@@ -607,12 +611,18 @@ Owners: Poulav owns Rust artifacts. Ishita owns Python packaging and operator ex
 
 Work:
 
-1. Add continuous integration for Rust, Python, TypeScript, docs, and secret scanning.
+1. ~~Add continuous integration for Rust, Python, TypeScript, docs, and secret scanning.~~
+   Done 2026-08-17 as `c3960de`, minus TypeScript: `sdk/ts` builds against a GitHub Packages
+   dependency that a bare checkout cannot resolve (F8), and a job gated on a token that may
+   not exist would report green without testing anything.
 2. Build `erebus-cli` for macOS arm64, macOS x86-64, and Linux x86-64.
-3. Package each binary with the matching Python wheel.
+3. Package each binary with the matching Python wheel. The binding resolves it with
+   `shutil.which("erebus-cli")`, so the wheel must place it on `PATH`.
 4. Make `uvx erebus-mcp-server` find the packaged binary.
-5. ~~Add `erebus doctor` before the first write.~~ Built 2026-08-17 as `erebus-cli doctor`.
-   Still to do: call it from the seam, the MCP server at startup, and the operator skill.
+5. ~~Add `erebus doctor` before the first write.~~ Built 2026-08-17 as `erebus-cli doctor`,
+   bound through the Python seam the same day as `2d69eda` along with `allowance` and
+   `approve`. Still to do: tests for those three, the MCP server at startup, and the
+   operator skill.
 6. ~~Inspect key permissions, state permissions, RPC health, and prover compatibility.~~ Done.
    Mode bits are checked on unix only; Windows has none, so that arm is skipped rather than
    guessed at.
@@ -878,9 +888,14 @@ board decides what to do next and §7 decides what done means.
       `0 < amount <= total`, `can_pay` removed, tool text rewritten.
 - [ ] Mirror `selected_input` and `change` through the Python seam and MCP.
 - [ ] Make missing payment evidence fail closed.
-- [ ] Fix wide `memo_hash` transport. Rust half done 2026-08-16; MCP schema still a JSON int.
+- [x] Fix wide `memo_hash` transport. Closed 2026-08-17 as `d1731f4`: MCP tools take a hex
+      string or an int and return hex. The frozen `interface.py` seam still types it `int`;
+      parsing happens at the MCP boundary where the JSON problem is. Breaking for readers.
 - [ ] Convert `OfferTerms.amount` to a decimal string. The receipt fields already are, so
-      this is the last `u128` crossing as a JSON number and it rounds above 2^53.
+      this is the last `u128` crossing as a JSON number and it rounds above 2^53. Same shape
+      as the `memo_hash` fix above and `d1731f4` is the template, including the two tests
+      that fail against the unfixed file. Also covers `total`, `agreed_amount`,
+      `paid_amount`, and the note list on the way back. Assigned to Ishita 2026-08-17.
 
 Deferred by D14, not cancelled: mainnet proving path, funded mainnet account, three mainnet
 transactions. See §5.7.
@@ -888,14 +903,27 @@ transactions. See §5.7.
 ### P1: Technical-preview release
 
 - [ ] Real MCP-to-CLI integration test.
-- [ ] MCP-client reference agents.
+- [ ] MCP-client reference agents. Ishita.
 - [ ] Erebus operator skill and unsafe-behavior evaluations.
-- [ ] Platform wheels containing `erebus-cli`.
-- [ ] `doctor` and health tools. Rust done 2026-08-17; not yet reachable from Python or MCP.
-- [ ] Continuous integration and secret scanning.
-- [ ] Clean-machine install and canary.
+- [ ] Platform wheels containing `erebus-cli`. Unblocked by CI. The binding resolves the
+      binary with `shutil.which("erebus-cli")`, so a wheel has to put it on `PATH`, and that
+      needs a cross-build matrix and one platform wheel per target.
+- [ ] `doctor` and health tools. Rust done 2026-08-17. Python seam done 2026-08-17 as
+      `2d69eda`, which also bound `allowance` and `approve` because `doctor`'s own repair
+      advice for the commonest failure is "run approve". Untested, and not yet an MCP tool.
+      Both remaining halves assigned to Ishita 2026-08-17.
+- [x] Continuous integration and secret scanning. Done 2026-08-17 as `c3960de`. Three jobs:
+      Rust (fmt, clippy `-D warnings`, `test --all-targets`, docs `-D warnings`, publishes
+      `erebus-cli`), Python (downloads that binary, runs the workspace suite), and gitleaks
+      over full history. Green on first run.
+      The Python job asserts the binary exists before pytest, because `sdk/py` tests skip
+      themselves when it is absent: verified that a missing binary skips all 12 and still
+      exits 0, so a lost artifact would have produced a green run that tested nothing.
+      `sdk/ts` and the Cairo probes are excluded on purpose, reasons in the workflow file.
+- [ ] Clean-machine install and canary. Depends on wheels.
 - [ ] One current status document and reconciled guides.
-- [ ] Tagged `v0.1.0` release with checksums and SBOM.
+- [ ] Tagged `v0.1.0` release with checksums and SBOM. Depends on wheels. Every package is
+      `0.0.0` and there is no version policy yet, so that decision comes first.
 
 ### P2: Operator alpha
 
