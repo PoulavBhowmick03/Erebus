@@ -275,15 +275,12 @@ impl Executor {
             r: Felt::ZERO,
             s: Felt::ZERO,
         });
-        let bounds = self.rpc.estimate_bounds(&estimate, &BlockId::Latest).await?;
+        let bounds = self
+            .rpc
+            .estimate_bounds(&estimate, &BlockId::Latest)
+            .await?;
 
-        let invoke = submission_invoke(
-            &self.config,
-            account_calldata,
-            nonce,
-            bounds,
-            Vec::new(),
-        );
+        let invoke = submission_invoke(&self.config, account_calldata, nonce, bounds, Vec::new());
         let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
         let transaction = invoke.with_signature(signature);
         let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;

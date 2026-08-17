@@ -12,9 +12,9 @@ use erebus_sdk::actions::NoteSalt;
 use erebus_sdk::wire::{
     decode_legacy_message, decode_message, encode_legacy_message, encode_message,
     legacy_note_index_for_message, note_index_for_message, truncate_memo_hash,
-    truncate_memo_hash_bytes, MessageType,
-    WireContext, WireError, WireMessage, CAPACITY_BITS, LEGACY_CAPACITY_BITS,
-    LEGACY_NOTES_PER_MESSAGE, MESSAGE_BITS, NOTES_PER_MESSAGE, PAYLOAD_BITS_PER_NOTE,
+    truncate_memo_hash_bytes, MessageType, WireContext, WireError, WireMessage, CAPACITY_BITS,
+    LEGACY_CAPACITY_BITS, LEGACY_NOTES_PER_MESSAGE, MESSAGE_BITS, NOTES_PER_MESSAGE,
+    PAYLOAD_BITS_PER_NOTE,
 };
 use serde::Deserialize;
 use starknet_types_core::felt::Felt;

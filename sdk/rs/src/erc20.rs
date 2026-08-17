@@ -123,7 +123,11 @@ mod tests {
         );
         assert_eq!(
             approve_calldata(spender, u128::MAX),
-            vec![spender, felt("0xffffffffffffffffffffffffffffffff"), Felt::ZERO]
+            vec![
+                spender,
+                felt("0xffffffffffffffffffffffffffffffff"),
+                Felt::ZERO
+            ]
         );
     }
 
@@ -145,6 +149,9 @@ mod tests {
         let error = parse_u256("allowance", &[Felt::ZERO, Felt::ONE]).expect_err("high limb set");
         assert!(matches!(error, Erc20Error::ExceedsU128 { .. }));
         let error = parse_u256("allowance", &[Felt::ZERO]).expect_err("one felt");
-        assert!(matches!(error, Erc20Error::UnexpectedWidth { felts: 1, .. }));
+        assert!(matches!(
+            error,
+            Erc20Error::UnexpectedWidth { felts: 1, .. }
+        ));
     }
 }

@@ -132,7 +132,11 @@ mod tests {
         let report = Report {
             checks: vec![
                 Check::pass("rpc", "block 13095252"),
-                Check::warn("allowance", "covers 2 more writes", "top up before the next run"),
+                Check::warn(
+                    "allowance",
+                    "covers 2 more writes",
+                    "top up before the next run",
+                ),
             ],
         };
         assert!(report.ready());
@@ -147,7 +151,10 @@ mod tests {
         let report = Report {
             checks: vec![
                 Check::pass("rpc", "block 1"),
-                Check::skipped("allowance", "token address unreadable, so the read was not run"),
+                Check::skipped(
+                    "allowance",
+                    "token address unreadable, so the read was not run",
+                ),
             ],
         };
         assert!(!report.ready());
@@ -159,7 +166,11 @@ mod tests {
         let report = Report {
             checks: vec![
                 Check::pass("rpc", "block 1"),
-                Check::fail("allowance", "0 against a 2 STRK fee", "run erebus-cli approve"),
+                Check::fail(
+                    "allowance",
+                    "0 against a 2 STRK fee",
+                    "run erebus-cli approve",
+                ),
                 Check::warn("balance", "0.5 STRK", "fund the account"),
             ],
         };

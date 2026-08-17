@@ -283,7 +283,10 @@ fn doctor_reports_every_fault_in_one_run_rather_than_stopping_at_the_first() {
     // Finding faults is a successful inspection. `ok:false` would mean doctor itself broke.
     assert!(ok, "an inspection that finds problems still succeeded");
     let result = &response["result"];
-    assert_eq!(result["ready"], false, "nothing about this config is usable");
+    assert_eq!(
+        result["ready"], false,
+        "nothing about this config is usable"
+    );
 
     let checks = result["checks"].as_array().expect("checks array");
     assert!(
@@ -299,7 +302,10 @@ fn doctor_reports_every_fault_in_one_run_rather_than_stopping_at_the_first() {
         .filter_map(|check| check["name"].as_str())
         .collect();
     for expected in ["pool_key_file", "account_key_file", "rpc", "prover"] {
-        assert!(named.contains(&expected), "{expected} missing from {named:?}");
+        assert!(
+            named.contains(&expected),
+            "{expected} missing from {named:?}"
+        );
     }
 
     // The point of the whole module: every unhealthy check hands back an action.
@@ -309,7 +315,9 @@ fn doctor_reports_every_fault_in_one_run_rather_than_stopping_at_the_first() {
             assert!(check.get("repair").is_none());
         } else if status != "skipped" {
             assert!(
-                check["repair"].as_str().is_some_and(|text| !text.is_empty()),
+                check["repair"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty()),
                 "{} is {status} with no repair instruction",
                 check["name"]
             );

@@ -188,7 +188,10 @@ impl Client {
 
         let rpc_live = match self.executor.rpc().block_number().await {
             Ok(block) => {
-                checks.push(Check::pass("rpc", format!("reachable, head is block {block}")));
+                checks.push(Check::pass(
+                    "rpc",
+                    format!("reachable, head is block {block}"),
+                ));
                 true
             }
             Err(error) => {
@@ -213,7 +216,13 @@ impl Client {
         });
 
         if !rpc_live {
-            for name in ["chain_id", "pool", "registration", "allowance", "gas_balance"] {
+            for name in [
+                "chain_id",
+                "pool",
+                "registration",
+                "allowance",
+                "gas_balance",
+            ] {
                 checks.push(Check::skipped(name, "needs a reachable RPC"));
             }
             return Report { checks };
@@ -1788,7 +1797,10 @@ fn check_key_file(path: &PathBuf, name: &'static str) -> Check {
     match file_mode(path) {
         Some(mode) if mode & 0o077 != 0 => Check::warn(
             name,
-            format!("{display} is mode {:o}, readable beyond its owner", mode & 0o777),
+            format!(
+                "{display} is mode {:o}, readable beyond its owner",
+                mode & 0o777
+            ),
             format!("chmod 600 {display}"),
         ),
         _ => Check::pass(name, format!("{display} present and owner-only")),
@@ -1807,9 +1819,14 @@ fn check_state_dir(path: &PathBuf) -> Check {
     match file_mode(path) {
         Some(mode) if mode & 0o077 != 0 => Check::warn(
             "state_dir",
-            format!("{display} is mode {:o}, open beyond its owner", mode & 0o777),
-            format!("chmod 700 {display}. Channel state is not key material, but it names \
-                     counterparties and amounts"),
+            format!(
+                "{display} is mode {:o}, open beyond its owner",
+                mode & 0o777
+            ),
+            format!(
+                "chmod 700 {display}. Channel state is not key material, but it names \
+                     counterparties and amounts"
+            ),
         ),
         _ => Check::pass("state_dir", format!("{display} present and owner-only")),
     }
@@ -1818,7 +1835,9 @@ fn check_state_dir(path: &PathBuf) -> Check {
 #[cfg(unix)]
 fn file_mode(path: &PathBuf) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).ok().map(|data| data.permissions().mode())
+    std::fs::metadata(path)
+        .ok()
+        .map(|data| data.permissions().mode())
 }
 
 /// Windows has no mode bits, so the permission arm of these checks is skipped rather than
@@ -2106,7 +2125,10 @@ mod tests {
 
         for target in 1..=16u128 {
             let Some(selection) = select_notes(&holdings, target) else {
-                assert!(target > 16, "16 is the total, so anything at or under it is payable");
+                assert!(
+                    target > 16,
+                    "16 is the total, so anything at or under it is payable"
+                );
                 continue;
             };
             let selected_input = selection
