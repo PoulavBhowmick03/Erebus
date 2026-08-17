@@ -34,7 +34,8 @@ key and recovered nothing. The same tool run against the wire-v1 settlement
 worth anything. Details in [F30](./docs/friction.md).
 
 Still outstanding: a second implementation of wire v2 (`sdk/ts` is on v1), an independent
-security review, and traffic-shape privacy ([F31](./docs/friction.md)).
+security review, relationship privacy at channel-open ([F38](./docs/friction.md)), and
+traffic-shape privacy ([F31](./docs/friction.md)).
 
 Target is **Starknet Sepolia**, privacy pool v2.0 at `0x0254a6...0d91`, verified on-chain.
 A mainnet pool went live at `0x040337b1...812a` with an identical class hash, so porting is a
@@ -69,7 +70,7 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Message privacy: live. Traffic privacy: partial** | Wire v2 encrypts the negotiation payload under AES-256-GCM-SIV, so an observer with no key recovers no terms. The fifth salt still has a fixed 59-bit shape that fingerprints Erebus traffic, so an observer can count and time deals without reading them. See [F31](./docs/friction.md). |
+| **Message privacy: live. Relationship privacy: partial** | Wire v2 encrypts the negotiation payload under AES-256-GCM-SIV, so an observer with no key recovers no terms. Two things still leak: opening a channel writes the counterparty's address to public calldata ([F38](./docs/friction.md)), and the fifth salt has a fixed shape that fingerprints Erebus traffic, so an observer can count and time deals without reading them ([F31](./docs/friction.md)). See [privacy-model.md](./docs/privacy-model.md) for the full boundary. |
 | **Atomic negotiate to settle** | The accepted offer and the shielded payment are one proven state transition. There is no "agreed but never paid" gap and no separate payment hop. |
 | **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record (terms and payment) to a specific counterparty, without exposing anything to the public or leaking data about unrelated users. |
 | **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end: STRK20 ships no paymaster of its own, so this rides on a third party. |
@@ -142,7 +143,7 @@ Used in docs, marketing, and conversation. **Not** in the API surface, see [CLAU
 | Term | Meaning |
 |---|---|
 | **Erebus** | The protocol as a whole |
-| **Eleusis** | The intended private channel between two agents; current wire still leaks its payload |
+| **Eleusis** | The private channel between two agents; opening one still exposes the counterparty's address on-chain (F38) |
 | **Kleidouchos** | A holder of a viewing key (auditor, operator, counterparty) |
 | Enter Erebus | Start using the protocol |
 | Open an Eleusis | Create a private agent channel |

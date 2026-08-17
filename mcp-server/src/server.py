@@ -28,7 +28,9 @@ _config = ServerConfig.from_env()
 server = MCPServer(
     name="erebus",
     instructions=(
-        "Private coordination and settlement between two agents on Starknet. "
+        "Structured negotiation and settlement between two agents on Starknet. "
+        "Negotiation terms and settlement amounts stay private; opening a channel does "
+        "not, it writes the counterparty's address to public calldata (F38). "
         "Open a channel with a counterparty, exchange structured offers, and settle "
         "atomically. accept_and_settle always spends this identity's private notes: "
         "only the payer calls it; a payee leaves its final offer for the payer. "

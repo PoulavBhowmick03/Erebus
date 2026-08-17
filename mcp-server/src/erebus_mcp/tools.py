@@ -127,8 +127,12 @@ def register_tools(
 
     @server.tool()
     async def open_channel(counterparty: str) -> dict[str, Any]:
-        """Establish a private channel with a counterparty (their address). Returns a
-        channel_handle to use in every other call for this relationship."""
+        """Establish a channel with a counterparty (their address). Returns a
+        channel_handle to use in every other call for this relationship.
+
+        This call itself is not private: it writes the counterparty's address to public
+        chain calldata (F38). Negotiation content and settlement amounts are hidden once
+        the channel is open; that you opened one with this counterparty is not."""
         outcome = await _call(client.open_channel(counterparty))
         if outcome["ok"]:
             outcome["result"] = {"channel_handle": outcome["result"]}
