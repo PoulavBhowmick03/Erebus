@@ -4,6 +4,13 @@ Written 2026-08-01, after the full loop ran on Sepolia and the MCP server reache
 Each item says what breaks, what the mechanism is, and whose problem it is. None of it is a
 plan; the sequencing is a product decision.
 
+> **§4 is stale as of 2026-08-18.** It treats relationship exposure as something an observer
+> infers from timing and message shape. F38 found it is not inferred at all: the
+> counterparty's address is written into public calldata at channel-open, upstream of our
+> encryption. The gap is real but larger and differently shaped than described below. See
+> [privacy-model.md](./privacy-model.md), and [status.md](./status.md) when documents
+> disagree.
+
 Ordered by what it blocks, not by effort.
 
 ---

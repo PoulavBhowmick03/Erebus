@@ -110,6 +110,11 @@ jobs:
         # guard above passes.
         run: uv run pytest -rs
 
+      - name: Every dependency is hashed
+        # An unhashed dependency cannot be verified as the one the author published. A
+        # release is the wrong moment to discover one, so this runs on every push.
+        run: python3 scripts/sbom.py --check
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest

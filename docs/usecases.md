@@ -3,6 +3,11 @@
 This document helps a team decide whether the current implementation fits a use case.
 It separates implemented behavior, future use cases, and cases outside the present protocol.
 
+> **Partly stale as of 2026-08-18.** Fit-test row 6 says no live wire-v2 negotiation has
+> completed. One did, on 2026-08-07. This document also predates F38, which found the
+> counterparty's address is public at channel-open. Check [`status.md`](./status.md) before
+> relying on any claim here; it is the tiebreaker when documents disagree.
+
 For the full technical explanation, read [`tech.md`](../tech.md).
 
 ## What Erebus is

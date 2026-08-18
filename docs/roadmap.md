@@ -881,37 +881,53 @@ board decides what to do next and §7 decides what done means.
 - [ ] Rewrite the demo video script, deleted 2026-08-16.
 - [ ] Public three-minute video that names its network.
 - [ ] `strk20.json` with the video URL, and an explicit note that `transactions` is empty.
-- [ ] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`.
+- [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
+      No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop
       `can_pay_exactly`, and the receipt reports `selected_input` and `change`.
 - [x] Align change-making across MCP, mock, and agents. PR #16: `_require_payable` checks
       `0 < amount <= total`, `can_pay` removed, tool text rewritten.
-- [ ] Mirror `selected_input` and `change` through the Python seam and MCP.
+- [x] Mirror `selected_input` and `change` through the Python seam and MCP. Done 2026-08-17
+      as `40b8543`, so an agent can now see what a settlement actually spent.
 - [ ] Make missing payment evidence fail closed.
 - [x] Fix wide `memo_hash` transport. Closed 2026-08-17 as `d1731f4`: MCP tools take a hex
       string or an int and return hex. The frozen `interface.py` seam still types it `int`;
       parsing happens at the MCP boundary where the JSON problem is. Breaking for readers.
-- [ ] Convert `OfferTerms.amount` to a decimal string. The receipt fields already are, so
-      this is the last `u128` crossing as a JSON number and it rounds above 2^53. Same shape
-      as the `memo_hash` fix above and `d1731f4` is the template, including the two tests
-      that fail against the unfixed file. Also covers `total`, `agreed_amount`,
-      `paid_amount`, and the note list on the way back. Assigned to Ishita 2026-08-17.
+- [x] Convert `OfferTerms.amount` to a decimal string. Done 2026-08-17 as `40b8543`, which
+      also covered `total`, `agreed_amount`, `paid_amount`, and the note list on the way
+      back. That was the last `u128` crossing the MCP boundary as a JSON number, so the
+      whole class of silent rounding above 2^53 is now closed.
 
 Deferred by D14, not cancelled: mainnet proving path, funded mainnet account, three mainnet
 transactions. See §5.7.
 
 ### P1: Technical-preview release
 
-- [ ] Real MCP-to-CLI integration test.
-- [ ] MCP-client reference agents. Ishita.
+- [x] Real MCP-to-CLI integration test. Done 2026-08-18 in
+      `mcp-server/tests/test_seam_integration.py`. Drives a real MCP tool call through the
+      Python seam into the real `erebus-cli`, which nothing did before: the tool tests use
+      the mock, the seam-client tests use a stub holding payloads captured on 2026-07-31,
+      and `sdk/py` mocks the subprocess. Frozen payloads cannot notice the binary changing
+      shape, and those predate live wire v2, change notes, and string amounts.
+      `doctor` is what makes it runnable without a chain, a prover, or funds: it is
+      read-only and reports faults instead of raising, so an unreachable RPC exercises tool
+      registration, config marshalling, key-file paths, the envelope, and report
+      translation in under two seconds. Two of the three tests fail if the backend is
+      switched to the mock, which is the check that they test what they claim.
+      Still manual, because they need a funded identity: everything that writes.
+- [x] MCP-client reference agents. Done 2026-08-17 by Ishita as `5362ada`.
 - [ ] Erebus operator skill and unsafe-behavior evaluations.
-- [ ] Platform wheels containing `erebus-cli`. Unblocked by CI. The binding resolves the
-      binary with `shutil.which("erebus-cli")`, so a wheel has to put it on `PATH`, and that
-      needs a cross-build matrix and one platform wheel per target.
-- [ ] `doctor` and health tools. Rust done 2026-08-17. Python seam done 2026-08-17 as
+- [x] Platform wheels containing `erebus-cli`. Done 2026-08-17 as `5f7bc09` and `3c32561`.
+      `erebus-cli` is its own package so the pure-Python half stays one wheel; a build hook
+      forces the platform tag, because hatchling defaults to `py3-none-any` and a binary
+      wheel tagged `any` installs anywhere and fails on first call. Built and verified
+      locally on arm64 macOS; the Linux and x86-64 macOS legs have not run yet.
+      Not published anywhere, so `uvx erebus-mcp-server` still does not work.
+- [x] `doctor` and health tools. Rust done 2026-08-17. Python seam done 2026-08-17 as
       `2d69eda`, which also bound `allowance` and `approve` because `doctor`'s own repair
-      advice for the commonest failure is "run approve". Untested, and not yet an MCP tool.
-      Both remaining halves assigned to Ishita 2026-08-17.
+      advice for the commonest failure is "run approve". Tests and the MCP tool landed
+      2026-08-17 by Ishita in `40b8543`. Still to do: call it at MCP startup and from the
+      operator skill.
 - [x] Continuous integration and secret scanning. Done 2026-08-17 as `c3960de`. Three jobs:
       Rust (fmt, clippy `-D warnings`, `test --all-targets`, docs `-D warnings`, publishes
       `erebus-cli`), Python (downloads that binary, runs the workspace suite), and gitleaks
@@ -920,10 +936,62 @@ transactions. See §5.7.
       themselves when it is absent: verified that a missing binary skips all 12 and still
       exits 0, so a lost artifact would have produced a green run that tested nothing.
       `sdk/ts` and the Cairo probes are excluded on purpose, reasons in the workflow file.
-- [ ] Clean-machine install and canary. Depends on wheels.
-- [ ] One current status document and reconciled guides.
-- [ ] Tagged `v0.1.0` release with checksums and SBOM. Depends on wheels. Every package is
-      `0.0.0` and there is no version policy yet, so that decision comes first.
+- [x] Clean-machine install and canary. Done 2026-08-18 in `.github/workflows/canary.yml`.
+      Installs the wheels into an empty environment on Linux and macOS, on Python 3.11 and
+      3.13, verifies checksums first, and drives a real MCP tool call through them. Needs no
+      chain, prover, funds, or keys with value, because `doctor` reports faults instead of
+      raising. Rehearsed locally end to end: the chain resolved from wheels alone, the
+      server started, ten tools registered, `doctor` returned all ten checks.
+      Two things this found. `shutil.which` returns `None` when the environment is not on
+      `PATH`, which is the normal case for a launcher spawning the server, so the canary
+      exercises `binary_path()` as well and that fallback is now verified rather than
+      assumed. And the release is five wheels, not three: `erebus-mcp-server` depends on
+      `erebus-sdk` depends on `erebus-cli`, so shipping only the binary leaves the chain
+      unresolvable. The pure-Python wheels are now built alongside.
+      **Still blocked on one thing, see the note under `v0.1.0`:** `server.py` is not in any
+      wheel, so the canary runs it from a checkout.
+- [x] One current status document. Done 2026-08-18 as `docs/status.md`: one page, and the
+      declared tiebreaker when documents disagree. Nine documents describe this system,
+      written across three weeks in which the privacy claim changed twice, which is the
+      whole reason it was needed.
+      Test counts in it were verified by running all three suites, not copied forward.
+- [x] Reconcile the stale guides. Done 2026-08-18. The `runbook.md` evidence boundary was
+      rewritten: it said wire v2 had not completed a live run, which stopped being true on
+      2026-08-07. `usecases.md` and `production-gaps.md` §4 carry dated notices naming the
+      specific wrong claim and pointing at `status.md`, rather than being rewritten
+      wholesale, because both are dated records and silently editing them would erase when
+      the project believed what.
+- [ ] Tagged `v0.1.0` release with checksums and SBOM. Version policy decided 2026-08-17:
+      one version across the workspace, `0.0.1` now, incrementing toward `0.1.0`.
+      Checksums and SBOM done 2026-08-18. `scripts/sbom.py` reads `Cargo.lock` and
+      `uv.lock` and emits CycloneDX 1.5 covering 224 components, 182 cargo and 42 pypi. No
+      network and no third-party tool, because a generator that resolved anything itself
+      could disagree with what ships. Output is byte-identical across runs, so a diff means
+      a dependency really moved, and it validates clean against the official CycloneDX 1.5
+      schema. `--check` fails if any dependency lacks a hash and runs on every push.
+      **Blocked on one decision, and it is the last thing between here and a real release.**
+      `server.py` sits beside the package rather than inside it, so no wheel contains it and
+      there is no `[project.scripts]` entry point. An operator can install every module and
+      still have no way to start the server; `uvx erebus-mcp-server` would resolve and then
+      do nothing. The fix is to move it into `erebus_mcp` and declare an entry point, which
+      is a structural change in Ishita's directory a day before her Phase 4 starts, so it
+      needs coordinating rather than doing.
+      Publishing decided 2026-08-18 (D-wheels): GitHub Releases plus a static package index
+      on GitHub Pages. Nothing leaves GitHub and no PyPI account is needed. Built the same
+      day: the `release` job in `wheels.yml` fires on a `v*` tag, creates the release with
+      wheels, raw per-target binaries, `SHA256SUMS` and `sbom.json`, then generates and
+      deploys the index.
+      GitHub Packages was checked and ruled out: it serves npm, RubyGems, Maven, Gradle,
+      NuGet and Docker, and has no Python registry, so Release assets are files at URLs that
+      no installer can resolve a dependency chain from. `scripts/build-index.py` writes the
+      PEP 503 index that fixes that, holding links rather than files so Pages stays small.
+      Rehearsed against a local server: `uv pip install --extra-index-url <index>
+      erebus-mcp-server` resolved all three packages and the installed binary answered.
+      `--extra-index-url` and not `--index-url`, because PyPI still serves `mcp`.
+      One trap handled and tested: deploying Pages replaces the whole site, so an index
+      built from one tag would delete every earlier version's links and break pinned
+      installs. The job merges the live index in first, verified against a simulated
+      earlier release.
 
 ### P2: Operator alpha
 

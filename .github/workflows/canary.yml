@@ -1,0 +1,195 @@
+name: Canary
+
+# Installs the built wheel on a machine that has never seen this repository and drives the
+# MCP server through it. Every other test runs inside a development checkout with a
+# cargo-built binary on PATH and the source tree importable, so none of them can notice that
+# the shipped artifact is missing a file, resolves the wrong binary, or needs a Rust
+# toolchain the operator does not have.
+#
+# What it deliberately does not need: a chain, a prover, funds, or keys with value. `doctor`
+# is read-only and reports faults instead of raising, so an unreachable RPC still exercises
+# install, discovery, config, and the response path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Wheels workflow run to install from. Blank builds fresh."
+        required: false
+  workflow_run:
+    workflows: ["Wheels"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  install:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        # The floor from requires-python, and a newer one. A release that only works on the
+        # version the authors happen to run is the usual way this breaks.
+        python: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Only the MCP server entry point and the request helper are needed to drive it.
+          # The wheel supplies everything else, which is the point.
+          sparse-checkout: |
+            mcp-server/src
+            scripts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Fetch the wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify the checksums before installing anything
+        run: |
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c SHA256SUMS
+          else
+            shasum -a 256 -c SHA256SUMS
+          fi
+
+      - name: Install into an empty environment
+        # The whole chain, from the wheels alone: erebus-mcp-server depends on erebus-sdk,
+        # which depends on erebus-cli. No --system and no editable install, so this resolves
+        # the way an operator's install resolves.
+        run: |
+          uv venv /tmp/fresh
+          uv pip install --python /tmp/fresh/bin/python \
+            --find-links dist \
+            erebus-mcp-server
+
+      - name: All three packages resolved
+        run: |
+          /tmp/fresh/bin/python -c "import erebus, erebus_mcp, erebus_cli; print('imports ok')"
+          uv pip list --python /tmp/fresh/bin/python | grep -i erebus
+
+      - name: The binary is discoverable both ways, and answers
+        # Two discovery paths, and they are not equivalent. `shutil.which` is what the
+        # binding uses, and it only works once the environment is on PATH -- which is how
+        # an operator's activated venv or a uvx tool environment behaves.
+        #
+        # `binary_path()` has to work without that, because a launcher spawning the server
+        # as a subprocess often does not activate anything. That case returned None from
+        # `which` in local testing, so the fallback is the one carrying the weight.
+        run: |
+          echo "/tmp/fresh/bin" >> "$GITHUB_PATH"
+          /tmp/fresh/bin/python - <<'PY'
+          import json, os, shutil, subprocess, sys
+          from erebus_cli import binary_path
+
+          # Deliberately without the environment on PATH.
+          stripped = dict(os.environ, PATH="/usr/bin:/bin")
+          if shutil.which("erebus-cli", path=stripped["PATH"]):
+              sys.exit("a stray erebus-cli on the system PATH would invalidate this test")
+
+          fallback = binary_path()
+          if not fallback:
+              sys.exit("binary_path() could not locate the installed binary")
+          print("binary_path():", fallback)
+
+          out = subprocess.run([str(fallback)], input='{"method":"version"}',
+                               capture_output=True, text=True, check=True)
+          body = json.loads(out.stdout)
+          assert body["ok"] is True, body
+          print("version:", body["result"])
+          PY
+
+      - name: And on PATH, the way the binding resolves it
+        run: |
+          /tmp/fresh/bin/python -c "
+          import shutil, sys
+          found = shutil.which('erebus-cli')
+          sys.exit('installed but not on PATH') if not found else print('which:', found)
+          "
+
+      - name: No Rust toolchain was involved
+        # The whole point of shipping a binary. If cargo is somehow present on the runner
+        # and something silently built from source, this would not catch it, so it checks
+        # the binary is the installed one rather than a target/ artifact.
+        run: |
+          real=$(/tmp/fresh/bin/python -c 'import shutil; print(shutil.which("erebus-cli"))')
+          case "$real" in
+            /tmp/fresh/*) echo "resolved to the installed wheel: $real" ;;
+            *) echo "::error::resolved to $real, not the installed wheel"; exit 1 ;;
+          esac
+
+      - name: Drive the MCP server through the installed binary
+        # The real acceptance test: an operator's install, answering a tool call. Points at
+        # a reserved dead port so the run needs no chain and no secrets.
+        #
+        # `server.py` comes from the sparse checkout, not the wheel, because it is not in
+        # the wheel: `erebus-mcp-server` packages `src/erebus_mcp` only, and `server.py`
+        # sits beside it. So an install has every module and no way to start. Until it moves
+        # into the package with a `[project.scripts]` entry point, this step proves the
+        # binary and the seam ship correctly but cannot prove `uvx erebus-mcp-server` works,
+        # because that command does not exist yet.
+        run: |
+          mkdir -p /tmp/canary-state && chmod 700 /tmp/canary-state
+          printf '0x1234567890abcdef\n' > /tmp/canary-pool.key && chmod 600 /tmp/canary-pool.key
+          printf '0xfedcba0987654321\n' > /tmp/canary-account.key && chmod 600 /tmp/canary-account.key
+          /tmp/fresh/bin/python - <<'PY'
+          import asyncio, json, os, shutil
+          from mcp import ClientSession
+          from mcp.client.stdio import StdioServerParameters, stdio_client
+
+          dead = "http://127.0.0.1:1"
+          params = StdioServerParameters(
+              command="/tmp/fresh/bin/python",
+              args=["mcp-server/src/server.py"],
+              env={**os.environ,
+                   "EREBUS_BACKEND": "seam",
+                   "EREBUS_CLI": shutil.which("erebus-cli"),
+                   "AGENT_ADDRESS": "0xa11ce",
+                   "PROVING_SERVICE_URL": dead,
+                   "STARKNET_RPC_URL": dead,
+                   "POOL_ADDRESS": "0x254a6b2",
+                   "STARKNET_CHAIN_ID": "0x534e5f5345504f4c4941",
+                   "TOKEN_ADDRESS": "0x7042",
+                   "POOL_KEY_FILE": "/tmp/canary-pool.key",
+                   "ACCOUNT_KEY_FILE": "/tmp/canary-account.key",
+                   "EREBUS_STATE_DIR": "/tmp/canary-state",
+                   "EREBUS_SETTLEMENT_ROLE": "payer"},
+          )
+
+          async def main():
+              async with stdio_client(params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      await session.initialize()
+                      tools = {t.name for t in (await session.list_tools()).tools}
+                      print("tools:", sorted(tools))
+                      assert "doctor" in tools, tools
+
+                      res = await session.call_tool("doctor", {})
+                      body = (res.structured_content
+                              if res.structured_content is not None
+                              else json.loads(res.content[0].text))
+                      assert body["ok"] is True, body
+                      names = {c["name"] for c in body["result"]["checks"]}
+                      print("checks:", sorted(names))
+                      assert "rpc" in names, names
+                      print("the installed wheel served a tool call")
+
+          asyncio.run(main())
+          PY

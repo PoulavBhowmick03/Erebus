@@ -46,6 +46,9 @@ Where the stack has fought us is logged in [docs/friction.md](./docs/friction.md
 largest constraint so far is that a pool note has no payload field, so negotiation state is
 carried in note salts at 119 bits each.
 
+[docs/status.md](./docs/status.md) is the one-page current state, and the tiebreaker when
+any two documents here disagree.
+
 ---
 
 ## The problem
@@ -106,6 +109,33 @@ Agent B ─┘                                          │                     
                                                                  │
                                                     Viewing Key Disclosure (Kleidouchos)
 ```
+
+## Install
+
+> Nothing is published yet. These are the commands a tagged release produces, recorded here
+> so the release workflow has a target to match.
+
+Releases live on GitHub, with a static package index on GitHub Pages. GitHub has no Python
+registry, so the index is what makes the wheels resolvable rather than just downloadable.
+
+```bash
+uv tool install \
+  --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \
+  erebus-mcp-server
+```
+
+`--extra-index-url` rather than `--index-url`: PyPI still serves `mcp` and its dependencies,
+and only the three `erebus-*` packages come from the index.
+
+Not calling from Python? The binary speaks one JSON request on stdin and one envelope on
+stdout, so any language can drive it. Take it from the release directly rather than
+installing a Python package to extract it:
+
+```bash
+curl -LO https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/erebus-cli-aarch64-apple-darwin
+```
+
+Every release also carries `SHA256SUMS` and a CycloneDX `sbom.json`.
 
 ## Repo layout
 

@@ -5,10 +5,16 @@ directional channel pair between them, negotiation state written into note salts
 back with every field intact, an atomic settlement, and an independently reconstructed
 disclosure record.
 
-**Evidence boundary. 2026-07-31:** the recorded live transaction used public wire v1 and
-demonstrates mechanics, not private negotiation. New channels now use five-note wire v2:
-AES-256-GCM-SIV ciphertext plus a 128-bit tag. Wire v2 is verified offline but has not yet
-completed this live run. See friction.md F30/F31.
+**Evidence boundary. Updated 2026-08-18:** wire v2 completed this live run on 2026-08-07,
+settling as `0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3`, and an
+observer with no key recovered nothing from it. The note here previously said wire v2 was
+verified offline only; that stopped being true on 2026-08-07.
+
+Two limits remain. There has been no independent cryptographic review. And content
+confidentiality is not relationship confidentiality: the counterparty's address is written
+into public calldata at channel-open (F38), so an observer learns who dealt with whom
+without decrypting anything. See friction.md F30/F31/F38 and
+[privacy-model.md](./privacy-model.md).
 
 First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on blocks.
 
