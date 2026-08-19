@@ -8,6 +8,9 @@ dependencies = [
     "erebus-sdk",
 ]
 
+[project.scripts]
+erebus-mcp-server = "erebus_mcp.server:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 

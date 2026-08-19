@@ -56,11 +56,16 @@ def _translate(exc: SeamError) -> ErebusError:
 
 
 def _terms(raw: dict[str, Any]) -> OfferTerms:
+    # The CLI sends both u128 fields as strings (amount decimal, memo_hash 0x-hex):
+    # serde_json cannot carry integers above 2**64-1, and a real digest tail always
+    # exceeds that. Payloads captured before that change carry plain numbers.
+    amount = raw["amount"]
+    memo_hash = raw["memo_hash"]
     return OfferTerms(
-        amount=raw["amount"],
+        amount=int(amount) if isinstance(amount, str) else amount,
         token=raw["token"],
         deadline=raw["deadline"],
-        memo_hash=raw["memo_hash"],
+        memo_hash=int(memo_hash, 16) if isinstance(memo_hash, str) else memo_hash,
     )
 
 

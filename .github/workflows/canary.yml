@@ -139,12 +139,10 @@ jobs:
         # The real acceptance test: an operator's install, answering a tool call. Points at
         # a reserved dead port so the run needs no chain and no secrets.
         #
-        # `server.py` comes from the sparse checkout, not the wheel, because it is not in
-        # the wheel: `erebus-mcp-server` packages `src/erebus_mcp` only, and `server.py`
-        # sits beside it. So an install has every module and no way to start. Until it moves
-        # into the package with a `[project.scripts]` entry point, this step proves the
-        # binary and the seam ship correctly but cannot prove `uvx erebus-mcp-server` works,
-        # because that command does not exist yet.
+        # The server is launched by its installed console script, `erebus-mcp-server`,
+        # resolved inside the fresh environment. Nothing here reads from the checkout, so
+        # this step proves what a real `uvx erebus-mcp-server` user gets: install the
+        # wheels, run the command, get a serving MCP process.
         run: |
           mkdir -p /tmp/canary-state && chmod 700 /tmp/canary-state
           printf '0x1234567890abcdef\n' > /tmp/canary-pool.key && chmod 600 /tmp/canary-pool.key
@@ -155,9 +153,11 @@ jobs:
           from mcp.client.stdio import StdioServerParameters, stdio_client
 
           dead = "http://127.0.0.1:1"
+          server_cmd = shutil.which("erebus-mcp-server", path="/tmp/fresh/bin")
+          assert server_cmd, "erebus-mcp-server console script missing from the install"
           params = StdioServerParameters(
-              command="/tmp/fresh/bin/python",
-              args=["mcp-server/src/server.py"],
+              command=server_cmd,
+              args=[],
               env={**os.environ,
                    "EREBUS_BACKEND": "seam",
                    "EREBUS_CLI": shutil.which("erebus-cli"),

@@ -132,7 +132,12 @@ def register_tools(
 
         This call itself is not private: it writes the counterparty's address to public
         chain calldata (F38). Negotiation content and settlement amounts are hidden once
-        the channel is open; that you opened one with this counterparty is not."""
+        the channel is open; that you opened one with this counterparty is not.
+
+        This is an on-chain write: simulate, prove, submit. Expect 1-3 minutes
+        of silence and do not abort or retry while it runs; the operation is not
+        stuck below five minutes, and abandoning it does not cancel the
+        transaction it may already have submitted."""
         outcome = await _call(client.open_channel(counterparty))
         if outcome["ok"]:
             outcome["result"] = {"channel_handle": outcome["result"]}
@@ -153,7 +158,12 @@ def register_tools(
 
         If this server is configured as payer, the amount must not exceed its total
         spendable note value (call get_note_balance first); settlement returns any excess
-        as change. Payee offers are asks and do not spend the payee's notes."""
+        as change. Payee offers are asks and do not spend the payee's notes.
+
+        This is an on-chain write: simulate, prove, submit. Expect 1-3 minutes
+        of silence and do not abort or retry while it runs; the operation is not
+        stuck below five minutes, and abandoning it does not cancel the
+        transaction it may already have submitted."""
         parsed_amount, failure = _amount_or_error(amount)
         if failure is not None:
             return failure
@@ -186,7 +196,12 @@ def register_tools(
         leave the final seller-authored offer that the payer will accept.
 
         Pass amount as a decimal string and memo_hash as a hex string, as in
-        propose_offer."""
+        propose_offer.
+
+        This is an on-chain write: simulate, prove, submit. Expect 1-3 minutes
+        of silence and do not abort or retry while it runs; the operation is not
+        stuck below five minutes, and abandoning it does not cancel the
+        transaction it may already have submitted."""
         parsed_amount, failure = _amount_or_error(amount)
         if failure is not None:
             return failure
@@ -254,7 +269,12 @@ def register_tools(
         channel. A supplier/payee must never call this; leave a final payee-authored offer
         for the buyer to accept.
 
-        This closes the channel: one channel is one deal."""
+        This closes the channel: one channel is one deal.
+
+        This is an on-chain write: simulate, prove, submit. Expect 2-4 minutes
+        of silence and do not abort or retry while it runs; the operation is not
+        stuck below five minutes, and abandoning it does not cancel the
+        transaction it may already have submitted."""
         if settlement_role is SettlementRole.PAYEE:
             return _error(
                 SettlementErrorCode.INVALID_REQUEST,

@@ -62,6 +62,10 @@ class ServerConfig:
     mock_spendable_notes: tuple[int, ...]
     mock_pending_notes: tuple[int, ...]
     seam: SeamSettings | None = None
+    #: Run the read-only `doctor` inspection when the server starts (seam backend only)
+    #: and log every non-passing check with its repair. Costs a few RPC round-trips of
+    #: startup latency; disable with EREBUS_SKIP_STARTUP_DOCTOR=1 when starting offline.
+    startup_doctor: bool = True
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -104,6 +108,7 @@ class ServerConfig:
             mock_spendable_notes=mock_spendable,
             mock_pending_notes=mock_pending,
             seam=seam,
+            startup_doctor=os.environ.get("EREBUS_SKIP_STARTUP_DOCTOR", "").strip() != "1",
         )
 
 
