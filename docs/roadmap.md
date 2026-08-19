@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-17.
+Last source audit: 2026-08-19.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -62,18 +62,21 @@ around it: mainnet work is recorded, deferred, and kept ready to execute if D14 
 
 ## 3. Current evidence
 
-This section records what exists on 2026-08-17. Later sections describe the missing work.
+This section records what exists on 2026-08-19. Later sections describe the missing work.
 
 ### Committed and working
 
 - Wire v2 uses AES-256-GCM-SIV and a 128-bit tag across five STRK20 note salts.
-- A live Sepolia negotiation settled through two role-bound MCP servers.
-- The settlement transaction is
-  `0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3`.
+- Two live Sepolia negotiations settled. The wire-v2 reference run,
+  `0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3` (2026-08-07), and
+  the merged-code run with change, a third-party disclosure, and observer output,
+  `0x4191fe47a0b062605a7bbc08dd40eafdefcd52de4fd0288e8315eb48ee2f341` (2026-08-19, see
+  `docs/runs/2026-08-19-sepolia-run.md`).
 - `scripts/observer.py` recovers wire-v1 terms and does not recover wire-v2 content.
 - The Rust client can open channels, write offers, read state, settle, shield, grant, and reveal.
 - The Python seam uses protocol 2 and passes key-file paths to Rust.
-- The MCP server exposes nine tools over stdio.
+- The MCP server exposes ten tools over stdio, installable as the `erebus-mcp-server`
+  console script from wheels alone.
 - Payer and payee roles prevent the payee from calling `accept_and_settle`.
 - `wait_for_offers` reduces agent tool calls, but it still polls the chain.
 - The public demo runs at `https://erebus-private-agents.vercel.app`.
@@ -83,108 +86,36 @@ This section records what exists on 2026-08-17. Later sections describe the miss
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- The current working tree passes 213 Rust tests, with 3 ignored tests.
-- The current working tree passes 58 Python tests and 38 TypeScript tests.
+- `main` passes 216 Rust tests, 70 Python tests, and 38 TypeScript tests.
 - Clippy and rustdoc pass with warnings denied.
 - CI runs all of the above on every push and pull request, plus a gitleaks history scan.
   TypeScript is not in it; see §5.6.
 - `docs/privacy-model.md` is the canonical privacy boundary. The roadmap, `tech.md`,
   `friction.md`, and `privacy-observer-finding.md` point at it rather than restating it.
 
-### Active but not shipped
+### Shipped since the 2026-08-17 audit
 
-The change-note implementation merged to `main` on 2026-08-15 as `8dd9b74`, via PR #14 from
-branch `change_output_payback`.
+Everything the previous audit listed as "active but not shipped" has landed on `main` and
+been exercised live. The short record, with pointers:
 
-- `sdk/rs/src/client.rs::select_notes` selects sufficient inputs.
-- `sdk/rs/src/channel.rs::accept_and_settle_with_change` creates payer-owned change.
-- `ChangeOutput::existing` writes to an open payer self-channel.
-- `ChangeOutput::opening` opens the self-channel and token subchannel in the same action set.
-- Settlement tests cover `5 STRK -> 3 STRK payment + 2 STRK change`, and both change branches.
-- The `ErebusClient` trait signature is unchanged, so agent-side mocks need no update.
-- The commit also carries the observer and friction-log changes, against Phase 0 step 1.
-
-This is not yet a product feature. The MCP server, mock, reference agents, and guides still
-require exact note sums, so the stack above the SDK now describes settlement behavior the SDK
-no longer has. One `Unreviewed` marker remains, on `accept_and_settle_with_change` at
-`sdk/rs/src/channel.rs:516`. `select_notes` and the client-side change block were reviewed
-before the merge.
-
-Two behavior changes ride along and are not only about change:
-
-- `select_notes` previously failed when its subset search hit the state cap. It now falls
-  through to a greedy largest-first selection, so a settlement that once errored can succeed
-  with a larger input set.
-- A settlement now emits a seventh note when the payer holds no exact subset, and six when it
-  does. This is a new public observable. See §4.
-
-The pool-allowance path merged to `main` on 2026-08-16 as `79bf78e`, via PR #15 from branch
-`feat/approve_call`. It exists because the pool pulls both deposits and its own fee with
-`transfer_from` against the caller, so a standing allowance is a precondition for every charged
-write on either network, Sepolia included.
-
-- `sdk/rs/src/erc20.rs` builds `approve` and `allowance` calldata and reads `u256` returns.
-  Selectors are pinned against `starknet_py`, which shares no code with this crate.
-- `Executor::submit_call` submits a signed account call with no proof, for calls that are not
-  pool state transitions. It must never carry pool calldata.
-- `Client::approve_pool` and `Client::pool_allowance`. The spender is always the configured
-  pool and is not a parameter, so approving anything else is unrepresentable.
-- `AllowanceReport::covers(writes, deposits)` answers whether the standing allowance covers a
-  planned run. Fees and deposits share one budget.
-- `erebus-cli` gains `approve` and `allowance`.
-- `scripts/agent.sh fund` reads the live fee and approves deposit plus fee. It previously
-  approved the deposit alone, which was correct only while the fee was zero.
-- Amounts are `u128`, so an unbounded approval is not expressible through the SDK.
-
-This is reachable only from `erebus-cli` and the scripts. The Python seam and the MCP server
-expose neither method, which is deliberate: provisioning is operator install work, in the same
-category as `shield`. See §11 for the decision not to make either an agent tool.
-
-Two live readings taken while building it, both still open:
-
-- The Sepolia identity in `.env`, `0x032bb394...c805`, has a **zero** allowance against a
-  2 STRK fee. Its next charged write fails.
-- The identity that submitted the wire-v2 settlement, `0x23ad2a76...b948`, holds 94 STRK of
-  allowance. Sepolia runs have been spending down an old over-approval rather than working
-  because the amounts were right.
-
-Neither has been exercised through the merged code. Sepolia charges 2 STRK, so a Sepolia run
-exercises `collect_fee`, the allowance, and `submit_call` under the same mechanics mainnet
-uses, differing only in the number. Under D14 that run is the only validation this path will
-get, which makes it a required step rather than a convenience.
-
-Two more changes are in the working tree on 2026-08-17.
-
-**Settlement receipts report the selection.** `SettlementReceipt` gains `selected_input` and
-`change`, taken from the same `NoteSelection` the action set was built from rather than a
-fresh read, because a later balance query anchors at a different block. Both are optional and
-absent for `shield`, which selects nothing: absent and `"0"` are different facts. A test walks
-every payable target and asserts `selected_input == amount + change`, since two numbers that
-can drift silently are how an agent reconciling from a receipt goes wrong. Mirrored in
-`sdk/ts/src/interface.ts` and ARCHITECTURE.md §4 per the frozen-contract rule.
-
-Both are decimal strings. That settles the open question in §5.3: `OfferTerms.amount` is now
-the only `u128` still crossing the boundary as a JSON number, so converting it is a cleanup
-with a precedent rather than an interface debate.
-
-**`sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`.** Ten read-only inspections in
-dependency order: both key files, the state directory, RPC, prover, chain id, pool identity
-and version, registration, allowance against the live fee, and public gas balance.
-
-- It never returns `Err` for a fault. Transport failures become checks, so one run reports
-  everything wrong instead of costing one repair-and-rerun cycle per fault.
-- `ok:true` when faults are found. `ok:false` is reserved for the inspection itself failing,
-  so a caller can tell "I looked and found problems" from "I could not look".
-- A `Skipped` check does not count as ready. A check that could not run verified nothing.
-- Every non-passing check carries an action rather than a diagnosis, enforced by a test.
-
-First live run, 2026-08-17, against the Sepolia `.env` identity: nine of ten pass, including
-registration, chain id, pool version `0x322e30`, 450-block proof validity, and 57.6 STRK of
-public balance. The one failure is the allowance at zero against the 2 STRK fee, which is the
-same finding that has been open since 2026-08-16 and is now one command to see.
-
-Reachable only from `erebus-cli`. The Python seam, the MCP server, and the operator skill do
-not call it yet.
+- **Change-note settlement, end to end.** PR #16 aligned MCP, mock, and agents with the
+  Rust change path; `40b8543` mirrored `selected_input`, `change`, and string amounts
+  through the seam. The 2026-08-19 settlement exercised it live: 5 STRK selected,
+  2.75 paid, 2.25 returned, conservation asserted by test and observed on chain.
+- **The allowance path, under the live 2 STRK fee.** Exercised through merged code on
+  2026-08-19. Still open: the `.env` identity `0x032bb394...c805` holds a zero allowance;
+  the evidence run used the `erebus-g`/`erebus-h`/`erebus-f` identities instead.
+- **`doctor`, reachable from every layer.** CLI, Python seam (`2d69eda`), MCP tool
+  (`40b8543`), and at MCP startup since 2026-08-19 (logged, not fatal;
+  `EREBUS_SKIP_STARTUP_DOCTOR=1` skips). `new-identity.sh` ends with it and fails
+  non-ready.
+- **Every `u128` crosses every boundary as a string.** `40b8543` closed the MCP boundary;
+  the 2026-08-19 `u128_boundary` fix closed the CLI boundary after a full-width
+  `memo_hash` wedged every read of a live channel — the failure F-entry `F39` should
+  record. Envelopes now carry `protocol: 2` and the seam refuses a mismatch by name.
+- **An installable server.** `erebus_mcp.server` with a `[project.scripts]` entry point;
+  platform wheels for `erebus-cli`; the canary drives the installed console script with
+  nothing from the checkout. Publishing waits on the `v0.1.0` tag.
 
 ### Not proven
 
@@ -192,10 +123,12 @@ not call it yet.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
 - The sprint video does not exist.
 - No external operator completed a clean install.
-- No automated test starts the real MCP server, calls the Rust CLI, and reaches Starknet.
+- No automated test reaches Starknet. The seam integration test drives the real MCP
+  server and the real CLI, but stops at `doctor` against dead endpoints.
 - No independent reviewer reviewed the wire or settlement code.
 - No evidence supports full relationship privacy.
-- No release artifact exists for the Rust CLI or Python packages.
+- No release artifact is published. Wheels build and verify locally; the `v0.1.0` tag
+  publishes them.
 - No Erebus-specific agent skill exists.
 
 ## 4. Privacy and trust boundary
@@ -247,8 +180,8 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| Change support stops at the SDK | Merged in Rust; MCP, mock, agents, and guides still require exact sums | Run the same behavior through the Python seam, MCP, and agents |
-| The allowance path is untested against a live fee | Merged in Rust; no Sepolia run has exercised `collect_fee` through it | Approve and settle once on Sepolia, and record the receipt |
+| ~~Change support stops at the SDK~~ | Aligned through MCP, mock, and agents (PR #16, `40b8543`); exercised live 2026-08-19 | Done |
+| ~~The allowance path is untested against a live fee~~ | Exercised 2026-08-19 through merged code under the 2 STRK fee, receipt recorded | Done |
 | One deal per channel | Settlement breaks the fixed five-note message grid | Add framed entries and deal identifiers in the final wire |
 | One directional channel per sender and recipient | STRK20 derives a channel key without an index | Reuse both directional channels for framed deals, or use fresh identities |
 | Wire fingerprint | The fifth salt contains 59 fixed spare bits | Randomize the spare bits without weakening decoding |
@@ -261,18 +194,18 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 | No idempotency | A lost response can cause a duplicate operation | Add operation IDs and a durable submission journal |
 | No state reconstruction command | Lost handles can be derived in principle | Rebuild handles and cursors from keys and chain state |
 | No signer abstraction | Rust reads a raw account-key file | Add an account signer interface before production |
-| Protocol code lacks review | Several files still contain `Unreviewed` markers | Complete internal review before the external audit |
+| Protocol code lacks review | `Unreviewed` markers cleared 2026-08-17, but the 2026-08-19 diff was pushed to `main` on Poulav's instruction before line review | Both owners review the 2026-08-19 push, then keep review-before-merge |
 
 ### 5.2 Python SDK
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| No packaged Rust binary | `Seam` expects `erebus-cli` on disk | Ship the binary in platform-specific wheels |
+| ~~No packaged Rust binary~~ | Platform wheels ship the binary; the arm64 macOS leg is verified, the other two legs have not run | Run the Linux and x86-64 macOS legs once before the tag |
 | Duplicate response mapping | The seam adapter repeats Rust fields | Add schema compatibility tests for every method |
-| No protocol negotiation | The seam assumes protocol 2 | Refuse incompatible CLI versions at startup |
+| ~~No protocol negotiation~~ | Every envelope carries `protocol: 2`; the seam refuses a mismatch by name, and the MCP server handshakes at startup (2026-08-19) | Done |
 | Timeout is global | Each call uses one 300-second limit | Use operation-specific timeouts and report the failed stage |
 | Key-path safety relies on convention | Python can access the named files | Add permission checks and secret-leak regression tests |
-| `CLAUDE.md` contradicts the source | It says the binding stays on protocol 1; `_seam.py` passes opaque handles and a `state_dir`, which is protocol 2 | Correct `CLAUDE.md`, since agents read it as authoritative |
+| ~~`CLAUDE.md` contradicts the source~~ | Corrected 2026-08-19: `CLAUDE.md` now says the binding speaks protocol 2 | Done |
 
 The Python SDK must stay a binding. It must not add hashes, salts, felt arithmetic, note
 selection, signing, or cryptography.
@@ -281,25 +214,25 @@ selection, signing, or cryptography.
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| Exact-note rules conflict with Rust change | `_require_payable` uses exact subset sums | Agree on the interface and update all tool behavior together |
+| ~~Exact-note rules conflict with Rust change~~ | PR #16: `_require_payable` checks `0 < amount <= total`, tool text rewritten | Done |
 | Missing payment looks consistent | `paid_amount is None` returns `True` | Return an unknown result, or fail closed |
-| Wide `memo_hash` values fail at JSON clients | The tool schema uses a JSON integer. The Rust half is done: the CLI now accepts a whole digest as hex and truncates through `wire::truncate_memo_hash_bytes` | Change the tool schema to a canonical hex string, and stop telling agents to truncate their own hash |
-| Amounts above 2^53 lose precision at JSON clients | `OfferTerms.amount` and `memo_hash` serialize as JSON numbers. 1 STRK is 1e18, well past the JSON safe-integer range, so any JavaScript MCP host reading `read_channel_state` silently rounds | Serialize both as decimal strings, as `balance` already does. This changes the frozen interface, so it needs both owners |
+| ~~Wide `memo_hash` values fail at JSON clients~~ | `d1731f4` fixed the input; the 2026-08-19 `u128_boundary` fix carried the output as hex strings | Done |
+| ~~Amounts above 2^53 lose precision at JSON clients~~ | Every `u128` crosses both boundaries as a string (`40b8543`, 2026-08-19) | Done |
 | `wait_for_offers` accepts invalid limits | Counts and timeouts have no range checks | Reject zero and negative values before polling |
 | Polling remains expensive | Each poll repeats note reads | Add discovery subscriptions after Q3 publishes a supported endpoint |
 | Concurrency behavior is unproven | `asyncio.to_thread` starts independent calls | Reproduce overlaps, serialize writes, and add concurrency tests |
 | Mock is the direct-start default | A local run can look like a real product | Show the backend in health output and require explicit production mode |
 | MCP dependency is too broad | Package requires `mcp[cli]>=1.2.0` | Pin the tested major range and test supported versions |
-| No real-seam transport test | MCP tests use a mock or `StubSeam` | Start `server.py`, call the real CLI, and inspect its result |
+| ~~No real-seam transport test~~ | `test_seam_integration.py` (2026-08-18) drives the real server and the real CLI | Done |
 | Viewing grants enter tool results | MCP hosts and transcripts can retain the secret | Add a secure export path and clear operator warnings |
-| No health or readiness tool | Startup checks only configuration fields. Rust has `doctor`; the MCP server does not call it | Run `doctor` at server start and refuse to come up unready |
+| ~~No health or readiness tool~~ | `doctor` is an MCP tool and runs at startup (2026-08-19), logged rather than fatal: an operator may start first and repair second | Done; refusal deliberately not adopted |
 
 ### 5.4 Reference agents and policy
 
 | Problem | Current mechanism | Required result |
 |---|---|---|
-| Reference agents call the mock directly | `run_negotiation` accepts `MockErebusClient` | Add an MCP-client reference flow |
-| Policy computes exact subset sums | `_payable_amounts` mirrors the old settlement rule | Update policy after the change-note interface decision |
+| ~~Reference agents call the mock directly~~ | `5362ada`: same policies over real MCP transport | Done |
+| ~~Policy computes exact subset sums~~ | Aligned with change-note settlement in PR #16 | Done |
 | Seller policy uses a fixed strategy | One threshold and one counter path | Keep this simple, but expose policy inputs as configuration |
 | No crash behavior | The loop assumes every call returns once | Resume from channel state and operation journal |
 | No operator approval policy | The agent can spend within its static budget | Add per-token, per-deal, and daily limits |
@@ -334,14 +267,14 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 | Problem | Current mechanism | Required result |
 |---|---|---|
 | ~~No continuous integration~~ | Added 2026-08-17 in `.github/workflows/ci.yml`. Rust, Python, and gitleaks | Add TypeScript when the GitHub Packages dependency can be resolved in CI (F8) |
-| Every package is `0.0.0` | No release version exists | Define one version policy and release `v0.1.0` |
-| No install command | Operators build Rust and source the workspace | Make `uvx erebus-mcp-server` install the matching CLI |
+| Every package is `0.0.1` | One workspace version, decided 2026-08-17 | Tag `v0.1.0` |
+| No *published* install | `uvx erebus-mcp-server` works from wheels; verified by the canary from an empty environment | Push the `v0.1.0` tag, which publishes wheels and the index |
 | No compatibility manifest | Pool, prover, and SDK versions can drift | Pin the pool class, ABI, prover protocol, and oracle revision |
 | ~~No `doctor` command~~ | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`, bound through the Python seam the same day | Wire it into the MCP server and the operator skill |
 | No backup and restore process | Key and state loss can be permanent | Add encrypted backup, restore, and state-rebuild procedures |
 | No monitoring | Logs show local events only | Add stage timing, transaction status, retry count, and RPC health |
 | No secret-safe log policy | Viewing grants and paths can enter logs | Redact grants, keys, authorization headers, and RPC secrets |
-| No release provenance | GitHub has source only | Publish checksums, build metadata, and a software bill of materials |
+| ~~No release provenance~~ | `SHA256SUMS` and a CycloneDX SBOM over 224 components, generated from lockfiles alone, `--check` on every push | The tag publishes them |
 
 ### 5.7 Sprint delivery, and mainnet as deferred work
 
@@ -523,6 +456,9 @@ Exit:
 
 ### Phase 2: Align Rust, Python, MCP, and agents
 
+**Status 2026-08-19: complete.** PR #16, `40b8543`, and the string-amount work closed it;
+the cross-layer settlement ran live on 2026-08-19.
+
 Target: 2026-08-15 to 2026-08-21.
 
 Owners: Poulav owns Rust. Ishita owns MCP and agents. Both own the seam contract.
@@ -548,6 +484,9 @@ Exit:
 - The full local gate passes from a clean checkout.
 
 ### Phase 3: Make the MCP path a release candidate
+
+**Status 2026-08-19: complete except publication.** Real-seam test, startup handshake and
+`doctor`, installable entry point; the `v0.1.0` tag is the remaining step.
 
 Target: 2026-08-19 to 2026-08-24.
 
@@ -605,6 +544,10 @@ Exit:
 
 ### Phase 5: Package the operator product
 
+**Status 2026-08-19: one step open.** Encrypted backup and restore (step 10) has not
+started; the two untested wheel legs need one `workflow_dispatch` run. Everything else is
+built and rehearsed.
+
 Target: 2026-08-20 to 2026-08-28.
 
 Owners: Poulav owns Rust artifacts. Ishita owns Python packaging and operator experience.
@@ -648,6 +591,9 @@ Exit:
 - Release artifacts contain no keys, state files, or local endpoint secrets.
 
 ### Phase 6: Publish `v0.1.0`
+
+**Status 2026-08-19: gated on review.** The mechanics are rehearsed end to end; what
+remains is both owners' review of the 2026-08-19 push, the wheel legs, and the tag.
 
 Target: 2026-08-27 to 2026-08-31.
 
@@ -877,8 +823,14 @@ board decides what to do next and §7 decides what done means.
 - [x] Merge the change-note work. Merged 2026-08-15 as `8dd9b74`, PR #14.
 - [x] Merge the pool-allowance path. Merged 2026-08-16 as `79bf78e`, PR #15.
 - [ ] Grant the Sepolia allowance to `0x032bb394...c805`. `doctor` reports it as the only
-      failing check; everything else in that configuration passes.
-- [ ] One full Sepolia run on merged code, with a receipt, observer output, and a disclosure.
+      failing check; everything else in that configuration passes. No longer blocks the
+      evidence run, which used `erebus-g`/`erebus-h` instead; still worth closing so the
+      runbook's default identity works.
+- [x] One full Sepolia run on merged code, with a receipt, observer output, and a
+      disclosure. Done 2026-08-19: settlement `0x4191fe47...f341` with change, a
+      disclosure reconstructed by an uninvolved identity, and observer output showing
+      content not recovered / traffic classified. It also found and fixed the
+      u128-boundary read wedge. `docs/runs/2026-08-19-sepolia-run.md`.
 - [ ] Rewrite the demo video script, deleted 2026-08-16.
 - [ ] Public three-minute video that names its network.
 - [ ] `strk20.json` with the video URL, and an explicit note that `transactions` is empty.
@@ -918,6 +870,16 @@ transactions. See §5.7.
       Still manual, because they need a funded identity: everything that writes.
 - [x] MCP-client reference agents. Done 2026-08-17 by Ishita as `5362ada`.
 - [ ] Erebus operator skill and unsafe-behavior evaluations.
+- [ ] Both owners review the 2026-08-19 push (`749cdd4` sdk, `c8741ff` mcp-server,
+      `bb4e636` scripts/docs). It landed on Poulav's instruction ahead of the usual
+      review; Poulav owns the Rust lines, Ishita the mcp-server lines.
+- [ ] Run the Linux x86-64 and macOS x86-64 wheel legs once (`workflow_dispatch`) before
+      the tag; only arm64 macOS has built.
+- [ ] Re-verify the MCP read path against the fixed CLI over freshly started servers.
+      During the 2026-08-19 run the long-running servers predated the seam fix, so reads
+      went through the CLI while only writes were proven over MCP transport.
+- [ ] Write F39: the u128 JSON-boundary wedge, its mislabeled error, and the stale-server
+      skew it exposed. Material in `docs/runs/2026-08-19-sepolia-run.md`. Poulav's voice.
 - [x] Platform wheels containing `erebus-cli`. Done 2026-08-17 as `5f7bc09` and `3c32561`.
       `erebus-cli` is its own package so the pure-Python half stays one wheel; a build hook
       forces the platform tag, because hatchling defaults to `py3-none-any` and a binary
