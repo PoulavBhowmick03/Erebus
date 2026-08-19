@@ -267,7 +267,7 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 | Problem | Current mechanism | Required result |
 |---|---|---|
 | ~~No continuous integration~~ | Added 2026-08-17 in `.github/workflows/ci.yml`. Rust, Python, and gitleaks | Add TypeScript when the GitHub Packages dependency can be resolved in CI (F8) |
-| Every package is `0.0.1` | One workspace version, decided 2026-08-17 | Tag `v0.1.0` |
+| ~~Every package is `0.0.1`~~ | Bumped to `0.1.0` across all seven manifests 2026-08-20 | Push the tag |
 | No *published* install | `uvx erebus-mcp-server` works from wheels; verified by the canary from an empty environment | Push the `v0.1.0` tag, which publishes wheels and the index |
 | No compatibility manifest | Pool, prover, and SDK versions can drift | Pin the pool class, ABI, prover protocol, and oracle revision |
 | ~~No `doctor` command~~ | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`, bound through the Python seam the same day | Wire it into the MCP server and the operator skill |
@@ -922,7 +922,8 @@ transactions. See §5.7.
       wholesale, because both are dated records and silently editing them would erase when
       the project believed what.
 - [ ] Tagged `v0.1.0` release with checksums and SBOM. Version policy decided 2026-08-17:
-      one version across the workspace, `0.0.1` now, incrementing toward `0.1.0`.
+      one version across the workspace. Bumped to `0.1.0` on 2026-08-20 across all seven
+      manifests, because the workflow takes versions from the manifests rather than the tag.
       Checksums and SBOM done 2026-08-18. `scripts/sbom.py` reads `Cargo.lock` and
       `uv.lock` and emits CycloneDX 1.5 covering 224 components, 182 cargo and 42 pypi. No
       network and no third-party tool, because a generator that resolved anything itself

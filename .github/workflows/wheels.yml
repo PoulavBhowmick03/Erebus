@@ -229,14 +229,41 @@ jobs:
           path: dist
 
       - name: Create the release
+        # The preamble carries the statements every pre-1.0 release must make: unaudited,
+        # no mainnet canary, relationship privacy incomplete, and which platforms are
+        # supported. It is prepended to the generated notes rather than written per
+        # release, because a required statement that has to be remembered each time is one
+        # that eventually gets forgotten. Two steps rather than combining --notes-file with
+        # --generate-notes, whose precedence is not something to guess at during a release.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          test -s docs/release-preamble.md || {
+            echo "::error::docs/release-preamble.md is missing or empty"; exit 1; }
+
           gh release create "${{ github.ref_name }}" dist/* \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
             --verify-tag
+
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --json body -q .body > /tmp/generated-notes.md
+          cat docs/release-preamble.md /tmp/generated-notes.md > /tmp/release-notes.md
+          gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+            --notes-file /tmp/release-notes.md
+
+          # Fail the release if the notes lost the required statements, rather than
+          # publishing a release that quietly claims less than it should.
+          body=$(gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
+                 --json body -q .body)
+          for phrase in "unaudited" "never executed on mainnet" "not the relationship" \
+                        "Linux x86-64 and macOS arm64"; do
+            case "$body" in
+              *"$phrase"*) ;;
+              *) echo "::error::release notes are missing: $phrase"; exit 1 ;;
+            esac
+          done
 
       - name: Build the package index
         # GitHub has no Python registry, so Release assets are just files at URLs and an

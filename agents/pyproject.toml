@@ -1,6 +1,6 @@
 [project]
 name = "erebus-agents"
-version = "0.0.1"
+version = "0.1.0"
 description = "Reference agents demonstrating the offer/counter/accept loop"
 requires-python = ">=3.11"
 dependencies = ["mcp[cli]>=1.2.0", "erebus-mcp-server"]

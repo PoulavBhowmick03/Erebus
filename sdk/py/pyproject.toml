@@ -1,6 +1,6 @@
 [project]
 name = "erebus-sdk"
-version = "0.0.1"
+version = "0.1.0"
 description = "Thin Python binding over the Erebus Rust client, no protocol logic"
 requires-python = ">=3.11"
 # The binding shells out to `erebus-cli`, so an install without it resolves fine and then
