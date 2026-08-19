@@ -143,9 +143,16 @@ impl TermsParams {
     }
 }
 
+/// Version of the request/response contract this binary speaks. Carried on every envelope
+/// so a consumer can fail with a named mismatch instead of a shape error deep inside its
+/// own decoding — a stale server against a newer binary surfaced exactly that way on
+/// 2026-08-19. Bump on any change to a request or result shape, not only breaking ones.
+const PROTOCOL: u8 = 2;
+
 #[derive(Debug, Serialize)]
 struct Response {
     ok: bool,
+    protocol: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,6 +171,7 @@ impl Response {
         match serde_json::to_value(value) {
             Ok(result) => Self {
                 ok: true,
+                protocol: PROTOCOL,
                 result: Some(result),
                 error: None,
             },
@@ -174,6 +182,7 @@ impl Response {
     fn err(code: &'static str, message: impl Into<String>, retryable: bool) -> Self {
         Self {
             ok: false,
+            protocol: PROTOCOL,
             result: None,
             error: Some(ErrorBody {
                 code,
@@ -188,6 +197,11 @@ impl Response {
 enum CliError {
     #[error("request is not valid JSON: {0}")]
     BadRequest(String),
+    /// The result computed fine and could not be encoded. Labeled distinctly from
+    /// `BadRequest`: reporting an output failure as "request is not valid JSON" once sent
+    /// a debugging session through the request parser when the request was blameless.
+    #[error("response failed to serialize: {0}")]
+    BadResponse(String),
     #[error("field {field} is invalid: {value}")]
     BadValue { field: &'static str, value: String },
     #[error(transparent)]
@@ -204,6 +218,7 @@ impl CliError {
             Self::BadRequest(_) | Self::BadValue { .. } | Self::State(_) => {
                 Response::err("INVALID_REQUEST", self.to_string(), false)
             }
+            Self::BadResponse(_) => Response::err("INTERNAL", self.to_string(), false),
             Self::KeyFile(_) => Response::err("IDENTITY_UNAVAILABLE", self.to_string(), false),
             Self::Client(error) => client_error_response(error),
         }
@@ -215,7 +230,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         Request::Version => Ok(serde_json::json!({
             "name": env!("CARGO_PKG_NAME"),
             "version": env!("CARGO_PKG_VERSION"),
-            "protocol": 2,
+            "protocol": PROTOCOL,
         })),
         Request::GeneratePoolKey { path } => {
             let generated = generate_pool_key_file(path)?;
@@ -341,7 +356,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
 }
 
 fn serialize(value: impl Serialize) -> Result<serde_json::Value, CliError> {
-    serde_json::to_value(value).map_err(|error| CliError::BadRequest(error.to_string()))
+    serde_json::to_value(value).map_err(|error| CliError::BadResponse(error.to_string()))
 }
 
 fn offer_id(value: String) -> OfferId {

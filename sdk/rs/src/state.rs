@@ -228,6 +228,16 @@ impl StateStore {
     /// Locks and loads a channel. Keep the returned lease alive through any async operation
     /// that uses or advances its cursor.
     pub fn lock(&self, handle: &ChannelHandle) -> Result<ChannelLease, StateError> {
+        // Checked before the lock file is created: opening the lock first left a
+        // `<handle>.lock` behind for every unknown handle ever asked about, and a state
+        // directory accumulating locks for channels that do not exist reads as corruption
+        // during an incident. Racing a concurrent `create` is benign — the caller that
+        // loses simply reports the handle as it found it, not found.
+        let state_path = self.state_path(handle);
+        if !state_path.exists() {
+            return Err(StateError::NotFound(handle.clone()));
+        }
+
         let lock_path = self.lock_path(handle);
         let lock = OpenOptions::new()
             .read(true)
@@ -535,6 +545,22 @@ mod tests {
         ));
         let store = StateStore::new(&root).expect("store");
         (root, store)
+    }
+
+    /// Asking about a handle that does not exist must not leave anything behind. The lock
+    /// file used to be created before the existence check, so every unknown handle ever
+    /// queried left a permanent `<handle>.lock` in the state directory.
+    #[test]
+    fn an_unknown_handle_leaves_no_trace_in_the_state_directory() {
+        let (root, store) = temporary_store();
+        let absent = ChannelHandle::parse(format!("ch_{}", "ef".repeat(32))).expect("handle");
+        assert!(matches!(store.lock(&absent), Err(StateError::NotFound(_))));
+        let leftovers: Vec<_> = std::fs::read_dir(&root)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
     }
 
     #[test]

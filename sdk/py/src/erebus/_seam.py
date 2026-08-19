@@ -29,6 +29,10 @@ __all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable"]
 #: A write includes preflight, a ~20 s proof, fee estimation, submission, and receipt polling.
 DEFAULT_TIMEOUT_SECONDS = 300
 
+#: The request/response contract this binding speaks. The binary reports its own on every
+#: envelope; ``call`` refuses a mismatch by name instead of failing on a changed shape.
+PROTOCOL = 2
+
 
 class SeamUnavailable(RuntimeError):
     """The ``erebus-cli`` binary could not be found or could not be run."""
@@ -144,6 +148,18 @@ class Seam:
                 f"{method} did not return a JSON envelope "
                 f"(exit {completed.returncode}): {completed.stdout!r}{completed.stderr!r}"
             ) from exc
+
+        # Envelopes carry the contract version they speak. A mismatch means the binary and
+        # this binding were installed from different releases; failing here, by name, beats
+        # the alternative — a shape error deep inside whichever field changed. Envelopes
+        # from binaries that predate the field pass, because they can only be protocol 2.
+        spoken = envelope.get("protocol", PROTOCOL)
+        if spoken != PROTOCOL:
+            raise SeamUnavailable(
+                f"{self._binary} speaks seam protocol {spoken}, this binding speaks "
+                f"{PROTOCOL}. Install erebus-cli and erebus-sdk from the same release, "
+                "and restart any long-running server that spawned this binding."
+            )
 
         if envelope.get("ok"):
             return envelope.get("result", {})

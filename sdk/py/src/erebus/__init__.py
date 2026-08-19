@@ -20,8 +20,8 @@ the key in the same heap, contrary to CLAUDE.md constraint 6.
 The Rust binary also generates entropy. Python does not produce keys or salts.
 """
 
-from erebus._seam import ErebusError, Seam, SeamConfig, SeamUnavailable
+from erebus._seam import PROTOCOL, ErebusError, Seam, SeamConfig, SeamUnavailable
 
-__all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable", "__version__"]
+__all__ = ["PROTOCOL", "ErebusError", "Seam", "SeamConfig", "SeamUnavailable", "__version__"]
 
 __version__ = "0.0.0"

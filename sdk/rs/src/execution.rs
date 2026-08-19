@@ -135,6 +135,12 @@ impl Executor {
     ///
     /// Read both private keys from operator-owned files immediately before this call. The
     /// executor does not retain them.
+    ///
+    /// Stage names go to stderr as they start. A write is minutes of silence otherwise,
+    /// and a caller that cannot tell "proving" from "hung" aborts and retries, which is
+    /// how duplicate submissions happen. stderr is outside the CLI's one-envelope stdout
+    /// contract, so consumers of the envelope are unaffected; the lines carry no key
+    /// material, no addresses, and no amounts.
     pub async fn execute(
         &self,
         user_address: Felt,
@@ -146,6 +152,7 @@ impl Executor {
         let proving_number = head.saturating_sub(self.config.proving_block_lag).max(1);
         let proving_block = BlockId::Number(proving_number);
 
+        stage("simulating the action set against the proving block");
         let compile_calldata = calldata::compile_actions(user_address, pool_private_key, actions);
         let simulated = self
             .rpc
@@ -170,6 +177,7 @@ impl Executor {
             proof_nonce,
             actions,
         )?;
+        stage("proving, the long stage: tens of seconds to minutes");
         let proof = self
             .prover
             .prove_transaction(&proving_block, &proof_invocation)
@@ -216,6 +224,7 @@ impl Executor {
                 s: Felt::ZERO,
             })
             .with_proof(proof.proof.clone());
+        stage("estimating fee, which also verifies the proof");
         let bounds = self
             .rpc
             .estimate_bounds(&estimate_transaction, &BlockId::Latest)
@@ -230,6 +239,7 @@ impl Executor {
         );
         let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
         let transaction = invoke.with_signature(signature).with_proof(proof.proof);
+        stage("submitting apply_actions and waiting for the receipt");
         let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;
         let receipt = self.wait_for_receipt(transaction_hash).await?;
 
@@ -512,6 +522,11 @@ pub enum ExecutionError {
         /// Configured wait.
         waited: Duration,
     },
+}
+
+/// One stage line on stderr. Freestanding so the write path reads as its stages.
+fn stage(name: &str) {
+    eprintln!("stage: {name}");
 }
 
 #[cfg(test)]

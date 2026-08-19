@@ -1287,16 +1287,81 @@ impl ErebusClient for Client {
     }
 }
 
+/// JSON representations for the two `u128` fields that cross the CLI boundary.
+///
+/// serde_json refuses any integer above `u64::MAX`, and the failure lands on the *read*:
+/// the offer writes fine, and then every `read_channel_state` of that channel returns an
+/// error, permanently, because the note is already on-chain. A full-width `memo_hash` hits
+/// this always (it is a digest tail, uniformly distributed over 128 bits); `amount` hits it
+/// past ~18.4 tokens of 1e18 base units. Strings sidestep the ceiling the same way the
+/// MCP boundary already does for amounts.
+///
+/// Deserialization stays tolerant of plain numbers so payloads captured before this change
+/// still parse; only values small enough to have serialized at all can exist in them.
+mod u128_boundary {
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Text(String),
+        Legacy(u64),
+    }
+
+    /// Decimal string, matching the amount convention at the MCP boundary.
+    pub mod decimal {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(&value.to_string())
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+            match Repr::deserialize(deserializer)? {
+                Repr::Text(text) => text
+                    .parse()
+                    .map_err(|_| D::Error::custom(format!("not a decimal amount: {text}"))),
+                Repr::Legacy(value) => Ok(u128::from(value)),
+            }
+        }
+    }
+
+    /// `0x`-prefixed hex string, matching the memo_hash convention at the MCP boundary:
+    /// callers compare it against digest tails, which are written in hex.
+    pub mod hex {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(&format!("{value:#x}"))
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+            match Repr::deserialize(deserializer)? {
+                Repr::Text(text) => {
+                    let digits = text
+                        .strip_prefix("0x")
+                        .ok_or_else(|| D::Error::custom(format!("not a hex memo_hash: {text}")))?;
+                    u128::from_str_radix(digits, 16)
+                        .map_err(|_| D::Error::custom(format!("not a hex memo_hash: {text}")))
+                }
+                Repr::Legacy(value) => Ok(u128::from(value)),
+            }
+        }
+    }
+}
+
 /// Offer terms represented by the canonical negotiation wire.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OfferTerms {
-    /// Token base units.
+    /// Token base units. A decimal string in JSON, see [`u128_boundary`].
+    #[serde(with = "u128_boundary::decimal")]
     pub amount: u128,
     /// Must match this client's configured token.
     pub token: Felt,
     /// Unix seconds.
     pub deadline: u64,
-    /// 128-bit commitment to off-chain detail.
+    /// 128-bit commitment to off-chain detail. Hex in JSON, see [`u128_boundary`].
+    #[serde(with = "u128_boundary::hex")]
     pub memo_hash: u128,
 }
 
@@ -2038,6 +2103,40 @@ mod tests {
 
     fn handle() -> ChannelHandle {
         ChannelHandle::parse(format!("ch_{}", "ab".repeat(32))).expect("handle")
+    }
+
+    /// Both `u128` fields must survive the JSON boundary at full width. serde_json caps
+    /// numbers at `u64::MAX`, and the first live offer carrying a real digest tail as its
+    /// memo_hash made every read of its channel fail permanently — the note was already
+    /// on-chain. Amounts hit the same ceiling past ~18.4 tokens of 1e18 base units.
+    #[test]
+    fn full_width_terms_cross_the_json_boundary_as_strings() {
+        let terms = OfferTerms {
+            amount: u128::MAX,
+            token: Felt::ONE,
+            deadline: 1,
+            memo_hash: u128::MAX,
+        };
+        let value = serde_json::to_value(terms).expect("full-width terms serialize");
+        assert_eq!(value["amount"], "340282366920938463463374607431768211455");
+        assert_eq!(value["memo_hash"], "0xffffffffffffffffffffffffffffffff");
+        let back: OfferTerms = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, terms);
+    }
+
+    /// Payloads captured before the string representation carry plain numbers; only values
+    /// small enough to have serialized at all can exist in them, and they must keep parsing.
+    #[test]
+    fn legacy_numeric_terms_still_deserialize() {
+        let value = serde_json::json!({
+            "amount": 3_000_000_000_000_000_000u64,
+            "token": "0x1",
+            "deadline": 1,
+            "memo_hash": 0x1234,
+        });
+        let terms: OfferTerms = serde_json::from_value(value).expect("legacy parse");
+        assert_eq!(terms.amount, 3_000_000_000_000_000_000);
+        assert_eq!(terms.memo_hash, 0x1234);
     }
 
     #[test]
