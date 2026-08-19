@@ -1353,14 +1353,14 @@ mod u128_boundary {
 /// Offer terms represented by the canonical negotiation wire.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OfferTerms {
-    /// Token base units. A decimal string in JSON, see [`u128_boundary`].
+    /// Token base units. A decimal string in JSON; see the `u128_boundary` module below.
     #[serde(with = "u128_boundary::decimal")]
     pub amount: u128,
     /// Must match this client's configured token.
     pub token: Felt,
     /// Unix seconds.
     pub deadline: u64,
-    /// 128-bit commitment to off-chain detail. Hex in JSON, see [`u128_boundary`].
+    /// 128-bit commitment to off-chain detail. Hex in JSON; see the `u128_boundary` module.
     #[serde(with = "u128_boundary::hex")]
     pub memo_hash: u128,
 }
