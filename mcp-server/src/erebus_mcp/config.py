@@ -108,7 +108,7 @@ class ServerConfig:
             mock_spendable_notes=mock_spendable,
             mock_pending_notes=mock_pending,
             seam=seam,
-            startup_doctor=os.environ.get("EREBUS_SKIP_STARTUP_DOCTOR", "").strip() != "1",
+            startup_doctor=not _flag("EREBUS_SKIP_STARTUP_DOCTOR"),
         )
 
 
@@ -136,6 +136,10 @@ def _seam_settings() -> SeamSettings:
         state_dir=Path(_require("EREBUS_STATE_DIR")),
         token=_require("TOKEN_ADDRESS"),
     )
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _require(name: str) -> str:
