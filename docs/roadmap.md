@@ -548,7 +548,10 @@ Work:
    Done 2026-08-17 as `c3960de`, minus TypeScript: `sdk/ts` builds against a GitHub Packages
    dependency that a bare checkout cannot resolve (F8), and a job gated on a token that may
    not exist would report green without testing anything.
-2. Build `erebus-cli` for macOS arm64, macOS x86-64, and Linux x86-64.
+2. ~~Build `erebus-cli` for macOS arm64, macOS x86-64, and Linux x86-64.~~ macOS arm64 and
+   Linux x86-64 build and install clean, both verified 2026-08-19. Intel macOS is dropped:
+   its `macos-13` runner is no longer assigned, and a cross-build from arm64 would ship a
+   binary CI never executed. Unsupported for now, and the release notes say so.
 3. Package each binary with the matching Python wheel. The binding resolves it with
    `shutil.which("erebus-cli")`, so the wheel must place it on `PATH`.
 4. Make `uvx erebus-mcp-server` find the packaged binary.
@@ -603,6 +606,8 @@ Exit:
 - Every public claim links to source, a test, or a transaction.
 - The release notes state that the product is unaudited.
 - The release notes state that relationship privacy is not complete.
+- The release notes state which platforms are supported: Linux x86-64 and macOS arm64.
+  Intel macOS is not.
 
 ### Phase 7: Reliability and recovery
 
@@ -860,8 +865,9 @@ transactions. See §5.7.
 - [ ] Both owners review the 2026-08-19 push (`749cdd4` sdk, `c8741ff` mcp-server,
       `bb4e636` scripts/docs). It landed on Poulav's instruction ahead of the usual
       review; Poulav owns the Rust lines, Ishita the mcp-server lines.
-- [ ] Run the Linux x86-64 and macOS x86-64 wheel legs once (`workflow_dispatch`) before
-      the tag; only arm64 macOS has built.
+- [x] Run the remaining wheel legs once before the tag. Done 2026-08-19: Linux x86-64
+      built, installed into a clean environment, and ran, for the first time. Intel macOS
+      was dropped the same day rather than fixed; see Phase 5 step 2.
 - [x] Re-verify the MCP read path against the fixed CLI over freshly started servers.
       Done 2026-08-19. A fresh `erebus_mcp.server` on the seam backend, driven by a real
       MCP client against the live settled channel `ch_620b53e1...`: `doctor`,

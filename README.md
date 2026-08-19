@@ -135,6 +135,9 @@ installing a Python package to extract it:
 curl -LO https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/erebus-cli-aarch64-apple-darwin
 ```
 
+Supported platforms are **Linux x86-64** and **macOS arm64**. Intel macOS is not built:
+its runner is no longer available, and a cross-build would ship a binary CI never executed.
+
 Every release also carries `SHA256SUMS` and a CycloneDX `sbom.json`.
 
 Installed, `erebus-mcp-server` starts the MCP server (configuration is environment

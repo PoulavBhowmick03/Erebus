@@ -4,8 +4,15 @@ name: Wheels
 # target. The Python binding resolves the binary with `shutil.which`, so the wheel installs
 # it into the environment's script directory rather than importing it.
 #
-# Runs on demand and on a version tag. Not on every push: three cross-builds per commit is
-# a lot of CI time for an artifact nobody consumes until a release.
+# Runs on demand and on a version tag. Not on every push: cross-builds per commit are a lot
+# of CI time for an artifact nobody consumes until a release.
+#
+# Intel macOS (`x86_64-apple-darwin`) is deliberately absent. It built on a `macos-13`
+# runner, which stopped being assigned: two dispatches in August 2026 got zero steps, one
+# sitting queued until it was cancelled at 24h. Cross-compiling it from the arm64 runner
+# would produce a wheel this workflow could not execute on its own architecture, and
+# shipping an unexecuted binary is worse than shipping none. Decided 2026-08-19: Intel Macs
+# are unsupported for now, stated in the release notes rather than half-built here.
 
 on:
   workflow_dispatch:
@@ -31,9 +38,6 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-14
             wheel_platform: macosx_11_0_arm64
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            wheel_platform: macosx_10_12_x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -177,7 +181,7 @@ jobs:
         # only noticed by the person who cannot install it.
         run: |
           missing=0
-          for tag in manylinux macosx_11_0_arm64 macosx_10_12_x86_64; do
+          for tag in manylinux macosx_11_0_arm64; do
             ls dist/ | grep -q "$tag" || { echo "::error::no erebus-cli wheel for $tag"; missing=1; }
           done
           for pkg in erebus_sdk erebus_mcp_server; do
