@@ -144,3 +144,23 @@ Five blockers from the run's readiness assessment, all addressed in the working 
 Verified: cargo test (22 suites) + clippy `-D warnings` + fmt clean; 70 Python tests
 green; local canary — three wheels into an empty venv, `erebus-mcp-server` served 10
 tools and answered `get_note_balance` with no repo on any path.
+
+## MCP read path, re-verified
+
+The run left one leg unproven: the session's long-running MCP servers predated the seam
+fix, so writes went over MCP while reads went through the CLI. Closed the same day.
+
+A freshly started `erebus_mcp.server` (seam backend, identity g, real MCP client over
+stdio) against the live settled channel `ch_620b53e1...`:
+
+- `doctor` — returns its ten checks through the transport.
+- `get_note_balance` — `2250000000000000000`, the change note from this run's settlement.
+- `read_channel_state` — all four offers, both directions, amounts as decimal strings and
+  `memo_hash` as `0x1c7d05e73d64d73c21438174cd1b55ea`: the full-width digest tail that
+  wedged this channel now survives Rust → CLI → seam → MCP intact.
+- `wait_for_offers` — same shape, returns immediately at `expected_count: 4`.
+
+The session's pre-fix servers still fail on the same calls with
+`Unknown format code 'x' for object of type 'str'` — an old `_terms` handing a string to a
+hex format. That is precisely the stale-process class the startup handshake now reports by
+name rather than as a type error mid-tool-call.

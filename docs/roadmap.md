@@ -456,9 +456,6 @@ Exit:
 
 ### Phase 2: Align Rust, Python, MCP, and agents
 
-**Status 2026-08-19: complete.** PR #16, `40b8543`, and the string-amount work closed it;
-the cross-layer settlement ran live on 2026-08-19.
-
 Target: 2026-08-15 to 2026-08-21.
 
 Owners: Poulav owns Rust. Ishita owns MCP and agents. Both own the seam contract.
@@ -484,9 +481,6 @@ Exit:
 - The full local gate passes from a clean checkout.
 
 ### Phase 3: Make the MCP path a release candidate
-
-**Status 2026-08-19: complete except publication.** Real-seam test, startup handshake and
-`doctor`, installable entry point; the `v0.1.0` tag is the remaining step.
 
 Target: 2026-08-19 to 2026-08-24.
 
@@ -544,10 +538,6 @@ Exit:
 
 ### Phase 5: Package the operator product
 
-**Status 2026-08-19: one step open.** Encrypted backup and restore (step 10) has not
-started; the two untested wheel legs need one `workflow_dispatch` run. Everything else is
-built and rehearsed.
-
 Target: 2026-08-20 to 2026-08-28.
 
 Owners: Poulav owns Rust artifacts. Ishita owns Python packaging and operator experience.
@@ -591,9 +581,6 @@ Exit:
 - Release artifacts contain no keys, state files, or local endpoint secrets.
 
 ### Phase 6: Publish `v0.1.0`
-
-**Status 2026-08-19: gated on review.** The mechanics are rehearsed end to end; what
-remains is both owners' review of the 2026-08-19 push, the wheel legs, and the tag.
 
 Target: 2026-08-27 to 2026-08-31.
 
@@ -875,9 +862,13 @@ transactions. See §5.7.
       review; Poulav owns the Rust lines, Ishita the mcp-server lines.
 - [ ] Run the Linux x86-64 and macOS x86-64 wheel legs once (`workflow_dispatch`) before
       the tag; only arm64 macOS has built.
-- [ ] Re-verify the MCP read path against the fixed CLI over freshly started servers.
-      During the 2026-08-19 run the long-running servers predated the seam fix, so reads
-      went through the CLI while only writes were proven over MCP transport.
+- [x] Re-verify the MCP read path against the fixed CLI over freshly started servers.
+      Done 2026-08-19. A fresh `erebus_mcp.server` on the seam backend, driven by a real
+      MCP client against the live settled channel `ch_620b53e1...`: `doctor`,
+      `get_note_balance`, `read_channel_state`, and `wait_for_offers` all return, with the
+      full-width `memo_hash` `0x1c7d05e73d64d73c21438174cd1b55ea` intact through the
+      transport and amounts as strings. The session's old servers still fail, which is the
+      stale-process case the startup handshake now names.
 - [ ] Write F39: the u128 JSON-boundary wedge, its mislabeled error, and the stale-server
       skew it exposed. Material in `docs/runs/2026-08-19-sepolia-run.md`. Poulav's voice.
 - [x] Platform wheels containing `erebus-cli`. Done 2026-08-17 as `5f7bc09` and `3c32561`.
