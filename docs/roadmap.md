@@ -621,7 +621,8 @@ Work:
 4. Make `uvx erebus-mcp-server` find the packaged binary.
 5. ~~Add `erebus doctor` before the first write.~~ Built 2026-08-17 as `erebus-cli doctor`,
    bound through the Python seam the same day as `2d69eda` along with `allowance` and
-   `approve`. Still to do: tests for those three, the MCP server at startup, and the
+   `approve`. Tests for those three landed 2026-08-17 by Ishita in `40b8543`
+   (`sdk/py/tests/test_seam.py`). Still to do: the MCP server at startup, and the
    operator skill.
 6. ~~Inspect key permissions, state permissions, RPC health, and prover compatibility.~~ Done.
    Mode bits are checked on unix only; Windows has none, so that arm is skipped rather than
@@ -948,8 +949,8 @@ transactions. See §5.7.
       assumed. And the release is five wheels, not three: `erebus-mcp-server` depends on
       `erebus-sdk` depends on `erebus-cli`, so shipping only the binary leaves the chain
       unresolvable. The pure-Python wheels are now built alongside.
-      **Still blocked on one thing, see the note under `v0.1.0`:** `server.py` is not in any
-      wheel, so the canary runs it from a checkout.
+      Unblocked 2026-08-19: the server moved into the package (below) and the canary now
+      launches the installed `erebus-mcp-server` console script, nothing from the checkout.
 - [x] One current status document. Done 2026-08-18 as `docs/status.md`: one page, and the
       declared tiebreaker when documents disagree. Nine documents describe this system,
       written across three weeks in which the privacy claim changed twice, which is the
@@ -969,13 +970,12 @@ transactions. See §5.7.
       could disagree with what ships. Output is byte-identical across runs, so a diff means
       a dependency really moved, and it validates clean against the official CycloneDX 1.5
       schema. `--check` fails if any dependency lacks a hash and runs on every push.
-      **Blocked on one decision, and it is the last thing between here and a real release.**
-      `server.py` sits beside the package rather than inside it, so no wheel contains it and
-      there is no `[project.scripts]` entry point. An operator can install every module and
-      still have no way to start the server; `uvx erebus-mcp-server` would resolve and then
-      do nothing. The fix is to move it into `erebus_mcp` and declare an entry point, which
-      is a structural change in Ishita's directory a day before her Phase 4 starts, so it
-      needs coordinating rather than doing.
+      The `server.py` blocker cleared 2026-08-19: `erebus_mcp.server` with
+      `build_server()`/`main()`, a `[project.scripts]` entry point, and a shim at the old
+      path so `mcp dev` and existing stdio configs keep working. Done on Poulav's
+      instruction ahead of the coordination the previous note asked for, so Ishita reviews
+      it before it lands; the local canary rehearsal from wheels alone passed. What remains
+      for the tag: both owners' review of the 2026-08-19 working tree, then push the tag.
       Publishing decided 2026-08-18 (D-wheels): GitHub Releases plus a static package index
       on GitHub Pages. Nothing leaves GitHub and no PyPI account is needed. Built the same
       day: the `release` job in `wheels.yml` fires on a `v*` tag, creates the release with

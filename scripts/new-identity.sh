@@ -116,10 +116,22 @@ activate)
     STRK=$(grep '^TOKEN_ADDRESS=' "$DIR/env" | cut -d= -f2)
     POOL=$(grep '^POOL_ADDRESS=' "$DIR/env" | cut -d= -f2)
 
-    echo "==> approving the pool for 1 STRK"
+    # The pool's fee is read live rather than hardcoded: it was 1 STRK when this script
+    # was written and 2 STRK by 2026-08-19, and an approve below the fee produces an
+    # identity that passes provisioning and fails its first write.
+    echo "==> reading the pool's live fee per write"
+    FEE=$(python3 "$REQ" "$DIR/env" allowance '{}' | "$CLI" \
+          | python3 -c 'import sys,json; print(int(json.load(sys.stdin)["result"]["fee_per_write"]))')
+    WRITES="${APPROVE_WRITES:-10}"
+    read -r LOW HIGH <<<"$(python3 -c '
+import sys
+total = int(sys.argv[1]) * int(sys.argv[2])
+print(hex(total & ((1 << 128) - 1)), hex(total >> 128))' "$FEE" "$WRITES")"
+
+    echo "==> approving the pool for $WRITES writes at the current fee"
     TX=$(sncast --account "$NAME" invoke --url "$RPC" \
             --contract-address "$STRK" --function approve \
-            --calldata "$POOL" 0xde0b6b3a7640000 0x0 \
+            --calldata "$POOL" "$LOW" "$HIGH" \
          | grep -oE '0x[0-9a-f]{6,}' | tail -1)
     echo "    $TX"
 
@@ -130,6 +142,20 @@ activate)
 
     echo "==> shielding 1 STRK, which also registers the identity"
     python3 "$REQ" "$DIR/env" shield '{"amount":"1000000000000000000"}' | "$CLI"
+
+    # The inspection this identity's operator would otherwise run first. Every check is a
+    # read; a non-ready result here means provisioning missed something, named.
+    echo "==> doctor"
+    python3 "$REQ" "$DIR/env" doctor '{}' | "$CLI" | python3 -c '
+import json, sys
+report = json.load(sys.stdin)["result"]
+for check in report["checks"]:
+    mark = {"pass": "ok  "}.get(check["status"], check["status"] + "  ")
+    print(f"    {mark} {check[\"name\"]}: {check[\"detail\"]}")
+    if check.get("repair"):
+        print(f"         repair: {check[\"repair\"]}")
+print("    ready" if report["ready"] else "    NOT READY", file=sys.stderr)
+raise SystemExit(0 if report["ready"] else 1)'
 
     echo
     echo "ready: $ADDR"

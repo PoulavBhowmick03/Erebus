@@ -137,6 +137,12 @@ curl -LO https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/ere
 
 Every release also carries `SHA256SUMS` and a CycloneDX `sbom.json`.
 
+Installed, `erebus-mcp-server` starts the MCP server (configuration is environment
+variables; it prints what is missing). On-chain setup — account, funding, keys, pool
+allowance, first shield — is one script: `scripts/new-identity.sh`, which ends by running
+`erebus-cli doctor` and reporting every check. `doctor` is also the first thing to run
+when anything misbehaves.
+
 ## Repo layout
 
 ```

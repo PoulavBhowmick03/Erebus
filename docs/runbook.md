@@ -82,6 +82,12 @@ bash "$REPO/scripts/wait-for-depth.sh" 0x_TRANSACTION_HASH
 
 ## 1. Create an identity
 
+> **Sections 1 and 2 are automated.** `scripts/new-identity.sh bootstrap <name> <dir>
+> <funder-account>` runs create → fund → deploy → key files → env → fee-aware approve →
+> depth wait → shield, and finishes with `doctor`. The faucet variant
+> (`create`, fund by hand, `activate`) is in the script header. The manual steps below
+> remain the reference for what the script does and for debugging a step that fails.
+
 Repeat this whole section once per agent. Agent A uses `~/.erebus` and the repo `.env`;
 agent B uses `~/.erebus-b` and `~/.erebus-b/env`. Substitute `NAME` and `DIR` accordingly.
 
