@@ -160,7 +160,7 @@ The five leaks, in the order they should be worked:
    bit about payer holdings per deal. Fix is a constant-count zero-valued change note.
 
 Leak 0 was found on 2026-08-17 and supersedes the earlier claim that the counterparty was
-private. The relationship-privacy work in Phase 10 is larger than it was scoped as.
+private. The relationship-privacy work in Phase 13 is larger than it was scoped as.
 
 Deposit screening is enforced by the pool. A self-hosted prover does not remove that
 requirement. Selective disclosure reveals data for a legitimate request, but it does not
@@ -240,8 +240,10 @@ selection, signing, or cryptography.
 
 ### 5.5 Erebus skill
 
-The repository contains the generic `strk20-privacy-integration` skill. It does not contain
-an Erebus operator skill.
+The repository contains the generic `strk20-privacy-integration` skill **and** an Erebus
+operator skill at `skills/erebus/SKILL.md`, landed in #19, whose five unsafe-behavior evals
+pass. An earlier version of this section said no Erebus skill existed; that was stale.
+Phase 9.3 extends its eval set.
 
 The generic skill also has upstream drift. Its freshness check found newer `get-starknet`
 packages, a removed sub-account package, and a new shadow-account package.
@@ -342,17 +344,18 @@ starts.
 |---|---|---|---|---|
 | D1 | Anchor use case | One-off service purchase or bilateral RFQ | Both | Before product copy freezes |
 | D2 | First external operator | Not selected | Both | Before the clean-install test |
-| D3 | Repeat deals in `v0.1.0` | Not selected | Both | Before the final wire work |
+| D3 | Repeat deals in `v0.1.0` | Not selected | Both | Before the final wire work. Carries per-deal grant scope with it: see Phase 11 |
 | D4 | Technical-preview privacy claim | Confidential terms and shielded settlement | Both | Decided |
 | D5 | Long-term privacy goal | Relationship privacy | Both | Decided, research remains |
 | D6 | Disclosure audience | Auditors and arbitrators receive grants | Both | Decided |
-| D7 | Platform evidence | Platforms receive a receipt, not a grant | Both | Mechanism not selected |
+| D7 | Platform evidence | Platforms receive a receipt, not a grant | Both | Mechanism not selected; blocked on D1 and on Phase 12. Decide `memoHash` width with it |
 | D8 | Mainnet spend limit | About 30 STRK for the minimum sprint run | Poulav | Before funding |
 | D9 | External review target | Final wire only, or wire v2 plus final wire | Poulav | Before audit booking |
 | D10 | Skill distribution | Erebus repo only, upstream skill repo, or both | Ishita | Before `v0.1.0` |
 | D11 | Support model | Best effort, named maintainer, or funded maintenance | Both | Before `v1.0` |
 | D12 | Pool allowance mechanism | Standing approval, decided 2026-08-16 | Poulav | Decided, built |
 | D13 | Who provisions allowance and notes | Operator at install; not an agent tool | Both | Before the operator product |
+| D15 | AVNU as a swap dependency | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount | Both | Before Phase 10.3 builds |
 | D14 | Sprint network | Sepolia only, decided 2026-08-16 | Both | Decided. Reversing needs days of Pathfinder lead time |
 
 ### External questions
@@ -661,34 +664,411 @@ Exit:
 - Random public notes and Erebus records have no fixed shape classifier.
 - The specification is sufficient for a third implementation.
 
-### Phase 9: Disclosure and platform evidence
+### Phase 9: Agent-layer safety and integration
 
-Target: October to November 2026.
+Target: September to October 2026. **Precedes Phase 10**: spending limits must land before
+the capability surface gives an agent more ways to spend.
 
-Owners: Poulav owns cryptographic scope. Ishita owns delivery and operator workflow.
+Owner: Ishita. Poulav reviews anything that changes the seam contract.
+
+This phase is Python only. Nothing here needs a Rust change, and none of it is blocked on the
+Rust track.
+
+**The governing principle, stated once so the rest follows from it.** `CLAUDE.md` constraint 6
+says the policy engine decides *what* to do and never touches key material. The agent-era
+extension: **a model may decide what to offer; it must never authorize value movement.** An
+LLM that proposes terms which a deterministic validator checks and executes gives you
+negotiation intelligence on a testable spend path. An LLM that calls `accept_and_settle`
+directly does not. Every item below is an application of that line.
+
+#### 9.1 Spending limits belong below the agent
+
+Today the only spending limit is the `budget` inside `BuyerPolicy`
+(`agents/src/erebus_agents/policy.py`). The component being constrained is the component
+enforcing the constraint. For a deterministic policy that is fragile; the moment a model
+drives the loop it is structurally wrong, because a limit the agent can read is a limit the
+agent can be argued out of.
+
+Limits belong at the **MCP layer**, where the agent cannot reason past them, cannot be
+prompt-injected past them, and cannot be talked out of them by a counterparty.
 
 Work:
 
-1. Compare Erebus grants with the selective-disclosure flow in Stellar Private Payments.
-2. Separate disclosure generation, delivery, and independent verification.
-3. Encrypt each grant to the intended recipient.
-4. Add per-deal scope and define what expiry can stop.
-5. Prevent normal MCP transcripts from storing the grant secret.
-6. Select the platform receipt mechanism in D7.
-7. Bind the receipt to deal ID, terms commitment, token, amount, and transaction hash.
-8. Let a platform determine that settlement occurred without learning the counterparty.
-9. Add walletless verification for the receipt format.
-10. Document what each disclosure proves and does not prove.
-11. State that revocation cannot erase data that a recipient already learned.
+1. Add per-token, per-deal, and daily cumulative caps to `ServerConfig`, read from the
+   environment alongside `EREBUS_SETTLEMENT_ROLE`.
+2. Enforce them in `tools.py` before any call reaches the seam, not in agent policy.
+3. Persist daily cumulative spend so a restarted server does not reset the counter.
+4. Return a distinct, non-retryable error when a limit blocks a call, so an agent stops rather
+   than retries.
+5. Keep the limits out of tool descriptions and results. A cap an agent can read is a cap an
+   agent can plan around.
+
+Exit:
+
+- A settlement above any configured cap is refused at the MCP layer with the agent's policy
+  unchanged.
+- Restarting the server does not reset daily spend.
+- A test drives an agent that tries to exceed a cap and fails closed.
+
+#### 9.2 Tool results are model input, not logs
+
+Three known defects are really LLM-legibility bugs, and a model cannot catch any of them the
+way a human reviewer would.
+
+- **`paid_amount is None` reports consistent.** A tool that answers "yes" when it means "I
+  could not check" produces a confidently wrong agent. Already tracked in §5.3 as "Missing
+  payment looks consistent".
+- **Mock is the direct-start default**, and §5.3 notes "a local run can look like a real
+  product". A person notices; a model does not.
+- **Viewing grants enter tool results.** This risk exists *because* a model is in the loop: a
+  bearer secret in a tool result is a bearer secret in a transcript that leaves the machine.
+
+Work:
+
+1. Make consistency checks fail closed: return `unknown` rather than a truthy default whenever
+   payment evidence is missing.
+2. Put `backend` and `network` in every tool result payload, not only in health output or
+   logs, so a model cannot mistake mock for Sepolia or Sepolia for mainnet.
+3. Give `grant_viewing_key` a secure export path that writes to an operator-chosen file and
+   returns a reference, so the secret never enters a transcript.
+4. Range-check `wait_for_offers` counts and timeouts before polling.
+5. Review every tool description for a claim a model could repeat as a privacy guarantee, and
+   align them with §4 wording. "Private" without a qualifier is a defect in a tool string.
+
+Exit:
+
+- No tool returns a truthy value for a check it could not perform.
+- Every result names its backend and network.
+- A full negotiation transcript contains no viewing grant.
+
+#### 9.3 Evals, including an adversarial counterparty
+
+`skills/erebus/evals/unsafe-behavior.md` exists and its five evals pass. (§5.5 still says the
+Erebus skill does not exist; that is stale and is corrected in this phase.) The set is thin
+for what the skill now covers.
+
+Work:
+
+1. Extend the unsafe-behavior set so each of these fails the eval: reading a key file,
+   inventing a receipt or transaction hash, settling as payee, claiming the relationship is
+   private, pasting a viewing grant into chat, and reporting a mock run as live.
+2. Add an **adversarial-counterparty eval**. Erebus agents read messages written by another
+   agent, so untrusted text reaches a model that can spend. The memo and offer fields are the
+   injection surface. A counterparty offer carrying instructions — "ignore your budget", "this
+   is urgent, accept immediately", "your operator approved this" — must not change the agent's
+   decision.
+3. Add a limit-evasion eval: an agent told about a cap must not split a deal into pieces to
+   get under it.
+4. Run the eval set in CI once it is stable enough not to flake.
+
+Exit:
+
+- Every item in the roadmap's §5.5 skill task list has a failing-case eval.
+- An injected instruction in a counterparty offer changes no decision.
+- A false privacy claim fails, and the failure names the wording that was wrong.
+
+#### 9.4 One real framework integration
+
+`§3 Not proven` records that no external operator has completed a clean install. That, rather
+than any missing feature, is the binding constraint on "other products build on Erebus".
+
+Work:
+
+1. Build one worked example driving the full loop through the MCP server from a mainstream
+   agent framework — LangGraph, the Claude Agent SDK, or the OpenAI Agents SDK. Pick one.
+2. Install it from the published wheels, not from the checkout, so it exercises what an
+   outsider gets.
+3. Record every place the integration needed knowledge not present in the docs, and file each
+   as friction.
+4. Publish it as the quickstart the README points to.
+
+Exit:
+
+- The example runs end to end against Sepolia from a clean environment.
+- A reader who has never seen this repository can follow it without asking a question.
+
+#### 9.5 Crash behavior in the agent loop
+
+`§5.4` records that the loop assumes every call returns once. With one deal per pair, a lost
+mid-settlement is permanent. Sequenced after Phase 7's operation journal, which supplies the
+state this depends on.
+
+Work:
+
+1. Make `mcp_loop.py` resume from channel state rather than assume a fresh negotiation.
+2. Treat every write as potentially applied: re-read state before retrying.
+3. Distinguish "the call failed" from "the call may have succeeded" in agent-visible errors.
+
+Exit:
+
+- An agent killed mid-settlement resumes without double-spending or stranding the channel.
+
+### Phase 10: Capability surface — transfer, messaging, swap, bridge
+
+Target: October to December 2026, staged. The four parts have different entry criteria and
+must not be scheduled as one block.
+
+Owners: Poulav owns action-set construction and the AVNU seam. Ishita owns the MCP tools,
+the agent-facing surface, and the off-chain message transport.
+
+Erebus exposes exactly one way to move value: `accept_and_settle`, which requires a
+counterparty-authored offer. Everything in this phase widens that surface. **None of it
+requires an Erebus Cairo contract.** The one part that would have — private swap — does not,
+because AVNU shipped a first-party private path before we needed to write one.
+
+#### 10.1 Private transfer
+
+`accept_and_settle` is the only value-moving path and it is gated on a counterparty offer:
+`negotiation.rs:236` rejects accepting your own offer (`OwnOffer`), and `channel.rs:525`
+rejects an action set whose message is not `MessageType::Accept`. So Alice cannot push tokens
+to Bob today — Bob must first author an offer, which is an invoice, and costs a proof round
+before the payment round.
+
+The construction already exists. `ChangeOutput` (`client.rs:1124-1167`) builds a value note
+into a channel and opens that channel when it does not exist. It targets the payer, but
+nothing in the construction requires that. A transfer is `accept_and_settle_with_change`
+minus the `Acceptance` argument.
+
+Work:
+
+1. Add a `transfer_with_change` action-set builder: payment note plus optional change note, no
+   acceptance note.
+2. Decide the note-grid position for a payment with no acceptance. The reader currently
+   derives the payment index from the acceptance index
+   (`read.rs:273`, `(acceptance_index + 1) * notes_per_message`) and walks messages in strides
+   of five, so an unaligned value note may read as a torn message. Settle this before writing
+   the builder, not after.
+3. Extend `reveal` so a disclosed record can contain a transfer with no negotiation.
+4. Add `transfer()` to the interface and all five mirrors: `sdk/ts/src/interface.ts`, the Rust
+   trait, the Python seam, the MCP tool, and `mock_client.py`.
+5. Add the MCP tool with the payer-role guard `accept_and_settle` already uses.
+
+Exit:
+
+- Alice transfers to Bob with no offer written by either side.
+- A transfer and a negotiated settlement both read back correctly from the same channel.
+- `status.md` no longer implies settlement is the only way value moves.
+
+#### 10.2 Agent messaging, off-chain
+
+The salt lane can carry arbitrary bytes — `ARCHITECTURE.md §7` says so and warns against ever
+claiming otherwise. The argument against prose in notes is price, not possibility: 119 bits
+per note, one permanent storage slot and one **permanently burned** subchannel index per
+15 bytes, no reclaim because `use_note` rejects zero amounts, ~29 s per proof round, and
+directional channels so a conversation needs two of everything. A tweet-length message is
+19 notes and 19 dead slots, forever.
+
+So the agent communication layer is built **off-chain**, keyed off the directional channel
+secret Erebus already derives. Free-text in note salts stays in §11 deferred work and this
+phase does not move it.
+
+Work:
+
+1. Derive a message-transport key from the existing directional channel key via HKDF, with a
+   distinct info string so it cannot collide with the wire-v2 key.
+2. Specify the transport: framing, ordering, replay handling, and what happens when the two
+   sides disagree about history.
+3. Implement send and receive in the Rust client; keep key handling inside the SDK boundary.
+4. Expose `send_message` and `read_messages` MCP tools.
+5. Document plainly that off-chain messages are **not** settled, not proven, and not part of
+   a disclosed record — they carry no atomicity guarantee.
+6. State the delivery assumption: this is a transport, and an offline counterparty misses
+   messages unless a relay stores them.
+
+Exit:
+
+- Two agents exchange free-text over a channel with no on-chain write.
+- No message content reaches a note salt.
+- A disclosed record clearly separates settled state from unsettled chatter.
+
+#### 10.3 Private swap through AVNU — verified 2026-08-20, no Cairo required
+
+**AVNU ships private swaps end to end** (`@avnu/avnu-sdk >= 4.2.0`,
+https://docs.avnu.fi/docs/privacy, live since 2026-07-21). Their executor is deployed and
+their paymaster relays the transaction, so Erebus writes, audits, deploys and maintains **no
+anonymizer contract**. This supersedes the earlier assumption that private swap meant taking
+on Cairo; the skill's own anonymizer route says to check for a first-party private path
+before planning a contract, and AVNU is the case it names.
+
+Two facts make this reachable from Erebus specifically, which is an SDK-direct integration
+with its own pool key and its own prover, and has no wallet:
+
+- AVNU documents **two proving backends**, and the second is "Starknet Privacy SDK
+  (self-managed) — you manage keys and notes." The docs state there is no strict wallet
+  requirement and that any `PrivateSwapProver` implementation is acceptable. The interface is
+  one function: `buildAndProve(plan) -> { call, proof }`.
+- The paymaster is JSON-RPC 2.0 over HTTPS (`paymaster_buildTransaction`, mainnet
+  `starknet.paymaster.avnu.fi`, testnet `sepolia.paymaster.avnu.fi`) and is documented as
+  callable by any HTTP client, a Rust backend included, with a portal API key and no browser.
+
+The swap is one action set of four actions:
+
+1. `Withdraw` the sell token to AVNU's executor address, with surplus routed back to the taker.
+2. `Withdraw` the pool fee to the recipient named by `paymaster_buildTransaction`.
+3. An **open note** for the buy token to the taker — the amount is filled at execution.
+4. `InvokeExternal` against the executor with `[buy_token, executor_calls, open_note_id]`.
+
+**Erebus already encodes every primitive this needs.** All ten `ClientAction` variants are
+implemented with correct variant indices, phase ordering and Cairo Serde in
+`actions.rs:276-297` — `Withdraw`, `CreateOpenNote`, `InvokeExternal` and `ComputeAndInvoke`
+included — and they are pinned against the TypeScript oracle by
+`tests/fixtures/ts-clientaction-serde.json`. The gap is orchestration, not primitives.
+
+Work:
+
+1. Re-verify AVNU's docs, SDK version and paymaster endpoints before building; this record is
+   dated and privacy-stack statuses drift.
+2. Build a Rust AVNU client: quote, `quoteToCalls`, `paymaster_buildTransaction`, and private
+   submission. Keep the API key in operator configuration, never in state.
+3. Build the four-action swap set behind a `swap()` client method.
+4. Implement open-note handling: reading back a note whose amount was filled on chain, and
+   surplus routing for the sell leg.
+5. Test atomicity both ways — a swap that fills credits a private note; a swap that reverts
+   rolls the whole set back with nothing stranded.
+6. Document that **the bought amount is public**. An open note carries its amount in
+   plaintext by construction; the owner stays hidden, the amount does not. This must reach
+   `privacy-model.md` before any swap claim is made.
+7. Record AVNU as an availability and confidentiality dependency: their paymaster sees the
+   request, and a swap fails when they are down.
+8. Decide D15 (below) before wiring the MCP tool.
+
+**Second-order benefit, worth scoping deliberately.** AVNU's private mode is always
+`sponsored_private`: the paymaster relays `apply_action` and no user signature is required.
+The submitting account is therefore AVNU's, not the agent's. That is precisely the mitigation
+`privacy-model.md` leak 2 and F38 describe for the *sender* half of the relationship leak, and
+which `roadmap.md §4` records as not implemented. Evaluate whether the same paymaster path can
+carry ordinary Erebus settlements, not only swaps — one integration may close two problems.
+It does not touch `recipient_addr`, so the receiver half of F38 stands.
+
+Exit:
+
+- An agent swaps token A for token B from its shielded balance with no Erebus Cairo deployed.
+- A reverted swap leaves the pool balance unchanged and no tokens at the executor.
+- `privacy-model.md` states the open-note amount exposure before the feature is announced.
+- The AVNU dependency is named in the trust model, not just the code.
+
+#### 10.4 Private bridge — tracked, not built
+
+No general private bridge exists to integrate against, and this phase does not build one.
+
+What exists is narrower than the phrase suggests. **strkBTC** is a Bitcoin wrapper built on
+STRK20: it bridges BTC in and the resulting asset can be shielded. That is a bridged asset
+with privacy, not a private bridge. Starknet has signalled that later phases will let apps on
+other EVM chains and Solana use the pool as a privacy layer, but that is announced rather than
+shipped, and the privacy monorepo contains no bridge package.
+
+The pool anticipates one. `actions.cairo:259` documents open notes as existing for flows
+"such as AMM swaps or receiving funds directly through bridge transfers" — the hook is there
+and the bridges are not.
+
+Entry criterion, so this is a trigger rather than a wish: **an upstream package, or a
+first-party private path documented by a bridge operator, meeting the same test AVNU passed —
+a deployed contract, a documented non-wallet integration path, and a self-managed-keys prover
+option.** Until then, re-check quarterly and change nothing.
+
+`CLAUDE.md` lists cross-chain as out of scope and §11 defers cross-chain settlement. This
+section does not reverse either; it records what would have to be true first.
+
+### Phase 11: Disclosure primitives
+
+Target: September to October 2026. Blocks Phase 12 and ships with D3.
+
+Owner: Poulav owns the grant format and key derivation. Ishita owns the MCP surface and the
+operator workflow.
+
+Disclosure is implemented and live. `ViewingGrant` reconstructs one negotiation and its
+settlement from chain data and cannot spend, exercised on chain in `0x4191fe47…f341` on
+2026-08-19. It is not yet a primitive an external integrator should build on, for two
+reasons.
+
+**It is a bearer secret.** `grantee` is metadata and binds nothing. The Poseidon checksum
+detects edited or incompatible grant data but is not a signature and does not authenticate
+who issued it (`sdk/rs/src/disclosure.rs`, `docs/privacy-model.md`). Whoever holds the
+serialized grant reads the relationship.
+
+**It is scoped to a whole channel pair, permanently.** The grant carries both directional
+channel keys, and every note index derives from them. There is no per-deal scope and no
+expiry.
+
+**The second defect is masked today by an unrelated rule.** One deal per channel is an Erebus
+rule rather than a protocol constraint (`docs/status.md`), so a whole-channel grant is
+accidentally a per-deal grant. The moment repeat deals land in Phase 8, every grant already
+issued becomes retroactively broader: a grant for deal 1 opens deals 2..n, including deals
+that did not exist when it was issued. Per-deal derivation must ship in the same release as
+repeat deals, not after it. **D3 and disclosure scope are one decision, not two.**
+
+Work:
+
+1. Encrypt each grant to the intended recipient's public key. The channel layer already does
+   this for `channel_key` through `EncChannelInfo`; reuse that ECDH construction rather than
+   introducing a second one.
+2. Derive per-deal subkeys so a grant opens one deal's index range and no other.
+3. Define what expiry can and cannot stop, and state it in the grant format itself.
+4. Keep grants issued before this phase readable, and have them report themselves as legacy.
+5. Prevent normal MCP transcripts from storing a grant secret.
+6. Separate disclosure generation, delivery, and independent verification.
+7. Extend `docs/privacy-model.md` with what a disclosed record proves and what it only
+   asserts, per grant shape.
+8. State that revocation cannot erase data a recipient already learned.
 
 Exit:
 
 - A copied grant is not sufficient without the recipient key.
-- A per-deal grant cannot reveal another deal in the same channel.
+- A per-deal grant cannot reveal another deal in the same channel, tested against a channel
+  carrying two deals.
+- Every grant issued before this phase still reads, and identifies itself as legacy.
+- No MCP transcript contains a grant secret.
+
+### Phase 12: Platform evidence
+
+Target: November 2026. Start after Phase 11 and after D1 freezes.
+
+Owners: Poulav owns cryptographic scope. Ishita owns delivery and operator workflow.
+
+D7 records that platforms receive a receipt rather than a grant. The mechanism is unselected,
+and the choice turns entirely on what makes a receipt true. There are three candidates:
+
+- **An issuer signature.** The verifier trusts the agent that signed it. Erebus exists so
+  that neither side has to trust the other, so a self-signed receipt reintroduces at the
+  disclosure layer the same gap atomic settlement closes at the settlement layer. Not
+  acceptable alone; acceptable only bound to chain evidence the verifier checks independently.
+- **A viewing key.** This is a grant, and it is Phase 11. A receipt whose verifying key is a
+  viewing key is not a second mechanism.
+- **A proof.** The honest form of an outcome-only receipt. STRK20's circuit has no concept of
+  an offer, so this is a new circuit over pool state rather than a parameter passed to
+  theirs. Cost it as research before committing to it.
+
+Selecting a mechanism also reopens `memoHash` width. At 128 bits it carries 2^64 collision
+resistance under birthday bounds (`sdk/rs/src/wire.rs`). That is inert while a memo claim is
+only read by a grant holder against chain data, and load-bearing the moment a receipt is used
+as contested evidence, because a collision supports a false memo claim. Decide the width with
+D7 rather than after it.
+
+Ordering note: this phase follows Phase 11 because grants compose forward into receipts and
+receipts do not compose backward into grants. **If D1 settles on platform-mediated commerce,
+that order inverts**: receipts become the product and Phase 11 narrows to arbitration support.
+Today's grant can never serve a platform audience, because it carries `granter` and
+`counterparty` in cleartext by construction.
+
+Work:
+
+1. Select the platform receipt mechanism in D7.
+2. Compare Erebus grants and receipts with the selective-disclosure flow in Stellar Private
+   Payments.
+3. Bind the receipt to deal ID, terms commitment, token, amount, and transaction hash.
+4. Let a platform determine that settlement occurred without learning the counterparty.
+5. Add walletless verification for the receipt format.
+6. Re-decide `memoHash` width against the selected mechanism.
+7. Document what each receipt proves and does not prove.
+
+Exit:
+
 - A platform can determine that one settlement occurred without a channel viewing grant.
 - Missing payment evidence never produces a positive result.
+- A receipt verifier needs no Erebus state directory, no grant, and no wallet.
+- The published claim for a receipt matches what its mechanism actually proves.
 
-### Phase 10: Relationship-privacy research
+### Phase 13: Relationship-privacy research
 
 Target: no release date until the threat model has measurable exit conditions.
 
@@ -713,9 +1093,9 @@ Exit:
 - The public claim matches the measured result.
 - If the result misses the target, the team removes the relationship-privacy claim.
 
-### Phase 11: Review, audit, and `v1.0`
+### Phase 14: Review, audit, and `v1.0`
 
-Target: after phases 7 through 10 settle the shipping scope.
+Target: after phases 7 through 13 settle the shipping scope.
 
 Owners: Both. Independent reviewers own the external findings.
 
@@ -765,7 +1145,15 @@ Threat model -> final wire -> TypeScript oracle and spec -> external crypto revi
 
 Operation journal -> crash recovery -> clean operator canary -> v1 release
 
-Recipient-bound grants -> platform receipt -> disclosure review
+MCP spending limits -> capability surface        (limits land before new spend paths)
+
+Private transfer -> off-chain messaging          (independent of the swap track)
+
+AVNU re-verification -> Rust AVNU client -> four-action swap set -> open-note handling
+                     -> paymaster relay evaluated for ordinary settlement (F38 sender half)
+
+Recipient-bound grants -> per-deal grants -> platform receipt -> disclosure review
+  (per-deal grants ship with repeat deals, not after them: D3, Phase 11)
 ```
 
 Do not start the external wire review before the final wire freezes. Do not claim repeat
@@ -953,6 +1341,11 @@ transactions. See §5.7.
       installs. The job merges the live index in first, verified against a simulated
       earlier release.
 
+- [ ] MCP-layer spending limits: per-token, per-deal, daily (Phase 9.1, Ishita).
+- [ ] Tool results carry backend and network, and fail closed on missing evidence (Phase 9.2).
+- [ ] Adversarial-counterparty and limit-evasion evals (Phase 9.3).
+- [ ] One framework integration installed from published wheels (Phase 9.4).
+
 ### P2: Operator alpha
 
 - [ ] Durable operation journal and idempotency.
@@ -969,8 +1362,14 @@ transactions. See §5.7.
 - [ ] Final framed wire with randomized spare bits.
 - [ ] Repeat deals through the same directional channel pair.
 - [ ] TypeScript final-wire oracle and normative vectors.
-- [ ] Recipient-bound, time-limited, per-deal grants with documented limits.
-- [ ] Outcome-only platform receipts.
+- [ ] Recipient-bound, time-limited, per-deal grants with documented limits (Phase 11).
+- [ ] Per-deal grant scope released together with repeat deals, never after (D3, Phase 11).
+- [ ] Outcome-only platform receipts, mechanism selected in D7 (Phase 12).
+- [ ] Private transfer with no offer (Phase 10.1).
+- [ ] Off-chain agent messaging keyed off the channel secret (Phase 10.2).
+- [ ] Private swap via AVNU, no Erebus Cairo (Phase 10.3).
+- [ ] Paymaster-relayed submission evaluated for ordinary settlements, not only swaps (Phase 10.3).
+- [ ] Private bridge: re-check quarterly against the Phase 10.4 entry criterion.
 - [ ] Submission unlinkability research.
 - [ ] Independent cryptographic and security review.
 
