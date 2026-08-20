@@ -22,19 +22,23 @@ def _server_params(
     role: str = "payer",
     identity: str = "0xbuyer",
     spendable_notes: str = "100,150",
+    extra_env: dict[str, str] | None = None,
 ) -> StdioServerParameters:
+    env = {
+        "AGENT_ADDRESS": identity,
+        "PROVING_SERVICE_URL": "http://unused.invalid",
+        "EREBUS_MOCK_STORE_PATH": str(store_path),
+        "EREBUS_MOCK_LATENCY_SECONDS": "0",
+        "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
+        "EREBUS_SETTLEMENT_ROLE": role,
+    }
+    if extra_env:
+        env.update(extra_env)
     return StdioServerParameters(
         command="uv",
         args=["run", "python", str(SERVER_PATH)],
         cwd=str(REPO_ROOT),
-        env={
-            "AGENT_ADDRESS": identity,
-            "PROVING_SERVICE_URL": "http://unused.invalid",
-            "EREBUS_MOCK_STORE_PATH": str(store_path),
-            "EREBUS_MOCK_LATENCY_SECONDS": "0",
-            "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
-            "EREBUS_SETTLEMENT_ROLE": role,
-        },
+        env=env,
     )
 
 
@@ -201,6 +205,148 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
                 assert state["result"]["settlement"]["agreed_amount"] == "150"
+
+    asyncio.run(run())
+
+
+def test_accept_and_settle_refuses_a_settlement_above_the_configured_per_deal_cap(tmp_path):
+    """9.1: the cap lives below the agent, at the MCP layer, not in agent policy."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        seller_params = _server_params(store, role="payee", identity="0xseller")
+        buyer_params = _server_params(
+            store,
+            role="payer",
+            identity="0xbuyer",
+            extra_env={"EREBUS_SPENDING_LIMITS": '{"0xtoken": {"per_deal": "100"}}'},
+        )
+        async with stdio_client(seller_params) as (seller_read, seller_write):
+            async with ClientSession(seller_read, seller_write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                proposed = await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 150,  # above the 100 per-deal cap
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                offer_id = _structured(proposed)["result"]["offer_id"]
+
+                async with stdio_client(buyer_params) as (buyer_read, buyer_write):
+                    async with ClientSession(buyer_read, buyer_write) as buyer:
+                        await buyer.initialize()
+                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+
+                        refused = _structured(
+                            await buyer.call_tool(
+                                "accept_and_settle",
+                                {"channel_handle": handle, "offer_id": offer_id},
+                            )
+                        )
+                        assert refused["ok"] is False
+                        assert refused["error"]["code"] == "INVALID_REQUEST"
+                        assert refused["error"]["retryable"] is False
+                        # The message must never leak the configured threshold: a cap an
+                        # agent can read is a cap an agent can plan around.
+                        assert "100" not in refused["error"]["message"]
+                        assert "150" not in refused["error"]["message"]
+
+                # The blocked call must never have spent: the offer is still settleable,
+                # not consumed.
+                state = _structured(
+                    await seller.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert state["result"]["settlement"] is None
+
+    asyncio.run(run())
+
+
+def test_spending_cap_is_enforced_across_a_server_restart(tmp_path):
+    """9.1 exit criterion: restarting the server does not reset daily spend."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        spend_state = tmp_path / "spend.json"
+        buyer_env = {
+            "EREBUS_SPENDING_LIMITS": '{"0xtoken": {"daily": "100"}}',
+            "EREBUS_SPENDING_STATE_PATH": str(spend_state),
+        }
+
+        # First buyer process settles 60 against its 100 daily cap, then exits.
+        seller_one = _server_params(store, role="payee", identity="0xseller1")
+        async with stdio_client(seller_one) as (seller_read, seller_write):
+            async with ClientSession(seller_read, seller_write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle_one = _structured(opened)["result"]["channel_handle"]
+                proposed = await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle_one,
+                        "amount": 60,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                offer_one = _structured(proposed)["result"]["offer_id"]
+
+                buyer_one = _server_params(
+                    store, role="payer", identity="0xbuyer", extra_env=buyer_env
+                )
+                async with stdio_client(buyer_one) as (buyer_read, buyer_write):
+                    async with ClientSession(buyer_read, buyer_write) as buyer:
+                        await buyer.initialize()
+                        await buyer.call_tool("open_channel", {"counterparty": "0xseller1"})
+                        settled = _structured(
+                            await buyer.call_tool(
+                                "accept_and_settle",
+                                {"channel_handle": handle_one, "offer_id": offer_one},
+                            )
+                        )
+                        assert settled["ok"] is True
+
+        # A brand new buyer process, same identity and spending-state path: simulates a
+        # restart. 60 already spent today + 60 more would exceed the 100 daily cap.
+        seller_two = _server_params(store, role="payee", identity="0xseller2")
+        async with stdio_client(seller_two) as (seller_read, seller_write):
+            async with ClientSession(seller_read, seller_write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle_two = _structured(opened)["result"]["channel_handle"]
+                proposed = await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle_two,
+                        "amount": 60,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                offer_two = _structured(proposed)["result"]["offer_id"]
+
+                buyer_two = _server_params(
+                    store, role="payer", identity="0xbuyer", extra_env=buyer_env
+                )
+                async with stdio_client(buyer_two) as (buyer_read, buyer_write):
+                    async with ClientSession(buyer_read, buyer_write) as buyer:
+                        await buyer.initialize()
+                        await buyer.call_tool("open_channel", {"counterparty": "0xseller2"})
+                        refused = _structured(
+                            await buyer.call_tool(
+                                "accept_and_settle",
+                                {"channel_handle": handle_two, "offer_id": offer_two},
+                            )
+                        )
+                        assert refused["ok"] is False
+                        assert refused["error"]["code"] == "INVALID_REQUEST"
 
     asyncio.run(run())
 

@@ -33,6 +33,7 @@ from mcp.server import MCPServer
 from erebus_mcp.config import ConfigError, ServerConfig
 from erebus_mcp.mock_client import MockErebusClient
 from erebus_mcp.seam_client import SeamErebusClient
+from erebus_mcp.spending import SpendGuard
 from erebus_mcp.tools import register_tools
 
 logger = logging.getLogger("erebus_mcp")
@@ -122,7 +123,8 @@ def build_server() -> MCPServer:
             pending_notes=list(config.mock_pending_notes),
         )
 
-    register_tools(server, client, config.settlement_role)
+    spend_guard = SpendGuard(config.spending_limits, config.spending_state_path)
+    register_tools(server, client, config.settlement_role, spend_guard)
     return server
 
 

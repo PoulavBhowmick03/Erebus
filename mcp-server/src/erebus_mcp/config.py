@@ -12,8 +12,9 @@ and needs the full protocol-2 configuration. Startup validation catches a missin
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -52,6 +53,28 @@ class SeamSettings:
 
 
 @dataclass(frozen=True)
+class TokenSpendingLimit:
+    """Caps for one token. A missing field means unlimited on that axis."""
+
+    per_deal: int | None = None
+    daily: int | None = None
+
+
+@dataclass(frozen=True)
+class SpendingLimits:
+    """Per-token spending caps enforced at the MCP layer (roadmap 9.1), not by agent
+    policy. ``BuyerPolicy.budget`` stays as negotiation strategy; this is the safety
+    boundary underneath it. Empty by default: a server enforces nothing until an operator
+    opts in.
+    """
+
+    by_token: dict[str, TokenSpendingLimit] = field(default_factory=dict)
+
+    def for_token(self, token: str) -> TokenSpendingLimit:
+        return self.by_token.get(token.strip().lower(), TokenSpendingLimit())
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     address: str
     prover_url: str
@@ -66,6 +89,11 @@ class ServerConfig:
     #: and log every non-passing check with its repair. Costs a few RPC round-trips of
     #: startup latency; disable with EREBUS_SKIP_STARTUP_DOCTOR=1 when starting offline.
     startup_doctor: bool = True
+    #: Per-token per-deal and daily-cumulative spending caps (9.1). Empty means no caps.
+    spending_limits: SpendingLimits = field(default_factory=SpendingLimits)
+    #: Where daily cumulative spend is persisted, so a restart does not reset it. Defaults
+    #: to a path scoped to this identity; see `_spending_state_path`.
+    spending_state_path: Path = field(default_factory=lambda: Path("/tmp/erebus-spending-state.json"))
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -109,6 +137,8 @@ class ServerConfig:
             mock_pending_notes=mock_pending,
             seam=seam,
             startup_doctor=os.environ.get("EREBUS_SKIP_STARTUP_DOCTOR", "").strip() != "1",
+            spending_limits=_spending_limits(),
+            spending_state_path=_spending_state_path(address, seam),
         )
 
 
@@ -155,6 +185,78 @@ def _seam_settings() -> SeamSettings:
         state_dir=Path(_require("EREBUS_STATE_DIR")),
         token=_require("TOKEN_ADDRESS"),
     )
+
+
+def _spending_limits() -> SpendingLimits:
+    """Parses ``EREBUS_SPENDING_LIMITS``, a JSON object keyed by token address:
+
+    ``{"0xtoken...": {"per_deal": "5000000000000000000", "daily": "20000000000000000000"}}``
+
+    Amounts are decimal strings, not JSON numbers, for the same reason `propose_offer`
+    takes `amount` as a string (F37): a base-unit amount routinely exceeds 2**53. Unset or
+    empty means no caps. A token absent from the map, or a field absent within an entry,
+    is unlimited on that axis, not zero.
+    """
+    raw = os.environ.get("EREBUS_SPENDING_LIMITS", "").strip()
+    if not raw:
+        return SpendingLimits()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"EREBUS_SPENDING_LIMITS is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ConfigError("EREBUS_SPENDING_LIMITS must be a JSON object keyed by token address")
+
+    by_token: dict[str, TokenSpendingLimit] = {}
+    for token, caps in parsed.items():
+        if not isinstance(caps, dict):
+            raise ConfigError(f"EREBUS_SPENDING_LIMITS[{token!r}] must be a JSON object")
+        by_token[token.strip().lower()] = TokenSpendingLimit(
+            per_deal=_cap_amount(token, "per_deal", caps.get("per_deal")),
+            daily=_cap_amount(token, "daily", caps.get("daily")),
+        )
+    return SpendingLimits(by_token=by_token)
+
+
+def _cap_amount(token: str, field_name: str, value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(
+            f"EREBUS_SPENDING_LIMITS[{token!r}][{field_name!r}] must be a decimal string, "
+            f"got {value!r}"
+        )
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ConfigError(
+            f"EREBUS_SPENDING_LIMITS[{token!r}][{field_name!r}] is not an integer: {value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise ConfigError(
+            f"EREBUS_SPENDING_LIMITS[{token!r}][{field_name!r}] must be positive, got {parsed}"
+        )
+    return parsed
+
+
+def _spending_state_path(address: str, seam: SeamSettings | None) -> Path:
+    """Where daily cumulative spend is persisted.
+
+    Must be scoped per identity: a shared default path would let two identities on one
+    machine share, and silently corrupt, each other's daily counter. The seam backend
+    already has a per-identity state directory; reuse it. The mock backend has none, so
+    fall back to a path slugged from the identity address.
+    """
+    configured = os.environ.get("EREBUS_SPENDING_STATE_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    if seam is not None:
+        return seam.state_dir / "spending.json"
+    return Path(f"/tmp/erebus-spending-state-{_slug(address)}.json")
+
+
+def _slug(value: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in value.strip())
 
 
 def _require(name: str) -> str:
