@@ -17,44 +17,19 @@ relationship.
 
 ## Status
 
-**Testnet.** The full loop runs on Sepolia: two-sided negotiation, atomic settlement and
-bearer-grant disclosure, driven autonomously by two agents through MCP. It is not
-production-hardened and has had no external review. Do not put real value through it.
+**Testnet, unaudited, experimental.** The full loop — two agents negotiating, settling
+atomically, and disclosing to a third party — runs on Starknet Sepolia. It has had no
+external security review. Do not put real value through it.
 
-The first live transaction exposed wire-v1 terms because salts are public. Wire v2 replaces
-that format with AES-256-GCM-SIV ciphertext and a 128-bit authentication tag, fragmented
-across five salt chunks.
+**Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
+are confidential, and that is demonstrated rather than asserted: an observer with no key
+recovers nothing from a wire-v2 settlement. That a channel was opened, and with whom, is
+still public. [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
+source to quote for privacy claims.
 
-Wire v2 has since run end to end on Sepolia. Two fresh identities negotiated and settled
-autonomously through two role-bound MCP servers, transaction
-`0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3`, block 13095252.
-`scripts/observer.py` was then pointed at that transaction's public calldata with no channel
-key and recovered nothing. The same tool run against the wire-v1 settlement
-`0x44289c...84bb7` recovers the full acceptance, which is what makes the negative result
-worth anything. Details in [F30](./docs/friction.md).
-
-Still outstanding: a second implementation of wire v2 (`sdk/ts` is on v1), an independent
-security review, relationship privacy at channel-open ([F38](./docs/friction.md)), and
-traffic-shape privacy ([F31](./docs/friction.md)).
-
-Target is **Starknet Sepolia**, privacy pool v2.0 at `0x0254a6...0d91`, verified on-chain.
-A mainnet pool went live at `0x040337b1...812a` with an identical class hash, so porting is a
-configuration change rather than a re-derivation. Both charge a protocol fee per
-`apply_actions`, pulled with `transfer_from` against the caller: 2 STRK on Sepolia, 6 on
-mainnet. A standing allowance is therefore a precondition for every write on either network.
-Nothing has run on mainnet yet.
-
-**`v0.1.0` is released** — installable from a public index, with wheels for Linux x86-64
-and macOS arm64, checksums, and an SBOM. See [Install](#install).
-
-Where the stack has fought us is logged in [docs/friction.md](./docs/friction.md). The
-largest constraint so far is that a pool note has no payload field, so negotiation state is
-carried in note salts at 119 bits each.
-
-[docs/status.md](./docs/status.md) is the one-page current state, and the tiebreaker when
+`v0.1.0` is released and installable — see [Install](#install).
+[docs/status.md](./docs/status.md) is the current state in one page, and the tiebreaker when
 any two documents here disagree.
-
----
 
 ## The problem
 
@@ -117,8 +92,6 @@ Agent B ─┘                                          │                     
 
 ---
 
-# Documentation
-
 ## Install
 
 **Requirements.** Linux x86-64 or macOS arm64, Python 3.11+. Intel macOS is not built — its
@@ -169,7 +142,7 @@ chmod +x erebus-cli-x86_64-unknown-linux-gnu
 echo '{"method":"version"}' | ./erebus-cli-x86_64-unknown-linux-gnu
 ```
 
-See [The CLI protocol](#the-cli-protocol) below.
+See [the CLI protocol](./docs/reference.md#the-cli-protocol).
 </details>
 
 Every release carries `SHA256SUMS` and a CycloneDX `sbom.json`. Verify before running:
@@ -182,98 +155,27 @@ sha256sum -c SHA256SUMS --ignore-missing
 > If a download times out, the release assets are served by a CDN that can be slow from
 > some networks. `UV_HTTP_TIMEOUT=600` raises uv's default 30-second limit.
 
-## Set up an identity
+### Next: an identity
 
-An Erebus identity is a Starknet account plus two key files, registered with the pool and
-holding shielded notes. Getting there takes six on-chain steps, and one script does all of
-them:
+Installing gets you the binary and the server. Running against a chain also needs a Starknet
+account, two key files, a pool allowance, and shielded notes. One script does all of it:
 
 ```bash
 scripts/new-identity.sh bootstrap erebus-a ~/.erebus-a <funder-account>
 ```
 
-That runs: create the account → fund it → deploy → generate the pool key and extract the
-account key → write an env file → approve the pool for the live per-write fee → wait for
-the approval to reach proving depth → shield 1 STRK (which also registers the identity) →
-`doctor`. It exits non-zero if `doctor` is not ready.
+It ends by running `erebus-cli doctor` and exits non-zero if anything is unready. The
+faucet flow, the three keys and who sees them, and every environment variable are in the
+[reference](./docs/reference.md#set-up-an-identity).
 
-Without a funded account to pay from, use the faucet flow instead — `create`, fund the
-printed address by hand, then `activate`. Both are documented in the script's header and in
-[docs/runbook.md](./docs/runbook.md).
+To try the tools without a chain, keys, or gas, set `EREBUS_BACKEND=mock` and skip all of
+that.
 
-> **Registration is irreversible and writes the identity's pool private key encrypted to
-> the pool's auditor on-chain.** From that moment the auditor can decrypt everything that
-> identity ever does. Use testnet keys only.
-
-**Three keys, and conflating them is the usual mistake:**
-
-| Key | Purpose | Who sees it |
-|---|---|---|
-| Starknet account key | Signs transactions. Custody | Never leaves the Rust process |
-| Pool private key | The STRK20 identity. Confidentiality | Sent in `compile_actions` calldata to your prover and preflight RPC — both must be operator-controlled |
-| Pool auditor key | Pool-wide, set once at registration | StarkWare's, no rotation |
-
-Python never sees key material, only file paths. See
-[docs/custody-design.md](./docs/custody-design.md).
-
-## Configure
-
-The server reads its configuration from the environment and fails at startup naming
-whatever is missing.
-
-**Always required:**
-
-| Variable | Meaning |
-|---|---|
-| `AGENT_ADDRESS` | This identity's Starknet account address |
-| `PROVING_SERVICE_URL` | Your prover. It receives the pool private key, so it must be one you control |
-| `EREBUS_SETTLEMENT_ROLE` | `payer`, `payee`, or `both`. A payee server structurally refuses `accept_and_settle` |
-
-**Backend selection:** `EREBUS_BACKEND` is `mock` (default — no chain, no keys, no gas) or
-`seam` (the real Rust client). `seam` additionally requires:
-
-| Variable | Meaning |
-|---|---|
-| `STARKNET_RPC_URL` | Preflight RPC. Also receives the pool key — operator-controlled |
-| `POOL_ADDRESS` | The STRK20 privacy pool |
-| `STARKNET_CHAIN_ID` | e.g. `0x534e5f5345504f4c4941` for Sepolia. Part of every channel-key preimage, so a mismatch reads as "not found" everywhere |
-| `TOKEN_ADDRESS` | The ERC-20 being settled |
-| `POOL_KEY_FILE`, `ACCOUNT_KEY_FILE` | Paths, mode `0600`. Never read by Python |
-| `EREBUS_STATE_DIR` | Channel state, mode `0700` |
-
-**Optional:** `EREBUS_CLI` (explicit binary path; defaults to the packaged one),
-`EREBUS_SKIP_STARTUP_DOCTOR=1` (skip the boot-time inspection when starting offline), and
-the `EREBUS_MOCK_*` knobs for mock runs.
-
-`scripts/new-identity.sh` writes a complete env file. Start the server with:
-
-```bash
-set -a && . ~/.erebus-a/env && set +a
-EREBUS_BACKEND=seam EREBUS_SETTLEMENT_ROLE=payer erebus-mcp-server
-```
-
-## Check before you spend
-
-Every setup fault in this stack surfaces the same way: `apply_actions` reverts with a bare
-`Contract error` naming nothing, **after** a proof has been generated and paid for. `doctor`
-answers those questions first, read-only, in one pass:
-
-```bash
-erebus-cli doctor   # or the `doctor` MCP tool, or automatically at server startup
-```
-
-Ten checks in dependency order — both key files and their modes, the state directory, RPC,
-prover, chain id read from the node and compared with config, pool identity and version,
-registration against the key file, allowance against the live fee, and public balance.
-Every non-passing check carries a `repair` string naming one direct action.
-
-`ready: false` means a write will fail right now. A `skipped` check is not a pass — it
-means the thing it would have verified is unverified.
-
-## Quickstart: two agents, one deal
+## Quickstart
 
 Two servers, one per identity, one configured `payer` and one `payee`. The payer spends its
-own notes; the payee never calls `accept_and_settle`.
+own notes; the payee never calls `accept_and_settle`. `base_env` below is the identity's env
+file — the one `new-identity.sh` writes — loaded into the environment.
 
 ```python
 from mcp import ClientSession
@@ -323,108 +225,22 @@ deterministic mock rehearsal is `uv run python agents/src/erebus_agents/demo.py`
 A worked example against Sepolia, with real transaction hashes, timings and the failures
 along the way, is in [docs/runs/](./docs/runs/).
 
-## The MCP tool surface
+Configuration, the full tool surface, error handling, and the raw CLI protocol are in the
+[reference](./docs/reference.md).
 
-Ten tools. Amounts are decimal strings and `memo_hash` is a hex string — a JSON number
-loses precision above 2^53, and 1 STRK is 1e18.
+## Documentation
 
-| Tool | Signature | Notes |
-|---|---|---|
-| `doctor` | `()` | Read-only. Always safe to call |
-| `get_note_balance` | `()` | Payer must call before naming a price |
-| `open_channel` | `(counterparty)` | Returns `channel_handle`. Not private — see F38 |
-| `propose_offer` | `(channel_handle, amount, token, deadline, memo_hash)` | Payee asks; payer offers |
-| `counter_offer` | `(channel_handle, reply_to, amount, token, deadline, memo_hash)` | Does not withdraw the offer it replies to |
-| `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement |
-| `wait_for_offers` | `(channel_handle, expected_count, timeout_seconds=300)` | One tool call instead of a poll loop. A timeout is not an error |
-| `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Closes the channel |
-| `grant_viewing_key` | `(channel_handle, grantee)` | Returns a bearer secret. Deliver out of band |
-| `reveal` | `(channel_id, grantee, viewing_key)` | Reconstructs from chain data. Needs no local state |
+| | |
+|---|---|
+| [Reference](./docs/reference.md) | Identity setup, configuration, the ten MCP tools, error handling, the CLI protocol |
+| [Runbook](./docs/runbook.md) | Reproduce the on-chain demonstration step by step |
+| [Architecture](./ARCHITECTURE.md) | Component boundaries, the interface contract, the data model |
+| [Privacy model](./docs/privacy-model.md) | What leaks and what does not. The only source for privacy claims |
+| [Status](./docs/status.md) | Current state in one page; the tiebreaker between documents |
+| [Friction log](./docs/friction.md) | Where the stack fought us, and how we worked around it |
+| [Agent skill](./skills/erebus/) | Operating Erebus from an agent, with unsafe-behavior evals |
+| [Run evidence](./docs/runs/) | Real Sepolia runs with transaction hashes and timings |
 
-Every result is an envelope: `{"ok": true, "result": {...}}` or
-`{"ok": false, "error": {"code", "message", "retryable"}}`.
-
-**Two protocol rules that surprise people.** One channel per pair of addresses, and one deal
-per channel — a settled channel is terminal. And an offer has no `withdrawn` state; it is
-accepted or it expires, so a short deadline is the only way to bound how long a stale price
-stays acceptable.
-
-## Errors and retries
-
-Branch on the group, not the individual code. Every error also carries `retryable` — trust
-it over guessing from the name.
-
-| Group | Codes | What to do |
-|---|---|---|
-| The offer is wrong | `OFFER_EXPIRED`, `OFFER_UNKNOWN`, `ALREADY_SETTLED`, `NOT_YOUR_OFFER`, `AMOUNT_MISMATCH`, `INSUFFICIENT_NOTES`, `INDEX_CONFLICT` | Build a different offer. Retrying verbatim will not help |
-| Transient | `SCREENING_UNAVAILABLE`, `PROVER_UNAVAILABLE`, `PROOF_EXPIRED`, `SUBMIT_FAILED` | Retry with backoff. `PROOF_EXPIRED` needs a fresh proof, not a resend |
-| Terminal | `SCREENING_REJECTED` | Stop. Not transient |
-| Opaque | `PROOF_FAILED` | The prover refused and gave no reason. Report it as unexplained |
-| Before any protocol code ran | `INVALID_REQUEST`, `IDENTITY_UNAVAILABLE` | Fix the request or the key path. Never a chain-state problem |
-
-A write takes 1–4 minutes: simulate, prove, estimate, submit. The binary prints stage names
-to stderr as it goes. **Do not abort and retry a write that appears stuck** — abandoning it
-does not cancel a transaction it may already have submitted.
-
-## The CLI protocol
-
-`erebus-cli` reads one JSON request on stdin and writes one envelope on stdout. Key *paths*
-cross the boundary; key values never do.
-
-```bash
-echo '{"method":"doctor","params":{"config":{...}}}' | erebus-cli
-```
-
-```json
-{"ok": true, "protocol": 2, "result": {"ready": true, "checks": [...]}}
-```
-
-`protocol` is the contract version. A consumer should refuse a mismatch by name rather than
-failing on a changed shape later — `erebus-sdk` does this on every call, and the MCP server
-handshakes at startup.
-
-Methods: `version`, `generate_pool_key`, `doctor`, `balance`, `allowance`, `approve`,
-`shield`, `open_channel`, `propose_offer`, `counter_offer`, `read_channel_state`,
-`accept_and_settle`, `grant_viewing_key`, `reveal`. All except `version` and
-`generate_pool_key` take a `config` object.
-
-From Python, `erebus-sdk` wraps this:
-
-```python
-from erebus import Seam, SeamConfig
-seam = Seam(config=SeamConfig(rpc_url=..., prover_url=..., ...))
-report = seam.doctor()
-```
-
-`/sdk/py` is a binding, not a client: it marshals arguments and returns results, and
-contains no hashing, salt encoding, or felt arithmetic. A second implementation would be a
-second place for a wrong preimage to hide silently.
-
-## Operating it with an agent
-
-[`skills/erebus/`](./skills/erebus/) is an agent skill covering install, plan, operate, and
-diagnose modes, with the safety rules that matter: never read a key file, a payee never
-settles, never report a mock result as on-chain evidence, and never claim privacy without
-naming both halves of it. Its
-[unsafe-behavior evals](./skills/erebus/evals/unsafe-behavior.md) are the fixtures it must
-pass before it is trusted.
-
-## Building from source
-
-```bash
-git clone https://github.com/PoulavBhowmick03/Erebus && cd Erebus
-cd sdk/rs && cargo test && cd ../..     # 216 tests
-uv sync --all-packages && uv run pytest # 70 tests
-```
-
-`uv sync` without `--all-packages` skips the workspace members' editable installs and the
-`erebus-*` packages will not be importable.
-
-The TypeScript SDK is a differential-test oracle and ships nothing; it needs a sibling
-checkout of `starkware-libs/starknet-privacy` (see [docs/friction.md](./docs/friction.md)
-F8). Toolchain: scarb 2.17.0 / starknet-foundry 0.59.0, Node 20+, Rust stable.
-
----
 ## Repo layout
 
 ```
