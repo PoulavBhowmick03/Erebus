@@ -20,8 +20,12 @@ the key in the same heap, contrary to CLAUDE.md constraint 6.
 The Rust binary also generates entropy. Python does not produce keys or salts.
 """
 
+from importlib.metadata import version as _metadata_version
+
 from erebus._seam import PROTOCOL, ErebusError, Seam, SeamConfig, SeamUnavailable
 
 __all__ = ["PROTOCOL", "ErebusError", "Seam", "SeamConfig", "SeamUnavailable", "__version__"]
 
-__version__ = "0.0.0"
+# Read from installed metadata rather than hardcoded: this string said 0.0.0 through
+# three version bumps because nothing fails when it drifts.
+__version__ = _metadata_version("erebus-sdk")

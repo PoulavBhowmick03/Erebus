@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import shutil
 import sysconfig
+from importlib.metadata import version as _metadata_version
 from pathlib import Path
 
 __all__ = ["__version__", "binary_path"]
 
-__version__ = "0.0.1"
+# Read from installed metadata rather than hardcoded, so it cannot drift from the wheel
+# it ships in.
+__version__ = _metadata_version("erebus-cli")
 
 
 def binary_path() -> Path | None:

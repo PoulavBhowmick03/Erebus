@@ -113,12 +113,31 @@ class ServerConfig:
 
 
 def _seam_settings() -> SeamSettings:
-    binary = Path(_require("EREBUS_CLI"))
-    if not binary.exists():
-        raise ConfigError(
-            f"EREBUS_CLI points at {binary}, which does not exist. Build it with "
-            "`cargo build --release --bin erebus-cli` in sdk/rs."
-        )
+    # EREBUS_CLI is optional: the erebus-cli wheel ships the binary, and binary_path()
+    # finds it on PATH or inside the installed environment. That fallback matters for the
+    # documented install — `uv tool install erebus-mcp-server` exposes only the server's
+    # own executable, so the binary is present but not on PATH. An explicit EREBUS_CLI
+    # still wins, which is what a developer running a locally built binary expects.
+    configured = os.environ.get("EREBUS_CLI", "").strip()
+    if configured:
+        binary = Path(configured)
+        if not binary.exists():
+            raise ConfigError(
+                f"EREBUS_CLI points at {binary}, which does not exist. Build it with "
+                "`cargo build --release --bin erebus-cli` in sdk/rs."
+            )
+    else:
+        from erebus_cli import binary_path
+
+        found = binary_path()
+        if found is None:
+            raise ConfigError(
+                "erebus-cli was not found on PATH or in this environment, and EREBUS_CLI "
+                "is unset. Install the erebus-cli package, or build it with "
+                "`cargo build --release --bin erebus-cli` in sdk/rs and set EREBUS_CLI to "
+                "the resulting path."
+            )
+        binary = found
 
     pool_key = Path(_require("POOL_KEY_FILE"))
     account_key = Path(_require("ACCOUNT_KEY_FILE"))
