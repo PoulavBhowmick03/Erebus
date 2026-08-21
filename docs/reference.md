@@ -120,11 +120,13 @@ loses precision above 2^53, and 1 STRK is 1e18.
 | `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement |
 | `wait_for_offers` | `(channel_handle, expected_count, timeout_seconds=300)` | One tool call instead of a poll loop. A timeout is not an error |
 | `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Closes the channel |
-| `grant_viewing_key` | `(channel_handle, grantee)` | Returns a bearer secret. Deliver out of band |
+| `grant_viewing_key` | `(channel_handle, grantee, export_path)` | Writes the bearer secret to `export_path`, mode 0600. Never returned in the result. Deliver the file out of band |
 | `reveal` | `(channel_id, grantee, viewing_key)` | Reconstructs from chain data. Needs no local state |
 
-Every result is an envelope: `{"ok": true, "result": {...}}` or
-`{"ok": false, "error": {"code", "message", "retryable"}}`.
+Every result is an envelope: `{"ok": true, "backend", "network", "result": {...}}` or
+`{"ok": false, "backend", "network", "error": {"code", "message", "retryable"}}`. `backend`
+("mock" or "seam") and `network` are on every result, success or failure, so a transcript
+alone tells a model whether it is talking to a real chain and which one.
 
 **Two protocol rules that surprise people.** One channel per pair of addresses, and one deal
 per channel — a settled channel is terminal. And an offer has no `withdrawn` state; it is

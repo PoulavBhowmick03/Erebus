@@ -52,6 +52,7 @@ async def _main() -> dict:
             buyer_address=BUYER_ADDRESS,
             seller_address=SELLER_ADDRESS,
             auditor_address=AUDITOR_ADDRESS,
+            grant_export_path=Path(tmp) / "viewing-grant.json",
             token=TOKEN,
             max_rounds=args.rounds,
         )

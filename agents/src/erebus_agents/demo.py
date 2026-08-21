@@ -94,7 +94,7 @@ async def _main() -> DisclosedRecord:
                     {
                         "agreed_amount": record.settlement.agreed_amount,
                         "paid_amount": record.settlement.paid_amount,
-                        "is_consistent": record.settlement.is_consistent(),
+                        "consistency": record.settlement.consistency().value,
                     }
                     if record.settlement
                     else None

@@ -212,10 +212,12 @@ async with stdio_client(params) as (read, write):
             "accept_and_settle",
             {"channel_handle": handle, "offer_id": offer["offer_id"]})
 
-        # 6. Let a third party reconstruct the record. The returned viewing_key
-        #    is a bearer secret — deliver it out of band, never log it.
+        # 6. Let a third party reconstruct the record. The grant is written to
+        #    export_path, mode 0600, and never returned here — a bearer secret
+        #    never enters this transcript. Deliver the file out of band.
         await payer.call_tool("grant_viewing_key",
-                              {"channel_handle": handle, "grantee": auditor_address})
+                              {"channel_handle": handle, "grantee": auditor_address,
+                               "export_path": "/path/you/choose/grant.json"})
 ```
 
 A runnable two-sided version is in

@@ -30,6 +30,7 @@ def test_negotiation_settles_over_real_mcp_servers(tmp_path):
             buyer_address=BUYER_ADDRESS,
             seller_address=SELLER_ADDRESS,
             auditor_address=AUDITOR_ADDRESS,
+            grant_export_path=tmp_path / "grant.json",
             token=TOKEN,
         )
 
@@ -37,4 +38,4 @@ def test_negotiation_settles_over_real_mcp_servers(tmp_path):
 
     assert sorted(record["participants"]) == sorted([BUYER_ADDRESS, SELLER_ADDRESS])
     assert record["settlement"] is not None
-    assert record["settlement"]["is_consistent"] is True
+    assert record["settlement"]["consistency"] == "consistent"

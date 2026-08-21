@@ -9,7 +9,7 @@ import asyncio
 import time
 
 import pytest
-from erebus_mcp.interface import ErebusError, OfferTerms, SettlementErrorCode
+from erebus_mcp.interface import Consistency, ErebusError, OfferTerms, SettlementErrorCode
 from erebus_mcp.mock_client import MockErebusClient
 
 
@@ -63,7 +63,7 @@ def test_happy_path_end_to_end(clients, store_path):
         assert record.settlement is not None
         assert record.settlement.agreed_amount == 150
         assert record.settlement.paid_amount == 150
-        assert record.settlement.is_consistent()
+        assert record.settlement.consistency() is Consistency.CONSISTENT
 
     asyncio.run(run())
 

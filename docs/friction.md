@@ -940,10 +940,12 @@ settlement where the two happened to be equal, so nothing could tell the differe
 surviving mutant is what pointed at the missing check.
 
 **Worked around:** `ChannelError::AmountMismatch` rejects the disagreement at construction,
-and `DisclosedSettlement` keeps `agreed_amount` and `paid_amount` as separate fields with an
-`is_consistent()` on top. Enforce on write, verify on read, the read-side check still
-matters, because a record on chain may have been written by a different client or a hostile
-one, and an auditor has to be able to detect what our SDK refuses to produce.
+and `DisclosedSettlement` keeps `agreed_amount` and `paid_amount` as separate fields with a
+`consistency()` check on top, which fails closed to `UNKNOWN` rather than reporting
+consistent when `paid_amount` is missing (roadmap 9.2). Enforce on write, verify on read,
+the read-side check still matters, because a record on chain may have been written by a
+different client or a hostile one, and an auditor has to be able to detect what our SDK
+refuses to produce.
 
 **What would have made it easier.** Nothing in the stack. The lesson is about the word
 _atomic_: it is a claim about scheduling, not about semantics, and it reads like both.

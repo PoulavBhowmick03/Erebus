@@ -99,14 +99,18 @@ Before naming or accepting a price, establish the shape of the deal:
    - *Seam-level, before any protocol code ran:* `INVALID_REQUEST`, `IDENTITY_UNAVAILABLE`.
      These fail before a proof is attempted — cheap to retry after fixing the request or the
      key path, never a chain-state problem.
+   - *MCP-layer, before the seam is ever called:* `SPENDING_LIMIT_EXCEEDED`. An
+     operator-configured cap, not a protocol failure. Do not retry at a smaller amount to
+     route around it — a daily cumulative cap catches that. Stop and tell the operator.
    Every error carries `retryable: bool` — trust it over guessing from the code name.
-5. **Disclosure.** `grant_viewing_key(handle, grantee)` returns a bearer secret — whoever
-   holds it can reconstruct the whole relationship (ARCHITECTURE.md §3, "disclosure is the
-   intentional exception"). Hand it to the grantee through an out-of-band channel. Never
-   echo the `viewing_key` value into a chat transcript, a log line, or any output the
-   grantee didn't specifically ask to receive — the grant is the secret, not a result to
-   display for its own sake. `reveal(viewing_key)` needs no prior local state; it works from
-   the grant alone, on any machine.
+5. **Disclosure.** `grant_viewing_key(handle, grantee, export_path)` writes a bearer grant
+   to `export_path` on this machine, mode 0600, and never returns it — the tool result only
+   confirms the write. Whoever holds the file can reconstruct the whole relationship
+   (ARCHITECTURE.md §3, "disclosure is the intentional exception"). Deliver the file to the
+   grantee through an out-of-band channel; this tool does not do that. Never paste the file's
+   contents into a chat transcript, a log line, or any output the grantee didn't specifically
+   ask to receive. `reveal(viewing_key)` needs no prior local state; it works from the grant
+   alone, on any machine.
 6. **Evidence capture.** After a real (non-mock) settlement, record `tx_hash`, every
    `nullifier`, and — if the backend is Sepolia or mainnet — the Voyager link for that
    transaction on the matching network. Don't guess the URL format from memory; look up
