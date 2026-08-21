@@ -76,26 +76,44 @@ def register_tools(
     client: ErebusClient,
     settlement_role: SettlementRole,
     spend_guard: SpendGuard,
+    backend: str,
+    network: str,
 ) -> None:
     """Registers the tools against one identity-bound client.
 
     `spend_guard` enforces per-token, per-deal, and daily-cumulative spending caps below
     the agent (roadmap 9.1). An unconfigured guard (no `EREBUS_SPENDING_LIMITS`) never
     refuses anything, so passing one is always safe.
+
+    `backend` ("mock" or "seam") and `network` are stamped onto every tool result,
+    success or failure, so a model cannot mistake a mock run for a live one, or one
+    network for another, from the transcript alone (roadmap 9.2).
     """
+
+    def _envelope(
+        ok: bool, *, result: Any = None, error: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"ok": ok, "backend": backend, "network": network}
+        if ok:
+            payload["result"] = result
+        else:
+            payload["error"] = error
+        return payload
 
     async def _call(coro: Any) -> dict[str, Any]:
         try:
             result = await coro
         except ErebusError as e:
-            return {"ok": False, "error": {"code": e.code.value, "message": e.message, "retryable": e.retryable}}
-        return {"ok": True, "result": result}
+            return _envelope(
+                False,
+                error={"code": e.code.value, "message": e.message, "retryable": e.retryable},
+            )
+        return _envelope(True, result=result)
 
     def _error(code: SettlementErrorCode, message: str) -> dict[str, Any]:
-        return {
-            "ok": False,
-            "error": {"code": code.value, "message": message, "retryable": False},
-        }
+        return _envelope(
+            False, error={"code": code.value, "message": message, "retryable": False}
+        )
 
     def _balance_json(balance: NoteBalance) -> dict[str, Any]:
         return {
@@ -370,6 +388,16 @@ def register_tools(
         Returns the same shape as read_channel_state, plus `timed_out`. A timeout is not an
         error: the counterparty may still be thinking, and the caller decides whether to
         wait again or move on."""
+        if expected_count <= 0:
+            return _error(
+                SettlementErrorCode.INVALID_REQUEST,
+                f"expected_count must be positive, got {expected_count}",
+            )
+        if timeout_seconds <= 0:
+            return _error(
+                SettlementErrorCode.INVALID_REQUEST,
+                f"timeout_seconds must be positive, got {timeout_seconds}",
+            )
         deadline = time.monotonic() + timeout_seconds
         while True:
             outcome = await _call(client.read_channel_state(channel_handle))
@@ -377,16 +405,16 @@ def register_tools(
                 return outcome
             state = outcome["result"]
             if len(state.offers) >= expected_count or time.monotonic() >= deadline:
-                return {
-                    "ok": True,
-                    "result": {
+                return _envelope(
+                    True,
+                    result={
                         "offers": [_offer_to_json(o) for o in state.offers],
                         "settlement": (
                             _settlement_to_json(state.settlement) if state.settlement else None
                         ),
                         "timed_out": len(state.offers) < expected_count,
                     },
-                }
+                )
             # Each read uses O(notes) RPC round-trips. A write takes ~20 s, so faster polling
             # only adds RPC load.
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
@@ -477,5 +505,5 @@ def _settlement_to_json(settlement: Any) -> dict[str, Any]:
         "accepted_offer": settlement.accepted_offer,
         "agreed_amount": str(settlement.agreed_amount),
         "paid_amount": _amount_str(settlement.paid_amount),
-        "is_consistent": settlement.is_consistent(),
+        "consistency": settlement.consistency().value,
     }

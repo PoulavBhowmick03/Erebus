@@ -688,5 +688,143 @@ def test_an_invalid_amount_is_refused_before_any_write(tmp_path):
     asyncio.run(run())
 
 
+def test_every_result_names_its_backend_and_network(tmp_path):
+    """9.2: a model must be able to tell mock from a live network from the transcript
+    alone, on both success and failure results."""
+
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                ok = _structured(await session.call_tool("get_note_balance", {}))
+                assert ok["backend"] == "mock"
+                assert ok["network"] == "mock"
+
+                failure = _structured(
+                    await session.call_tool(
+                        "accept_and_settle",
+                        {"channel_handle": "ch_doesnotexist", "offer_id": "anything"},
+                    )
+                )
+                assert failure["ok"] is False
+                assert failure["backend"] == "mock"
+                assert failure["network"] == "mock"
+
+    asyncio.run(run())
+
+
+def test_wait_for_offers_rejects_a_non_positive_expected_count(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                for bad in (0, -1):
+                    body = _structured(
+                        await session.call_tool(
+                            "wait_for_offers",
+                            {"channel_handle": handle, "expected_count": bad},
+                        )
+                    )
+                    assert body["ok"] is False
+                    assert body["error"]["code"] == "INVALID_REQUEST"
+
+    asyncio.run(run())
+
+
+def test_wait_for_offers_rejects_a_non_positive_timeout(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                body = _structured(
+                    await session.call_tool(
+                        "wait_for_offers",
+                        {
+                            "channel_handle": handle,
+                            "expected_count": 1,
+                            "timeout_seconds": 0,
+                        },
+                    )
+                )
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INVALID_REQUEST"
+
+    asyncio.run(run())
+
+
+def test_grant_viewing_key_writes_the_secret_to_disk_not_the_result(tmp_path):
+    """9.2: a bearer viewing grant must never enter a tool result, since a tool result is
+    a tool result the model sees and a transcript that can leave the machine."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        export_path = tmp_path / "grant.json"
+        async with stdio_client(_server_params(store)) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                granted = _structured(
+                    await session.call_tool(
+                        "grant_viewing_key",
+                        {
+                            "channel_handle": handle,
+                            "grantee": "0xauditor",
+                            "export_path": str(export_path),
+                        },
+                    )
+                )
+                assert granted["ok"] is True
+                assert granted["result"]["exported_to"] == str(export_path)
+                assert "viewing_key" not in granted["result"]
+
+                on_disk = json.loads(export_path.read_text())
+                assert on_disk["channel_id"] == handle
+                assert on_disk["grantee"] == "0xauditor"
+                assert on_disk["viewing_key"]
+                # The real secret value, not just the field name, must be absent from the
+                # tool result: a false pass here would still leak through a differently
+                # named field.
+                assert on_disk["viewing_key"] not in json.dumps(granted)
+
+    asyncio.run(run())
+
+
+def test_grant_viewing_key_refuses_to_overwrite_an_existing_export(tmp_path):
+    async def run():
+        store = tmp_path / "store.json"
+        export_path = tmp_path / "grant.json"
+        export_path.write_text('{"already": "here"}')
+        async with stdio_client(_server_params(store)) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                body = _structured(
+                    await session.call_tool(
+                        "grant_viewing_key",
+                        {
+                            "channel_handle": handle,
+                            "grantee": "0xauditor",
+                            "export_path": str(export_path),
+                        },
+                    )
+                )
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INVALID_REQUEST"
+                assert json.loads(export_path.read_text()) == {"already": "here"}
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

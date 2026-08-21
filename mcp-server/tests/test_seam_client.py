@@ -15,6 +15,7 @@ import pytest
 from erebus import ErebusError as SeamError
 
 from erebus_mcp.interface import (
+    Consistency,
     ErebusError,
     OfferStatus,
     OfferTerms,
@@ -194,7 +195,7 @@ def test_reveal_reconstructs_the_settlement() -> None:
 
     assert record.participants == ["0xa11ce", "0xb0b"]
     assert record.settlement is not None
-    assert record.settlement.is_consistent()
+    assert record.settlement.consistency() is Consistency.CONSISTENT
 
 
 def test_settlement_amounts_arrive_as_strings_above_the_json_number_range() -> None:
@@ -260,7 +261,7 @@ def test_a_disagreeing_settlement_is_reported_not_hidden() -> None:
     record = run(SeamErebusClient(seam).reveal(grant))
 
     assert record.settlement is not None
-    assert not record.settlement.is_consistent()
+    assert record.settlement.consistency() is Consistency.INCONSISTENT
 
 
 def test_seam_errors_become_interface_errors() -> None:

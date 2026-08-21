@@ -47,8 +47,10 @@ def build_server() -> MCPServer:
         name="erebus",
         instructions=(
             "Structured negotiation and settlement between two agents on Starknet. "
-            "Negotiation terms and settlement amounts stay private; opening a channel does "
-            "not, it writes the counterparty's address to public calldata (F38). "
+            "Negotiation terms and settlement amounts are confidential against a chain "
+            "reader; they are not confidential against the prover or write RPC, which see "
+            "the pool key (docs/threat-model.md). Opening a channel is never confidential: "
+            "it writes the counterparty's address to public calldata (F38). "
             "Open a channel with a counterparty, exchange structured offers, and settle "
             "atomically. accept_and_settle always spends this identity's private notes: "
             "only the payer calls it; a payee leaves its final offer for the payer. "
@@ -125,7 +127,11 @@ def build_server() -> MCPServer:
         )
 
     spend_guard = SpendGuard(config.spending_limits, config.spending_state_path)
-    register_tools(server, client, config.settlement_role, spend_guard)
+    # Stamped onto every tool result (roadmap 9.2) so a transcript alone tells a model
+    # whether it is talking to a real chain, and which one. "mock" has no chain_id to
+    # report; there is nothing else it could truthfully say.
+    network = config.seam.chain_id if config.seam is not None else "mock"
+    register_tools(server, client, config.settlement_role, spend_guard, config.backend, network)
     return server
 
 
