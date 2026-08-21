@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from erebus_mcp.interface import Consistency
 from erebus_mcp.mock_client import MockErebusClient
 
 from erebus_agents.agent import run_negotiation
@@ -46,7 +47,7 @@ def test_negotiation_settles_when_ranges_overlap(tmp_path):
     record = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
 
     assert record.settlement is not None
-    assert record.settlement.is_consistent()
+    assert record.settlement.consistency() is Consistency.CONSISTENT
     assert record.settlement.agreed_amount <= 1000
     assert record.settlement.agreed_amount >= 700
     assert sorted(record.participants) == sorted(["0xbuyer", "0xseller"])

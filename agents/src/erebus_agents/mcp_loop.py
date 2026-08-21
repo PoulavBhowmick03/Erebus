@@ -95,6 +95,7 @@ async def run_negotiation_over_mcp(
     buyer_address: str,
     seller_address: str,
     auditor_address: str,
+    grant_export_path: Path,
     token: str,
     max_rounds: int = 3,
 ) -> dict[str, Any]:
@@ -191,10 +192,24 @@ async def run_negotiation_over_mcp(
                     if not settled:
                         _log_event("negotiation_ended_without_settlement", channel_handle=handle)
 
-                    grant = await _call(
-                        buyer, "grant_viewing_key", channel_handle=handle, grantee=auditor_address
+                    grant_export = await _call(
+                        buyer,
+                        "grant_viewing_key",
+                        channel_handle=handle,
+                        grantee=auditor_address,
+                        export_path=str(grant_export_path),
                     )
-                    _log_event("viewing_key_granted", channel_handle=handle, grantee=auditor_address)
+                    _log_event(
+                        "viewing_key_granted",
+                        channel_handle=handle,
+                        grantee=auditor_address,
+                        exported_to=grant_export["exported_to"],
+                    )
+                    # Read the grant back off disk, out of band from the MCP transcript —
+                    # the tool result never carries it (roadmap 9.2). In production this
+                    # read happens on whatever machine the file was delivered to, not here;
+                    # this demo plays both roles.
+                    grant = json.loads(grant_export_path.read_text())
 
     async with stdio_client(auditor_params) as (auditor_read, auditor_write):
         async with ClientSession(auditor_read, auditor_write) as auditor:
