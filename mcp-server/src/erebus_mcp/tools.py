@@ -28,6 +28,7 @@ from erebus_mcp.interface import (
     SettlementErrorCode,
     ViewingKeyGrant,
 )
+from erebus_mcp.spending import SpendGuard
 
 
 #: Poll interval. Writes take about 20 s, and each read needs one RPC round-trip per note.
@@ -35,9 +36,17 @@ POLL_INTERVAL_SECONDS = 5.0
 
 
 def register_tools(
-    server: MCPServer, client: ErebusClient, settlement_role: SettlementRole
+    server: MCPServer,
+    client: ErebusClient,
+    settlement_role: SettlementRole,
+    spend_guard: SpendGuard,
 ) -> None:
-    """Registers the tools against one identity-bound client."""
+    """Registers the tools against one identity-bound client.
+
+    `spend_guard` enforces per-token, per-deal, and daily-cumulative spending caps below
+    the agent (roadmap 9.1). An unconfigured guard (no `EREBUS_SPENDING_LIMITS`) never
+    refuses anything, so passing one is always safe.
+    """
 
     async def _call(coro: Any) -> dict[str, Any]:
         try:
@@ -293,8 +302,13 @@ def register_tools(
             failure = await _require_payable(target.terms.amount)
             if failure is not None:
                 return failure
+            denial = spend_guard.check(target.terms.token, target.terms.amount)
+            if denial is not None:
+                return _error(SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial)
         outcome = await _call(client.accept_and_settle(channel_handle, offer_id))
         if outcome["ok"]:
+            if target is not None:
+                spend_guard.record(target.terms.token, target.terms.amount)
             receipt = outcome["result"]
             outcome["result"] = {
                 "offer_id": receipt.offer_id,

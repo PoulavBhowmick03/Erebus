@@ -377,7 +377,10 @@ type SettlementErrorCode =
   // protocol code runs, so they are not settlement failures: but they arrive through the
   // same envelope and agent code must handle them, so they live in the same union.
   | "INVALID_REQUEST"        // malformed call: bad JSON, unknown method, a field that is not a felt
-  | "IDENTITY_UNAVAILABLE";  // the key file could not be read
+  | "IDENTITY_UNAVAILABLE"   // the key file could not be read
+  // MCP-layer, added 2026-08-21 for spending caps (roadmap 9.1). Refused before the seam
+  // is ever called — sdk/rs never produces this code, only the MCP server does.
+  | "SPENDING_LIMIT_EXCEEDED";
 ```
 
 Wire v2 has no serialized nonce field. HKDF derives the AES-GCM-SIV nonce from the chain,
