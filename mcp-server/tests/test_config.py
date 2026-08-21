@@ -90,3 +90,23 @@ def test_spending_state_path_honors_explicit_override(
     override = tmp_path / "spend.json"
     monkeypatch.setenv("EREBUS_SPENDING_STATE_PATH", str(override))
     assert ServerConfig.from_env().spending_state_path == override
+
+
+def test_startup_doctor_defaults_on() -> None:
+    assert ServerConfig.from_env().startup_doctor is True
+
+
+@pytest.mark.parametrize("value", ["1", "true", "True", "yes", "YES", "on"])
+def test_startup_doctor_skip_accepts_common_truthy_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("EREBUS_SKIP_STARTUP_DOCTOR", value)
+    assert ServerConfig.from_env().startup_doctor is False
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "", "banana"])
+def test_startup_doctor_skip_ignores_other_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("EREBUS_SKIP_STARTUP_DOCTOR", value)
+    assert ServerConfig.from_env().startup_doctor is True

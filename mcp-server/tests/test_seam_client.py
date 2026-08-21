@@ -73,6 +73,28 @@ def test_offers_map_onto_the_interface_dataclasses() -> None:
     assert offer.reply_to is None
 
 
+def test_string_amount_and_memo_hash_decode_to_ints() -> None:
+    offer = dict(OFFER, terms={**OFFER["terms"], "amount": "500000000000000000", "memo_hash": "1234"})
+    seam = StubSeam(read_channel_state={"channel_id": CHANNEL, "offers": [offer], "settled": False})
+    state = run(SeamErebusClient(seam).read_channel_state(CHANNEL))
+
+    assert state.offers[0].terms.amount == 500000000000000000
+    assert state.offers[0].terms.memo_hash == 0x1234
+
+
+def test_a_malformed_numeric_field_from_the_cli_is_a_structured_error() -> None:
+    """Not a bare ValueError: every other seam failure surfaces as ErebusError, this
+    should too rather than crashing the tool call outright."""
+    offer = dict(OFFER, terms={**OFFER["terms"], "amount": "not-a-number"})
+    seam = StubSeam(read_channel_state={"channel_id": CHANNEL, "offers": [offer], "settled": False})
+
+    with pytest.raises(ErebusError) as caught:
+        run(SeamErebusClient(seam).read_channel_state(CHANNEL))
+
+    assert caught.value.code is SettlementErrorCode.PROOF_FAILED
+    assert caught.value.retryable is False
+
+
 def test_balance_amount_strings_map_to_note_denominations() -> None:
     seam = StubSeam(balance={"notes": ["100", "150"], "total": "250", "pending": ["25"]})
     balance = run(SeamErebusClient(seam).note_balance())

@@ -136,7 +136,7 @@ class ServerConfig:
             mock_spendable_notes=mock_spendable,
             mock_pending_notes=mock_pending,
             seam=seam,
-            startup_doctor=os.environ.get("EREBUS_SKIP_STARTUP_DOCTOR", "").strip() != "1",
+            startup_doctor=not _flag("EREBUS_SKIP_STARTUP_DOCTOR"),
             spending_limits=_spending_limits(),
             spending_state_path=_spending_state_path(address, seam),
         )
@@ -257,6 +257,10 @@ def _spending_state_path(address: str, seam: SeamSettings | None) -> Path:
 
 def _slug(value: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in value.strip())
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _require(name: str) -> str:
