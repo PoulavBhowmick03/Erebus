@@ -55,17 +55,28 @@ def _translate(exc: SeamError) -> ErebusError:
     return ErebusError(code=code, message=exc.message, retryable=exc.retryable)
 
 
+def _parse_u128(value: Any, *, field: str, base: int = 10) -> int:
+    if not isinstance(value, str):
+        return value
+    try:
+        return int(value, base)
+    except ValueError as exc:
+        raise ErebusError(
+            code=SettlementErrorCode.PROOF_FAILED,
+            message=f"could not parse {field} {value!r} from the CLI; the adapter may be stale",
+            retryable=False,
+        ) from exc
+
+
 def _terms(raw: dict[str, Any]) -> OfferTerms:
     # The CLI sends both u128 fields as strings (amount decimal, memo_hash 0x-hex):
     # serde_json cannot carry integers above 2**64-1, and a real digest tail always
     # exceeds that. Payloads captured before that change carry plain numbers.
-    amount = raw["amount"]
-    memo_hash = raw["memo_hash"]
     return OfferTerms(
-        amount=int(amount) if isinstance(amount, str) else amount,
+        amount=_parse_u128(raw["amount"], field="amount"),
         token=raw["token"],
         deadline=raw["deadline"],
-        memo_hash=int(memo_hash, 16) if isinstance(memo_hash, str) else memo_hash,
+        memo_hash=_parse_u128(raw["memo_hash"], field="memo_hash", base=16),
     )
 
 
