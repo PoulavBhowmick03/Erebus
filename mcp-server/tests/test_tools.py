@@ -250,7 +250,7 @@ def test_accept_and_settle_refuses_a_settlement_above_the_configured_per_deal_ca
                             )
                         )
                         assert refused["ok"] is False
-                        assert refused["error"]["code"] == "INVALID_REQUEST"
+                        assert refused["error"]["code"] == "SPENDING_LIMIT_EXCEEDED"
                         assert refused["error"]["retryable"] is False
                         # The message must never leak the configured threshold: a cap an
                         # agent can read is a cap an agent can plan around.
@@ -346,7 +346,7 @@ def test_spending_cap_is_enforced_across_a_server_restart(tmp_path):
                             )
                         )
                         assert refused["ok"] is False
-                        assert refused["error"]["code"] == "INVALID_REQUEST"
+                        assert refused["error"]["code"] == "SPENDING_LIMIT_EXCEEDED"
 
     asyncio.run(run())
 

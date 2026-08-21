@@ -147,6 +147,11 @@ class SettlementErrorCode(str, Enum):
     INVALID_REQUEST = "INVALID_REQUEST"
     IDENTITY_UNAVAILABLE = "IDENTITY_UNAVAILABLE"
 
+    # MCP-layer: fail before the seam is ever called. Added 2026-08-21 for spending caps
+    # (roadmap 9.1). sdk/rs never produces this code; it is synthesized entirely in
+    # erebus_mcp/tools.py, below the agent, before accept_and_settle reaches the seam.
+    SPENDING_LIMIT_EXCEEDED = "SPENDING_LIMIT_EXCEEDED"
+
 
 @dataclass
 class ErebusError(Exception):

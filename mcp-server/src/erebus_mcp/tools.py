@@ -304,7 +304,7 @@ def register_tools(
                 return failure
             denial = spend_guard.check(target.terms.token, target.terms.amount)
             if denial is not None:
-                return _error(SettlementErrorCode.INVALID_REQUEST, denial)
+                return _error(SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial)
         outcome = await _call(client.accept_and_settle(channel_handle, offer_id))
         if outcome["ok"]:
             if target is not None:
