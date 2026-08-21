@@ -33,4 +33,4 @@ def test_negotiation_settles_over_real_mcp_servers(tmp_path):
     record = asyncio.run(run())
 
     assert record["settlement"] is not None
-    assert record["settlement"]["is_consistent"] is True
+    assert record["settlement"]["consistency"] == "consistent"
