@@ -344,7 +344,7 @@ starts.
 |---|---|---|---|---|
 | D1 | Anchor use case | One-off service purchase or bilateral RFQ | Both | Before product copy freezes |
 | D2 | First external operator | Not selected | Both | Before the clean-install test |
-| D3 | Repeat deals in `v0.1.0` | Not selected | Both | Before the final wire work. Carries per-deal grant scope with it: see Phase 11 |
+| D3 | Repeat deals | **Yes, decided 2026-08-21.** The same pair must be able to deal more than once. Lands in the final wire (Phase 8), not in `v0.1.0`, which is already released | Both | Decided. Per-deal grant scope ships in the same release: see Phase 11 |
 | D4 | Technical-preview privacy claim | Confidential terms and shielded settlement | Both | Decided |
 | D5 | Long-term privacy goal | Relationship privacy | Both | Decided, research remains |
 | D6 | Disclosure audience | Auditors and arbitrators receive grants | Both | Decided |
@@ -640,7 +640,8 @@ Exit:
 
 ### Phase 8: Final wire and repeat deals
 
-Target: October 2026. Start only after D3 and the threat model are complete.
+Target: October 2026. D3 decided 2026-08-21: repeat deals are in scope. Start
+once the threat model is written.
 
 Owner: Poulav. Ishita reviews API and agent behavior.
 
