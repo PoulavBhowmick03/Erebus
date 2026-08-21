@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-19.
+Last source audit: 2026-08-20.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -344,7 +344,7 @@ starts.
 |---|---|---|---|---|
 | D1 | Anchor use case | One-off service purchase or bilateral RFQ | Both | Before product copy freezes |
 | D2 | First external operator | Not selected | Both | Before the clean-install test |
-| D3 | Repeat deals in `v0.1.0` | Not selected | Both | Before the final wire work. Carries per-deal grant scope with it: see Phase 11 |
+| D3 | Repeat deals | **Yes, decided 2026-08-21.** The same pair must be able to deal more than once. Lands in the final wire (Phase 8), not in `v0.1.0`, which is already released | Both | Decided. Per-deal grant scope ships in the same release: see Phase 11 |
 | D4 | Technical-preview privacy claim | Confidential terms and shielded settlement | Both | Decided |
 | D5 | Long-term privacy goal | Relationship privacy | Both | Decided, research remains |
 | D6 | Disclosure audience | Auditors and arbitrators receive grants | Both | Decided |
@@ -640,7 +640,8 @@ Exit:
 
 ### Phase 8: Final wire and repeat deals
 
-Target: October 2026. Start only after D3 and the threat model are complete.
+Target: October 2026. D3 decided 2026-08-21: repeat deals are in scope. Start
+once the threat model is written.
 
 Owner: Poulav. Ishita reviews API and agent behavior.
 
@@ -1222,7 +1223,9 @@ board decides what to do next and §7 decides what done means.
       `0 < amount <= total`, `can_pay` removed, tool text rewritten.
 - [x] Mirror `selected_input` and `change` through the Python seam and MCP. Done 2026-08-17
       as `40b8543`, so an agent can now see what a settlement actually spent.
-- [ ] Make missing payment evidence fail closed.
+- [ ] Make missing payment evidence fail closed. `paid_amount is None` currently reports
+      consistent, which is a truthy answer to a question the tool could not answer. Now
+      the head of Phase 9.2, where the rest of the tool-result work sits.
 - [x] Fix wide `memo_hash` transport. Closed 2026-08-17 as `d1731f4`: MCP tools take a hex
       string or an int and return hex. The frozen `interface.py` seam still types it `int`;
       parsing happens at the MCP boundary where the JSON problem is. Breaking for readers.
@@ -1341,15 +1344,28 @@ transactions. See §5.7.
       installs. The job merges the live index in first, verified against a simulated
       earlier release.
 
-- [ ] MCP-layer spending limits: per-token, per-deal, daily (Phase 9.1, Ishita).
-- [ ] Tool results carry backend and network, and fail closed on missing evidence (Phase 9.2).
-- [ ] Adversarial-counterparty and limit-evasion evals (Phase 9.3).
-- [ ] One framework integration installed from published wheels (Phase 9.4).
+**Agent-layer safety (Phase 9, Ishita).** These gate the capability surface: limits must
+exist before Phase 10 gives an agent more ways to spend.
+
+- [ ] MCP-layer spending limits: per-token, per-deal, daily, persisted across restarts
+      (Phase 9.1). Today the only limit is `budget` inside `BuyerPolicy`, so the component
+      being constrained is the component enforcing the constraint.
+- [ ] Tool results carry backend and network in the payload, and fail closed on missing
+      evidence (Phase 9.2). A model cannot tell mock from Sepolia by looking at the logs.
+- [ ] Viewing grants leave tool results for a secure export path (Phase 9.2). A grant in a
+      transcript is a bearer secret that has left the machine.
+- [ ] Adversarial-counterparty and limit-evasion evals (Phase 9.3). Counterparty offers are
+      untrusted text reaching a model that can spend.
+- [ ] One framework integration installed from published wheels (Phase 9.4). This attacks
+      "no external operator completed a clean install" directly, which is the actual
+      constraint on other products building on Erebus.
 
 ### P2: Operator alpha
 
 - [ ] Durable operation journal and idempotency.
 - [ ] Crash and chain-state recovery.
+- [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
+      after the journal lands).
 - [ ] Read cursor, cache, and discovery support.
 - [ ] Multi-token client.
 - [ ] Signer abstraction.
@@ -1358,20 +1374,38 @@ transactions. See §5.7.
 
 ### P3: Protocol and privacy
 
+**Wire and threat model.**
+
 - [ ] Written relationship threat model.
 - [ ] Final framed wire with randomized spare bits.
 - [ ] Repeat deals through the same directional channel pair.
 - [ ] TypeScript final-wire oracle and normative vectors.
+- [ ] Submission unlinkability research.
+- [ ] Independent cryptographic and security review.
+
+**Capability surface (Phase 10).** Staged, not one block: 10.1 has no dependency, 10.3
+needs D15, 10.4 needs an upstream that does not exist yet.
+
+- [ ] Private transfer with no offer (Phase 10.1). Settle the note-grid position first;
+      the reader derives the payment index from the acceptance index.
+- [ ] Off-chain agent messaging keyed off the channel secret (Phase 10.2). Decide whether
+      it is channel-bound context or a messaging product before writing it.
+- [ ] Private swap via AVNU, no Erebus Cairo (Phase 10.3, gated on D15). Verified
+      2026-08-20: self-managed-keys prover, JSON-RPC paymaster, and every `ClientAction`
+      it needs is already encoded and pinned.
+- [ ] Open-note amount exposure written into `privacy-model.md` before any swap claim
+      (Phase 10.3). The owner stays hidden; the bought amount does not.
+- [ ] Paymaster-relayed submission evaluated for ordinary settlements, not only swaps
+      (Phase 10.3). It may cover the sender half of F38; it does nothing for the
+      recipient half.
+- [ ] Private bridge: re-check quarterly against the Phase 10.4 entry criterion. Nothing
+      to integrate against today.
+
+**Disclosure (Phases 11 and 12).**
+
 - [ ] Recipient-bound, time-limited, per-deal grants with documented limits (Phase 11).
 - [ ] Per-deal grant scope released together with repeat deals, never after (D3, Phase 11).
 - [ ] Outcome-only platform receipts, mechanism selected in D7 (Phase 12).
-- [ ] Private transfer with no offer (Phase 10.1).
-- [ ] Off-chain agent messaging keyed off the channel secret (Phase 10.2).
-- [ ] Private swap via AVNU, no Erebus Cairo (Phase 10.3).
-- [ ] Paymaster-relayed submission evaluated for ordinary settlements, not only swaps (Phase 10.3).
-- [ ] Private bridge: re-check quarterly against the Phase 10.4 entry criterion.
-- [ ] Submission unlinkability research.
-- [ ] Independent cryptographic and security review.
 
 ## 11. Explicitly deferred work
 
@@ -1379,14 +1413,20 @@ The current plan does not include these products:
 
 - A hosted multi-tenant Erebus service.
 - A consumer dashboard or wallet.
-- Free-text encrypted messaging.
+- Free-text encrypted messaging **in note salts**. Phase 10.2 plans an off-chain
+  transport keyed off the channel secret; what stays deferred is paying a permanent
+  storage slot per 15 bytes to carry prose on chain.
 - Multi-party negotiation.
 - High-frequency order books.
 - Sealed-bid auctions.
 - Delivery-versus-payment enforcement.
 - A token or economic layer.
-- Cross-chain settlement.
+- Cross-chain settlement. Phase 10.4 records the entry criterion that would reopen it,
+  and does not reopen it.
 - A custom pool deployment without a separate auditor and screening governance plan.
+- An Erebus anonymizer contract. Private swap reaches AVNU's deployed executor instead
+  (Phase 10.3), so `contracts/` stays probes-only and the "we deploy nothing" property
+  survives. Revisit only if a needed action has no first-party private path.
 
 Add one only after D1 changes and the owners accept its security and maintenance cost.
 
@@ -1401,6 +1441,10 @@ Add one only after D1 changes and the owners accept its security and maintenance
 - [ ] The product resumes safely after each write-stage failure.
 - [ ] The product can rebuild state from keys and chain data.
 - [ ] Disclosure grants are recipient-bound and scoped to one deal.
+- [ ] Spending limits are enforced below the agent and survive a restart.
+- [ ] The eval set covers every unsafe behavior in section 5.5, including an adversarial
+      counterparty.
+- [ ] An integrator outside the two owners has run the full loop from published artifacts.
 - [ ] Platforms can inspect a settlement result without receiving a viewing grant.
 - [ ] Every privacy claim has an observer test and a written evidence boundary.
 - [ ] One packaged mainnet canary covers payment change, recovery, disclosure, and receipts.
@@ -1417,9 +1461,14 @@ The roadmap uses these repository authorities:
 - `sdk/rs/src/wire.rs` for the wire format.
 - `sdk/rs/src/execution.rs` for the prove and submit path.
 - `sdk/rs/src/disclosure.rs` for grant and reconstruction behavior.
+- `sdk/rs/src/actions.rs` for the ten `ClientAction` variants and their encoding.
 - `sdk/py/src/erebus/_seam.py` for the Python-to-Rust boundary.
 - `mcp-server/src/erebus_mcp/tools.py` for agent-facing behavior.
 - `agents/src/erebus_agents/` for reference policy behavior.
+- `skills/erebus/SKILL.md` and its `evals/` for agent-facing operating behavior.
+- `docs/privacy-model.md` for the privacy boundary. It is canonical for any privacy
+  claim, and outranks this document where the two differ.
+- `docs/status.md` for current state; it is the tiebreaker across all documents.
 - `docs/friction.md` for measured failures and workarounds.
 - `docs/custody-design.md` for key ownership and deployment options.
 - `strk20.json` for sprint evidence.
