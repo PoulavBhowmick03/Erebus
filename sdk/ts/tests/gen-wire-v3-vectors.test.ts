@@ -1,6 +1,6 @@
 /** Generates normative wire-v3 vectors for the Rust/TypeScript differential tests. */
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { expect, test } from "vitest";
 
 import {
@@ -90,9 +90,7 @@ test("emit wire-v3 vectors for the Rust differential", () => {
     };
   });
 
-  writeFileSync(
-    new URL(OUT, import.meta.url),
-    `${JSON.stringify(
+  const rendered = `${JSON.stringify(
       {
         context: {
           chain_id: `0x${CONTEXT.chainId.toString(16)}`,
@@ -109,6 +107,31 @@ test("emit wire-v3 vectors for the Rust differential", () => {
       },
       null,
       2
-    )}\n`
-  );
+    )}\n`;
+
+  // These vectors are the known answer sdk/rs is pinned against, so they must not move as a
+  // side effect of running this suite. Overwriting on every run would let a change to the
+  // TypeScript codec silently redefine the Rust KAT: both sides drift together and cargo
+  // test still passes, which is the failure mode the pinning rule exists to prevent.
+  //
+  // Regenerate deliberately:  UPDATE_WIRE_VECTORS=1 pnpm vitest run gen-wire-v3-vectors
+  const target = new URL(OUT, import.meta.url);
+  if (process.env.UPDATE_WIRE_VECTORS === "1") {
+    writeFileSync(target, rendered);
+    return;
+  }
+
+  let committed: string;
+  try {
+    committed = readFileSync(target, "utf8");
+  } catch {
+    throw new Error(
+      `${OUT} is missing. Create it with UPDATE_WIRE_VECTORS=1 pnpm vitest run gen-wire-v3-vectors`
+    );
+  }
+  expect(
+    rendered,
+    "wire-v3 vectors changed. sdk/rs is pinned against this file, so review the diff and " +
+      "regenerate with UPDATE_WIRE_VECTORS=1 only if the change is intended."
+  ).toBe(committed);
 });
