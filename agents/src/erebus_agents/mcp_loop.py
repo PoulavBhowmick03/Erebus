@@ -67,6 +67,7 @@ def _decode_offer(raw: dict[str, Any], handle: str) -> Offer:
     terms = raw["terms"]
     return Offer(
         offer_id=raw["offer_id"],
+        deal_id=int(raw.get("deal_id", 0)),
         channel_id=handle,
         proposer=raw["proposer"],
         terms=OfferTerms(
@@ -89,12 +90,10 @@ async def run_negotiation_over_mcp(
     *,
     buyer_params: StdioServerParameters,
     seller_params: StdioServerParameters,
-    auditor_params: StdioServerParameters,
     buyer_policy: BuyerPolicy,
     seller_policy: SellerPolicy,
     buyer_address: str,
     seller_address: str,
-    auditor_address: str,
     token: str,
     max_rounds: int = 3,
 ) -> dict[str, Any]:
@@ -106,16 +105,23 @@ async def run_negotiation_over_mcp(
                     await buyer.initialize()
 
                     opened = await _call(buyer, "open_channel", counterparty=seller_address)
-                    handle = opened["channel_handle"]
-                    await _call(seller, "open_channel", counterparty=buyer_address)
-                    _log_event("channel_opened", channel_handle=handle)
+                    buyer_handle = opened["channel_handle"]
+                    opened = await _call(seller, "open_channel", counterparty=buyer_address)
+                    seller_handle = opened["channel_handle"]
+                    _log_event(
+                        "channel_opened",
+                        buyer_handle=buyer_handle,
+                        seller_handle=seller_handle,
+                    )
 
                     settled = False
                     for round_index in range(max_rounds + 1):
-                        state = await _call(buyer, "read_channel_state", channel_handle=handle)
+                        state = await _call(
+                            buyer, "read_channel_state", channel_handle=buyer_handle
+                        )
                         balance = await _call(buyer, "get_note_balance")
                         buyer_decision = buyer_policy.decide(
-                            _decode_state(state, handle),
+                            _decode_state(state, buyer_handle),
                             round_index,
                             token,
                             int(balance["total"]),
@@ -132,7 +138,7 @@ async def run_negotiation_over_mcp(
                             receipt = await _call(
                                 buyer,
                                 "accept_and_settle",
-                                channel_handle=handle,
+                                channel_handle=buyer_handle,
                                 offer_id=buyer_decision.reply_to,
                             )
                             _log_event("settled", by="buyer", tx_hash=receipt["tx_hash"])
@@ -142,7 +148,7 @@ async def run_negotiation_over_mcp(
                             offer = await _call(
                                 buyer,
                                 "propose_offer",
-                                channel_handle=handle,
+                                channel_handle=buyer_handle,
                                 amount=str(buyer_decision.terms.amount),
                                 token=token,
                                 deadline=buyer_decision.terms.deadline,
@@ -153,7 +159,7 @@ async def run_negotiation_over_mcp(
                             offer = await _call(
                                 buyer,
                                 "counter_offer",
-                                channel_handle=handle,
+                                channel_handle=buyer_handle,
                                 reply_to=buyer_decision.reply_to,
                                 amount=str(buyer_decision.terms.amount),
                                 token=token,
@@ -162,9 +168,11 @@ async def run_negotiation_over_mcp(
                             )
                             _log_event("countered", by="buyer", offer_id=offer["offer_id"])
 
-                        seller_state = await _call(seller, "read_channel_state", channel_handle=handle)
+                        seller_state = await _call(
+                            seller, "read_channel_state", channel_handle=seller_handle
+                        )
                         seller_decision = seller_policy.decide(
-                            _decode_state(seller_state, handle), round_index
+                            _decode_state(seller_state, seller_handle), round_index
                         )
                         _log_event(
                             "seller_decision", round=round_index, action=seller_decision.action.value
@@ -179,7 +187,7 @@ async def run_negotiation_over_mcp(
                             offer = await _call(
                                 seller,
                                 "counter_offer",
-                                channel_handle=handle,
+                                channel_handle=seller_handle,
                                 reply_to=seller_decision.reply_to,
                                 amount=str(seller_decision.terms.amount),
                                 token=token,
@@ -189,29 +197,22 @@ async def run_negotiation_over_mcp(
                             _log_event("countered", by="seller", offer_id=offer["offer_id"])
 
                     if not settled:
-                        _log_event("negotiation_ended_without_settlement", channel_handle=handle)
+                        _log_event(
+                            "negotiation_ended_without_settlement",
+                            buyer_handle=buyer_handle,
+                            seller_handle=seller_handle,
+                        )
 
-                    grant = await _call(
-                        buyer, "grant_viewing_key", channel_handle=handle, grantee=auditor_address
+                    state = await _call(
+                        buyer, "read_channel_state", channel_handle=buyer_handle
                     )
-                    _log_event("viewing_key_granted", channel_handle=handle, grantee=auditor_address)
-
-    async with stdio_client(auditor_params) as (auditor_read, auditor_write):
-        async with ClientSession(auditor_read, auditor_write) as auditor:
-            await auditor.initialize()
-            record = await _call(
-                auditor,
-                "reveal",
-                channel_id=grant["channel_id"],
-                grantee=grant["grantee"],
-                viewing_key=grant["viewing_key"],
-            )
 
     _log_event(
-        "revealed",
-        channel_handle=record["channel_id"],
-        participants=record["participants"],
-        offer_count=len(record["offers"]),
-        settled=record["settlement"] is not None,
+        "final_state",
+        buyer_handle=buyer_handle,
+        seller_handle=seller_handle,
+        offer_count=len(state["offers"]),
+        settled=state["settlement"] is not None,
+        disclosure="available_as_an_explicit_recipient_bound_operator_step",
     )
-    return record
+    return state

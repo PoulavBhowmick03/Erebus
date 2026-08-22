@@ -14,7 +14,11 @@ flag. The payload carries the structured `SettlementErrorCode`.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -32,6 +36,38 @@ from erebus_mcp.interface import (
 
 #: Poll interval. Writes take about 20 s, and each read needs one RPC round-trip per note.
 POLL_INTERVAL_SECONDS = 5.0
+
+
+def _save_grant(path_value: str, grant: ViewingKeyGrant) -> Path:
+    """Atomically publish a new mode-0600 grant file without overwriting a prior grant."""
+    path = Path(path_value).expanduser()
+    encoded = json.dumps(
+        {
+            "channel_id": grant.channel_id,
+            "grantee": grant.grantee,
+            "deal_id": grant.deal_id,
+            "expires_at": grant.expires_at,
+            "viewing_key": grant.viewing_key,
+        },
+        separators=(",", ":"),
+    ) + "\n"
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        return path
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def register_tools(
@@ -269,7 +305,8 @@ def register_tools(
         channel. A supplier/payee must never call this; leave a final payee-authored offer
         for the buyer to accept.
 
-        This closes the channel: one channel is one deal.
+        This settles only the selected wire-v3 deal. The same channel pair can start a new
+        deal after settlement.
 
         This is an on-chain write: simulate, prove, submit. Expect 2-4 minutes
         of silence and do not abort or retry while it runs; the operation is not
@@ -341,27 +378,49 @@ def register_tools(
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
     @server.tool()
-    async def grant_viewing_key(channel_handle: str, grantee: str) -> dict[str, Any]:
-        """Export a self-contained bearer grant that lets `grantee` reconstruct this
-        channel's full record via reveal(). Treat the returned viewing_key as a secret.
-        Whoever holds it can read the relationship and token. Delivery is your
-        responsibility, not this tool's."""
-        outcome = await _call(client.grant_viewing_key(channel_handle, grantee))
+    async def grant_viewing_key(
+        channel_handle: str,
+        deal_id: str,
+        grantee: str,
+        expires_at: int,
+        output_path: str,
+    ) -> dict[str, Any]:
+        """Encrypt one wire-v3 deal grant to a registered recipient and save it to a new
+        mode-0600 file. The secret capsule never enters the MCP result or transcript.
+        ``expires_at`` is a Unix timestamp chosen by the operator."""
+        outcome = await _call(
+            client.grant_viewing_key(channel_handle, deal_id, grantee, expires_at)
+        )
         if outcome["ok"]:
             grant = outcome["result"]
+            try:
+                path = _save_grant(output_path, grant)
+            except (OSError, TypeError, ValueError) as error:
+                return _error(SettlementErrorCode.INVALID_REQUEST, f"could not save grant: {error}")
             outcome["result"] = {
                 "channel_id": grant.channel_id,
+                "deal_id": grant.deal_id,
                 "grantee": grant.grantee,
-                "viewing_key": grant.viewing_key,
+                "expires_at": grant.expires_at,
+                "grant_path": str(path),
             }
         return outcome
 
     @server.tool()
-    async def reveal(channel_id: str, grantee: str, viewing_key: str) -> dict[str, Any]:
-        """Reconstruct a channel's full record (offers, counters, acceptance, settlement)
-        from a viewing key grant returned by grant_viewing_key. No prior local state is
-        needed. The grant is self-contained."""
-        grant = ViewingKeyGrant(channel_id=channel_id, grantee=grantee, viewing_key=viewing_key)
+    async def reveal(grant_path: str) -> dict[str, Any]:
+        """Open a recipient-bound grant file and reconstruct only its selected deal from
+        chain data. The recipient's configured pool key must match the encrypted capsule."""
+        try:
+            raw = json.loads(Path(grant_path).expanduser().read_text(encoding="utf-8"))
+            grant = ViewingKeyGrant(
+                channel_id=raw["channel_id"],
+                grantee=raw["grantee"],
+                deal_id=raw.get("deal_id"),
+                expires_at=raw.get("expires_at"),
+                viewing_key=raw["viewing_key"],
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+            return _error(SettlementErrorCode.INVALID_REQUEST, f"could not read grant: {error}")
         outcome = await _call(client.reveal(grant))
         if outcome["ok"]:
             record = outcome["result"]
@@ -381,6 +440,8 @@ def _amount_str(value: int | None) -> str | None:
 def _offer_to_json(offer: Any) -> dict[str, Any]:
     return {
         "offer_id": offer.offer_id,
+        # A wire-v3 deal id can exceed JavaScript's exact integer range.
+        "deal_id": str(offer.deal_id),
         "proposer": offer.proposer,
         "status": offer.status.value,
         "reply_to": offer.reply_to,

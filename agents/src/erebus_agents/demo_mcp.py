@@ -1,6 +1,6 @@
 """Run the same negotiation as demo.py, but over real MCP servers.
 
-Spawns three `server.py` subprocesses (buyer, seller, auditor) instead of calling
+Spawns two `server.py` subprocesses (buyer and seller) instead of calling
 MockErebusClient directly.
 """
 
@@ -19,7 +19,6 @@ from erebus_agents.policy import BuyerPolicy, SellerPolicy
 
 BUYER_ADDRESS = "0xbuyer"
 SELLER_ADDRESS = "0xseller"
-AUDITOR_ADDRESS = "0xauditor"
 TOKEN = "0xtoken"
 
 
@@ -42,7 +41,6 @@ async def _main() -> dict:
                 store_path, "payer", BUYER_ADDRESS, spendable_notes=str(args.budget)
             ),
             seller_params=server_params(store_path, "payee", SELLER_ADDRESS),
-            auditor_params=server_params(store_path, "both", AUDITOR_ADDRESS),
             buyer_policy=BuyerPolicy(
                 identity=BUYER_ADDRESS, budget=args.budget, deadline_seconds=3600, max_rounds=args.rounds
             ),
@@ -51,12 +49,11 @@ async def _main() -> dict:
             ),
             buyer_address=BUYER_ADDRESS,
             seller_address=SELLER_ADDRESS,
-            auditor_address=AUDITOR_ADDRESS,
             token=TOKEN,
             max_rounds=args.rounds,
         )
 
-    print("\n--- final revealed record ---")
+    print("\n--- final participant state; disclosure is an explicit operator step ---")
     print(json.dumps(record, indent=2))
     return record
 

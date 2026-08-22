@@ -1,6 +1,6 @@
 """Run the I1.2 mock negotiation from the command line.
 
-The command prints each transition and the final disclosed record. It defaults to 0.2 s of
+The command prints each transition and the final participant state. It defaults to 0.2 s of
 latency per round. Use `--latency 29` to rehearse the measured proof cost from I2.2.
 """
 
@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from erebus_mcp.interface import DisclosedRecord
+from erebus_mcp.interface import ChannelState
 from erebus_mcp.mock_client import MockErebusClient
 
 from erebus_agents.agent import run_negotiation
@@ -22,7 +22,6 @@ from erebus_agents.policy import BuyerPolicy, SellerPolicy
 
 BUYER_ADDRESS = "0xbuyer"
 SELLER_ADDRESS = "0xseller"
-AUDITOR_ADDRESS = "0xauditor"
 TOKEN = "0xtoken"
 
 
@@ -37,7 +36,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _main() -> DisclosedRecord:
+async def _main() -> ChannelState:
     args = _parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
@@ -70,17 +69,13 @@ async def _main() -> DisclosedRecord:
             buyer_address=BUYER_ADDRESS,
             seller_address=SELLER_ADDRESS,
             token=TOKEN,
-            store_path=store_path,
-            auditor_address=AUDITOR_ADDRESS,
             max_rounds=args.rounds,
         )
 
-    print("\n--- final revealed record ---")
+    print("\n--- final participant state; disclosure is an explicit operator step ---")
     print(
         json.dumps(
             {
-                "channel_id": record.channel_id,
-                "participants": record.participants,
                 "offers": [
                     {
                         "offer_id": o.offer_id,

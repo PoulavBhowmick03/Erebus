@@ -16,6 +16,7 @@ def _offer(proposer: str, amount: int, offer_id: str = "o1", status: OfferStatus
            deadline_delta: int = 3600) -> Offer:
     return Offer(
         offer_id=offer_id,
+        deal_id=1,
         channel_id="ch_x",
         proposer=proposer,
         terms=OfferTerms(amount=amount, token=TOKEN, deadline=int(time.time()) + deadline_delta, memo_hash=0),

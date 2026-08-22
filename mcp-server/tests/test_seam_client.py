@@ -26,6 +26,7 @@ from erebus_mcp.seam_client import SeamErebusClient, _wire_terms
 CHANNEL = "ch_" + "a8" * 32
 OFFER = {
     "offer_id": f"{CHANNEL}:us:0",
+    "deal_id": "18446744073709551615",
     "channel_id": CHANNEL,
     "proposer": "0x32bb394a452d4bdd24c4c0cdd76ea9d7c140b9a28287a9b81dcb25703bdc805",
     "status": "countered",
@@ -69,6 +70,7 @@ def test_offers_map_onto_the_interface_dataclasses() -> None:
     assert len(state.offers) == 1
     offer = state.offers[0]
     assert offer.status is OfferStatus.COUNTERED
+    assert offer.deal_id == 18_446_744_073_709_551_615
     assert offer.terms.amount == 500000000000000000
     assert offer.reply_to is None
 
@@ -122,6 +124,33 @@ def test_accept_and_settle_leaves_missing_change_fields_as_none() -> None:
 
     assert receipt.selected_input is None
     assert receipt.change is None
+
+
+def test_deal_grant_arguments_and_capsule_pass_through_unchanged() -> None:
+    capsule = {"version": 3, "ciphertext": [1, 2, 3]}
+    seam = StubSeam(
+        grant_viewing_key={
+            "channel_id": CHANNEL,
+            "grantee": "0xa0d17",
+            "deal_id": "18446744073709551615",
+            "expires_at": 1_800_000_000,
+            "viewing_key": capsule,
+        }
+    )
+    grant = run(
+        SeamErebusClient(seam).grant_viewing_key(
+            CHANNEL, "18446744073709551615", "0xa0d17", 1_800_000_000
+        )
+    )
+
+    assert seam.calls == [
+        (
+            "grant_viewing_key",
+            (CHANNEL, "18446744073709551615", "0xa0d17", 1_800_000_000),
+        )
+    ]
+    assert grant.viewing_key is capsule
+    assert grant.deal_id == "18446744073709551615"
 
 
 def test_reveal_reconstructs_the_settlement() -> None:

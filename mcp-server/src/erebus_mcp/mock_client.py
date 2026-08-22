@@ -27,6 +27,7 @@ from pathlib import Path
 
 from erebus_mcp.interface import (
     AgentId,
+    AgentId,
     ChannelHandle,
     ChannelState,
     DisclosedRecord,
@@ -39,15 +40,13 @@ from erebus_mcp.interface import (
     OfferId,
     OfferStatus,
     OfferTerms,
-    PublicKey,
     SettlementErrorCode,
     SettlementReceipt,
     ViewingKeyGrant,
 )
 
 # Proof-bearing calls only (ARCHITECTURE / friction F7): each set becomes one
-# `apply_actions` transaction on the real pool. `grant_viewing_key` is a local export with
-# no chain transaction (ARCHITECTURE §3). The two reads also do not write.
+# `apply_actions` transaction on the real pool. Reads and deal-grant creation do not write.
 _PROOF_BEARING_METHODS = frozenset(
     {"open_channel", "propose_offer", "counter_offer", "accept_and_settle"}
 )
@@ -93,7 +92,7 @@ class MockErebusClient:
         self._pending_notes = list([] if pending_notes is None else pending_notes)
         self._forced_error: ErebusError | None = None
         if not self._store_path.exists():
-            self._write_store({"channels": {}})
+            self._write_store({"channels": {}, "handles": {}})
 
     # --- test-only failure injection ------------------------------------------------
 
@@ -123,12 +122,22 @@ class MockErebusClient:
 
     @staticmethod
     def _channel_handle(a: AgentId, b: AgentId) -> ChannelHandle:
-        # A symmetric value gives both parties the same handle in either open order. Real
-        # handles are opaque random ids (ARCHITECTURE §3), but §4 only requires a string.
-        return "ch_" + "_".join(sorted([a, b]))
+        # Real handles belong to one local state store. The two directions must not converge
+        # on one value, or the mock hides production bugs that pass one party's handle to the
+        # other party's client.
+        digest = hashlib.sha256(f"mock-handle:{a}:{b}".encode()).hexdigest()
+        return "ch_" + digest
 
-    def _get_channel(self, store: dict, handle: ChannelHandle) -> dict:
-        channel = store["channels"].get(handle)
+    @staticmethod
+    def _pair_id(a: AgentId, b: AgentId) -> str:
+        return "|".join(sorted([a, b]))
+
+    def _get_channel(self, store: dict, handle: ChannelHandle, *, require_owner: bool = True) -> dict:
+        binding = store.get("handles", {}).get(handle)
+        if binding is None or (require_owner and binding["owner"] != self._identity):
+            channel = None
+        else:
+            channel = store["channels"].get(binding["pair"])
         if channel is None:
             # SettlementErrorCode has no channel-not-found value. INDEX_CONFLICT represents
             # a client whose local channel state does not match shared state.
@@ -152,6 +161,7 @@ class MockErebusClient:
         terms = OfferTerms(**d["terms"])
         return Offer(
             offer_id=d["offer_id"],
+            deal_id=d.get("deal_id", 0),
             channel_id=d["channel_id"],
             proposer=d["proposer"],
             terms=terms,
@@ -173,35 +183,33 @@ class MockErebusClient:
         await asyncio.sleep(self._latency_seconds)
         handle = self._channel_handle(self._identity, counterparty)
         store = self._read_store()
-        if handle not in store["channels"]:
-            store["channels"][handle] = {
+        pair = self._pair_id(self._identity, counterparty)
+        if pair not in store["channels"]:
+            store["channels"][pair] = {
                 "participants": sorted([self._identity, counterparty]),
                 "offers": [],
                 "settlement": None,
                 "next_seq": {},
             }
-            self._write_store(store)
+        store.setdefault("handles", {})[handle] = {"pair": pair, "owner": self._identity}
+        self._write_store(store)
         return handle
 
     async def propose_offer(self, handle: ChannelHandle, terms: OfferTerms) -> OfferId:
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
-        channel = self._get_channel(store, handle)
-        if channel["settlement"] is not None:
-            raise ErebusError(
-                code=SettlementErrorCode.INDEX_CONFLICT,
-                message="channel already settled; one subchannel is one deal",
-                retryable=False,
-            )
+        channel = self._get_channel(store, handle, require_owner=False)
         seq = channel["next_seq"].get(self._identity, 0)
         # OfferId uses (author, seq), not a bare index. Under friction F22, a bare index
         # collides across the two directions, because each side numbers its own subchannel
         # from zero.
         offer_id = f"{self._identity}:{seq}"
+        deal_id = int.from_bytes(hashlib.sha256(offer_id.encode()).digest()[:8], "big") or 1
         channel["next_seq"][self._identity] = seq + 1
         offer = Offer(
             offer_id=offer_id,
+            deal_id=deal_id,
             channel_id=handle,
             proposer=self._identity,
             terms=terms,
@@ -217,12 +225,6 @@ class MockErebusClient:
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
         channel = self._get_channel(store, handle)
-        if channel["settlement"] is not None:
-            raise ErebusError(
-                code=SettlementErrorCode.INDEX_CONFLICT,
-                message="channel already settled; one subchannel is one deal",
-                retryable=False,
-            )
         offers = [self._offer_from_dict(d) for d in channel["offers"]]
         target = next((o for o in offers if o.offer_id == reply_to), None)
         if target is None:
@@ -252,6 +254,7 @@ class MockErebusClient:
         channel["next_seq"][self._identity] = seq + 1
         new_offer = Offer(
             offer_id=offer_id,
+            deal_id=target.deal_id,
             channel_id=handle,
             proposer=self._identity,
             terms=terms,
@@ -283,6 +286,7 @@ class MockErebusClient:
             offers.append(
                 Offer(
                     offer_id=offer.offer_id,
+                    deal_id=offer.deal_id,
                     channel_id=offer.channel_id,
                     proposer=offer.proposer,
                     terms=offer.terms,
@@ -320,8 +324,6 @@ class MockErebusClient:
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
         channel = self._get_channel(store, handle)
-        if channel["settlement"] is not None:
-            raise ErebusError(code=SettlementErrorCode.ALREADY_SETTLED, message=handle, retryable=False)
         offers = [self._offer_from_dict(d) for d in channel["offers"]]
         target = next((o for o in offers if o.offer_id == offer_id), None)
         if target is None:
@@ -335,8 +337,15 @@ class MockErebusClient:
                 retryable=False,
             )
         now = int(time.time())
-        if self._effective_status(target, now) == OfferStatus.EXPIRED:
+        target_status = self._effective_status(target, now)
+        if target_status == OfferStatus.EXPIRED:
             raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=offer_id, retryable=False)
+        if target_status not in (OfferStatus.PROPOSED, OfferStatus.COUNTERED):
+            raise ErebusError(
+                code=SettlementErrorCode.ALREADY_SETTLED,
+                message=offer_id,
+                retryable=False,
+            )
 
         selected = _select_notes(self._spendable_notes, target.terms.amount)
         if selected is None:
@@ -370,6 +379,12 @@ class MockErebusClient:
             selected_input=target.terms.amount + change,
             change=change,
         )
+        channel["offers"] = [
+            {**offer, "status": OfferStatus.SETTLED.value}
+            if offer["offer_id"] == offer_id
+            else offer
+            for offer in channel["offers"]
+        ]
         channel["settlement"] = {
             "acceptance": offer_id,
             "accepted_offer": target.reply_to,
@@ -385,15 +400,89 @@ class MockErebusClient:
         self._write_store(store)
         return receipt
 
-    async def grant_viewing_key(self, handle: ChannelHandle, grantee: PublicKey) -> ViewingKeyGrant:
+    async def grant_viewing_key(
+        self, handle: ChannelHandle, deal_id: str, grantee: AgentId, expires_at: int
+    ) -> ViewingKeyGrant:
         self._maybe_raise_forced()
         store = self._read_store()
-        self._get_channel(store, handle)  # raises INDEX_CONFLICT if unknown
-        checksum = hashlib.sha256(handle.encode()).hexdigest()[:16]
-        return ViewingKeyGrant(channel_id=handle, grantee=grantee, viewing_key=f"vk1.{handle}.{checksum}")
+        channel = self._get_channel(store, handle)
+        if expires_at <= int(time.time()):
+            raise ErebusError(
+                code=SettlementErrorCode.INVALID_REQUEST,
+                message="viewing grant expiry must be in the future",
+                retryable=False,
+            )
+        if not any(str(offer["deal_id"]) == deal_id for offer in channel["offers"]):
+            raise ErebusError(
+                code=SettlementErrorCode.INVALID_REQUEST,
+                message=f"deal {deal_id} does not exist in this channel",
+                retryable=False,
+            )
+        checksum = hashlib.sha256(
+            f"{handle}:{deal_id}:{grantee}:{expires_at}".encode()
+        ).hexdigest()[:16]
+        return ViewingKeyGrant(
+            channel_id=handle,
+            grantee=grantee,
+            deal_id=deal_id,
+            expires_at=expires_at,
+            viewing_key={"version": 3, "mock_checksum": checksum},
+        )
 
     async def reveal(self, viewing_key: ViewingKeyGrant) -> DisclosedRecord:
         self._maybe_raise_forced()
+        if isinstance(viewing_key.viewing_key, dict):
+            if viewing_key.grantee != self._identity:
+                raise ErebusError(
+                    code=SettlementErrorCode.INVALID_REQUEST,
+                    message="viewing grant belongs to a different recipient",
+                    retryable=False,
+                )
+            if viewing_key.expires_at is None or int(time.time()) > viewing_key.expires_at:
+                raise ErebusError(
+                    code=SettlementErrorCode.INVALID_REQUEST,
+                    message="viewing grant expired",
+                    retryable=False,
+                )
+            if viewing_key.deal_id is None:
+                raise ErebusError(
+                    code=SettlementErrorCode.INVALID_REQUEST,
+                    message="viewing grant omitted its deal id",
+                    retryable=False,
+                )
+            checksum = hashlib.sha256(
+                f"{viewing_key.channel_id}:{viewing_key.deal_id}:{viewing_key.grantee}:"
+                f"{viewing_key.expires_at}".encode()
+            ).hexdigest()[:16]
+            if viewing_key.viewing_key.get("mock_checksum") != checksum:
+                raise ErebusError(
+                    code=SettlementErrorCode.INVALID_REQUEST,
+                    message="viewing grant authentication failed",
+                    retryable=False,
+                )
+            store = self._read_store()
+            # A grant recipient never owns the granter's handle. The recipient binding
+            # and expiry checked above are the access control, not handle ownership.
+            channel = self._get_channel(store, viewing_key.channel_id, require_owner=False)
+            offers = [
+                self._offer_from_dict(offer)
+                for offer in channel["offers"]
+                if str(offer["deal_id"]) == viewing_key.deal_id
+            ]
+            settlement = (
+                self._settlement_from_dict(channel["settlement"])
+                if channel["settlement"]
+                and any(
+                    offer.offer_id == channel["settlement"]["acceptance"] for offer in offers
+                )
+                else None
+            )
+            return DisclosedRecord(
+                channel_id=viewing_key.channel_id,
+                participants=list(channel["participants"]),
+                offers=offers,
+                settlement=settlement,
+            )
         parts = viewing_key.viewing_key.split(".")
         if len(parts) != 3 or parts[0] != "vk1":
             raise ErebusError(
@@ -407,7 +496,8 @@ class MockErebusClient:
                 retryable=False,
             )
         store = self._read_store()
-        channel = self._get_channel(store, handle)
+        # Same as the v3 path: the grant's checksum is the access check, not ownership.
+        channel = self._get_channel(store, handle, require_owner=False)
         offers = [self._offer_from_dict(d) for d in channel["offers"]]
         settlement = self._settlement_from_dict(channel["settlement"]) if channel["settlement"] else None
         return DisclosedRecord(
