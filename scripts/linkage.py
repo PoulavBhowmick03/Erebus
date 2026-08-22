@@ -56,8 +56,15 @@ from observer import (  # noqa: E402
 #: Wire v3 always creates five data notes, one payment note, and one change note.
 SETTLEMENT_NOTES = 7
 
-#: Codec-derived wire-v3 positive. This proves a codec property, not live system behavior.
-DEFAULT_FIXTURES = ("observer-wire-v3.json",)
+#: Wire-v3 positives. The first is codec-derived and proves a codec property. The rest are
+#: real Sepolia `apply_actions` calldata from the 2026-08-22 settlements, so M1 now measures
+#: live system behaviour rather than only the codec.
+DEFAULT_FIXTURES = (
+    "observer-wire-v3.json",
+    "observer-wire-v3-live-190c6b.json",
+    "observer-wire-v3-live-6bb25a.json",
+    "observer-wire-v3-live-60eace.json",
+)
 
 #: Historical transactions/fixtures that retain the classifier as a negative control. Both
 #: are wire-v2-shaped for M1 purposes: the
@@ -206,7 +213,9 @@ def _report(
             "timing_only_baseline": None,
         },
         "limits": [
-            "The wire-v3 positive is codec-derived, not a live Starknet transaction.",
+            "Three of the four wire-v3 positives are live Sepolia settlements; the fourth "
+            "is codec-derived. Four positives is a small sample: M1 recall is measured "
+            "against them, so its resolution is one quarter.",
             "Negatives are synthetic, not sampled from live STRK20 traffic.",
             "No timing-only baseline: it needs a real corpus this script does not fetch.",
             "M2 measures note count only; value-bearing ciphertext remains opaque.",
