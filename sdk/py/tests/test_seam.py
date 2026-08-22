@@ -174,7 +174,7 @@ def test_approve_sends_amount_and_returns_a_receipt(
         return subprocess.CompletedProcess(
             args=[str(CLI)],
             returncode=0,
-            stdout='{"ok":true,"result":{"tx_hash":"0xabc","approved":5000000000000000000}}',
+            stdout='{"ok":true,"result":{"tx_hash":"0xabc","approved":"30000000000000000000"}}',
             stderr="",
         )
 

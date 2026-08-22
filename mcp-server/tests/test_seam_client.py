@@ -197,6 +197,50 @@ def test_reveal_reconstructs_the_settlement() -> None:
     assert record.settlement.is_consistent()
 
 
+def test_settlement_amounts_arrive_as_strings_above_the_json_number_range() -> None:
+    """F40. A settlement above u64::MAX cannot cross the seam as a JSON number, so the CLI
+    sends decimal strings. The fixtures above keep the legacy numeric form on purpose: both
+    shapes must parse, or an archived disclosure stops reading."""
+    huge = 30000000000000000000  # 30 STRK, above u64::MAX
+    seam = StubSeam(
+        reveal={
+            "channel_id": CHANNEL,
+            "participants": [],
+            "offers": [],
+            "settlement": {
+                "acceptance": f"{CHANNEL}:us:1",
+                "accepted_offer": None,
+                "agreed_amount": str(huge),
+                "paid_amount": str(huge),
+            },
+        }
+    )
+    grant = ViewingKeyGrant(channel_id=CHANNEL, grantee="0x0", viewing_key="vk")
+    record = run(SeamErebusClient(seam).reveal(grant))
+
+    assert record.settlement is not None
+    assert record.settlement.agreed_amount == huge
+    assert record.settlement.paid_amount == huge
+    assert record.settlement.is_consistent()
+
+
+def test_an_absent_payment_note_is_not_a_zero_payment() -> None:
+    """None means no payment note was found; 0 would mean one was found and paid nothing."""
+    seam = StubSeam(
+        reveal={
+            "channel_id": CHANNEL,
+            "participants": [],
+            "offers": [],
+            "settlement": {"acceptance": f"{CHANNEL}:us:1", "agreed_amount": "5", "paid_amount": None},
+        }
+    )
+    grant = ViewingKeyGrant(channel_id=CHANNEL, grantee="0x0", viewing_key="vk")
+    record = run(SeamErebusClient(seam).reveal(grant))
+
+    assert record.settlement is not None
+    assert record.settlement.paid_amount is None
+
+
 def test_a_disagreeing_settlement_is_reported_not_hidden() -> None:
     """Atomicity guarantees both legs land, not that they describe the same trade (F23).
     A reader must still check, so the adapter must carry both numbers through unchanged."""

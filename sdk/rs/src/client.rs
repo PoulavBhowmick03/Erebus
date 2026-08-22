@@ -1452,6 +1452,35 @@ mod u128_boundary {
         }
     }
 
+    /// `Option<u128>` as a decimal string or `null`. Same reasoning as `decimal`; a missing
+    /// payment note is `None`, which is not the same as a zero payment.
+    pub mod optional_decimal {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(
+            value: &Option<u128>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            match value {
+                Some(inner) => serializer.serialize_some(&inner.to_string()),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<u128>, D::Error> {
+            match Option::<Repr>::deserialize(deserializer)? {
+                None => Ok(None),
+                Some(Repr::Text(text)) => text
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| D::Error::custom(format!("not a decimal amount: {text}"))),
+                Some(Repr::Legacy(value)) => Ok(Some(u128::from(value))),
+            }
+        }
+    }
+
     /// `0x`-prefixed hex string, matching the memo_hash convention at the MCP boundary:
     /// callers compare it against digest tails, which are written in hex.
     pub mod hex {
@@ -1557,7 +1586,9 @@ pub struct ChannelState {
 pub struct ApprovalReceipt {
     /// The `approve` transaction.
     pub tx_hash: String,
-    /// The allowance now standing, in token base units.
+    /// The allowance now standing, in token base units. A decimal string in JSON; a realistic
+    /// allowance exceeds `u64::MAX`, which `serde_json` cannot serialize as a number.
+    #[serde(with = "u128_boundary::decimal")]
     pub approved: u128,
 }
 
@@ -1674,9 +1705,12 @@ pub struct DisclosedSettlement {
     pub acceptance: OfferId,
     /// Offer it accepted.
     pub accepted_offer: Option<OfferId>,
-    /// Terms amount.
+    /// Terms amount. A decimal string in JSON, matching `OfferTerms::amount` in the same
+    /// document; a settlement above `u64::MAX` base units cannot serialize as a number.
+    #[serde(with = "u128_boundary::decimal")]
     pub agreed_amount: u128,
-    /// Decrypted payment.
+    /// Decrypted payment. Decimal string or `null`.
+    #[serde(with = "u128_boundary::optional_decimal")]
     pub paid_amount: Option<u128>,
 }
 
@@ -2361,6 +2395,78 @@ mod tests {
         let value = serde_json::to_value(offer).expect("offer serializes");
         assert_eq!(value["deal_id"], "18446744073709551615");
         assert!(value["deal_id"].is_string());
+    }
+
+    /// F39. A realistic allowance exceeds `u64::MAX` — the pool charges 2 STRK per write, so
+    /// nine writes crosses the line — and `serde_json` refuses to emit a `u128` above that as
+    /// a number. The `approve` transaction has already landed by the time the response is
+    /// built, so the caller sees `INTERNAL` on a call that succeeded and naturally retries.
+    #[test]
+    fn full_width_allowance_crosses_the_json_boundary_as_a_string() {
+        let receipt = ApprovalReceipt {
+            tx_hash: "0xabc".to_owned(),
+            approved: 30_000_000_000_000_000_000,
+        };
+        let value = serde_json::to_value(&receipt).expect("full-width approval serializes");
+        assert_eq!(value["approved"], "30000000000000000000");
+        assert!(value["approved"].is_string());
+        let back: ApprovalReceipt = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, receipt);
+    }
+
+    /// F40. `reveal` is the disclosure leg, and it ran with the same defect: a settlement above
+    /// `u64::MAX` base units failed to serialize *after* the settlement was irreversible on
+    /// chain. Every other disclosure test uses toy amounts and sits far below the boundary, so
+    /// the suite stayed green while the ceiling went unnamed.
+    #[test]
+    fn full_width_settlement_amounts_cross_the_json_boundary_as_strings() {
+        let settlement = DisclosedSettlement {
+            acceptance: OfferId("accept".to_owned()),
+            accepted_offer: Some(OfferId("offer".to_owned())),
+            agreed_amount: u128::MAX,
+            paid_amount: Some(u128::MAX),
+        };
+        let value = serde_json::to_value(&settlement).expect("full-width settlement serializes");
+        assert_eq!(
+            value["agreed_amount"],
+            "340282366920938463463374607431768211455"
+        );
+        assert!(value["agreed_amount"].is_string());
+        assert!(value["paid_amount"].is_string());
+        let back: DisclosedSettlement = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, settlement);
+    }
+
+    /// A missing payment note is not a zero payment, and the string encoding must not collapse
+    /// that distinction: `is_consistent` returns `None` for the first and `Some(false)` for the
+    /// second.
+    #[test]
+    fn absent_payment_stays_null_rather_than_zero() {
+        let settlement = DisclosedSettlement {
+            acceptance: OfferId("accept".to_owned()),
+            accepted_offer: None,
+            agreed_amount: 1,
+            paid_amount: None,
+        };
+        let value = serde_json::to_value(&settlement).expect("settlement serializes");
+        assert!(value["paid_amount"].is_null());
+        let back: DisclosedSettlement = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, settlement);
+    }
+
+    /// Records captured before this change carry plain numbers. The boundary helpers accept
+    /// them, so an archived disclosure still reads.
+    #[test]
+    fn legacy_numeric_settlement_payloads_still_deserialize() {
+        let value = serde_json::json!({
+            "acceptance": "accept",
+            "accepted_offer": null,
+            "agreed_amount": 900,
+            "paid_amount": 900,
+        });
+        let back: DisclosedSettlement = serde_json::from_value(value).expect("legacy round trip");
+        assert_eq!(back.agreed_amount, 900);
+        assert_eq!(back.paid_amount, Some(900));
     }
 
     /// Payloads captured before the string representation carry plain numbers; only values
