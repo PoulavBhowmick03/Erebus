@@ -32,8 +32,8 @@ use crate::disclosure::{ViewingGrant, ViewingGrantFields};
 use crate::hashes;
 use crate::subchannel::{IndexError, SubchannelCursor};
 use crate::wire::{
-    encode_message, MessageType, WireContext, WireError, WireMessage, WireVersion,
-    NOTES_PER_MESSAGE,
+    encode_message, encode_message_v3, MessageType, WireContext, WireError, WireMessage,
+    WireVersion, NOTES_PER_MESSAGE,
 };
 
 /// Errors from channel operations.
@@ -95,6 +95,12 @@ pub enum ChannelError {
     /// A present change output carried no value.
     #[error("a change output must move a non-zero amount")]
     ZeroChange,
+    /// Wire v3 settlements always include a payer-owned change note.
+    #[error("wire-v3 settlement requires a change output, including zero change")]
+    MissingV3Change,
+    /// The legacy grant exports channel-wide keys and is unsafe for repeat deals.
+    #[error("wire-v3 disclosure requires a per-deal grant; whole-channel export is disabled")]
+    V3DisclosureRequiresDealScope,
 }
 
 /// An agent's identity inside the pool.
@@ -123,6 +129,11 @@ impl PoolIdentity {
     /// The public half, which counterparties need in order to send to this identity.
     pub fn public_key(&self) -> Felt {
         get_public_key(&self.private_key)
+    }
+
+    /// Pool secret used only to open a recipient-bound disclosure capsule.
+    pub(crate) fn disclosure_private_key(&self) -> Felt {
+        self.private_key
     }
 
     /// The action that registers this identity with the pool.
@@ -180,6 +191,23 @@ impl Channel {
         identity: &PoolIdentity,
         counterparty: Counterparty,
     ) -> Self {
+        Self::derive_with_version(
+            chain_id,
+            pool_address,
+            identity,
+            counterparty,
+            WireVersion::V3,
+        )
+    }
+
+    /// Derives a channel using an explicitly selected writable wire generation.
+    pub fn derive_with_version(
+        chain_id: Felt,
+        pool_address: Felt,
+        identity: &PoolIdentity,
+        counterparty: Counterparty,
+        wire_version: WireVersion,
+    ) -> Self {
         let channel_key = hashes::compute_channel_key(
             identity.address,
             identity.private_key,
@@ -191,7 +219,7 @@ impl Channel {
             pool_address,
             channel_key,
             counterparty,
-            wire_version: WireVersion::V2,
+            wire_version,
         }
     }
 
@@ -210,7 +238,7 @@ impl Channel {
             pool_address,
             channel_key,
             counterparty,
-            WireVersion::V2,
+            WireVersion::V3,
         )
     }
 
@@ -394,10 +422,17 @@ impl Channel {
         token: Felt,
         message_index: u32,
     ) -> [Felt; NOTES_PER_MESSAGE] {
-        let first = u64::from(message_index) * NOTES_PER_MESSAGE as u64;
+        let first = u64::from(self.first_note_for_message(message_index));
         core::array::from_fn(|slot| {
             hashes::compute_note_id(self.channel_key, token, first + slot as u64)
         })
+    }
+
+    fn first_note_for_message(&self, message_index: u32) -> u32 {
+        match self.wire_version {
+            WireVersion::V3 => message_index,
+            WireVersion::V1 | WireVersion::V2 => message_index * NOTES_PER_MESSAGE as u32,
+        }
     }
 
     /// Builds the action set that writes one negotiation message into this channel.
@@ -414,8 +449,13 @@ impl Channel {
         if self.wire_version == WireVersion::V1 {
             return Err(WireError::LegacyReadOnly.into());
         }
-        let salts = encode_message(&self.wire_context(token, message_index), message)?;
-        let first = message_index * NOTES_PER_MESSAGE as u32;
+        let context = self.wire_context(token, message_index);
+        let salts = match self.wire_version {
+            WireVersion::V1 => return Err(WireError::LegacyReadOnly.into()),
+            WireVersion::V2 => encode_message(&context, message)?,
+            WireVersion::V3 => encode_message_v3(&context, message)?,
+        };
+        let first = self.first_note_for_message(message_index);
 
         let mut builder = ActionSetBuilder::new();
         for (slot, salt) in salts.iter().enumerate() {
@@ -436,27 +476,35 @@ impl Channel {
         cursor: &mut SubchannelCursor,
         message: &WireMessage,
     ) -> Result<(u32, ActionSet), ChannelError> {
-        let message_index = cursor.next_message_index()?;
+        let message_index = match self.wire_version {
+            WireVersion::V3 => cursor.next_index(),
+            WireVersion::V1 | WireVersion::V2 => cursor.next_message_index()?,
+        };
         let set = self.write_message(token, message_index, message)?;
-        cursor.reserve_message()?;
+        cursor.reserve(NOTES_PER_MESSAGE as u32)?;
         Ok((message_index, set))
     }
 
-    /// Grants a scoped viewing key for this channel pair on `token`.
+    /// Grants a legacy channel-pair viewing key for this channel pair on `token`.
     ///
     /// `incoming_key` is the counterparty-to-local key from `EncChannelInfo`. The grant needs
     /// both directional keys to show all messages.
     ///
     /// The grant contains channel keys, not a pool private key. It can read this channel but
-    /// cannot create a nullifier or spend.
+    /// cannot create a nullifier or spend. Wire v3 rejects this operation because one channel
+    /// can contain multiple deals and these keys would reveal all current and future deals.
+    /// A deal-scoped disclosure format must replace it for v3.
     /// See [`crate::disclosure`] for how this differs from the pool's own auditor escrow.
     pub fn grant_viewing_key(
         &self,
         identity: &PoolIdentity,
         incoming_key: Felt,
         token: Felt,
-    ) -> ViewingGrant {
-        ViewingGrant::new(ViewingGrantFields {
+    ) -> Result<ViewingGrant, ChannelError> {
+        if self.wire_version == WireVersion::V3 {
+            return Err(ChannelError::V3DisclosureRequiresDealScope);
+        }
+        Ok(ViewingGrant::new(ViewingGrantFields {
             chain_id: self.chain_id,
             pool_address: self.pool_address,
             wire_version: self.wire_version,
@@ -465,7 +513,7 @@ impl Channel {
             token,
             granter: identity.address(),
             counterparty: self.counterparty.address,
-        })
+        }))
     }
 
     /// A single zero-amount note carrying a structured salt.
@@ -533,7 +581,12 @@ impl Channel {
         if spend.is_empty() {
             return Err(ChannelError::NothingToSpend);
         }
-        if matches!(change, Some(output) if output.amount == 0) {
+        if self.wire_version == WireVersion::V3 && change.is_none() {
+            return Err(ChannelError::MissingV3Change);
+        }
+        if self.wire_version != WireVersion::V3
+            && matches!(change, Some(output) if output.amount == 0)
+        {
             return Err(ChannelError::ZeroChange);
         }
         // Atomicity does not make the accepted amount equal the payment. Without this check,
@@ -546,7 +599,7 @@ impl Channel {
         }
 
         // The payment note and the acceptance notes share one subchannel index space.
-        let acceptance_first = acceptance.message_index * NOTES_PER_MESSAGE as u32;
+        let acceptance_first = self.first_note_for_message(acceptance.message_index);
         let acceptance_range = acceptance_first..acceptance_first + NOTES_PER_MESSAGE as u32;
         if acceptance_range.contains(&payment.index) {
             return Err(ChannelError::IndexCollision {
@@ -559,10 +612,12 @@ impl Channel {
         if self.wire_version == WireVersion::V1 {
             return Err(WireError::LegacyReadOnly.into());
         }
-        let salts = encode_message(
-            &self.wire_context(token, acceptance.message_index),
-            &acceptance.message,
-        )?;
+        let context = self.wire_context(token, acceptance.message_index);
+        let salts = match self.wire_version {
+            WireVersion::V1 => return Err(WireError::LegacyReadOnly.into()),
+            WireVersion::V2 => encode_message(&context, &acceptance.message)?,
+            WireVersion::V3 => encode_message_v3(&context, &acceptance.message)?,
+        };
         let mut builder = ActionSetBuilder::new();
 
         // A payer can receive funds without ever opening a self-channel. If its first
@@ -639,11 +694,8 @@ impl Channel {
 
     /// Accepts and settles using the next free indices, allocated from `cursor`.
     ///
-    /// Places the acceptance on the `5k..5k+4` message grid and the payment after it. Putting
-    /// the payment first misaligns the reader.
-    ///
-    /// Settlement leaves the cursor off the message grid. A second negotiation cannot start
-    /// in that subchannel. `docs/poulav.md` P1.3 tracks this multi-deal constraint.
+    /// Wire v3 places the acceptance at the next physical note and the payment after it.
+    /// Historical wire v2 keeps its `5k..5k+4` grid.
     #[allow(clippy::too_many_arguments)]
     pub fn settle_next(
         &self,
@@ -672,8 +724,16 @@ impl Channel {
         message: &WireMessage,
         change: Option<ChangeOutput>,
     ) -> Result<(u32, ActionSet), ChannelError> {
-        let message_index = cursor.next_message_index()?;
-        let payment_index = message_index * NOTES_PER_MESSAGE as u32 + NOTES_PER_MESSAGE as u32;
+        let message_index = match self.wire_version {
+            WireVersion::V3 => cursor.next_index(),
+            WireVersion::V1 | WireVersion::V2 => cursor.next_message_index()?,
+        };
+        let payment_index = self
+            .first_note_for_message(message_index)
+            .checked_add(NOTES_PER_MESSAGE as u32)
+            .ok_or(IndexError::Exhausted {
+                index: message_index,
+            })?;
 
         let set = self.accept_and_settle_with_change(
             token,
@@ -690,8 +750,7 @@ impl Channel {
             change,
         )?;
 
-        cursor.reserve_message()?;
-        cursor.reserve_note()?;
+        cursor.reserve(NOTES_PER_MESSAGE as u32 + 1)?;
         Ok((message_index, set))
     }
 }

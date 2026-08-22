@@ -20,7 +20,7 @@ use erebus_sdk::negotiation::NegotiationError;
 use erebus_sdk::prover::ProverError;
 use erebus_sdk::state::{ChannelHandle, StateError};
 use erebus_sdk::subchannel::IndexError;
-use erebus_sdk::wire::WireError;
+use erebus_sdk::wire::{WireError, WireVersion};
 use serde::{Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
@@ -64,11 +64,13 @@ enum Request {
     GrantViewingKey {
         config: ConfigParams,
         handle: String,
+        deal_id: String,
         grantee: String,
+        expires_at: u64,
     },
     Reveal {
         config: ConfigParams,
-        viewing_key: ViewingKeyGrant,
+        viewing_key: Box<ViewingKeyGrant>,
     },
     Approve {
         config: ConfigParams,
@@ -104,10 +106,22 @@ struct ConfigParams {
     account_key_file: PathBuf,
     state_dir: PathBuf,
     token: String,
+    #[serde(default = "default_wire_version")]
+    wire_version: WireVersion,
+}
+
+fn default_wire_version() -> WireVersion {
+    WireVersion::V3
 }
 
 impl ConfigParams {
     fn build(self) -> Result<Client, CliError> {
+        if self.wire_version == WireVersion::V1 {
+            return Err(CliError::BadValue {
+                field: "wire_version",
+                value: "v1 is read-only; select v2 or v3".to_owned(),
+            });
+        }
         Client::new(ClientConfig {
             rpc_url: self.rpc_url,
             prover_url: self.prover_url,
@@ -118,6 +132,7 @@ impl ConfigParams {
             account_key_file: self.account_key_file,
             state_dir: self.state_dir,
             token: felt("token", &self.token)?,
+            new_channel_wire_version: self.wire_version,
         })
         .map_err(CliError::Client)
     }
@@ -147,7 +162,7 @@ impl TermsParams {
 /// so a consumer can fail with a named mismatch instead of a shape error deep inside its
 /// own decoding — a stale server against a newer binary surfaced exactly that way on
 /// 2026-08-19. Bump on any change to a request or result shape, not only breaking ones.
-const PROTOCOL: u8 = 2;
+const PROTOCOL: u8 = 3;
 
 #[derive(Debug, Serialize)]
 struct Response {
@@ -231,6 +246,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             "name": env!("CARGO_PKG_NAME"),
             "version": env!("CARGO_PKG_VERSION"),
             "protocol": PROTOCOL,
+            "default_wire_version": "v3",
         })),
         Request::GeneratePoolKey { path } => {
             let generated = generate_pool_key_file(path)?;
@@ -299,12 +315,20 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         Request::GrantViewingKey {
             config,
             handle,
+            deal_id,
             grantee,
+            expires_at,
         } => {
+            let deal_id = u64_value("deal_id", &deal_id)?;
             let client = config.build()?;
             serialize(
                 client
-                    .grant_viewing_key(ChannelHandle::parse(handle)?, felt("grantee", &grantee)?)
+                    .grant_viewing_key(
+                        ChannelHandle::parse(handle)?,
+                        deal_id,
+                        felt("grantee", &grantee)?,
+                        expires_at,
+                    )
                     .await?,
             )
         }
@@ -313,7 +337,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             viewing_key,
         } => {
             let client = config.build()?;
-            serialize(client.reveal(viewing_key).await?)
+            serialize(client.reveal(*viewing_key).await?)
         }
         Request::Approve { config, amount } => {
             let client = config.build()?;
@@ -411,6 +435,18 @@ fn u128_value(field: &'static str, value: &str) -> Result<u128, CliError> {
     })
 }
 
+fn u64_value(field: &'static str, value: &str) -> Result<u64, CliError> {
+    let parsed = if let Some(hex) = value.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16)
+    } else {
+        value.parse()
+    };
+    parsed.map_err(|_| CliError::BadValue {
+        field,
+        value: value.to_owned(),
+    })
+}
+
 fn client_error_response(error: &ClientError) -> Response {
     let (code, retryable) = match error {
         ClientError::InvalidRequest(_)
@@ -419,7 +455,8 @@ fn client_error_response(error: &ClientError) -> Response {
         | ClientError::AmbiguousReverseChannel(_)
         | ClientError::Protocol(_)
         | ClientError::Erc20(_)
-        | ClientError::DiscoveryLimit(_) => ("INVALID_REQUEST", false),
+        | ClientError::DiscoveryLimit(_)
+        | ClientError::Disclosure(_) => ("INVALID_REQUEST", false),
         ClientError::KeyFile { .. }
         | ClientError::InvalidKey { .. }
         | ClientError::IdentityMismatch { .. } => ("IDENTITY_UNAVAILABLE", false),
@@ -481,7 +518,9 @@ fn negotiation_error_code(error: NegotiationError) -> (&'static str, bool) {
             ("NOT_YOUR_OFFER", false)
         }
         NegotiationError::AlreadySettled { .. } => ("ALREADY_SETTLED", false),
-        NegotiationError::DanglingReply { .. } => ("PROOF_FAILED", false),
+        NegotiationError::DanglingReply { .. } | NegotiationError::CrossDealReply { .. } => {
+            ("PROOF_FAILED", false)
+        }
     }
 }
 
@@ -503,6 +542,8 @@ fn channel_error_code(error: &ChannelError) -> (&'static str, bool) {
         ChannelError::Wire(WireError::FieldTooWide { .. })
         | ChannelError::Wire(_)
         | ChannelError::ZeroChange
+        | ChannelError::MissingV3Change
+        | ChannelError::V3DisclosureRequiresDealScope
         | ChannelError::ActionSet(_) => ("INVALID_REQUEST", false),
     }
 }

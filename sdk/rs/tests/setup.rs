@@ -174,6 +174,7 @@ fn setup_and_the_first_message_agree_on_the_channel() {
     };
 
     let offer = WireMessage {
+        deal_id: 0,
         message_type: MessageType::Offer,
         reply_to: None,
         created_at: 1_753_699_200,

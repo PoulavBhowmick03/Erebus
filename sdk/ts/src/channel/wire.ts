@@ -122,7 +122,8 @@ export function truncateMemoHash(memoHash: string): bigint {
 }
 
 /** Packs a message into one big integer, most significant field first. */
-function packMessage(message: WireMessage): bigint {
+/** Packs a message for the historical public wire. */
+export function packWireMessage(message: WireMessage): bigint {
   const type = TYPE_CODES[message.type];
   if (type === undefined) {
     throw new Error(`unknown message type: ${String(message.type)}`);
@@ -155,7 +156,8 @@ function packMessage(message: WireMessage): bigint {
   return packed;
 }
 
-function unpackMessage(packed: bigint): WireMessage {
+/** Unpacks the canonical 400-bit negotiation payload. */
+export function unpackWireMessage(packed: bigint): WireMessage {
   const take = (value: bigint, bits: bigint): [bigint, bigint] => [
     value >> bits,
     value & ((1n << bits) - 1n),
@@ -199,7 +201,7 @@ function unpackMessage(packed: bigint): WireMessage {
  * Every returned salt satisfies the contract's `2 <= salt < 2^120`.
  */
 export function encodeMessage(message: WireMessage): bigint[] {
-  const packed = packMessage(message);
+  const packed = packWireMessage(message);
 
   const salts: bigint[] = [];
   for (let slot = NOTES_PER_MESSAGE - 1; slot >= 0; slot--) {
@@ -237,7 +239,7 @@ export function decodeMessage(salts: readonly bigint[]): WireMessage {
     packed = (packed << PAYLOAD_BITS_PER_NOTE) | (salt & PAYLOAD_MASK);
   }
 
-  return unpackMessage(packed);
+  return unpackWireMessage(packed);
 }
 
 /** Note index of the first note of message `messageIndex` within a subchannel. */

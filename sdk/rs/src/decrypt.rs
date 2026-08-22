@@ -126,6 +126,19 @@ pub fn note_amount(
     enc_amount.wrapping_sub(mask)
 }
 
+/// The exact one-time mask needed to disclose one encrypted value note.
+///
+/// A deal grant carries this value instead of the parent channel key. It opens one listed
+/// payment note and cannot derive another note location or mask.
+pub fn note_amount_mask(channel_key: Felt, token: Felt, index: u64, salt: u128) -> u128 {
+    low_u128(hashes::compute_enc_amount_hash(
+        channel_key,
+        token,
+        index,
+        salt,
+    ))
+}
+
 /// Reads a stored note.
 ///
 /// Open notes (`salt == 1`) carry their amount in plaintext; everything else is masked.

@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use erebus_sdk::actions::{ClientAction, RandomSalt};
-use erebus_sdk::channel::{Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity};
+use erebus_sdk::channel::{
+    ChangeOutput, Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity,
+};
 use erebus_sdk::negotiation::{Author, OfferId};
 use erebus_sdk::read::{reconstruct, ChannelReader, ReadError};
 use erebus_sdk::subchannel::SubchannelCursor;
@@ -26,6 +28,9 @@ impl Storage {
     fn apply(&mut self, channel: &Channel, set: &erebus_sdk::action_set::ActionSet) {
         for action in set.actions() {
             if let ClientAction::CreateEncNote(note) = action {
+                if note.recipient_addr != channel.counterparty().address {
+                    continue;
+                }
                 let note_id = erebus_sdk::hashes::compute_note_id(
                     channel.key(),
                     note.token,
@@ -104,12 +109,26 @@ fn chain() -> Felt {
 
 fn message(kind: MessageType, reply_to: Option<u32>, amount: u128, at: u64) -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: kind,
         reply_to,
         created_at: at,
         amount,
         deadline: at + 3_600,
         memo_hash: 0xc0de,
+    }
+}
+
+fn deal_message(
+    deal_id: u64,
+    kind: MessageType,
+    reply_to: Option<u32>,
+    amount: u128,
+    at: u64,
+) -> WireMessage {
+    WireMessage {
+        deal_id,
+        ..message(kind, reply_to, amount, at)
     }
 }
 
@@ -216,7 +235,7 @@ fn a_whole_transcript_reads_back_in_order() {
 
     assert_eq!(transcript.len(), 3);
     for (slot, read) in transcript.iter().enumerate() {
-        assert_eq!(read.message_index, slot as u32);
+        assert_eq!(read.message_index, slot as u32 * NOTES_PER_MESSAGE as u32);
         assert_eq!(read.message, sent[slot]);
     }
 }
@@ -330,13 +349,22 @@ fn the_settlement_payment_note_is_found_and_decrypts() {
         index: 0,
     }];
     let (acceptance_index, set) = channel
-        .settle_next(
+        .settle_next_with_change(
             token(),
             &mut cursor,
             &inputs,
             950,
             salt,
             &message(MessageType::Accept, Some(0), 950, 1_753_699_320),
+            Some(ChangeOutput::existing(
+                Channel::derive(chain(), pool(), &alice(), alice_as_counterparty()),
+                0,
+                0,
+                RandomSalt::from_entropy([
+                    0x31, 0x7a, 0xc4, 0x0d, 0x91, 0xee, 0x62, 0x58, 0xa3, 0x16, 0xb9, 0x44, 0x73,
+                    0x20, 0xd5, 0x8f,
+                ]),
+            )),
         )
         .expect("valid settlement");
     storage.apply(&channel, &set);
@@ -351,6 +379,80 @@ fn the_settlement_payment_note_is_found_and_decrypts() {
 }
 
 // --- Both directions ------------------------------------------------------------
+
+#[test]
+fn two_deals_settle_through_the_same_directional_channel_pair() {
+    let a_to_b = Channel::derive(chain(), pool(), &alice(), bob());
+    let b_to_a = Channel::derive(chain(), pool(), &bob_identity(), alice_as_counterparty());
+    let self_channel = Channel::derive(chain(), pool(), &alice(), alice_as_counterparty());
+    let mut storage = Storage::default();
+    let (mut a_cursor, mut b_cursor) = (SubchannelCursor::new(), SubchannelCursor::new());
+    let payment_salt = RandomSalt::from_entropy([
+        0x9a, 0x3f, 0x11, 0x7c, 0x42, 0xd8, 0x05, 0xbe, 0x6e, 0x21, 0xa0, 0x77, 0x13, 0x94, 0xcc,
+        0x58,
+    ]);
+    let change_salt = RandomSalt::from_entropy([
+        0x31, 0x7a, 0xc4, 0x0d, 0x91, 0xee, 0x62, 0x58, 0xa3, 0x16, 0xb9, 0x44, 0x73, 0x20, 0xd5,
+        0x8f,
+    ]);
+
+    for (round, deal_id) in [7u64, 8].into_iter().enumerate() {
+        let at = 1_753_699_200 + round as u64 * 120;
+        let (offer_start, offer_set) = b_to_a
+            .write_next_message(
+                token(),
+                &mut b_cursor,
+                &deal_message(deal_id, MessageType::Offer, None, 900, at),
+            )
+            .expect("offer frame");
+        storage.apply(&b_to_a, &offer_set);
+
+        let (_, settlement_set) = a_to_b
+            .settle_next_with_change(
+                token(),
+                &mut a_cursor,
+                &[OwnedNote {
+                    channel_key: self_channel.key(),
+                    token: token(),
+                    index: round as u32,
+                }],
+                900,
+                payment_salt,
+                &deal_message(
+                    deal_id,
+                    MessageType::Accept,
+                    Some(offer_start),
+                    900,
+                    at + 60,
+                ),
+                Some(ChangeOutput::existing(
+                    self_channel,
+                    0,
+                    round as u32,
+                    change_salt,
+                )),
+            )
+            .expect("settlement frame");
+        storage.apply(&a_to_b, &settlement_set);
+    }
+
+    let book = reconstruct(
+        &ChannelReader::new(chain(), pool(), a_to_b.key(), token()),
+        &ChannelReader::new(chain(), pool(), b_to_a.key(), token()),
+        &storage.source(),
+    )
+    .expect("both deals reconstruct");
+
+    assert_eq!(book.len(), 4);
+    assert_eq!(
+        book.status(OfferId::new(Author::Counterparty, 0), u64::MAX),
+        Some(erebus_sdk::negotiation::OfferStatus::Settled)
+    );
+    assert_eq!(
+        book.status(OfferId::new(Author::Counterparty, 5), u64::MAX),
+        Some(erebus_sdk::negotiation::OfferStatus::Settled)
+    );
+}
 
 /// A negotiation is two directional channels. Neither alone is the conversation, and the
 /// note indices are per-direction, so ordering has to come from `created_at`.

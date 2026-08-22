@@ -18,7 +18,10 @@ use crate::channel::{
     SetupParams,
 };
 use crate::decrypt;
-use crate::disclosure::{self, ViewingGrant};
+use crate::disclosure::{
+    self, DealGrantFields, DealGrantPayload, DirectionCapability, FrameCapability, NoteCapability,
+    ViewingGrant,
+};
 use crate::doctor::{Check, Report};
 use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
@@ -31,7 +34,10 @@ use crate::read::{reconstruct, ChannelReader, ReadError};
 use crate::rpc::{RpcError, StarknetRpc};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
 use crate::subchannel::SubchannelCursor;
-use crate::wire::{MessageType, WireMessage, WireVersion};
+use crate::wire::{
+    derive_deal_id, derive_deal_key, MessageType, WireContext, WireMessage, WireVersion,
+    NOTES_PER_MESSAGE,
+};
 
 const MAX_DISCOVERY_ITEMS: u64 = 4096;
 const MAX_SELECTION_NOTES: usize = 256;
@@ -61,6 +67,9 @@ pub struct ClientConfig {
     pub state_dir: PathBuf,
     /// The one token supported by the MVP client instance.
     pub token: Felt,
+    /// Wire generation assigned to newly opened channels. Existing records keep their
+    /// persisted version and are never silently migrated.
+    pub new_channel_wire_version: WireVersion,
 }
 
 /// Concrete Rust implementation.
@@ -105,11 +114,12 @@ impl Client {
             address: identity.address(),
             public_key: identity.public_key(),
         };
-        let channel = Channel::derive(
+        let channel = Channel::derive_with_version(
             self.config.chain_id,
             self.config.pool_address,
             &identity,
             counterparty,
+            self.config.new_channel_wire_version,
         );
 
         // Choose the funding path from chain state. Another machine can shield the identity,
@@ -827,8 +837,7 @@ impl Client {
     }
 }
 
-/// Frozen negotiation surface. Granting returns a bearer viewing grant for delivery to the
-/// grantee.
+/// Negotiation surface. Wire-v3 granting returns a recipient-bound deal capsule.
 #[allow(async_fn_in_trait)]
 pub trait ErebusClient {
     /// Establishes and submits a private channel.
@@ -854,11 +863,13 @@ pub trait ErebusClient {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError>;
-    /// Exports the scoped bearer viewing grant.
+    /// Exports one deal to one registered recipient.
     async fn grant_viewing_key(
         &self,
         handle: ChannelHandle,
+        deal_id: u64,
         grantee: Felt,
+        expires_at: u64,
     ) -> Result<ViewingKeyGrant, ClientError>;
     /// Reconstructs a disclosed record from chain data.
     async fn reveal(&self, viewing_key: ViewingKeyGrant) -> Result<DisclosedRecord, ClientError>;
@@ -917,7 +928,7 @@ impl ErebusClient for Client {
         let tx_hash = receipt.transaction_hash;
         let opened_block = accepted_block(&receipt)?;
         let handle = self.state.create(|handle| {
-            StoredChannel::new(
+            StoredChannel::new_with_wire_version(
                 handle,
                 self.config.chain_id,
                 self.config.pool_address,
@@ -930,6 +941,7 @@ impl ErebusClient for Client {
                 0,
                 tx_hash,
                 opened_block,
+                self.config.new_channel_wire_version,
             )
         })?;
         Ok(handle)
@@ -946,7 +958,7 @@ impl ErebusClient for Client {
         validate_owner(lease.state(), identity.address())?;
         validate_scope(lease.state(), &self.config)?;
         validate_token(lease.state(), terms.token)?;
-        if lease.state().settled {
+        if lease.state().settled && lease.state().wire_version != WireVersion::V3 {
             return Err(ClientError::AlreadySettled);
         }
 
@@ -967,6 +979,17 @@ impl ErebusClient for Client {
             state.wire_version,
         );
         let message = WireMessage {
+            deal_id: if state.wire_version == WireVersion::V3 {
+                derive_deal_id(&WireContext {
+                    chain_id: self.config.chain_id,
+                    pool_address: self.config.pool_address,
+                    channel_key: state.outgoing_key,
+                    token: state.token,
+                    message_index: chain_next,
+                })
+            } else {
+                0
+            },
             message_type: MessageType::Offer,
             reply_to: None,
             created_at: now()?,
@@ -1034,6 +1057,7 @@ impl ErebusClient for Client {
         );
         let mut cursor = SubchannelCursor::resume_at(chain_next);
         let message = WireMessage {
+            deal_id: target_message.deal_id,
             message_type: MessageType::Counter,
             reply_to: Some(target.index),
             created_at: now()?,
@@ -1086,7 +1110,7 @@ impl ErebusClient for Client {
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
         validate_scope(lease.state(), &self.config)?;
-        if lease.state().settled {
+        if lease.state().settled && lease.state().wire_version != WireVersion::V3 {
             return Err(ClientError::AlreadySettled);
         }
         self.attach_reverse_channel(lease.state_mut(), pool_key)
@@ -1121,7 +1145,7 @@ impl ErebusClient for Client {
             }
         })?;
         let spend: Vec<OwnedNote> = selected.notes.iter().map(|note| note.note).collect();
-        let change = if selected.change == 0 {
+        let change = if selected.change == 0 && lease.state().wire_version != WireVersion::V3 {
             None
         } else {
             let self_counterparty = Counterparty {
@@ -1180,6 +1204,7 @@ impl ErebusClient for Client {
         );
         let mut cursor = SubchannelCursor::resume_at(chain_next);
         let acceptance = WireMessage {
+            deal_id: offer.deal_id,
             message_type: MessageType::Accept,
             reply_to: Some(target.index),
             created_at: decision_time,
@@ -1230,11 +1255,13 @@ impl ErebusClient for Client {
     async fn grant_viewing_key(
         &self,
         handle: ChannelHandle,
+        deal_id: u64,
         grantee: Felt,
+        expires_at: u64,
     ) -> Result<ViewingKeyGrant, ClientError> {
         if grantee == Felt::ZERO {
             return Err(ClientError::InvalidRequest(
-                "grantee public key must be non-zero".to_owned(),
+                "grantee account address must be non-zero".to_owned(),
             ));
         }
         let (identity, pool_key) = self.pool_identity()?;
@@ -1244,6 +1271,76 @@ impl ErebusClient for Client {
         self.attach_reverse_channel(lease.state_mut(), pool_key)
             .await?;
         let state = lease.state();
+        if state.wire_version == WireVersion::V3 {
+            let issued_at = now()?;
+            if expires_at <= issued_at {
+                return Err(ClientError::InvalidRequest(
+                    "viewing grant expiry must be in the future".to_owned(),
+                ));
+            }
+            let recipient_public_key = self.registered_public_key(grantee).await?;
+            if recipient_public_key == Felt::ZERO {
+                return Err(ClientError::CounterpartyUnregistered(grantee));
+            }
+            let (book, source, _) = self.sync_book(state).await?;
+            if !book
+                .entries()
+                .any(|(_, message)| message.deal_id == deal_id)
+            {
+                return Err(ClientError::InvalidRequest(format!(
+                    "deal {deal_id} does not exist in this channel"
+                )));
+            }
+            let incoming_key = state.incoming_key.ok_or(ClientError::ChannelNotReady)?;
+            let outgoing = deal_direction_capability(
+                &book,
+                &source,
+                Author::Us,
+                self.config.chain_id,
+                self.config.pool_address,
+                state.outgoing_key,
+                state.token,
+                deal_id,
+            )?;
+            let incoming = deal_direction_capability(
+                &book,
+                &source,
+                Author::Counterparty,
+                self.config.chain_id,
+                self.config.pool_address,
+                incoming_key,
+                state.token,
+                deal_id,
+            )?;
+            let viewing_key = ViewingGrant::new_deal(
+                DealGrantFields {
+                    chain_id: self.config.chain_id,
+                    pool_address: self.config.pool_address,
+                    token: state.token,
+                    granter: identity.address(),
+                    counterparty: state.counterparty_address,
+                    deal_id,
+                    recipient: grantee,
+                    expires_at,
+                },
+                &DealGrantPayload { outgoing, incoming },
+                recipient_public_key,
+                entropy().get(),
+            )?;
+            lease.commit()?;
+            return Ok(ViewingKeyGrant {
+                channel_id: handle,
+                grantee,
+                deal_id: Some(deal_id.to_string()),
+                expires_at: Some(expires_at),
+                viewing_key,
+            });
+        }
+        if deal_id != 0 {
+            return Err(ClientError::InvalidRequest(
+                "wire-v1 and wire-v2 grants use deal id 0".to_owned(),
+            ));
+        }
         let channel = Channel::from_key_with_version(
             self.config.chain_id,
             self.config.pool_address,
@@ -1258,11 +1355,13 @@ impl ErebusClient for Client {
             &identity,
             state.incoming_key.ok_or(ClientError::ChannelNotReady)?,
             state.token,
-        );
+        )?;
         lease.commit()?;
         Ok(ViewingKeyGrant {
             channel_id: handle,
             grantee,
+            deal_id: None,
+            expires_at: None,
             viewing_key,
         })
     }
@@ -1274,6 +1373,33 @@ impl ErebusClient for Client {
                     "viewing grant chain/pool does not match client config".to_owned(),
                 ));
             }
+        }
+        if grant.viewing_key.is_deal_grant() {
+            let (identity, _) = self.pool_identity()?;
+            let opened_at = now()?;
+            let payload = grant.viewing_key.open_deal(&identity, opened_at)?;
+            let mut source = HashMap::new();
+            for direction in [&payload.outgoing, &payload.incoming] {
+                for frame in &direction.frames {
+                    for note in frame.notes.iter().chain(frame.payment.iter()) {
+                        let result = self
+                            .view("get_note", &[note.note_id], &BlockId::Latest)
+                            .await?;
+                        require_len("get_note", &result, 2)?;
+                        if result[0] == Felt::ZERO {
+                            return Err(ClientError::Disclosure(
+                                disclosure::DisclosureError::InvalidCapability,
+                            ));
+                        }
+                        check_note_token(result[0], result[1], grant.viewing_key.token)?;
+                        source.insert(note.note_id, result[0]);
+                    }
+                }
+            }
+            let note_source = |id: Felt| source.get(&id).copied();
+            let record =
+                disclosure::reveal_deal(&grant.viewing_key, &payload, &note_source, opened_at)?;
+            return Ok(disclosed_record(&grant.channel_id, record));
         }
         let (outgoing, incoming) = grant.viewing_key.readers();
         let mut source = HashMap::new();
@@ -1396,6 +1522,9 @@ pub enum OfferStatus {
 pub struct Offer {
     /// Opaque id.
     pub offer_id: OfferId,
+    /// Wire-v3 deal identifier. Decimal string in JSON to preserve all 64 bits.
+    /// Historical wire-v1 and wire-v2 messages use `"0"`.
+    pub deal_id: String,
     /// Owning channel handle.
     pub channel_id: ChannelHandle,
     /// Author address.
@@ -1493,14 +1622,20 @@ pub struct SettlementReceipt {
     pub change: Option<String>,
 }
 
-/// Intentional secret export for out-of-band delivery.
+/// Intentional encrypted capability export for out-of-band delivery.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ViewingKeyGrant {
     /// Opaque record id carried to the auditor; no local state lookup is needed.
     pub channel_id: ChannelHandle,
-    /// Intended recipient public key. This is metadata in MVP v1, not encryption.
+    /// Intended recipient account. Wire v3 encrypts to its registered pool key.
     pub grantee: Felt,
-    /// Bearer secret. Anyone holding it can read this one relationship and token.
+    /// Selected wire-v3 deal as a decimal string. Absent on legacy grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deal_id: Option<String>,
+    /// Recipient verification deadline. Absent on legacy grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// Encrypted capability capsule on wire v3; legacy bearer secret otherwise.
     pub viewing_key: ViewingGrant,
 }
 
@@ -1510,6 +1645,8 @@ impl core::fmt::Debug for ViewingKeyGrant {
             .debug_struct("ViewingKeyGrant")
             .field("channel_id", &self.channel_id)
             .field("grantee", &self.grantee)
+            .field("deal_id", &self.deal_id)
+            .field("expires_at", &self.expires_at)
             .field("viewing_key", &"<redacted>")
             .finish()
     }
@@ -1629,6 +1766,80 @@ fn accepted_block(receipt: &crate::execution::ExecutionReceipt) -> Result<u64, C
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn deal_direction_capability(
+    book: &OfferBook,
+    source: &HashMap<Felt, Felt>,
+    author: Author,
+    chain_id: Felt,
+    pool_address: Felt,
+    channel_key: Felt,
+    token: Felt,
+    deal_id: u64,
+) -> Result<DirectionCapability, ClientError> {
+    let frames = book
+        .entries()
+        .filter(|(id, message)| id.author == author && message.deal_id == deal_id)
+        .map(|(id, message)| {
+            let notes = (0..NOTES_PER_MESSAGE)
+                .map(|slot| {
+                    note_capability(
+                        source,
+                        channel_key,
+                        token,
+                        u64::from(id.index) + slot as u64,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .try_into()
+                .map_err(|_| ClientError::Protocol("wire-v3 frame width changed".to_owned()))?;
+            let payment = (message.message_type == MessageType::Accept)
+                .then(|| {
+                    note_capability(
+                        source,
+                        channel_key,
+                        token,
+                        u64::from(id.index) + NOTES_PER_MESSAGE as u64,
+                    )
+                })
+                .transpose()?;
+            Ok(FrameCapability {
+                message_index: id.index,
+                notes,
+                payment,
+            })
+        })
+        .collect::<Result<Vec<_>, ClientError>>()?;
+    let context = WireContext {
+        chain_id,
+        pool_address,
+        channel_key,
+        token,
+        message_index: 0,
+    };
+    Ok(DirectionCapability {
+        deal_key: derive_deal_key(&context, deal_id),
+        frames,
+    })
+}
+
+fn note_capability(
+    source: &HashMap<Felt, Felt>,
+    channel_key: Felt,
+    token: Felt,
+    index: u64,
+) -> Result<NoteCapability, ClientError> {
+    let note_id = hashes::compute_note_id(channel_key, token, index);
+    let packed = source.get(&note_id).ok_or_else(|| {
+        ClientError::Protocol(format!("deal capability note {note_id:#x} is missing"))
+    })?;
+    let (salt, _) = decrypt::unpack_note(*packed);
+    Ok(NoteCapability {
+        note_id,
+        amount_mask: decrypt::note_amount_mask(channel_key, token, index, salt).to_be_bytes(),
+    })
+}
+
 fn channel_state(
     handle: &ChannelHandle,
     state: &StoredChannel,
@@ -1660,6 +1871,7 @@ fn offer(
 ) -> Offer {
     Offer {
         offer_id: external_offer_id(handle, id.author, id.index),
+        deal_id: message.deal_id.to_string(),
         channel_id: handle.clone(),
         proposer: match id.author {
             Author::Us => state.owner,
@@ -1693,6 +1905,7 @@ fn disclosed_record(
         .iter()
         .map(|entry| Offer {
             offer_id: external_offer_id(handle, entry.id.author, entry.id.index),
+            deal_id: entry.message.deal_id.to_string(),
             channel_id: handle.clone(),
             proposer: entry.author_addr,
             reply_to: entry
@@ -1800,7 +2013,7 @@ fn validate_token(state: &StoredChannel, token: Felt) -> Result<(), ClientError>
 }
 
 fn validate_scope(state: &StoredChannel, config: &ClientConfig) -> Result<(), ClientError> {
-    if state.wire_version == WireVersion::V2
+    if matches!(state.wire_version, WireVersion::V2 | WireVersion::V3)
         && (state.chain_id != config.chain_id || state.pool_address != config.pool_address)
     {
         return Err(ClientError::InvalidRequest(
@@ -2095,6 +2308,9 @@ pub enum ClientError {
     /// Offer-state failure.
     #[error(transparent)]
     Negotiation(#[from] NegotiationError),
+    /// Recipient-bound disclosure failure.
+    #[error(transparent)]
+    Disclosure(#[from] disclosure::DisclosureError),
 }
 
 #[cfg(test)]
@@ -2122,6 +2338,29 @@ mod tests {
         assert_eq!(value["memo_hash"], "0xffffffffffffffffffffffffffffffff");
         let back: OfferTerms = serde_json::from_value(value).expect("round trip");
         assert_eq!(back, terms);
+    }
+
+    #[test]
+    fn full_width_deal_id_crosses_the_json_boundary_as_a_string() {
+        let offer = Offer {
+            offer_id: OfferId("offer".to_owned()),
+            deal_id: u64::MAX.to_string(),
+            channel_id: handle(),
+            proposer: Felt::ONE,
+            reply_to: None,
+            terms: OfferTerms {
+                amount: 1,
+                token: Felt::TWO,
+                deadline: 3,
+                memo_hash: 4,
+            },
+            status: OfferStatus::Proposed,
+            created_at: 5,
+        };
+
+        let value = serde_json::to_value(offer).expect("offer serializes");
+        assert_eq!(value["deal_id"], "18446744073709551615");
+        assert!(value["deal_id"].is_string());
     }
 
     /// Payloads captured before the string representation carry plain numbers; only values
@@ -2294,6 +2533,7 @@ mod tests {
         );
         let mut book = OfferBook::new();
         let terms = WireMessage {
+            deal_id: 0,
             message_type: MessageType::Offer,
             reply_to: None,
             created_at: 10,
@@ -2344,6 +2584,7 @@ mod tests {
             account_key_file: PathBuf::new(),
             state_dir: PathBuf::new(),
             token: Felt::from(4u8),
+            new_channel_wire_version: WireVersion::V3,
         };
 
         assert!(validate_scope(&state, &config).is_ok());

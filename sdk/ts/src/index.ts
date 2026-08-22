@@ -13,6 +13,7 @@ export type {
   SettlementErrorCode,
   SettlementReceipt,
   ViewingKey,
+  ViewingKeyGrant,
 } from "./interface.js";
 export { SettlementError } from "./interface.js";
 
@@ -33,3 +34,14 @@ export {
   PAYLOAD_BITS_PER_NOTE,
   truncateMemoHash,
 } from "./channel/wire.js";
+export type { WireContextV3, WireMessageV3 } from "./channel/wire-v3.js";
+export {
+  decodeMessageV3,
+  decodeMessageV3WithDealKey,
+  deriveDealIdV3,
+  deriveDealKeyV3,
+  encodeMessageV3,
+  WIRE_V3_CAPACITY_BITS,
+  WIRE_V3_NOTES_PER_MESSAGE,
+  WIRE_V3_PAYLOAD_BITS_PER_NOTE,
+} from "./channel/wire-v3.js";

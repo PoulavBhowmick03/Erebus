@@ -48,11 +48,13 @@ fn temporary_path(name: &str) -> PathBuf {
 }
 
 #[test]
-fn version_is_protocol_two() {
+fn version_reports_protocol_three_and_wire_v3() {
     let (response, ok) = run(r#"{"method":"version"}"#);
     assert!(ok);
     assert_eq!(response["ok"], true);
-    assert_eq!(response["result"]["protocol"], 2);
+    assert_eq!(response["protocol"], 3);
+    assert_eq!(response["result"]["protocol"], 3);
+    assert_eq!(response["result"]["default_wire_version"], "v3");
     assert!(response["error"].is_null());
 }
 
@@ -214,6 +216,42 @@ fn a_key_value_field_is_rejected_not_ignored() {
     assert_eq!(response["error"]["code"], "INVALID_REQUEST");
 }
 
+#[test]
+fn deal_grants_require_an_exact_decimal_u64_and_explicit_expiry() {
+    let base = serde_json::json!({
+        "method": "grant_viewing_key",
+        "params": {
+            "config": config("grant", "/definitely/not/a/pool-key", "/definitely/not/an/account-key"),
+            "handle": format!("ch_{}", "ab".repeat(32)),
+            "deal_id": "18446744073709551616",
+            "grantee": "0xa0d17",
+            "expires_at": 1_800_000_000u64,
+        }
+    });
+    let (too_wide, ok) = run(&base.to_string());
+    assert!(!ok);
+    assert_eq!(too_wide["error"]["code"], "INVALID_REQUEST");
+    assert!(too_wide["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("deal_id"));
+
+    let mut max = base;
+    max["params"]["deal_id"] = serde_json::json!("18446744073709551615");
+    let (parsed, ok) = run(&max.to_string());
+    assert!(!ok);
+    assert_eq!(parsed["error"]["code"], "IDENTITY_UNAVAILABLE");
+
+    let mut missing_expiry = max;
+    missing_expiry["params"]
+        .as_object_mut()
+        .expect("params")
+        .remove("expires_at");
+    let (missing, ok) = run(&missing_expiry.to_string());
+    assert!(!ok);
+    assert_eq!(missing["error"]["code"], "INVALID_REQUEST");
+}
+
 fn offer_with_memo(name: &str, memo_hash: &str) -> (serde_json::Value, bool) {
     let request = serde_json::json!({
         "method": "propose_offer",
@@ -340,4 +378,22 @@ fn legacy_open_channel_shape_fails_loudly() {
         }}"#);
     assert!(!ok);
     assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+}
+
+#[test]
+fn wire_v1_cannot_be_selected_for_a_new_channel() {
+    let mut request = serde_json::json!({
+        "method": "open_channel",
+        "params": {
+            "config": config("wire-v1", "/missing/pool", "/missing/account"),
+            "counterparty": "0xb0b"
+        }
+    });
+    request["params"]["config"]["wire_version"] = serde_json::json!("v1");
+    let (response, ok) = run(&request.to_string());
+    assert!(!ok);
+    assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+    assert!(response["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("v1 is read-only")));
 }

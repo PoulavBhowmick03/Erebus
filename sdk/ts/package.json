@@ -17,6 +17,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/ciphers": "2.1.1",
+    "@noble/hashes": "1.8.0",
     "@starkware-libs/starknet-privacy-sdk": "file:../../../starknet-privacy/sdk",
     "starknet": "^10.0.0-beta.6"
   },

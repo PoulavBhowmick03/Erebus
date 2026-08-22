@@ -16,10 +16,30 @@ use erebus_sdk::disclosure::{reveal, ViewingGrant};
 use erebus_sdk::negotiation::{Author, OfferStatus};
 use erebus_sdk::read::NoteSource;
 use erebus_sdk::subchannel::SubchannelCursor;
-use erebus_sdk::wire::{MessageType, WireMessage, NOTES_PER_MESSAGE};
+use erebus_sdk::wire::{MessageType, WireMessage, WireVersion, NOTES_PER_MESSAGE};
 use starknet_types_core::felt::Felt;
 
 const NOON: u64 = 1_753_699_200;
+
+#[test]
+fn wire_v3_rejects_the_legacy_whole_channel_grant() {
+    let channel = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&bob()),
+        WireVersion::V3,
+    );
+
+    let error = channel
+        .grant_viewing_key(&alice(), Felt::from(1_u8), token())
+        .expect_err("v3 must not disclose every deal through channel keys");
+
+    assert!(matches!(
+        error,
+        erebus_sdk::channel::ChannelError::V3DisclosureRequiresDealScope
+    ));
+}
 
 #[derive(Default)]
 struct Storage(HashMap<Felt, Felt>);
@@ -113,6 +133,7 @@ fn other_token() -> Felt {
 
 fn message(kind: MessageType, reply_to: Option<u32>, amount: u128, at: u64) -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: kind,
         reply_to,
         created_at: at,
@@ -132,8 +153,20 @@ fn salt() -> RandomSalt {
 /// A complete negotiation: A offers 1000, B counters 900, A accepts and pays 900.
 /// Returns the storage and the grant A would hand an auditor.
 fn settled_negotiation() -> (Storage, ViewingGrant) {
-    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&bob()),
+        WireVersion::V2,
+    );
+    let b_to_a = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &bob(),
+        as_counterparty(&alice()),
+        WireVersion::V2,
+    );
     let mut storage = Storage::default();
     let (mut a_cursor, mut b_cursor) = (SubchannelCursor::new(), SubchannelCursor::new());
 
@@ -172,7 +205,9 @@ fn settled_negotiation() -> (Storage, ViewingGrant) {
         .expect("settlement");
     storage.apply(a_to_b.key(), &set);
 
-    let grant = a_to_b.grant_viewing_key(&alice(), b_to_a.key(), token());
+    let grant = a_to_b
+        .grant_viewing_key(&alice(), b_to_a.key(), token())
+        .expect("legacy v2 grant");
     (storage, grant)
 }
 
@@ -254,8 +289,20 @@ fn record_separates_agreed_and_paid_amounts() {
 /// this test builds the mismatch directly and checks that disclosure reports it.
 #[test]
 fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
-    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&bob()),
+        WireVersion::V2,
+    );
+    let b_to_a = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &bob(),
+        as_counterparty(&alice()),
+        WireVersion::V2,
+    );
     let mut storage = Storage::default();
     let mut cursor = SubchannelCursor::new();
 
@@ -280,7 +327,9 @@ fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
         salt().salt().get(),
     );
 
-    let grant = a_to_b.grant_viewing_key(&alice(), b_to_a.key(), token());
+    let grant = a_to_b
+        .grant_viewing_key(&alice(), b_to_a.key(), token())
+        .expect("legacy v2 grant");
     let record = reveal(&grant, &storage.source(), NOON + 10).expect("reveals");
     let settlement = record.settlement.expect("settled");
 
@@ -295,8 +344,20 @@ fn disclosure_detects_a_payment_that_disagrees_with_its_acceptance() {
 
 #[test]
 fn an_unsettled_negotiation_discloses_as_unsettled() {
-    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
-    let b_to_a = Channel::derive(chain(), pool(), &bob(), as_counterparty(&alice()));
+    let a_to_b = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&bob()),
+        WireVersion::V2,
+    );
+    let b_to_a = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &bob(),
+        as_counterparty(&alice()),
+        WireVersion::V2,
+    );
     let mut storage = Storage::default();
     let mut cursor = SubchannelCursor::new();
 
@@ -309,7 +370,9 @@ fn an_unsettled_negotiation_discloses_as_unsettled() {
         .expect("offer");
     storage.apply(a_to_b.key(), &set);
 
-    let grant = a_to_b.grant_viewing_key(&alice(), b_to_a.key(), token());
+    let grant = a_to_b
+        .grant_viewing_key(&alice(), b_to_a.key(), token())
+        .expect("legacy v2 grant");
     let record = reveal(&grant, &storage.source(), NOON + 10).expect("reveals");
 
     assert!(!record.is_settled());
@@ -337,7 +400,13 @@ fn a_grant_discloses_nothing_about_another_counterparty() {
     let (mut storage, grant) = settled_negotiation();
 
     // A also negotiates with Carol, in the same pool, on the same token.
-    let a_to_c = Channel::derive(chain(), pool(), &alice(), as_counterparty(&carol()));
+    let a_to_c = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&carol()),
+        WireVersion::V2,
+    );
     let mut cursor = SubchannelCursor::new();
     let (_, set) = a_to_c
         .write_next_message(
@@ -364,7 +433,13 @@ fn a_grant_discloses_nothing_about_another_counterparty() {
 fn a_grant_discloses_nothing_about_another_token() {
     let (mut storage, grant) = settled_negotiation();
 
-    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
+    let a_to_b = Channel::derive_with_version(
+        chain(),
+        pool(),
+        &alice(),
+        as_counterparty(&bob()),
+        WireVersion::V2,
+    );
     let mut cursor = SubchannelCursor::new();
     let (_, set) = a_to_b
         .write_next_message(
@@ -394,13 +469,21 @@ fn a_grant_discloses_nothing_about_another_token() {
 #[test]
 fn a_half_grant_is_rejected_rather_than_disclosing_a_partial_record() {
     let (storage, _) = settled_negotiation();
-    let a_to_b = Channel::derive(chain(), pool(), &alice(), as_counterparty(&bob()));
-
-    let half = a_to_b.grant_viewing_key(
+    let a_to_b = Channel::derive_with_version(
+        chain(),
+        pool(),
         &alice(),
-        Felt::from_hex("0xdead").expect("wrong key"),
-        token(),
+        as_counterparty(&bob()),
+        WireVersion::V2,
     );
+
+    let half = a_to_b
+        .grant_viewing_key(
+            &alice(),
+            Felt::from_hex("0xdead").expect("wrong key"),
+            token(),
+        )
+        .expect("legacy v2 grant");
 
     let error = reveal(&half, &storage.source(), NOON + 200)
         .expect_err("a grant missing the incoming key cannot produce a coherent record");
