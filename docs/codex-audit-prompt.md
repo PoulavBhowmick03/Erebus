@@ -40,6 +40,15 @@ found by accident rather than by a test:
    fail permanently* — the note was already on-chain and unfixable. Latent twin: amounts
    above ~18.4 tokens at 1e18 base units. **Hunt for every remaining numeric type that
    crosses a process or language boundary and can exceed 2^53 (JSON safe integer) or 2^64.**
+
+   *Update 2026-08-22:* the twin was real and has been fixed — `ApprovalReceipt.approved`
+   (F39) and `DisclosedSettlement.{agreed_amount,paid_amount}` (F40). Both now use the
+   `u128_boundary` helpers, verified on Sepolia with a 60 STRK approve and a 19 STRK
+   settlement. A grep found five structs holding `u128` fields and exactly those two reached
+   `serde_json` through a derive; `AllowanceReport` and `NoteBalance` are correct only
+   because `erebus_cli.rs` reshapes them by hand, so the invariant lives in a call site
+   rather than in a type. **That is the part still worth attacking:** find the next call
+   site that forgets, and say whether this should be a type rather than a convention.
 2. **An error labeled as the wrong thing.** Output-serialization failures were wrapped in
    `CliError::BadRequest` and reported as "request is not valid JSON", sending diagnosis
    into the request parser when the request was blameless. **Hunt for error paths whose
