@@ -82,7 +82,13 @@ def _offer(raw: dict[str, Any]) -> Offer:
     )
 
 
-def _optional_amount(value: str | None) -> int | None:
+def _amount(value: str | int) -> int:
+    # Decimal string since the u128 boundary fix; plain number in payloads captured before it.
+    # int() accepts both, matching the tolerance _terms already applies.
+    return int(value)
+
+
+def _optional_amount(value: str | int | None) -> int | None:
     return int(value) if value is not None else None
 
 
@@ -102,9 +108,9 @@ def _settlement(raw: dict[str, Any] | None) -> DisclosedSettlement | None:
         return None
     return DisclosedSettlement(
         acceptance=raw["acceptance"],
-        agreed_amount=raw["agreed_amount"],
+        agreed_amount=_amount(raw["agreed_amount"]),
         accepted_offer=raw.get("accepted_offer"),
-        paid_amount=raw.get("paid_amount"),
+        paid_amount=_optional_amount(raw.get("paid_amount")),
     )
 
 
