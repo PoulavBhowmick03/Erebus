@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the on-chain negotiation demo: open both directional channels,
-# offer, counter, atomically accept/pay, then reconstruct through a bearer viewing grant.
+# offer, counter, atomically accept/pay, then reconstruct through a deal-scoped viewing grant.
 #
 # The script captures the handle instead of asking for copy and paste. Earlier versions used
 # a literal placeholder and failed with
@@ -8,8 +8,12 @@
 #
 # Usage:  scripts/demo.sh [amount-wei]
 #
-# The amount must exactly match one or more unspent private notes owned by agent A. With the
-# runbook's fresh setup, both agents shield 1 STRK and the default below settles exactly.
+# Agent A needs one unspent note worth at least the amount. It need not match exactly: the
+# client selects a larger note and returns the excess as payer-owned change.
+#
+# Safe to run repeatedly against the same pair. Every step keys on the deal id this run
+# creates, so a second deal at the same price is unambiguous. Matching on (proposer, amount)
+# was only ever correct while a pair could trade once.
 #
 # Requires: .env populated for agent A, ~/.erebus-b/env for agent B, both identities
 # already registered (see docs/runbook.md §1-2), and erebus-cli built.
@@ -77,13 +81,18 @@ python3 -m json.tool <<<"$STATE"
 
 # A wrong derivation writes to a slot that the reader never checks. The read returns an empty
 # result without an error. Reject an empty transcript after a successful write.
-python3 - "$AMOUNT" "$DEADLINE" "$STATE" <<'PY'
+python3 - "$AMOUNT" "$DEADLINE" "$STATE" "$OFFER" <<'PY'
 import json, sys
-amount, deadline = int(sys.argv[1]), int(sys.argv[2])
+amount, deadline, offer_id = int(sys.argv[1]), int(sys.argv[2]), sys.argv[4]
 offers = json.loads(sys.argv[3])["result"]["offers"]
 if not offers:
     sys.exit("FAIL: transcript empty after a successful write; the note ids are misderived")
-t = offers[-1]["terms"]
+# Select this run's offer by id. A channel carries every past deal, so offers[-1] is only
+# this offer by accident, and stops being so the moment a later deal is written.
+mine = [o for o in offers if o["offer_id"] == offer_id]
+if len(mine) != 1:
+    sys.exit(f"FAIL: expected this run's offer {offer_id} in the transcript, found {len(mine)}")
+t = mine[0]["terms"]
 # amount and memo_hash cross the seam as strings so a u128 survives JSON, which has one
 # numeric type and 53 bits of mantissa. Coerce before comparing, as the filters below do.
 assert int(t["amount"]) == amount, f'amount {t["amount"]} != {amount}'
@@ -91,6 +100,17 @@ assert t["deadline"] == deadline, f'deadline {t["deadline"]} != {deadline}'
 assert int(t["memo_hash"], 16) == 0x1234, f'memo_hash {t["memo_hash"]} != 0x1234'
 print("\nOK: every field round-tripped through the salt lane intact.")
 PY
+
+# Everything downstream keys on this deal id. Matching on (proposer, amount) cannot work
+# once a pair can trade twice: a second deal at the same price is indistinguishable, which is
+# the case wire v3 exists to support.
+DEAL_ID=$(python3 - "$STATE" "$OFFER" <<'PY'
+import json, sys
+offers, target = json.loads(sys.argv[1])["result"]["offers"], sys.argv[2]
+print(next(o["deal_id"] for o in offers if o["offer_id"] == target))
+PY
+)
+echo "    deal:   $DEAL_ID"
 
 echo
 echo "==> open_channel B -> A"
@@ -101,13 +121,16 @@ echo "    B handle: $HANDLE_B"
 echo
 echo "==> read A's offer from B's direction"
 STATE_B=$(call "$ENV_B" read_channel_state "{\"handle\":\"$HANDLE_B\"}")
-REPLY_FOR_B=$(python3 - "$STATE_B" "$A" "$AMOUNT" <<'PY'
+REPLY_FOR_B=$(python3 - "$STATE_B" "$A" "$DEAL_ID" <<'PY'
 import json, sys
-state, author, amount = json.loads(sys.argv[1])["result"], int(sys.argv[2], 16), int(sys.argv[3])
+state, author, deal_id = json.loads(sys.argv[1])["result"], int(sys.argv[2], 16), sys.argv[3]
 matches = [o for o in state["offers"]
-           if int(o["proposer"], 16) == author and int(o["terms"]["amount"]) == amount]
+           if int(o["proposer"], 16) == author
+           and o["deal_id"] == deal_id
+           and o["reply_to"] is None]
 if len(matches) != 1:
-    raise SystemExit(f"FAIL: expected one matching A offer in B's view, found {len(matches)}")
+    raise SystemExit(f"FAIL: expected one opening A offer for deal {deal_id} in B's view, "
+                     f"found {len(matches)}")
 print(matches[0]["offer_id"])
 PY
 )
@@ -123,22 +146,17 @@ echo "    B-local counter: $COUNTER"
 echo
 echo "==> read B's counter from A's direction"
 STATE_A=$(call "$ENV_A" read_channel_state "{\"handle\":\"$HANDLE\"}")
-TARGET_FOR_A=$(python3 - "$STATE_A" "$B" "$AMOUNT" <<'PY'
+TARGET_FOR_A=$(python3 - "$STATE_A" "$B" "$DEAL_ID" <<'PY'
 import json, sys
-state, author, amount = json.loads(sys.argv[1])["result"], int(sys.argv[2], 16), int(sys.argv[3])
+state, author, deal_id = json.loads(sys.argv[1])["result"], int(sys.argv[2], 16), sys.argv[3]
 matches = [o for o in state["offers"]
            if int(o["proposer"], 16) == author
-           and o["reply_to"] is not None
-           and int(o["terms"]["amount"]) == amount]
+           and o["deal_id"] == deal_id
+           and o["reply_to"] is not None]
 if len(matches) != 1:
-    raise SystemExit(f"FAIL: expected one matching B counter in A's view, found {len(matches)}")
+    raise SystemExit(f"FAIL: expected one B counter for deal {deal_id} in A's view, "
+                     f"found {len(matches)}")
 print(matches[0]["offer_id"])
-PY
-)
-DEAL_ID=$(python3 - "$STATE_A" "$TARGET_FOR_A" <<'PY'
-import json, sys
-offers, target = json.loads(sys.argv[1])["result"]["offers"], sys.argv[2]
-print(next(o["deal_id"] for o in offers if o["offer_id"] == target))
 PY
 )
 

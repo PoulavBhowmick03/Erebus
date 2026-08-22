@@ -190,3 +190,100 @@ wire v3, the fifth-salt linkage measurement has not been re-run against v3 codec
 `scripts/demo.sh` still cannot demonstrate repeat deals on its own because its uniqueness
 filters match on proposer and amount rather than on `deal_id`. This round routed around that
 filter for the fourth time, using a distinct amount.
+
+---
+
+# Third round — closing the gaps the first two rounds left open
+
+## Linkage, measured against live wire-v3 transactions
+
+`docs/wire-v3.md` requires the historical fifth-salt classifier to score `0.5000` on wire-v3
+output. It does:
+
+```
+M1  balanced accuracy  0.5000   target 0.5   (tp=0 fp=0 tn=10000 fn=4)
+M2  accuracy           0.5030   target 0.5
+```
+
+The first round's positive was codec-derived, which the report listed as a limit. Three live
+Sepolia settlements are now committed as positives
+(`scripts/fixtures/observer-wire-v3-live-*.json`, real `apply_actions` calldata pulled from
+chain), so M1 measures the deployed system and not only the codec. The classifier detects
+none of the four.
+
+`scripts/observer.py` run directly against each of the three transactions agrees: content
+not recovered without a key, and not classified by the fixed fifth-salt shape.
+
+The candidate-salt count the observer reports varies across the three (5, 9, 7 over 61
+calldata felts each). That is the observer's in-range heuristic rather than the note count,
+and a varying shape is the opposite of the constant fingerprint F31 exploited.
+
+Remaining limits are unchanged and still stated in the report: negatives are synthetic rather
+than sampled from live pool traffic, there is no timing-only baseline, and four positives is
+a small sample — M1 recall has a resolution of one quarter.
+
+## MCP path, verified at wire v3
+
+The first round drove the protocol through `erebus-cli` only, leaving the MCP leg proven at
+wire v2 (2026-08-19) but not v3. Closed: a freshly started `erebus_mcp.server` on the seam
+backend, identity `d`, real MCP client over stdio, against the live channel.
+
+- 10 tools served; startup handshake and startup `doctor` both pass.
+- `doctor` — 9/10, the exception a `gas_balance` warning that was true at the time.
+- `get_note_balance` — amounts as decimal strings.
+- `read_channel_state` — 15 offers across 6 distinct deal IDs through the transport, every
+  `terms.amount` a Python `str`, and `memo_hash` the full-width
+  `0x00000000000000000000000000005678` rather than a truncated integer.
+
+## `scripts/demo.sh` can now demonstrate repeat deals
+
+Every step keys on the deal ID the run creates, established immediately after
+`propose_offer` and threaded through both directional reads and the grant. The previous
+`(proposer, amount)` filters could not survive a pair trading twice at one price, which is
+the case wire v3 exists to support; all three earlier deals used distinct amounts to route
+around it.
+
+Verified by running the script twice at the **same** amount, 0.25 STRK. Both runs matched
+exactly one offer at each step where the old filters would have found two.
+
+The second attempt failed at `accept_and_settle` with `SUBMIT_FAILED` /
+`"Insufficient ERC20 balance"`: `d`'s public STRK had fallen to 1.55 and the pool pulls a
+2 STRK fee per write. A funding exhaustion, not a matching failure — it had already cleared
+both filters under test. `d` was refunded 25 STRK from `e`
+(`0x001c81680c8225182279f877d8a142313aa01bb9f6f16ed9e02b680d3252b65e`) and the deal re-run,
+settling as `0x9cf2f86a3b1fc79abc4e0c6bfb0f4b797d9f0ed60c05319fc5926fb0d5e887`.
+
+The channel now holds **two settled deals at the identical 0.25 STRK price**, plus the
+abandoned third:
+
+```
+15370372084312329435  0.25 STRK  countered settled settled
+14793700134513158960  0.25 STRK  countered proposed          (abandoned, out of fee STRK)
+755997519791712192    0.25 STRK  countered settled settled
+```
+
+Eighteen offers across seven deal IDs in one directional channel. Under the old filters the
+second of these was unreachable: `read A's offer from B's direction` would have matched two
+offers and aborted before any proof was spent.
+
+**Worth noting for anyone budgeting a run:** the pool fee is charged in public STRK through
+`transfer_from`, so an identity can hold a healthy shielded balance and a healthy allowance
+and still be unable to write. `doctor` reports this as a `gas_balance` warning, which is the
+check to read before a long session rather than after it.
+
+## A pinning weakness found while reviewing, and fixed
+
+`sdk/ts/tests/gen-wire-v3-vectors.test.ts` called `writeFileSync` unconditionally inside a
+`test()`. Every `pnpm vitest run` therefore rewrote `sdk/rs/tests/fixtures/ts-wire-v3.json`
+— the known answer `sdk/rs` is pinned against.
+
+Nothing had drifted; the file is byte-identical across regenerations. But the mechanism meant
+a change to the TypeScript codec would silently redefine the Rust KAT: edit TS, run the
+suite, commit, and `cargo test` still passes while both implementations move together. That
+is exactly the failure the "nothing lands in `/sdk/rs` unpinned" rule exists to prevent, and
+the differential test would have reported agreement while measuring nothing.
+
+The generator now compares against the committed file and fails with an explanatory message
+on any difference. Regeneration is deliberate: `UPDATE_WIRE_VECTORS=1 pnpm vitest run
+gen-wire-v3-vectors`. Verified by tampering with one committed salt and confirming the suite
+fails.

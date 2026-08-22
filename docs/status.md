@@ -23,9 +23,10 @@ are confidential and demonstrated to be so. The relationship is not.
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | four settlements: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
   `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19), and
-  `0x190c6b73…8d02` + `0x6bb25aa9…8372` + `0x60eace8b…a7be` (wire v3, three deals through one
-  channel pair with deal-scoped disclosure, the last at 19 STRK to clear the u64 boundary that
-  F39/F40 named, 2026-08-22) |
+  and five wire-v3 settlements on 2026-08-22 through one channel pair with deal-scoped
+  disclosure, including `0x60eace8b…a7be` at 19 STRK to clear the u64 boundary F39/F40 named
+  and two at an identical 0.25 STRK price to demonstrate repeat deals
+  (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
 | Tests | 238 Rust (plus 2 intentionally ignored live-prover tests), 73 Python, 43 TypeScript |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
@@ -137,7 +138,8 @@ only metadata and the path. The capsule does not enter the model transcript.
    `v0.1.0` tag publishes the wheels and the index.
 3. **Fill the spare wire bits with random padding.** It closes the only privacy leak that is
    actually within reach — F38 is upstream, and the public funding leg has no fix.
-   Wire v3 is live as of 2026-08-22 (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`), but the
-   linkage measurement it requires has not been re-run against v3 codec output.
+   Wire v3 is live as of 2026-08-22 (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`). The
+   linkage measurement now scores M1 `0.5000` against three live wire-v3 transactions, so
+   this item is about the remaining leaks, not about missing evidence.
 4. **Phase 7: the operation journal and crash recovery.** Nothing on this list makes a
    killed process recoverable, and one-deal-per-pair makes a lost mid-settlement permanent.
