@@ -28,17 +28,30 @@ SPEC.loader.exec_module(linkage)
 
 
 class M1TrafficClassification(unittest.TestCase):
-    def test_the_current_wire_is_perfectly_separable(self) -> None:
-        """The baseline this harness exists to record: F31 as a number."""
+    def test_the_historical_wire_is_perfectly_separable(self) -> None:
+        """The F31 baseline remains pinned as a negative control."""
         rng = random.Random(0)
         positives = linkage.load_positives(
-            ROOT / "scripts" / "fixtures", linkage.DEFAULT_FIXTURES
+            ROOT / "scripts" / "fixtures", linkage.HISTORICAL_FIXTURES
         )
         negatives = [linkage.synthetic_negative(rng, 5) for _ in range(5_000)]
 
         score = linkage.score_m1(positives, negatives)
 
         self.assertEqual(score.balanced_accuracy, 1.0)
+        self.assertEqual(score.false_positive, 0)
+
+    def test_the_wire_v3_codec_scores_at_chance(self) -> None:
+        """The committed codec output removes the historical fixed fifth-salt shape."""
+        rng = random.Random(0)
+        positives = linkage.load_positives(
+            ROOT / "scripts" / "fixtures", linkage.DEFAULT_FIXTURES
+        )
+        negatives = [linkage.synthetic_negative(rng, 5) for _ in range(10_000)]
+
+        score = linkage.score_m1(positives, negatives)
+
+        self.assertEqual(score.balanced_accuracy, 0.5)
         self.assertEqual(score.false_positive, 0)
 
     def test_padded_salts_score_at_chance(self) -> None:
@@ -66,11 +79,12 @@ class M1TrafficClassification(unittest.TestCase):
 
 
 class M2ChangeBit(unittest.TestCase):
-    def test_note_count_reveals_the_change_bit(self) -> None:
+    def test_wire_v3_note_count_scores_at_chance(self) -> None:
         rng = random.Random(3)
         labelled = linkage.synthetic_settlements(rng, 5_000)
 
-        self.assertEqual(linkage.score_m2(labelled), 1.0)
+        self.assertGreater(linkage.score_m2(labelled), 0.45)
+        self.assertLess(linkage.score_m2(labelled), 0.55)
 
     def test_a_constant_note_count_reduces_it_to_chance(self) -> None:
         """The Phase 8 fix is an always-minted change note, zero-valued when unneeded.
@@ -80,7 +94,7 @@ class M2ChangeBit(unittest.TestCase):
         """
         rng = random.Random(4)
         constant = [
-            (linkage.synthetic_negative(rng, linkage.CHANGE_SETTLEMENT_NOTES), truth)
+            (linkage.synthetic_negative(rng, linkage.SETTLEMENT_NOTES), truth)
             for _, truth in linkage.synthetic_settlements(rng, 5_000)
         ]
 

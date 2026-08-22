@@ -7,7 +7,8 @@
 #
 # The env file is the identity's own (docs/runbook.md §1): AGENT_ADDRESS,
 # PROVING_SERVICE_URL, STARKNET_RPC_URL, POOL_ADDRESS, STARKNET_CHAIN_ID, TOKEN_ADDRESS,
-# POOL_KEY_FILE, ACCOUNT_KEY_FILE, EREBUS_STATE_DIR. Config validates all of them at startup
+# POOL_KEY_FILE, ACCOUNT_KEY_FILE, EREBUS_STATE_DIR, and optional EREBUS_WIRE_VERSION
+# (v3 by default). Config validates them at startup
 # rather than on the first tool call.
 #
 # Run one server per identity. Two identities in one process put both pool keys in the same

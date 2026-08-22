@@ -8,15 +8,14 @@ can be defended. The metrics are M1 and M2 in ``docs/threat-model.md``.
     python3 scripts/linkage.py
     python3 scripts/linkage.py --negatives 100000 --json
 
-**M1 — traffic classification.** Can an observer separate Erebus transactions from ordinary
-pool traffic without any key? The classifier is the fifth-salt shape: bit 119 pinned and bits
-60..118 clear. Positives are the committed fixtures. Negatives are synthetic transactions of
-uniformly random in-range salts.
+**M1 — traffic classification.** Can the historical fifth-salt classifier separate Erebus
+records from ordinary pool traffic without any key? Wire-v3 positives are committed codec
+outputs; historical v1/v2 fixtures remain negative controls. Negatives are synthetic
+transactions of uniformly random in-range salts.
 
-**M2 — the change bit.** Can an observer tell whether a settlement minted a change note? A
-settlement writes five data notes plus one payment note, and a seventh note when the payer's
-selected inputs overshoot the price. Counting notes answers it, which leaks one bit about the
-payer's holdings on every deal.
+**M2 — the change bit.** Can an observer tell whether the payer had change? Wire v3 always
+writes five data notes, one payment note, and one payer-owned change note. The change note is
+zero for an exact payment. Note count no longer answers the question.
 
 **What the negatives are, and are not.** Uniformly random salts are the correct *null model*
 for M1: F31's claim is precisely that an Erebus salt does not look like an ordinary random
@@ -54,16 +53,17 @@ from observer import (  # noqa: E402
     salts_from_calldata,
 )
 
-#: Notes a wire-v2 settlement writes when the payer's inputs match the price exactly: five
-#: acceptance data notes and one payment note.
-EXACT_SETTLEMENT_NOTES = 6
-#: With change, the payer mints a seventh note back to itself.
-CHANGE_SETTLEMENT_NOTES = 7
+#: Wire v3 always creates five data notes, one payment note, and one change note.
+SETTLEMENT_NOTES = 7
 
-#: Fixtures that are real Erebus transactions. Both are wire-v2-shaped for M1 purposes: the
+#: Codec-derived wire-v3 positive. This proves a codec property, not live system behavior.
+DEFAULT_FIXTURES = ("observer-wire-v3.json",)
+
+#: Historical transactions/fixtures that retain the classifier as a negative control. Both
+#: are wire-v2-shaped for M1 purposes: the
 #: fingerprint is a property of the fifth salt, which v1 also exhibits, and that is itself the
 #: finding recorded in privacy-observer-finding.md.
-DEFAULT_FIXTURES = ("observer-wire-v1.json", "observer-wire-v2.json")
+HISTORICAL_FIXTURES = ("observer-wire-v1.json", "observer-wire-v2.json")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -127,10 +127,8 @@ def change_minted(salts: Sequence[int]) -> bool | None:
     honest answer for a transaction that is not a settlement. A classifier that guessed on
     those would be scoring itself on inputs it cannot read.
     """
-    if len(salts) == CHANGE_SETTLEMENT_NOTES:
+    if len(salts) == SETTLEMENT_NOTES:
         return True
-    if len(salts) == EXACT_SETTLEMENT_NOTES:
-        return False
     return None
 
 
@@ -167,8 +165,7 @@ def synthetic_settlements(
     out: list[tuple[tuple[int, ...], bool]] = []
     for _ in range(count):
         with_change = rng.random() < 0.5
-        notes = CHANGE_SETTLEMENT_NOTES if with_change else EXACT_SETTLEMENT_NOTES
-        out.append((synthetic_negative(rng, notes), with_change))
+        out.append((synthetic_negative(rng, SETTLEMENT_NOTES), with_change))
     return out
 
 
@@ -209,9 +206,10 @@ def _report(
             "timing_only_baseline": None,
         },
         "limits": [
+            "The wire-v3 positive is codec-derived, not a live Starknet transaction.",
             "Negatives are synthetic, not sampled from live STRK20 traffic.",
             "No timing-only baseline: it needs a real corpus this script does not fetch.",
-            "M2 assumes a wire-v2 settlement shape of six or seven notes.",
+            "M2 measures note count only; value-bearing ciphertext remains opaque.",
         ],
     }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Command wrapper for one Erebus identity.
 #
-# The wrapper builds the nine-field configuration and limits output. Each command prints a
+# The wrapper builds the versioned configuration and limits output. Each command prints a
 # few lines. Errors print a code and message and return a non-zero status.
 #
 #   agent.sh <env> open      <counterparty_addr>          -> handle

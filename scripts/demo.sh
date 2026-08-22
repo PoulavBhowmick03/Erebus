@@ -59,21 +59,7 @@ HANDLE=$(call "$ENV_A" open_channel "{\"counterparty\":\"$B\"}" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["channel_handle"])')
 echo "    handle: $HANDLE"
 
-# One channel supports one deal, so a settled pair cannot trade again with this client.
-# Report that condition before propose_offer returns ALREADY_SETTLED.
-if call "$ENV_A" read_channel_state "{\"handle\":\"$HANDLE\"}" \
-    | python3 -c 'import sys,json;sys.exit(0 if json.load(sys.stdin)["result"]["settled"] else 1)'; then
-    cat >&2 <<MSG
-
-This pair has already settled, and the channel is terminal.
-
-There is exactly one channel per (sender, recipient) pair. The pool derives the channel
-key without an index and writes its marker WriteOnce, so this is not a state you can
-clear locally. To run the demo again, create a third identity (docs/runbook.md §1) and
-point ENV_B at it.
-MSG
-    exit 1
-fi
+# Wire v3 reuses this directional channel pair for framed repeat deals.
 
 echo
 echo "==> propose_offer  (5 encrypted zero-amount notes, one action set, one proof)"
@@ -98,9 +84,11 @@ offers = json.loads(sys.argv[3])["result"]["offers"]
 if not offers:
     sys.exit("FAIL: transcript empty after a successful write; the note ids are misderived")
 t = offers[-1]["terms"]
-assert t["amount"] == amount, f'amount {t["amount"]} != {amount}'
+# amount and memo_hash cross the seam as strings so a u128 survives JSON, which has one
+# numeric type and 53 bits of mantissa. Coerce before comparing, as the filters below do.
+assert int(t["amount"]) == amount, f'amount {t["amount"]} != {amount}'
 assert t["deadline"] == deadline, f'deadline {t["deadline"]} != {deadline}'
-assert t["memo_hash"] == 0x1234, f'memo_hash {t["memo_hash"]:#x} != 0x1234'
+assert int(t["memo_hash"], 16) == 0x1234, f'memo_hash {t["memo_hash"]} != 0x1234'
 print("\nOK: every field round-tripped through the salt lane intact.")
 PY
 
@@ -147,6 +135,12 @@ if len(matches) != 1:
 print(matches[0]["offer_id"])
 PY
 )
+DEAL_ID=$(python3 - "$STATE_A" "$TARGET_FOR_A" <<'PY'
+import json, sys
+offers, target = json.loads(sys.argv[1])["result"]["offers"], sys.argv[2]
+print(next(o["deal_id"] for o in offers if o["offer_id"] == target))
+PY
+)
 
 echo
 echo "==> accept_and_settle A -> B  (five-note acceptance + payment, one proof)"
@@ -160,14 +154,15 @@ GRANT_FILE=$(mktemp)
 REVEAL_OUT=$(mktemp)
 trap 'rm -f "$GRANT_FILE" "$REVEAL_OUT"' EXIT
 chmod 600 "$GRANT_FILE" "$REVEAL_OUT"
-call "$ENV_A" grant_viewing_key "{\"handle\":\"$HANDLE\",\"grantee\":\"$B\"}" \
+EXPIRES_AT=$(( $(date +%s) + 3600 ))
+call "$ENV_A" grant_viewing_key \
+    "{\"handle\":\"$HANDLE\",\"deal_id\":\"$DEAL_ID\",\"grantee\":\"$B\",\"expires_at\":$EXPIRES_AT}" \
     | python3 -c 'import sys,json;json.dump(json.load(sys.stdin)["result"],sys.stdout)' \
     > "$GRANT_FILE"
 
-# The grant is an intentional bearer secret. Feed it from a mode-0600 file, never argv or
-# an environment variable. A's config supplies the matching chain/pool RPC for this local
-# demonstration; an independent auditor can use its own config for the same chain/pool.
-python3 - "$ENV_A" "$GRANT_FILE" <<'PY' | "$CLI" > "$REVEAL_OUT"
+# The capsule is encrypted to B's registered pool key. Feed it from a mode-0600 file, never
+# argv or an environment variable, and reveal with B's identity-bound configuration.
+python3 - "$ENV_B" "$GRANT_FILE" <<'PY' | "$CLI" > "$REVEAL_OUT"
 import json, sys
 env = {}
 for line in open(sys.argv[1]):
