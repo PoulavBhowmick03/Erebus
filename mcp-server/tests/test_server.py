@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from erebus import PROTOCOL
+
 from erebus_mcp.config import ConfigError
 
 import erebus_mcp.server as server_module
@@ -58,7 +60,7 @@ def seam_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_matching_protocol_builds_and_runs_doctor(seam_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    holder = _install_fake_seam(monkeypatch, protocol=2)
+    holder = _install_fake_seam(monkeypatch, protocol=PROTOCOL)
 
     server_module.build_server()
 
@@ -73,14 +75,14 @@ def test_protocol_mismatch_is_a_clear_config_error(seam_env: None, monkeypatch: 
 
     message = str(caught.value)
     assert "999" in message
-    assert "2" in message
+    assert str(PROTOCOL) in message
 
 
 def test_skip_startup_doctor_env_var_prevents_the_call(
     seam_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EREBUS_SKIP_STARTUP_DOCTOR", "1")
-    holder = _install_fake_seam(monkeypatch, protocol=2)
+    holder = _install_fake_seam(monkeypatch, protocol=PROTOCOL)
 
     server_module.build_server()
 
@@ -90,7 +92,7 @@ def test_skip_startup_doctor_env_var_prevents_the_call(
 def test_a_not_ready_doctor_report_does_not_block_startup(
     seam_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _install_fake_seam(monkeypatch, protocol=2, ready=False)
+    _install_fake_seam(monkeypatch, protocol=PROTOCOL, ready=False)
 
     # Must not raise: doctor is logged, not fatal.
     server_module.build_server()

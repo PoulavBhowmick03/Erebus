@@ -248,12 +248,19 @@ def test_accept_and_settle_refuses_a_settlement_above_the_configured_per_deal_ca
                 async with stdio_client(buyer_params) as (buyer_read, buyer_write):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
-                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+                        # Protocol 3 handles are opaque and owner-scoped, so the payer
+                        # settles through its own handle, not the proposer's. Both map to
+                        # the same channel; only the handle string differs.
+                        buyer_handle = _structured(
+                            await buyer.call_tool(
+                                "open_channel", {"counterparty": "0xseller"}
+                            )
+                        )["result"]["channel_handle"]
 
                         refused = _structured(
                             await buyer.call_tool(
                                 "accept_and_settle",
-                                {"channel_handle": handle, "offer_id": offer_id},
+                                {"channel_handle": buyer_handle, "offer_id": offer_id},
                             )
                         )
                         assert refused["ok"] is False
@@ -310,11 +317,15 @@ def test_spending_cap_is_enforced_across_a_server_restart(tmp_path):
                 async with stdio_client(buyer_one) as (buyer_read, buyer_write):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
-                        await buyer.call_tool("open_channel", {"counterparty": "0xseller1"})
+                        buyer_handle_one = _structured(
+                            await buyer.call_tool(
+                                "open_channel", {"counterparty": "0xseller1"}
+                            )
+                        )["result"]["channel_handle"]
                         settled = _structured(
                             await buyer.call_tool(
                                 "accept_and_settle",
-                                {"channel_handle": handle_one, "offer_id": offer_one},
+                                {"channel_handle": buyer_handle_one, "offer_id": offer_one},
                             )
                         )
                         assert settled["ok"] is True
@@ -345,11 +356,15 @@ def test_spending_cap_is_enforced_across_a_server_restart(tmp_path):
                 async with stdio_client(buyer_two) as (buyer_read, buyer_write):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
-                        await buyer.call_tool("open_channel", {"counterparty": "0xseller2"})
+                        buyer_handle_two = _structured(
+                            await buyer.call_tool(
+                                "open_channel", {"counterparty": "0xseller2"}
+                            )
+                        )["result"]["channel_handle"]
                         refused = _structured(
                             await buyer.call_tool(
                                 "accept_and_settle",
-                                {"channel_handle": handle_two, "offer_id": offer_two},
+                                {"channel_handle": buyer_handle_two, "offer_id": offer_two},
                             )
                         )
                         assert refused["ok"] is False
