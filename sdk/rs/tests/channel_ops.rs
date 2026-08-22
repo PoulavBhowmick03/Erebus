@@ -7,7 +7,10 @@
 use erebus_sdk::actions::ClientAction;
 use erebus_sdk::channel::{Channel, Counterparty, PoolIdentity};
 use erebus_sdk::hashes;
-use erebus_sdk::wire::{encode_message, MessageType, WireContext, WireMessage, NOTES_PER_MESSAGE};
+use erebus_sdk::wire::{
+    encode_message, encode_message_v3, MessageType, WireContext, WireMessage, WireVersion,
+    NOTES_PER_MESSAGE,
+};
 use starknet_types_core::felt::Felt;
 
 fn alice() -> PoolIdentity {
@@ -26,6 +29,7 @@ fn bob() -> Counterparty {
 
 fn offer() -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: MessageType::Offer,
         reply_to: None,
         created_at: 1_753_699_200,
@@ -114,6 +118,36 @@ fn a_received_channel_key_reconstructs_the_same_channel() {
     assert_eq!(derived, received);
 }
 
+#[test]
+fn new_channels_default_to_v3_but_v2_can_be_selected_explicitly() {
+    let current = Channel::derive(chain(), pool(), &alice(), bob());
+    assert_eq!(current.wire_version(), WireVersion::V3);
+
+    let legacy = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
+    assert_eq!(legacy.wire_version(), WireVersion::V2);
+
+    let expected = encode_message(
+        &WireContext {
+            chain_id: chain(),
+            pool_address: pool(),
+            channel_key: legacy.key(),
+            token: token(),
+            message_index: 0,
+        },
+        &offer(),
+    )
+    .expect("v2 encodes");
+    let actions = legacy
+        .write_message(token(), 0, &offer())
+        .expect("v2 writes");
+    for (slot, action) in actions.actions().iter().enumerate() {
+        let ClientAction::CreateEncNote(note) = action else {
+            panic!("expected CreateEncNote");
+        };
+        assert_eq!(note.salt, expected[slot]);
+    }
+}
+
 // --- Writing a message ----------------------------------------------------------
 
 #[test]
@@ -140,7 +174,7 @@ fn a_message_becomes_five_zero_amount_notes() {
 #[test]
 fn notes_carry_the_wire_salts_in_index_order() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
-    let expected = encode_message(
+    let expected = encode_message_v3(
         &WireContext {
             chain_id: chain(),
             pool_address: pool(),
@@ -160,12 +194,8 @@ fn notes_carry_the_wire_salts_in_index_order() {
             panic!("expected CreateEncNote");
         };
         assert_eq!(note.salt, expected[slot], "salt mismatch at slot {slot}");
-        // Message 3 starts at 3 * the versioned stride.
-        assert_eq!(
-            note.index,
-            3 * NOTES_PER_MESSAGE as u32 + slot as u32,
-            "index mismatch at slot {slot}"
-        );
+        // Wire v3 identifies a frame by its physical first-note index.
+        assert_eq!(note.index, 3 + slot as u32, "index mismatch at slot {slot}");
     }
 }
 
@@ -173,7 +203,7 @@ fn notes_carry_the_wire_salts_in_index_order() {
 fn message_indices_do_not_overlap() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let first = channel.write_message(token(), 0, &offer()).expect("valid");
-    let second = channel.write_message(token(), 1, &offer()).expect("valid");
+    let second = channel.write_message(token(), 5, &offer()).expect("valid");
 
     let indices = |set: &erebus_sdk::action_set::ActionSet| -> Vec<u32> {
         set.actions()
@@ -197,11 +227,7 @@ fn note_ids_match_the_pinned_derivation() {
     let ids = channel.note_ids_for_message(token(), 2);
 
     for (slot, id) in ids.iter().enumerate() {
-        let expected = hashes::compute_note_id(
-            channel.key(),
-            token(),
-            2 * NOTES_PER_MESSAGE as u64 + slot as u64,
-        );
+        let expected = hashes::compute_note_id(channel.key(), token(), 2 + slot as u64);
         assert_eq!(*id, expected, "note id mismatch at slot {slot}");
     }
 }

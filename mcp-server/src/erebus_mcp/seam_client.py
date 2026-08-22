@@ -83,6 +83,7 @@ def _terms(raw: dict[str, Any]) -> OfferTerms:
 def _offer(raw: dict[str, Any]) -> Offer:
     return Offer(
         offer_id=raw["offer_id"],
+        deal_id=int(raw.get("deal_id", 0)),
         channel_id=raw["channel_id"],
         proposer=raw["proposer"],
         terms=_terms(raw["terms"]),
@@ -186,15 +187,18 @@ class SeamErebusClient:
         return _receipt(result)
 
     async def grant_viewing_key(
-        self, handle: ChannelHandle, grantee: PublicKey
+        self, handle: ChannelHandle, deal_id: str, grantee: AgentId, expires_at: int
     ) -> ViewingKeyGrant:
-        result = await self._run(self._seam.grant_viewing_key, handle, grantee)
-        # The bearer grant reads one relationship. Pass it through without logging or
-        # widening its scope.
+        result = await self._run(
+            self._seam.grant_viewing_key, handle, deal_id, grantee, expires_at
+        )
+        # Rust owns the encrypted capsule. Pass it through without inspecting its fields.
         return ViewingKeyGrant(
             channel_id=result["channel_id"],
             grantee=result["grantee"],
             viewing_key=result["viewing_key"],
+            deal_id=result.get("deal_id"),
+            expires_at=result.get("expires_at"),
         )
 
     async def reveal(self, viewing_key: ViewingKeyGrant) -> DisclosedRecord:
@@ -203,6 +207,10 @@ class SeamErebusClient:
             "grantee": viewing_key.grantee,
             "viewing_key": viewing_key.viewing_key,
         }
+        if viewing_key.deal_id is not None:
+            grant["deal_id"] = viewing_key.deal_id
+        if viewing_key.expires_at is not None:
+            grant["expires_at"] = viewing_key.expires_at
         result = await self._run(self._seam.reveal, grant)
         return DisclosedRecord(
             channel_id=result["channel_id"],

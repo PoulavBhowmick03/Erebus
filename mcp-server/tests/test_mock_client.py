@@ -6,10 +6,12 @@ Each test uses `asyncio.run()` instead of adding pytest-asyncio for sequential c
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import hashlib
 import time
 
 import pytest
-from erebus_mcp.interface import ErebusError, OfferTerms, SettlementErrorCode
+from erebus_mcp.interface import ErebusError, OfferTerms, SettlementErrorCode, ViewingKeyGrant
 from erebus_mcp.mock_client import MockErebusClient
 
 
@@ -38,14 +40,17 @@ def test_happy_path_end_to_end(clients, store_path):
 
     async def run():
         handle = await buyer.open_channel("0xseller")
-        assert handle == await seller.open_channel("0xbuyer")  # both converge on one handle
+        seller_handle = await seller.open_channel("0xbuyer")
+        # Each direction has its own handle. They must not converge, or the mock would hide
+        # a client that was handed the other party's handle.
+        assert handle != seller_handle
 
         offer_id = await buyer.propose_offer(handle, _terms(amount=100))
-        state = await seller.read_channel_state(handle)
+        state = await seller.read_channel_state(seller_handle)
         assert len(state.offers) == 1
         assert state.offers[0].offer_id == offer_id
 
-        counter_id = await seller.counter_offer(handle, offer_id, _terms(amount=150))
+        counter_id = await seller.counter_offer(seller_handle, offer_id, _terms(amount=150))
         state = await buyer.read_channel_state(handle)
         proposed_by_seller = [o for o in state.offers if o.offer_id == counter_id]
         assert proposed_by_seller[0].status.value == "proposed"
@@ -55,9 +60,25 @@ def test_happy_path_end_to_end(clients, store_path):
         receipt = await buyer.accept_and_settle(handle, counter_id)
         assert receipt.tx_hash.startswith("0x")
 
-        grant = await buyer.grant_viewing_key(handle, "0xauditor")
+        state = await buyer.read_channel_state(handle)
+        deal_id = str(state.offers[0].deal_id)
+        grant = await buyer.grant_viewing_key(
+            handle, deal_id, "0xauditor", int(time.time()) + 600
+        )
         auditor = MockErebusClient(identity="0xauditor", store_path=store_path, latency_seconds=0)
         record = await auditor.reveal(grant)
+        assert {offer.deal_id for offer in record.offers} == {int(deal_id)}
+        assert record.settlement is not None
+
+        # Historical grants remain readable. Construct the mock's legacy fixture directly;
+        # new wire-v3 channels cannot export one.
+        checksum = hashlib.sha256(handle.encode()).hexdigest()[:16]
+        legacy_grant = ViewingKeyGrant(
+            channel_id=handle,
+            grantee="0xauditor",
+            viewing_key=f"vk1.{handle}.{checksum}",
+        )
+        record = await auditor.reveal(legacy_grant)
         assert record.channel_id == handle
         assert sorted(record.participants) == sorted(["0xbuyer", "0xseller"])
         assert record.settlement is not None
@@ -68,17 +89,39 @@ def test_happy_path_end_to_end(clients, store_path):
     asyncio.run(run())
 
 
-def test_post_settle_write_is_rejected(clients):
+def test_same_pair_can_complete_two_deals(clients):
     buyer, seller = clients
 
     async def run():
         handle = await buyer.open_channel("0xseller")
-        offer_id = await seller.propose_offer(handle, _terms())
-        await buyer.accept_and_settle(handle, offer_id)
+        first = await seller.propose_offer(handle, _terms(amount=100))
+        await buyer.accept_and_settle(handle, first)
+        second = await seller.propose_offer(handle, _terms(amount=150))
+        await buyer.accept_and_settle(handle, second)
 
-        with pytest.raises(ErebusError) as excinfo:
-            await seller.propose_offer(handle, _terms())
-        assert excinfo.value.code == SettlementErrorCode.INDEX_CONFLICT
+        state = await buyer.read_channel_state(handle)
+        assert [offer.status.value for offer in state.offers] == ["settled", "settled"]
+        assert state.offers[0].deal_id != state.offers[1].deal_id
+
+        grant = await buyer.grant_viewing_key(
+            handle, str(state.offers[0].deal_id), "0xauditor", int(time.time()) + 600
+        )
+        auditor = MockErebusClient(
+            identity="0xauditor", store_path=buyer._store_path, latency_seconds=0
+        )
+        disclosed = await auditor.reveal(grant)
+        assert {offer.deal_id for offer in disclosed.offers} == {state.offers[0].deal_id}
+
+        wrong = MockErebusClient(
+            identity="0xwrong", store_path=buyer._store_path, latency_seconds=0
+        )
+        with pytest.raises(ErebusError) as wrong_recipient:
+            await wrong.reveal(grant)
+        assert wrong_recipient.value.code == SettlementErrorCode.INVALID_REQUEST
+
+        with pytest.raises(ErebusError) as expired:
+            await auditor.reveal(dataclasses.replace(grant, expires_at=int(time.time()) - 1))
+        assert expired.value.code == SettlementErrorCode.INVALID_REQUEST
 
     asyncio.run(run())
 
@@ -117,13 +160,14 @@ def test_acceptor_is_the_payer_and_exact_notes_are_consumed(clients):
 
     async def run():
         handle = await buyer.open_channel("0xseller")
+        seller_handle = await seller.open_channel("0xbuyer")
         buyer_offer = await buyer.propose_offer(handle, _terms(amount=100))
 
         with pytest.raises(ErebusError) as excinfo:
-            await seller.accept_and_settle(handle, buyer_offer)
+            await seller.accept_and_settle(seller_handle, buyer_offer)
         assert excinfo.value.code == SettlementErrorCode.INSUFFICIENT_NOTES
 
-        seller_offer = await seller.counter_offer(handle, buyer_offer, _terms(amount=150))
+        seller_offer = await seller.counter_offer(seller_handle, buyer_offer, _terms(amount=150))
         receipt = await buyer.accept_and_settle(handle, seller_offer)
         assert receipt.selected_input == 150
         assert receipt.change == 0
@@ -166,10 +210,11 @@ def test_countering_an_unknown_offer_is_rejected(clients):
     buyer, seller = clients
 
     async def run():
-        handle = await buyer.open_channel("0xseller")
+        await buyer.open_channel("0xseller")
+        seller_handle = await seller.open_channel("0xbuyer")
 
         with pytest.raises(ErebusError) as excinfo:
-            await seller.counter_offer(handle, "0xbuyer:999", _terms())
+            await seller.counter_offer(seller_handle, "0xbuyer:999", _terms())
         assert excinfo.value.code == SettlementErrorCode.OFFER_UNKNOWN
 
     asyncio.run(run())

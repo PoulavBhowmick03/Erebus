@@ -10,7 +10,7 @@ use erebus_sdk::channel::{
     Acceptance, ChangeChannelSetup, ChangeOutput, Channel, ChannelError, Counterparty, OwnedNote,
     Payment, PoolIdentity,
 };
-use erebus_sdk::wire::{MessageType, WireMessage};
+use erebus_sdk::wire::{MessageType, WireMessage, WireVersion};
 use starknet_types_core::felt::Felt;
 
 fn alice() -> PoolIdentity {
@@ -55,6 +55,7 @@ fn change_salt() -> RandomSalt {
 
 fn accept_message() -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: MessageType::Accept,
         reply_to: Some(1),
         created_at: 1_753_699_320,
@@ -97,7 +98,7 @@ fn settle(
 /// One action set means one proof, which means both legs land or neither does.
 #[test]
 fn acceptance_and_payment_land_in_one_action_set() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
     // 1 spend + 1 payment + 5 encrypted acceptance notes.
@@ -121,7 +122,7 @@ fn acceptance_and_payment_land_in_one_action_set() {
 /// a proof has already been paid for.
 #[test]
 fn spends_come_before_creations() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
     let first_create = set
@@ -140,7 +141,7 @@ fn spends_come_before_creations() {
 
 #[test]
 fn multiple_inputs_are_all_consumed() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let many: Vec<OwnedNote> = (0..3)
         .map(|index| OwnedNote {
             channel_key: Felt::from_hex("0xc0ffee").expect("channel"),
@@ -180,7 +181,7 @@ fn multiple_inputs_are_all_consumed() {
 /// different salt types precisely so this cannot be got wrong by accident.
 #[test]
 fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let set = settle(&channel, 4, 2).expect("valid settlement");
 
     let notes: Vec<_> = set
@@ -216,7 +217,7 @@ fn the_payment_note_carries_the_random_salt_and_the_record_does_not() {
 
 #[test]
 fn exactly_one_note_carries_value() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let set = settle(&channel, 4, 2).expect("valid settlement");
     let valued = set
         .actions()
@@ -231,7 +232,7 @@ fn exactly_one_note_carries_value() {
 /// 3 to Bob and creates payer-owned change worth 2 with no gap in either channel.
 #[test]
 fn one_five_value_note_pays_three_and_retains_two_as_change() {
-    let outgoing = Channel::derive(chain(), pool(), &alice(), bob());
+    let outgoing = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let payer = Counterparty {
         address: alice().address(),
         public_key: alice().public_key(),
@@ -306,7 +307,7 @@ fn one_five_value_note_pays_three_and_retains_two_as_change() {
 
 #[test]
 fn first_change_opens_the_self_channel_at_note_zero_before_spending() {
-    let outgoing = Channel::derive(chain(), pool(), &alice(), bob());
+    let outgoing = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let payer = Counterparty {
         address: alice().address(),
         public_key: alice().public_key(),
@@ -377,11 +378,78 @@ fn random_salts_stay_inside_the_contract_bound() {
     }
 }
 
+#[test]
+fn wire_v3_exact_and_change_settlements_create_the_same_number_of_notes() {
+    let outgoing = Channel::derive(chain(), pool(), &alice(), bob());
+    let payer = Counterparty {
+        address: alice().address(),
+        public_key: alice().public_key(),
+    };
+    let self_channel = Channel::derive(chain(), pool(), &alice(), payer);
+    let mut acceptance = accept_message();
+    acceptance.deal_id = 0x1234_5678_9abc_def0;
+
+    let build = |change| {
+        outgoing
+            .accept_and_settle_with_change(
+                token(),
+                &inputs(),
+                Payment {
+                    amount: acceptance.amount,
+                    index: 5,
+                    salt: salt(),
+                },
+                Acceptance {
+                    message_index: 0,
+                    message: acceptance,
+                },
+                Some(ChangeOutput::existing(
+                    self_channel,
+                    change,
+                    0,
+                    change_salt(),
+                )),
+            )
+            .expect("wire-v3 settlement")
+    };
+    let exact = build(0);
+    let surplus = build(2);
+    let creation_count = |set: &erebus_sdk::action_set::ActionSet| {
+        set.actions()
+            .iter()
+            .filter(|action| matches!(action, ClientAction::CreateEncNote(_)))
+            .count()
+    };
+    assert_eq!(creation_count(&exact), 7);
+    assert_eq!(creation_count(&surplus), 7);
+}
+
+#[test]
+fn wire_v3_rejects_a_settlement_without_the_constant_change_slot() {
+    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let error = channel
+        .accept_and_settle(
+            token(),
+            &inputs(),
+            Payment {
+                amount: 950_000,
+                index: 5,
+                salt: salt(),
+            },
+            Acceptance {
+                message_index: 0,
+                message: accept_message(),
+            },
+        )
+        .expect_err("wire v3 requires an explicit zero-change note");
+    assert!(matches!(error, ChannelError::MissingV3Change));
+}
+
 // --- Rejections -----------------------------------------------------------------
 
 #[test]
 fn a_non_acceptance_message_is_rejected() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let mut message = accept_message();
     message.message_type = MessageType::Counter;
 
@@ -412,7 +480,7 @@ fn a_non_acceptance_message_is_rejected() {
 /// valid on-chain acceptance.
 #[test]
 fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let error = channel
         .accept_and_settle(
             token(),
@@ -439,7 +507,7 @@ fn a_payment_that_disagrees_with_the_acceptance_is_rejected() {
 
 #[test]
 fn a_zero_payment_is_rejected() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let error = channel
         .accept_and_settle(
             token(),
@@ -460,7 +528,7 @@ fn a_zero_payment_is_rejected() {
 
 #[test]
 fn settling_without_inputs_is_rejected() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     let error = channel
         .accept_and_settle(
             token(),
@@ -483,7 +551,7 @@ fn settling_without_inputs_is_rejected() {
 /// overlap would silently overwrite part of the record.
 #[test]
 fn a_payment_index_inside_the_record_range_is_rejected() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     // Message 2 occupies 10..14.
     for colliding in 10..15 {
         let error = settle(&channel, colliding, 2)
@@ -497,7 +565,7 @@ fn a_payment_index_inside_the_record_range_is_rejected() {
 
 #[test]
 fn an_index_just_outside_the_record_range_is_allowed() {
-    let channel = Channel::derive(chain(), pool(), &alice(), bob());
+    let channel = Channel::derive_with_version(chain(), pool(), &alice(), bob(), WireVersion::V2);
     settle(&channel, 9, 2).expect("index 9 is below the 10..14 record");
     settle(&channel, 15, 2).expect("index 15 is above the 10..14 record");
 }

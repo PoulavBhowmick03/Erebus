@@ -82,6 +82,16 @@ pub enum NegotiationError {
         /// The index it claimed to reply to.
         reply_to: u32,
     },
+    /// A reply used a deal id different from the message it targets.
+    #[error("message {index} has deal id {deal_id}, but its target has deal id {target_deal_id}")]
+    CrossDealReply {
+        /// The replying message.
+        index: u32,
+        /// Deal id carried by the reply.
+        deal_id: u64,
+        /// Deal id carried by the target.
+        target_deal_id: u64,
+    },
 }
 
 /// Which side wrote a message.
@@ -136,7 +146,7 @@ struct Entry {
 #[derive(Debug, Clone, Default)]
 pub struct OfferBook {
     entries: Vec<Entry>,
-    settled: Option<OfferId>,
+    settlements: Vec<OfferId>,
 }
 
 impl OfferBook {
@@ -144,7 +154,7 @@ impl OfferBook {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            settled: None,
+            settlements: Vec::new(),
         }
     }
 
@@ -166,12 +176,27 @@ impl OfferBook {
 
         if let Some(reply_to) = message.reply_to {
             let target = OfferId::new(author.opposite(), reply_to);
-            if !self.entries.iter().any(|e| e.id == target) {
-                return Err(NegotiationError::DanglingReply { index, reply_to });
+            let target_message = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == target)
+                .map(|entry| entry.message)
+                .ok_or(NegotiationError::DanglingReply { index, reply_to })?;
+            if target_message.deal_id != message.deal_id {
+                return Err(NegotiationError::CrossDealReply {
+                    index,
+                    deal_id: message.deal_id,
+                    target_deal_id: target_message.deal_id,
+                });
             }
         }
         if message.message_type == MessageType::Accept {
-            self.settled = Some(id);
+            if let Some(settled_at) = self.settlement_for_deal(message.deal_id) {
+                return Err(NegotiationError::AlreadySettled {
+                    index: settled_at.index,
+                });
+            }
+            self.settlements.push(id);
         }
         self.entries.push(Entry { id, message });
         Ok(())
@@ -181,11 +206,11 @@ impl OfferBook {
     pub fn status(&self, id: OfferId, now: u64) -> Option<OfferStatus> {
         let entry = self.entries.iter().find(|e| e.id == id)?;
 
-        if self.settled == Some(id) {
+        if self.settlements.contains(&id) {
             return Some(OfferStatus::Settled);
         }
         // Acceptance and settlement form one transition.
-        if let Some(settled_at) = self.settled {
+        if let Some(settled_at) = self.settlement_for_deal(entry.message.deal_id) {
             let accepted = self
                 .entries
                 .iter()
@@ -207,10 +232,28 @@ impl OfferBook {
 
     /// The message replying to `id`, if any.
     fn replies_to(&self, id: OfferId) -> Option<OfferId> {
+        let deal_id = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.message.deal_id)?;
         self.entries
             .iter()
-            .find(|e| e.id.author == id.author.opposite() && e.message.reply_to == Some(id.index))
+            .find(|e| {
+                e.id.author == id.author.opposite()
+                    && e.message.reply_to == Some(id.index)
+                    && e.message.deal_id == deal_id
+            })
             .map(|e| e.id)
+    }
+
+    fn settlement_for_deal(&self, deal_id: u64) -> Option<OfferId> {
+        self.settlements.iter().copied().find(|id| {
+            self.entries
+                .iter()
+                .find(|entry| entry.id == *id)
+                .is_some_and(|entry| entry.message.deal_id == deal_id)
+        })
     }
 
     /// Whether `id` may be accepted and settled right now.
@@ -221,17 +264,17 @@ impl OfferBook {
     /// A countered offer remains acceptable under §4. A counter is a proposal, not a
     /// revocation. The wire has no `withdrawn` state.
     pub fn check_acceptable(&self, id: OfferId, now: u64) -> Result<(), NegotiationError> {
-        if let Some(settled_at) = self.settled {
-            return Err(NegotiationError::AlreadySettled {
-                index: settled_at.index,
-            });
-        }
-
         let entry = self
             .entries
             .iter()
             .find(|e| e.id == id)
             .ok_or(NegotiationError::UnknownOffer { index: id.index })?;
+
+        if let Some(settled_at) = self.settlement_for_deal(entry.message.deal_id) {
+            return Err(NegotiationError::AlreadySettled {
+                index: settled_at.index,
+            });
+        }
 
         if id.author == Author::Us {
             return Err(NegotiationError::OwnOffer { index: id.index });

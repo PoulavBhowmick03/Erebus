@@ -23,12 +23,13 @@
 //!
 //! ```
 //!
-//! Wire v2 encrypts these 50 bytes with AES-256-GCM-SIV. The ciphertext and 16-byte tag use
-//! 528 of the 595 payload bits. An 8-bit version marker follows. The remaining 59 high bits
-//! must be zero. Chunk 0 holds the least-significant 119 bits, as it does in wire v1.
+//! Wire v2 encrypts these 50 bytes with AES-256-GCM-SIV. Its ciphertext, tag, and marker use
+//! 536 of the 595 payload bits. The remaining 59 bits are zero.
 //!
-//! Message `k` uses note indices `5k .. 5k+4`. This fixed stride lets a reader find each
-//! message without a framing scan.
+//! Wire v3 prepends a 64-bit deal id before encryption. Its 58-byte ciphertext and 16-byte
+//! tag use 592 bits. A derived mask fills the three spare bits. Wire v3 identifies a frame
+//! by its physical first-note index. An acceptance frame adds a payment note after its five
+//! data notes.
 //!
 //! ## Which notes may use this
 //!
@@ -55,6 +56,7 @@ pub const LEGACY_NOTES_PER_MESSAGE: usize = 4;
 /// Payload bits per note. Bit 119 is the pinned format flag.
 pub const PAYLOAD_BITS_PER_NOTE: u32 = 119;
 
+const DEAL_ID_BITS: u32 = 64;
 const TYPE_BITS: u32 = 8;
 const REPLY_TO_BITS: u32 = 32;
 const CREATED_AT_BITS: u32 = 40;
@@ -79,6 +81,20 @@ const V2_PAYLOAD_BITS: u32 = V2_PAYLOAD_BYTES as u32 * 8;
 const FLAG_BIT: u128 = 1u128 << 119;
 const PAYLOAD_MASK: u128 = FLAG_BIT - 1;
 
+/// Wire-v3 envelope width: an obfuscated 64-bit deal id plus the historical message fields.
+pub const V3_MESSAGE_BITS: u32 = DEAL_ID_BITS + MESSAGE_BITS;
+const V3_HEADER_BYTES: usize = DEAL_ID_BITS as usize / 8;
+const V3_PLAINTEXT_BYTES: usize = PLAINTEXT_BYTES;
+const V3_PAYLOAD_BYTES: usize = V3_HEADER_BYTES + V3_PLAINTEXT_BYTES + TAG_BYTES;
+const V3_PAYLOAD_BITS: u32 = V3_PAYLOAD_BYTES as u32 * 8;
+/// Bits wire v3 masks with a derived keystream: the three spare bits `592..594`.
+const V3_MASK_LO: u32 = V3_PAYLOAD_BITS;
+const V3_MASK_BITS: u32 = CAPACITY_BITS - V3_MASK_LO;
+/// Bytes of HKDF output the mask consumes. `ceil(3 / 8)`.
+const V3_MASK_BYTES: usize = V3_MASK_BITS.div_ceil(8) as usize;
+/// Bytes needed to hold all 595 salt payload bits. `ceil(595 / 8)`.
+const V3_ENVELOPE_BYTES: usize = CAPACITY_BITS.div_ceil(8) as usize;
+
 /// `2^32 - 1`, reserved to mean "no reply", so it is not a usable message index.
 const NO_REPLY_TO: u32 = u32::MAX;
 
@@ -88,6 +104,9 @@ const _: () = assert!(
 );
 const _: () = assert!(MESSAGE_BITS <= LEGACY_CAPACITY_BITS);
 const _: () = assert!(V2_PAYLOAD_BITS <= CAPACITY_BITS);
+const _: () = assert!(V3_MESSAGE_BITS.is_multiple_of(8));
+const _: () = assert!(V3_PAYLOAD_BITS <= CAPACITY_BITS);
+const _: () = assert!(V3_MASK_LO + V3_MASK_BITS == CAPACITY_BITS);
 
 /// Negotiation wire generation stored with a channel.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +117,8 @@ pub enum WireVersion {
     V1,
     /// Five-note authenticated-encryption wire.
     V2,
+    /// Five-note authenticated encryption with a deal id and derived spare-bit mask.
+    V3,
 }
 
 impl WireVersion {
@@ -105,7 +126,7 @@ impl WireVersion {
     pub const fn notes_per_message(self) -> usize {
         match self {
             Self::V1 => LEGACY_NOTES_PER_MESSAGE,
-            Self::V2 => NOTES_PER_MESSAGE,
+            Self::V2 | Self::V3 => NOTES_PER_MESSAGE,
         }
     }
 }
@@ -152,6 +173,9 @@ pub enum WireError {
     /// `replyTo` was the reserved sentinel.
     #[error("replyTo 2^32-1 is reserved as the 'no reply' sentinel")]
     ReservedReplyTo,
+    /// Historical wires have no deal-id field.
+    #[error("wire v1 and wire v2 cannot encode a deal id")]
+    DealIdUnsupported,
     /// A salt lacked the pinned format flag, so it is not an Erebus data note.
     #[error("salt at slot {0} is missing the format flag, so it is not an Erebus data note")]
     MissingFlag(usize),
@@ -162,14 +186,17 @@ pub enum WireError {
     #[error(transparent)]
     Salt(#[from] ActionError),
     /// Wire v1 is read-only because its payload is public.
-    #[error("wire v1 is read-only; open a wire-v2 channel before writing")]
+    #[error("wire v1 is read-only; open a wire-v2 or wire-v3 channel before writing")]
     LegacyReadOnly,
     /// The authenticated ciphertext was changed or decoded under the wrong context.
-    #[error("wire-v2 authentication failed")]
+    #[error("wire authentication failed")]
     Authentication,
     /// The five chunks did not carry the wire-v2 marker and canonical zero padding.
     #[error("invalid wire-v2 marker or padding")]
     InvalidV2Envelope,
+    /// The five chunks did not carry canonical wire-v3 authenticated padding.
+    #[error("invalid wire-v3 padding")]
+    InvalidV3Envelope,
 }
 
 /// What a negotiation message is.
@@ -209,6 +236,8 @@ impl MessageType {
 /// These omissions keep the plaintext at 400 bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireMessage {
+    /// Negotiation identifier. Historical v1/v2 messages decode with deal id zero.
+    pub deal_id: u64,
     /// Message kind.
     pub message_type: MessageType,
     /// Index of the message being replied to, or `None` for an opening offer.
@@ -333,6 +362,9 @@ fn fits(value: u128, bits: u32, field: &'static str) -> Result<(), WireError> {
 }
 
 fn pack_message(message: &WireMessage) -> Result<Bits, WireError> {
+    if message.deal_id != 0 {
+        return Err(WireError::DealIdUnsupported);
+    }
     let reply_to = match message.reply_to {
         Some(NO_REPLY_TO) => return Err(WireError::ReservedReplyTo),
         Some(index) => index,
@@ -369,6 +401,87 @@ fn unpack_message(bits: &Bits) -> Result<WireMessage, WireError> {
     let memo_hash = take(MEMO_HASH_BITS);
 
     Ok(WireMessage {
+        deal_id: 0,
+        message_type,
+        reply_to: (reply_to_raw != NO_REPLY_TO).then_some(reply_to_raw),
+        created_at,
+        amount,
+        deadline,
+        memo_hash,
+    })
+}
+
+fn write_msb(bytes: &mut [u8], cursor: &mut u32, value: u128, width: u32) {
+    for bit in (0..width).rev() {
+        if value >> bit & 1 == 1 {
+            let position = *cursor as usize;
+            bytes[position / 8] |= 1 << (7 - position % 8);
+        }
+        *cursor += 1;
+    }
+}
+
+fn read_msb(bytes: &[u8], cursor: &mut u32, width: u32) -> u128 {
+    let mut value = 0u128;
+    for _ in 0..width {
+        let position = *cursor as usize;
+        value = (value << 1) | u128::from(bytes[position / 8] >> (7 - position % 8) & 1);
+        *cursor += 1;
+    }
+    value
+}
+
+fn pack_message_v3(message: &WireMessage) -> Result<[u8; V3_PLAINTEXT_BYTES], WireError> {
+    let reply_to = match message.reply_to {
+        Some(NO_REPLY_TO) => return Err(WireError::ReservedReplyTo),
+        Some(index) => index,
+        None => NO_REPLY_TO,
+    };
+    fits(u128::from(message.created_at), CREATED_AT_BITS, "createdAt")?;
+    fits(u128::from(message.deadline), DEADLINE_BITS, "deadline")?;
+
+    let mut bytes = [0u8; V3_PLAINTEXT_BYTES];
+    let mut cursor = 0u32;
+    write_msb(
+        &mut bytes,
+        &mut cursor,
+        u128::from(message.message_type.code()),
+        TYPE_BITS,
+    );
+    write_msb(&mut bytes, &mut cursor, u128::from(reply_to), REPLY_TO_BITS);
+    write_msb(
+        &mut bytes,
+        &mut cursor,
+        u128::from(message.created_at),
+        CREATED_AT_BITS,
+    );
+    write_msb(&mut bytes, &mut cursor, message.amount, AMOUNT_BITS);
+    write_msb(
+        &mut bytes,
+        &mut cursor,
+        u128::from(message.deadline),
+        DEADLINE_BITS,
+    );
+    write_msb(&mut bytes, &mut cursor, message.memo_hash, MEMO_HASH_BITS);
+    debug_assert_eq!(cursor, MESSAGE_BITS);
+    Ok(bytes)
+}
+
+fn unpack_message_v3(
+    deal_id: u64,
+    bytes: &[u8; V3_PLAINTEXT_BYTES],
+) -> Result<WireMessage, WireError> {
+    let mut cursor = 0u32;
+    let message_type = MessageType::from_code(read_msb(bytes, &mut cursor, TYPE_BITS) as u8)?;
+    let reply_to_raw = read_msb(bytes, &mut cursor, REPLY_TO_BITS) as u32;
+    let created_at = read_msb(bytes, &mut cursor, CREATED_AT_BITS) as u64;
+    let amount = read_msb(bytes, &mut cursor, AMOUNT_BITS);
+    let deadline = read_msb(bytes, &mut cursor, DEADLINE_BITS) as u64;
+    let memo_hash = read_msb(bytes, &mut cursor, MEMO_HASH_BITS);
+    debug_assert_eq!(cursor, MESSAGE_BITS);
+
+    Ok(WireMessage {
+        deal_id,
         message_type,
         reply_to: (reply_to_raw != NO_REPLY_TO).then_some(reply_to_raw),
         created_at,
@@ -414,12 +527,144 @@ fn derive_key_and_nonce(context: &WireContext) -> ([u8; 32], [u8; 12]) {
     (key, nonce)
 }
 
+fn v3_scope(context: &WireContext) -> Vec<u8> {
+    let mut scope = Vec::with_capacity(96);
+    scope.extend_from_slice(&context.chain_id.to_bytes_be());
+    scope.extend_from_slice(&context.pool_address.to_bytes_be());
+    scope.extend_from_slice(&context.token.to_bytes_be());
+    scope
+}
+
+/// Native wire-v3 encryption key for one deal in one direction.
+///
+/// The parent channel key never enters a v3 grant. Granting this key opens only messages
+/// whose authenticated `deal_id` matches.
+pub fn derive_deal_key(context: &WireContext, deal_id: u64) -> [u8; 32] {
+    const SALT: &[u8] = b"EREBUS_WIRE_V3_DEAL_KEY_HKDF_SHA256";
+    let channel_key = context.channel_key.to_bytes_be();
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), &channel_key);
+    let mut key_info = b"EREBUS_WIRE_V3_DEAL_KEY".to_vec();
+    key_info.extend_from_slice(&v3_scope(context));
+    key_info.extend_from_slice(&deal_id.to_be_bytes());
+    let mut key = [0u8; 32];
+    hkdf.expand(&key_info, &mut key)
+        .expect("32-byte HKDF output is always valid");
+    key
+}
+
+fn derive_v3_nonce(context: &WireContext, deal_key: &[u8; 32]) -> [u8; 12] {
+    const SALT: &[u8] = b"EREBUS_WIRE_V3_HKDF_SHA256";
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), deal_key);
+    let mut nonce_info = b"EREBUS_WIRE_V3_NONCE".to_vec();
+    nonce_info.extend_from_slice(&v3_scope(context));
+    nonce_info.extend_from_slice(&context.message_index.to_be_bytes());
+    let mut nonce = [0u8; 12];
+    hkdf.expand(&nonce_info, &mut nonce)
+        .expect("12-byte HKDF output is always valid");
+    nonce
+}
+
+fn obfuscated_deal_id(context: &WireContext, deal_id: u64) -> [u8; V3_HEADER_BYTES] {
+    const SALT: &[u8] = b"EREBUS_WIRE_V3_HEADER_HKDF_SHA256";
+    let channel_key = context.channel_key.to_bytes_be();
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), &channel_key);
+    let mut info = b"EREBUS_WIRE_V3_DEAL_HEADER".to_vec();
+    info.extend_from_slice(&v3_scope(context));
+    info.extend_from_slice(&context.message_index.to_be_bytes());
+    let mut mask = [0u8; V3_HEADER_BYTES];
+    hkdf.expand(&info, &mut mask)
+        .expect("8-byte HKDF output is always valid");
+    let mut header = deal_id.to_be_bytes();
+    for (byte, mask_byte) in header.iter_mut().zip(mask) {
+        *byte ^= mask_byte;
+    }
+    header
+}
+
+fn recover_deal_id(context: &WireContext, header: &[u8; V3_HEADER_BYTES]) -> u64 {
+    let masked_zero = obfuscated_deal_id(context, 0);
+    let mut bytes = *header;
+    for (byte, mask_byte) in bytes.iter_mut().zip(masked_zero) {
+        *byte ^= mask_byte;
+    }
+    u64::from_be_bytes(bytes)
+}
+
+/// Derives the deal id for a wire-v3 opening offer at this physical frame start.
+pub fn derive_deal_id(context: &WireContext) -> u64 {
+    const SALT: &[u8] = b"EREBUS_WIRE_V3_DEAL_HKDF_SHA256";
+    let channel_key = context.channel_key.to_bytes_be();
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), &channel_key);
+    let mut info = b"EREBUS_WIRE_V3_DEAL_ID".to_vec();
+    info.extend_from_slice(&v3_scope(context));
+    info.extend_from_slice(&context.message_index.to_be_bytes());
+    let mut bytes = [0u8; 8];
+    hkdf.expand(&info, &mut bytes)
+        .expect("8-byte HKDF output is always valid");
+    u64::from_be_bytes(bytes)
+}
+
+/// Keystream covering wire v3's three spare bits.
+///
+/// Derived rather than random, for four reasons that all point the same way:
+///
+/// - **Encoding stays deterministic.** The same message at the same index produces the same
+///   salts, so a known-answer test can pin the wire byte-for-byte. Random padding would make
+///   the encoder untestable against a fixture.
+/// - **A retry rebuilds identical salts.** Wire v2 chose AES-GCM-SIV precisely because an
+///   attempt can fail before `WriteOnce` applies and then be rebuilt at the same index.
+///   Random padding would emit different salts for the same message on the second attempt.
+/// - **The reader can verify it.** The mask is outside the AEAD, so nothing else would catch
+///   a flipped spare bit. Recomputing it authenticates all three spare bits.
+/// - **No new entropy source.** The encode path stays a pure function of context and message.
+///
+/// An observer without the channel key cannot distinguish HKDF output from random, so
+/// deriving costs nothing against the observer this defends against.
+fn derive_v3_mask(
+    context: &WireContext,
+    deal_key: &[u8; 32],
+    header: &[u8; V3_HEADER_BYTES],
+) -> [u8; V3_MASK_BYTES] {
+    const SALT: &[u8] = b"EREBUS_WIRE_V3_MASK_HKDF_SHA256";
+    let hkdf = Hkdf::<Sha256>::new(Some(SALT), deal_key);
+
+    let mut info = b"EREBUS_WIRE_V3_MASK".to_vec();
+    info.extend_from_slice(&context.chain_id.to_bytes_be());
+    info.extend_from_slice(&context.pool_address.to_bytes_be());
+    info.extend_from_slice(&context.token.to_bytes_be());
+    info.extend_from_slice(&context.message_index.to_be_bytes());
+    info.extend_from_slice(header);
+
+    let mut mask = [0u8; V3_MASK_BYTES];
+    hkdf.expand(&info, &mut mask)
+        .expect("one-byte HKDF output is always valid");
+    mask
+}
+
+/// Whether the mask's bit `offset` (0 = first masked position) is set.
+fn mask_bit(mask: &[u8; V3_MASK_BYTES], offset: u32) -> bool {
+    mask[(offset / 8) as usize] & (1 << (offset % 8)) != 0
+}
+
 fn associated_data(context: &WireContext) -> Vec<u8> {
     let mut data = b"EREBUS_WIRE_V2_AAD".to_vec();
     data.extend_from_slice(&context.chain_id.to_bytes_be());
     data.extend_from_slice(&context.pool_address.to_bytes_be());
     data.extend_from_slice(&context.token.to_bytes_be());
     data.extend_from_slice(&context.message_index.to_be_bytes());
+    data
+}
+
+fn associated_data_v3(
+    context: &WireContext,
+    deal_id: u64,
+    header: &[u8; V3_HEADER_BYTES],
+) -> Vec<u8> {
+    let mut data = b"EREBUS_WIRE_V3_AAD".to_vec();
+    data.extend_from_slice(&v3_scope(context));
+    data.extend_from_slice(&context.message_index.to_be_bytes());
+    data.extend_from_slice(&deal_id.to_be_bytes());
+    data.extend_from_slice(header);
     data
 }
 
@@ -504,6 +749,159 @@ pub fn decode_message(
         .map_err(|_| WireError::Authentication)?;
 
     unpack_message(&Bits::from_bytes(&plaintext))
+}
+
+/// Encrypts a message into five salts that carry no fixed shape.
+///
+/// Wire v2 filled 536 of 595 payload bits and zero-filled the rest, so the fifth salt of
+/// every message had bits 60..118 clear whatever the message said. A random salt has that
+/// shape with probability 2^-59, so the fifth salt identified an Erebus message essentially
+/// every time. Measured at balanced accuracy 1.0000 in `scripts/linkage.py`; tracked as F31
+/// and as M1 in `docs/threat-model.md`.
+///
+/// Wire v3 covers the three spare bits with a separately derived keystream. The ciphertext
+/// and tag below them are already uniform, so all 595 bits become
+/// indistinguishable from random and only the pinned bit 119 remains — which about half of
+/// all ordinary pool salts carry anyway.
+///
+/// **This is not backward compatible, by construction.** A v2 reader validates the spare
+/// bits as zero and will reject every v3 message. Both parties must run v3, which is why it
+/// is a wire version rather than a patch.
+pub fn encode_message_v3(
+    context: &WireContext,
+    message: &WireMessage,
+) -> Result<[NoteSalt; NOTES_PER_MESSAGE], WireError> {
+    let mut ciphertext = pack_message_v3(message)?;
+    let header = obfuscated_deal_id(context, message.deal_id);
+    let deal_key = derive_deal_key(context, message.deal_id);
+    let nonce = derive_v3_nonce(context, &deal_key);
+    let cipher =
+        Aes256GcmSiv::new_from_slice(&deal_key).expect("AES-256-GCM-SIV accepts every 32-byte key");
+    let tag = cipher
+        .encrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            &associated_data_v3(context, message.deal_id, &header),
+            &mut ciphertext,
+        )
+        .map_err(|_| WireError::Authentication)?;
+
+    let mut payload = [0u8; V3_PAYLOAD_BYTES];
+    payload[..V3_HEADER_BYTES].copy_from_slice(&header);
+    payload[V3_HEADER_BYTES..V3_HEADER_BYTES + V3_PLAINTEXT_BYTES].copy_from_slice(&ciphertext);
+    payload[V3_HEADER_BYTES + V3_PLAINTEXT_BYTES..].copy_from_slice(&tag);
+
+    let mask = derive_v3_mask(context, &deal_key, &header);
+    let mut salts = Vec::with_capacity(NOTES_PER_MESSAGE);
+    for slot in 0..NOTES_PER_MESSAGE {
+        let mut chunk = 0u128;
+        for j in 0..PAYLOAD_BITS_PER_NOTE {
+            let position = slot as u32 * PAYLOAD_BITS_PER_NOTE + j;
+            if position >= CAPACITY_BITS {
+                continue;
+            }
+            // Below the masked region the envelope is ciphertext and tag; above it, the
+            // spare bits contribute nothing but the mask.
+            let carried = position < V3_PAYLOAD_BITS && bit_at_lsb(&payload, position);
+            let masked = position >= V3_MASK_LO && mask_bit(&mask, position - V3_MASK_LO);
+            if carried != masked {
+                chunk |= 1u128 << j;
+            }
+        }
+        salts.push(NoteSalt::new(chunk | FLAG_BIT)?);
+    }
+
+    Ok([salts[0], salts[1], salts[2], salts[3], salts[4]])
+}
+
+/// Authenticates and decrypts five wire-v3 salts in note-index order.
+///
+/// Unmasking is verified rather than discarded: the mask sits outside the AEAD, so a flipped
+/// spare bit would otherwise pass silently. Recomputing it and rejecting a mismatch makes
+/// those three bits authenticated in practice.
+pub fn decode_message_v3(
+    context: &WireContext,
+    salts: &[NoteSalt; NOTES_PER_MESSAGE],
+) -> Result<WireMessage, WireError> {
+    let payload = v3_payload(salts)?;
+    let header: [u8; V3_HEADER_BYTES] = payload[..V3_HEADER_BYTES]
+        .try_into()
+        .expect("wire-v3 header has fixed width");
+    let deal_id = recover_deal_id(context, &header);
+    let deal_key = derive_deal_key(context, deal_id);
+    decode_message_v3_with_deal_key(context, deal_id, &deal_key, salts)
+}
+
+fn v3_payload(salts: &[NoteSalt; NOTES_PER_MESSAGE]) -> Result<[u8; V3_PAYLOAD_BYTES], WireError> {
+    let mut envelope = [0u8; V3_ENVELOPE_BYTES];
+    for (slot, salt) in salts.iter().enumerate() {
+        let value = salt.get();
+        if value & FLAG_BIT == 0 {
+            return Err(WireError::MissingFlag(slot));
+        }
+        let chunk = value & PAYLOAD_MASK;
+        for j in 0..PAYLOAD_BITS_PER_NOTE {
+            let position = slot as u32 * PAYLOAD_BITS_PER_NOTE + j;
+            if position >= CAPACITY_BITS {
+                // Salt 4 ends exactly at the capacity bound, so a set bit here means the
+                // salt was not produced by this encoder.
+                if chunk & (1 << j) != 0 {
+                    return Err(WireError::InvalidV3Envelope);
+                }
+                continue;
+            }
+            if position < V3_PAYLOAD_BITS && chunk & (1 << j) != 0 {
+                set_bit_lsb(&mut envelope, position);
+            }
+        }
+    }
+
+    let payload_lo = V3_ENVELOPE_BYTES - V3_PAYLOAD_BYTES;
+    Ok(envelope[payload_lo..]
+        .try_into()
+        .expect("the envelope is wider than the payload"))
+}
+
+/// Authenticates one wire-v3 frame with a native per-deal key.
+///
+/// This entry point is for a deal-scoped grant. It does not require the parent channel key.
+pub fn decode_message_v3_with_deal_key(
+    context: &WireContext,
+    deal_id: u64,
+    deal_key: &[u8; 32],
+    salts: &[NoteSalt; NOTES_PER_MESSAGE],
+) -> Result<WireMessage, WireError> {
+    let payload = v3_payload(salts)?;
+    let header: [u8; V3_HEADER_BYTES] = payload[..V3_HEADER_BYTES]
+        .try_into()
+        .expect("wire-v3 header has fixed width");
+    let mask = derive_v3_mask(context, deal_key, &header);
+
+    // The three spare bits contain only the deal-key-derived mask.
+    for position in V3_PAYLOAD_BITS..CAPACITY_BITS {
+        let slot = position / PAYLOAD_BITS_PER_NOTE;
+        let bit = position % PAYLOAD_BITS_PER_NOTE;
+        let carried = salts[slot as usize].get() & (1u128 << bit) != 0;
+        if carried != mask_bit(&mask, position - V3_MASK_LO) {
+            return Err(WireError::InvalidV3Envelope);
+        }
+    }
+
+    let mut plaintext = [0u8; V3_PLAINTEXT_BYTES];
+    plaintext.copy_from_slice(&payload[V3_HEADER_BYTES..V3_HEADER_BYTES + V3_PLAINTEXT_BYTES]);
+    let tag = Tag::from_slice(&payload[V3_HEADER_BYTES + V3_PLAINTEXT_BYTES..]);
+    let nonce = derive_v3_nonce(context, deal_key);
+    let cipher =
+        Aes256GcmSiv::new_from_slice(deal_key).expect("AES-256-GCM-SIV accepts every 32-byte key");
+    cipher
+        .decrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            &associated_data_v3(context, deal_id, &header),
+            &mut plaintext,
+            tag,
+        )
+        .map_err(|_| WireError::Authentication)?;
+
+    unpack_message_v3(deal_id, &plaintext)
 }
 
 /// Encodes the public four-note wire for compatibility vectors only.

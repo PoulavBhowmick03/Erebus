@@ -1,0 +1,75 @@
+{
+  "context": {
+    "chain_id": "0x534e5f5345504f4c4941",
+    "pool_address": "0x9001",
+    "channel_key": "0xc4a11e",
+    "token": "0x7042"
+  },
+  "constants": {
+    "notes_per_message": 5,
+    "payload_bits_per_note": 119,
+    "capacity_bits": 595
+  },
+  "vectors": [
+    {
+      "name": "opening_offer_no_reply_to",
+      "message_index": 0,
+      "message": {
+        "deal_id": "17904379333018433890",
+        "type": "offer",
+        "reply_to": null,
+        "created_at": 1753699200,
+        "amount": "0xf4240",
+        "deadline": 1753702800,
+        "memo_hash": "0x1234567890abcdef1234567890abcdef"
+      },
+      "salts": [
+        "0x86b3eb74792ffed8019383b4e0f930",
+        "0xcc65546b3658004268dc850ad1e408",
+        "0xa075d331dc17d8b3e2201548c1e807",
+        "0xb8d2bde3c5c3c6429cdcaf75b46b3b",
+        "0x88fd60cf943752f19588dcca1e3b83"
+      ]
+    },
+    {
+      "name": "counter_with_reply_to",
+      "message_index": 5,
+      "message": {
+        "deal_id": "17904379333018433890",
+        "type": "counter",
+        "reply_to": 0,
+        "created_at": 1753699260,
+        "amount": "0xe7ef0",
+        "deadline": 1753702800,
+        "memo_hash": "0xdeadbeef"
+      },
+      "salts": [
+        "0xf8b1e14e7aea6ff2d42b2a76ebc6c0",
+        "0xa860a4f67acc7d4bdf28a8d287988b",
+        "0x847c64e830a54661b7fcf71b413e60",
+        "0xa6f604af499c1b2a249776e4120d08",
+        "0x829bf2c85f1e91dcd030b53f65cb88"
+      ]
+    },
+    {
+      "name": "accept",
+      "message_index": 10,
+      "message": {
+        "deal_id": "17904379333018433890",
+        "type": "accept",
+        "reply_to": 5,
+        "created_at": 1753699320,
+        "amount": "0xe7ef0",
+        "deadline": 1753702800,
+        "memo_hash": "0x0"
+      },
+      "salts": [
+        "0x8055ca308d5732f7d94d93e62b3135",
+        "0xd3fa071cecb13d177b93c5625eaf28",
+        "0xb6326af625c3f445f4c79045ed1147",
+        "0xc259c82c32fefd76fe2170177cee98",
+        "0x88c3ae67f8add3eb9a1045fbad778b"
+      ]
+    }
+  ]
+}

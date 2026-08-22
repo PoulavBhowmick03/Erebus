@@ -1,5 +1,10 @@
 # Erebus PoC
 
+> **Historical wire-v2 description.** Wire v3 is now the source default. It supports repeat
+> deals and removes the fixed fifth-salt classifier. It is verified offline but has no live
+> Sepolia receipt. Recipient-bound per-deal disclosure is implemented and verified offline.
+> See `docs/status.md` and `docs/wire-v3.md` for current behavior.
+
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
 Erebus is attempting a third option. Two agents open a channel on STRK20, negotiate as

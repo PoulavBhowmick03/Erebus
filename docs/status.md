@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-20.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-22.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -20,11 +20,13 @@ are confidential and demonstrated to be so. The relationship is not.
 | | |
 |---|---|
 | Network | Sepolia only. Never run on mainnet |
-| Wire | v2 — AES-256-GCM-SIV, 128-bit tag, five note salts |
-| Live evidence | two settlements: `0x14b38e9d…4cb3` (wire v2, 2026-08-07) and
-  `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19) |
+| Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
+| Live evidence | four settlements: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
+  `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19), and
+  `0x190c6b73…8d02` + `0x6bb25aa9…8372` (wire v3, two deals through one channel pair with
+  deal-scoped disclosure, 2026-08-22) |
 | Version | `0.1.0` across every package |
-| Tests | 216 Rust, 70 Python, 38 TypeScript |
+| Tests | 238 Rust (plus 2 intentionally ignored live-prover tests), 73 Python, 43 TypeScript |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
   arm64 built and canary-verified. Intel macOS unsupported. Published at the `v0.1.0` tag |
@@ -32,9 +34,9 @@ are confidential and demonstrated to be so. The relationship is not.
 ## What Erebus does
 
 Two agents open a channel, exchange offers and counters as encrypted state, and settle
-atomically in one action set. Either side can later hand a scoped viewing grant to a third
-party, who reconstructs the whole exchange from chain data without gaining the ability to
-spend.
+atomically in one action set. Wire v3 can encrypt one deal's read capabilities to a
+registered recipient with an explicit expiry. Historical wire-v1/v2 channels keep their
+broader bearer-grant format.
 
 Agents drive it through MCP, so any framework in any language can use it. No contract of our
 own is deployed: the negotiation rides in note salts the pool already provides.
@@ -44,12 +46,12 @@ own is deployed: the negotiation rides in note salts the pool already provides.
 - **Hide who you are dealing with.** The counterparty's address is written in public
   calldata at channel-open. This is upstream of our encryption and no wire change fixes it.
   See F38 and [privacy-model.md](./privacy-model.md).
-- **Hide that a negotiation happened.** Wire v2 leaves 59 bits zero-filled, giving every
-  message a constant shape a reader can fingerprint.
+- **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
+  the submitting account, transaction timing, action shape, and note count remain public.
 - **Run on mainnet.** No published mainnet prover exists, and self-hosting needs a synced
   Pathfinder node.
-- **Support more than one deal per pair of addresses.** One channel per pair is a protocol
-  constraint; one deal per channel is our own rule and is the first thing to revisit.
+- **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
+  cannot make a recipient forget a record opened before expiry.
 - **Escrow, or deferred delivery.** Settlement is atomic, so there is no "agree now, deliver
   later". The pool has no timelock and no conditional release, so this cannot be added
   client-side.
@@ -74,7 +76,7 @@ Never describe this as private in an absolute sense.
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
 | What to do next | [roadmap.md](./roadmap.md) | current |
 | How to reproduce a run | [runbook.md](./runbook.md) | mostly current, see below |
-| How the code works | [tech.md](../tech.md) | current, source-cited |
+| Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
 | Does this fit my use case | [usecases.md](./usecases.md) | **stale**, see below |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | **stale**, see below |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
@@ -105,7 +107,8 @@ a binding with no protocol logic. `/mcp-server` exposes the tools. `/agents` are
 agents.
 
 **Does not ship:** `/sdk/ts` is the differential-test oracle and exists so two independent
-implementations can be checked against the same Cairo vectors. It is still on wire v1.
+implementations can be checked against the same vectors. It implements historical wire v1
+and the wire-v3 cryptographic/bit-level oracle.
 `/contracts` holds throwaway probes and is nearly empty, which is correct.
 
 ## Where the keys go
@@ -118,8 +121,9 @@ Three distinct keys, and conflating them is the usual mistake:
   reconstruct that identity's full history. The submitted transaction does not carry it.
 - **Pool auditor key** — pool-wide, StarkWare's, set once at registration, no rotation.
 
-Python never sees key material, only file paths. It does handle bearer viewing grants, so
-MCP transcripts sit inside the disclosure trust boundary.
+Python never sees account, pool, parent-channel, or native deal keys in plaintext. The MCP
+server carries the encrypted grant long enough to write a new mode-`0600` file, then returns
+only metadata and the path. The capsule does not enter the model transcript.
 
 ---
 
@@ -132,5 +136,7 @@ MCP transcripts sit inside the disclosure trust boundary.
    `v0.1.0` tag publishes the wheels and the index.
 3. **Fill the spare wire bits with random padding.** It closes the only privacy leak that is
    actually within reach — F38 is upstream, and the public funding leg has no fix.
+   Wire v3 is live as of 2026-08-22 (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`), but the
+   linkage measurement it requires has not been re-run against v3 codec output.
 4. **Phase 7: the operation journal and crash recovery.** Nothing on this list makes a
    killed process recoverable, and one-deal-per-pair makes a lost mid-settlement permanent.

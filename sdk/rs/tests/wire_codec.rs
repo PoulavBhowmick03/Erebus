@@ -10,7 +10,8 @@
 
 use erebus_sdk::actions::NoteSalt;
 use erebus_sdk::wire::{
-    decode_legacy_message, decode_message, encode_legacy_message, encode_message,
+    decode_legacy_message, decode_message, decode_message_v3, decode_message_v3_with_deal_key,
+    derive_deal_id, derive_deal_key, encode_legacy_message, encode_message, encode_message_v3,
     legacy_note_index_for_message, note_index_for_message, truncate_memo_hash,
     truncate_memo_hash_bytes, MessageType, WireContext, WireError, WireMessage, CAPACITY_BITS,
     LEGACY_CAPACITY_BITS, LEGACY_NOTES_PER_MESSAGE, MESSAGE_BITS, NOTES_PER_MESSAGE,
@@ -58,8 +59,54 @@ struct Message {
     memo_hash: String,
 }
 
+#[derive(Deserialize)]
+struct V3Fixture {
+    context: V3Context,
+    constants: V3Constants,
+    vectors: Vec<V3Vector>,
+}
+
+#[derive(Deserialize)]
+struct V3Context {
+    chain_id: String,
+    pool_address: String,
+    channel_key: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct V3Constants {
+    notes_per_message: usize,
+    payload_bits_per_note: u32,
+    capacity_bits: u32,
+}
+
+#[derive(Deserialize)]
+struct V3Vector {
+    name: String,
+    message_index: u32,
+    message: V3Message,
+    salts: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct V3Message {
+    deal_id: String,
+    #[serde(rename = "type")]
+    message_type: String,
+    reply_to: Option<u32>,
+    created_at: u64,
+    amount: String,
+    deadline: u64,
+    memo_hash: String,
+}
+
 fn load() -> Fixture {
     serde_json::from_str(include_str!("fixtures/ts-wire-salts.json")).expect("fixture parses")
+}
+
+fn load_v3() -> V3Fixture {
+    serde_json::from_str(include_str!("fixtures/ts-wire-v3.json")).expect("v3 fixture parses")
 }
 
 fn u128_of(hex: &str) -> u128 {
@@ -78,6 +125,27 @@ fn build(m: &Message) -> WireMessage {
         other => panic!("unknown message type in fixture: {other}"),
     };
     WireMessage {
+        deal_id: 0,
+        message_type,
+        reply_to: m.reply_to,
+        created_at: m.created_at,
+        amount: u128_of(&m.amount),
+        deadline: m.deadline,
+        memo_hash: truncate_memo_hash(
+            Felt::from_hex(&m.memo_hash).expect("fixture memo hash parses"),
+        ),
+    }
+}
+
+fn build_v3(m: &V3Message) -> WireMessage {
+    let message_type = match m.message_type.as_str() {
+        "offer" => MessageType::Offer,
+        "counter" => MessageType::Counter,
+        "accept" => MessageType::Accept,
+        other => panic!("unknown v3 message type in fixture: {other}"),
+    };
+    WireMessage {
+        deal_id: m.deal_id.parse().expect("fixture deal id parses"),
         message_type,
         reply_to: m.reply_to,
         created_at: m.created_at,
@@ -95,6 +163,16 @@ fn context(message_index: u32) -> WireContext {
         pool_address: Felt::from_hex("0x9001").expect("pool"),
         channel_key: Felt::from_hex("0xc4a11e").expect("channel key"),
         token: Felt::from_hex("0x7042").expect("token"),
+        message_index,
+    }
+}
+
+fn fixture_v3_context(fixture: &V3Fixture, message_index: u32) -> WireContext {
+    WireContext {
+        chain_id: Felt::from_hex(&fixture.context.chain_id).expect("chain"),
+        pool_address: Felt::from_hex(&fixture.context.pool_address).expect("pool"),
+        channel_key: Felt::from_hex(&fixture.context.channel_key).expect("channel key"),
+        token: Felt::from_hex(&fixture.context.token).expect("token"),
         message_index,
     }
 }
@@ -225,6 +303,69 @@ fn wire_v2_has_a_pinned_known_answer_and_changes_with_context() {
 }
 
 #[test]
+fn wire_v3_matches_the_typescript_oracle_byte_for_byte() {
+    let fixture = load_v3();
+    assert_eq!(fixture.constants.notes_per_message, NOTES_PER_MESSAGE);
+    assert_eq!(
+        fixture.constants.payload_bits_per_note,
+        PAYLOAD_BITS_PER_NOTE
+    );
+    assert_eq!(fixture.constants.capacity_bits, CAPACITY_BITS);
+    assert!(!fixture.vectors.is_empty());
+    let opening_context = fixture_v3_context(&fixture, fixture.vectors[0].message_index);
+    assert_eq!(
+        derive_deal_id(&opening_context),
+        build_v3(&fixture.vectors[0].message).deal_id,
+        "Rust and TypeScript must derive the same opening deal id"
+    );
+
+    for vector in &fixture.vectors {
+        let context = fixture_v3_context(&fixture, vector.message_index);
+        let expected: Vec<NoteSalt> = vector.salts.iter().map(|salt| salt_of(salt)).collect();
+        let actual = encode_message_v3(&context, &build_v3(&vector.message)).expect("v3 encode");
+        assert_eq!(
+            actual.to_vec(),
+            expected,
+            "salt mismatch for {}",
+            vector.name
+        );
+        assert_eq!(
+            decode_message_v3(&context, &actual).expect("v3 decode"),
+            build_v3(&vector.message),
+            "decode mismatch for {}",
+            vector.name
+        );
+    }
+}
+
+#[test]
+fn a_native_deal_key_opens_only_its_deal_without_the_parent_channel_key() {
+    let context = context(7);
+    let mut first = build_v3(&load_v3().vectors[0].message);
+    first.deal_id = 11;
+    let mut second = first;
+    second.deal_id = 12;
+    let salts = encode_message_v3(&context, &first).expect("first deal encodes");
+    let first_key = derive_deal_key(&context, first.deal_id);
+    let second_key = derive_deal_key(&context, second.deal_id);
+    assert_ne!(first_key, second_key);
+
+    let grant_context = WireContext {
+        channel_key: Felt::ZERO,
+        ..context
+    };
+    assert_eq!(
+        decode_message_v3_with_deal_key(&grant_context, first.deal_id, &first_key, &salts)
+            .expect("deal grant decrypts without the parent key"),
+        first
+    );
+    assert!(matches!(
+        decode_message_v3_with_deal_key(&grant_context, second.deal_id, &second_key, &salts),
+        Err(WireError::Authentication) | Err(WireError::InvalidV3Envelope)
+    ));
+}
+
+#[test]
 fn a_failed_attempt_can_change_terms_at_the_same_index_without_breaking_decryption() {
     let first_message = build(&load().vectors[0].message);
     let mut retry_message = first_message;
@@ -296,6 +437,7 @@ fn every_emitted_salt_is_contract_valid() {
 #[test]
 fn the_reserved_reply_to_sentinel_is_rejected() {
     let message = WireMessage {
+        deal_id: 0,
         message_type: MessageType::Counter,
         reply_to: Some(u32::MAX),
         created_at: 1,
@@ -312,6 +454,7 @@ fn the_reserved_reply_to_sentinel_is_rejected() {
 #[test]
 fn an_oversized_created_at_is_rejected() {
     let message = WireMessage {
+        deal_id: 0,
         message_type: MessageType::Offer,
         reply_to: None,
         created_at: 1u64 << 40, // 40 bits is the budget
@@ -333,6 +476,7 @@ fn a_salt_without_the_flag_is_not_an_erebus_note() {
     // A plausible random salt from an ordinary value-bearing note.
     let ordinary = NoteSalt::new(0x1234_5678).expect("in range");
     let message = WireMessage {
+        deal_id: 0,
         message_type: MessageType::Offer,
         reply_to: None,
         created_at: 1,
@@ -413,6 +557,7 @@ fn the_felt_and_byte_truncations_agree_wherever_both_are_defined() {
 #[test]
 fn the_legacy_header_is_in_the_most_significant_salt() {
     let message = WireMessage {
+        deal_id: 0,
         message_type: MessageType::Accept, // code 3
         reply_to: None,
         created_at: 0,

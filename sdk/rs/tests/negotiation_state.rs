@@ -20,12 +20,25 @@ fn ours(index: u32) -> OfferId {
 
 fn message(kind: MessageType, reply_to: Option<u32>, deadline: u64) -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: kind,
         reply_to,
         created_at: NOON,
         amount: 1_000,
         deadline,
         memo_hash: 0xabc,
+    }
+}
+
+fn deal_message(
+    deal_id: u64,
+    kind: MessageType,
+    reply_to: Option<u32>,
+    deadline: u64,
+) -> WireMessage {
+    WireMessage {
+        deal_id,
+        ..message(kind, reply_to, deadline)
     }
 }
 
@@ -169,6 +182,53 @@ fn a_reply_to_a_message_that_does_not_exist_is_rejected() {
         }
     ));
     assert!(book.is_empty(), "a rejected message was still recorded");
+}
+
+#[test]
+fn a_reply_cannot_cross_deals() {
+    let mut book = OfferBook::new();
+    book.record(
+        0,
+        Author::Counterparty,
+        deal_message(7, MessageType::Offer, None, NOON + ONE_HOUR),
+    )
+    .expect("first deal");
+    let error = book
+        .record(
+            0,
+            Author::Us,
+            deal_message(8, MessageType::Counter, Some(0), NOON + ONE_HOUR),
+        )
+        .expect_err("reply used another deal id");
+    assert!(matches!(error, NegotiationError::CrossDealReply { .. }));
+}
+
+#[test]
+fn settling_one_deal_does_not_close_the_next_deal() {
+    let mut book = OfferBook::new();
+    book.record(
+        0,
+        Author::Counterparty,
+        deal_message(7, MessageType::Offer, None, NOON + ONE_HOUR),
+    )
+    .expect("first offer");
+    book.record(
+        0,
+        Author::Us,
+        deal_message(7, MessageType::Accept, Some(0), NOON + ONE_HOUR),
+    )
+    .expect("first settlement");
+    book.record(
+        5,
+        Author::Counterparty,
+        deal_message(8, MessageType::Offer, None, NOON + ONE_HOUR),
+    )
+    .expect("second offer");
+
+    assert_eq!(book.status(theirs(0), NOON), Some(OfferStatus::Settled));
+    assert_eq!(book.status(theirs(5), NOON), Some(OfferStatus::Proposed));
+    book.check_acceptable(theirs(5), NOON)
+        .expect("the second deal remains live");
 }
 
 // --- What a policy engine asks --------------------------------------------------

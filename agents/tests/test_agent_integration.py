@@ -35,38 +35,32 @@ def _run(*, budget: int, reserve: int, max_rounds: int, tmp_path):
             buyer_address="0xbuyer",
             seller_address="0xseller",
             token=TOKEN,
-            store_path=store_path,
-            auditor_address="0xauditor",
             max_rounds=max_rounds,
         )
     )
 
 
 def test_negotiation_settles_when_ranges_overlap(tmp_path):
-    record = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
+    state = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
 
-    assert record.settlement is not None
-    assert record.settlement.is_consistent()
-    assert record.settlement.agreed_amount <= 1000
-    assert record.settlement.agreed_amount >= 700
-    assert sorted(record.participants) == sorted(["0xbuyer", "0xseller"])
-    assert len(record.offers) >= 1
+    assert state.settlement is not None
+    assert state.settlement.is_consistent()
+    assert state.settlement.agreed_amount <= 1000
+    assert state.settlement.agreed_amount >= 700
+    assert len(state.offers) >= 1
 
 
 def test_negotiation_walks_away_when_ranges_never_overlap(tmp_path):
     # Buyer's opening anchor (80% of budget = 400) is below the reserve, and neither side's
     # single fixed counter closes the gap, so this should end without a settlement rather
     # than looping forever.
-    record = _run(budget=500, reserve=5000, max_rounds=3, tmp_path=tmp_path)
+    state = _run(budget=500, reserve=5000, max_rounds=3, tmp_path=tmp_path)
 
-    assert record.settlement is None
-    # Disclosure needs a grant, not a successful settlement.
-    assert sorted(record.participants) == sorted(["0xbuyer", "0xseller"])
+    assert state.settlement is None
+    assert state.offers
 
 
-def test_negotiation_reveal_is_from_a_genuine_third_party(tmp_path):
-    # The auditor only calls reveal and never joins the channel or proposes an offer.
-    record = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
+def test_wire_v3_agent_loop_returns_participant_state_without_disclosure(tmp_path):
+    state = _run(budget=1000, reserve=700, max_rounds=3, tmp_path=tmp_path)
 
-    assert "0xauditor" not in record.participants
-    assert all(o.proposer != "0xauditor" for o in record.offers)
+    assert all(o.proposer in {"0xbuyer", "0xseller"} for o in state.offers)

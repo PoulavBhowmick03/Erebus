@@ -9,7 +9,6 @@ from erebus_agents.policy import BuyerPolicy, SellerPolicy
 
 BUYER_ADDRESS = "0xbuyer"
 SELLER_ADDRESS = "0xseller"
-AUDITOR_ADDRESS = "0xauditor"
 TOKEN = "0xtoken"
 
 
@@ -20,7 +19,6 @@ def test_negotiation_settles_over_real_mcp_servers(tmp_path):
         return await run_negotiation_over_mcp(
             buyer_params=server_params(store, "payer", BUYER_ADDRESS, spendable_notes="1000"),
             seller_params=server_params(store, "payee", SELLER_ADDRESS),
-            auditor_params=server_params(store, "both", AUDITOR_ADDRESS),
             buyer_policy=BuyerPolicy(
                 identity=BUYER_ADDRESS, budget=1000, deadline_seconds=3600, max_rounds=3
             ),
@@ -29,12 +27,10 @@ def test_negotiation_settles_over_real_mcp_servers(tmp_path):
             ),
             buyer_address=BUYER_ADDRESS,
             seller_address=SELLER_ADDRESS,
-            auditor_address=AUDITOR_ADDRESS,
             token=TOKEN,
         )
 
     record = asyncio.run(run())
 
-    assert sorted(record["participants"]) == sorted([BUYER_ADDRESS, SELLER_ADDRESS])
     assert record["settlement"] is not None
     assert record["settlement"]["is_consistent"] is True

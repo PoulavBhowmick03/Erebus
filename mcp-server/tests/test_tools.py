@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -184,14 +186,19 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                 async with stdio_client(buyer_params) as (buyer_read, buyer_write):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
-                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+                        # The buyer settles with its own handle. A handle is a key into one
+                        # client's own state, so the seller's does not resolve here.
+                        buyer_opened = await buyer.call_tool(
+                            "open_channel", {"counterparty": "0xseller"}
+                        )
+                        buyer_handle = _structured(buyer_opened)["result"]["channel_handle"]
                         payable = _structured(await buyer.call_tool("get_note_balance", {}))
                         assert int(payable["result"]["total"]) >= 150
 
                         settled = _structured(
                             await buyer.call_tool(
                                 "accept_and_settle",
-                                {"channel_handle": handle, "offer_id": offer_id},
+                                {"channel_handle": buyer_handle, "offer_id": offer_id},
                             )
                         )
                         assert settled["ok"] is True
@@ -379,14 +386,19 @@ def test_mcp_settle_change(tmp_path):
                 async with stdio_client(buyer_params) as (buyer_read, buyer_write):
                     async with ClientSession(buyer_read, buyer_write) as buyer:
                         await buyer.initialize()
-                        await buyer.call_tool("open_channel", {"counterparty": "0xseller"})
+                        # The buyer settles with its own handle. A handle is a key into one
+                        # client's own state, so the seller's does not resolve here.
+                        buyer_opened = await buyer.call_tool(
+                            "open_channel", {"counterparty": "0xseller"}
+                        )
+                        buyer_handle = _structured(buyer_opened)["result"]["channel_handle"]
                         payable = _structured(await buyer.call_tool("get_note_balance", {}))
                         assert payable["result"]["total"] == "5"
 
                         settled = _structured(
                             await buyer.call_tool(
                                 "accept_and_settle",
-                                {"channel_handle": handle, "offer_id": offer_id},
+                                {"channel_handle": buyer_handle, "offer_id": offer_id},
                             )
                         )
                         assert settled["ok"] is True
@@ -429,6 +441,67 @@ def test_open_channel_and_propose_offer_round_trip(tmp_path):
                 proposed_body = _structured(proposed)
                 assert proposed_body["ok"] is True
                 assert "offer_id" in proposed_body["result"]
+
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                assert isinstance(state["result"]["offers"][0]["deal_id"], str)
+
+    asyncio.run(run())
+
+
+def test_deal_grant_uses_a_private_file_and_never_returns_the_capsule(tmp_path):
+    async def run():
+        store = tmp_path / "store.json"
+        grant_path = tmp_path / "deal.grant.json"
+        seller_params = _server_params(store, role="payee", identity="0xseller")
+        async with stdio_client(seller_params) as (read, write):
+            async with ClientSession(read, write) as seller:
+                await seller.initialize()
+                opened = await seller.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                await seller.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 100,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                state = _structured(
+                    await seller.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                deal_id = state["result"]["offers"][0]["deal_id"]
+                exported = _structured(
+                    await seller.call_tool(
+                        "grant_viewing_key",
+                        {
+                            "channel_handle": handle,
+                            "deal_id": deal_id,
+                            "grantee": "0xauditor",
+                            "expires_at": int(time.time()) + 600,
+                            "output_path": str(grant_path),
+                        },
+                    )
+                )
+                assert exported["ok"] is True
+                assert "viewing_key" not in exported["result"]
+                assert "ciphertext" not in json.dumps(exported)
+                assert stat.S_IMODE(grant_path.stat().st_mode) == 0o600
+
+        auditor_params = _server_params(store, role="payee", identity="0xauditor")
+        async with stdio_client(auditor_params) as (read, write):
+            async with ClientSession(read, write) as auditor:
+                await auditor.initialize()
+                revealed = _structured(
+                    await auditor.call_tool("reveal", {"grant_path": str(grant_path)})
+                )
+                assert revealed["ok"] is True
+                assert {offer["deal_id"] for offer in revealed["result"]["offers"]} == {deal_id}
+
+        assert grant_path.exists()
 
     asyncio.run(run())
 

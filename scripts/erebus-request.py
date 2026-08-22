@@ -34,6 +34,7 @@ def main() -> None:
 
     params = json.loads(sys.argv[3]) if len(sys.argv) == 4 else {}
     params["config"] = {target: values[source] for target, source in required.items()}
+    params["config"]["wire_version"] = values.get("EREBUS_WIRE_VERSION", "v3")
     print(json.dumps({"method": sys.argv[2], "params": params}))
 
 

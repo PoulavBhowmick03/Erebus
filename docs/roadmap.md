@@ -74,7 +74,7 @@ This section records what exists on 2026-08-19. Later sections describe the miss
   `docs/runs/2026-08-19-sepolia-run.md`).
 - `scripts/observer.py` recovers wire-v1 terms and does not recover wire-v2 content.
 - The Rust client can open channels, write offers, read state, settle, shield, grant, and reveal.
-- The Python seam uses protocol 2 and passes key-file paths to Rust.
+- The Python seam uses protocol 3 and passes key-file paths to Rust.
 - The MCP server exposes ten tools over stdio, installable as the `erebus-mcp-server`
   console script from wheels alone.
 - Payer and payee roles prevent the payee from calling `accept_and_settle`.
@@ -86,7 +86,7 @@ This section records what exists on 2026-08-19. Later sections describe the miss
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- `main` passes 216 Rust tests, 70 Python tests, and 38 TypeScript tests.
+- The wire-v3 worktree passes 234 Rust tests, 70 Python tests, and 42 TypeScript tests.
 - Clippy and rustdoc pass with warnings denied.
 - CI runs all of the above on every push and pull request, plus a gitleaks history scan.
   TypeScript is not in it; see §5.6.
@@ -202,10 +202,10 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 |---|---|---|
 | ~~No packaged Rust binary~~ | Platform wheels ship the binary; the arm64 macOS leg is verified, the other two legs have not run | Run the Linux and x86-64 macOS legs once before the tag |
 | Duplicate response mapping | The seam adapter repeats Rust fields | Add schema compatibility tests for every method |
-| ~~No protocol negotiation~~ | Every envelope carries `protocol: 2`; the seam refuses a mismatch by name, and the MCP server handshakes at startup (2026-08-19) | Done |
+| ~~No protocol negotiation~~ | Every envelope carries `protocol: 3`; the seam refuses a mismatch by name, and the MCP server handshakes at startup | Done |
 | Timeout is global | Each call uses one 300-second limit | Use operation-specific timeouts and report the failed stage |
 | Key-path safety relies on convention | Python can access the named files | Add permission checks and secret-leak regression tests |
-| ~~`CLAUDE.md` contradicts the source~~ | Corrected 2026-08-19: `CLAUDE.md` now says the binding speaks protocol 2 | Done |
+| ~~`CLAUDE.md` contradicts the source~~ | `CLAUDE.md` now says the binding speaks protocol 3 | Done |
 
 The Python SDK must stay a binding. It must not add hashes, salts, felt arithmetic, note
 selection, signing, or cryptography.
@@ -977,40 +977,33 @@ Target: September to October 2026. Blocks Phase 12 and ships with D3.
 Owner: Poulav owns the grant format and key derivation. Ishita owns the MCP surface and the
 operator workflow.
 
-Disclosure is implemented and live. `ViewingGrant` reconstructs one negotiation and its
-settlement from chain data and cannot spend, exercised on chain in `0x4191fe47…f341` on
-2026-08-19. It is not yet a primitive an external integrator should build on, for two
-reasons.
+Historical bearer disclosure is live: `ViewingGrant` reconstructed the 2026-08-19 wire-v2
+settlement `0x4191fe47…f341`. Wire v3 now uses a different primitive. It derives native
+subkeys for one deal in each direction. Because STRK20 note locations and amount masks still
+derive from the parent channel key, the capsule also carries only the exact opaque note IDs
+and masks needed for the selected frames. It never carries a parent channel key.
 
-**It is a bearer secret.** `grantee` is metadata and binds nothing. The Poseidon checksum
-detects edited or incompatible grant data but is not a signature and does not authenticate
-who issued it (`sdk/rs/src/disclosure.rs`, `docs/privacy-model.md`). Whoever holds the
-serialized grant reads the relationship.
+The capsule is encrypted with one-time Stark-curve ECDH to the recipient's registered pool
+key. Its authenticated metadata binds its scope and explicit expiry. Expiry prevents a later
+open; it cannot erase a record already opened. MCP writes the capsule to a new mode-`0600`
+file and returns only metadata and the path.
 
-**It is scoped to a whole channel pair, permanently.** The grant carries both directional
-channel keys, and every note index derives from them. There is no per-deal scope and no
-expiry.
-
-**The second defect is masked today by an unrelated rule.** One deal per channel is an Erebus
-rule rather than a protocol constraint (`docs/status.md`), so a whole-channel grant is
-accidentally a per-deal grant. The moment repeat deals land in Phase 8, every grant already
-issued becomes retroactively broader: a grant for deal 1 opens deals 2..n, including deals
-that did not exist when it was issued. Per-deal derivation must ship in the same release as
-repeat deals, not after it. **D3 and disclosure scope are one decision, not two.**
+This implementation has local cross-language and isolation evidence. It still needs the
+planned wire-v3 Sepolia run before this phase has live evidence.
 
 Work:
 
-1. Encrypt each grant to the intended recipient's public key. The channel layer already does
+1. [x] Encrypt each grant to the intended recipient's public key. The channel layer already does
    this for `channel_key` through `EncChannelInfo`; reuse that ECDH construction rather than
    introducing a second one.
-2. Derive per-deal subkeys so a grant opens one deal's index range and no other.
-3. Define what expiry can and cannot stop, and state it in the grant format itself.
-4. Keep grants issued before this phase readable, and have them report themselves as legacy.
-5. Prevent normal MCP transcripts from storing a grant secret.
-6. Separate disclosure generation, delivery, and independent verification.
-7. Extend `docs/privacy-model.md` with what a disclosed record proves and what it only
+2. [x] Derive per-deal subkeys so a grant opens one deal's index range and no other.
+3. [x] Define what expiry can and cannot stop, and state it in the grant format itself.
+4. [x] Keep grants issued before this phase readable, and have them report themselves as legacy.
+5. [x] Prevent normal MCP transcripts from storing a grant secret.
+6. [x] Separate disclosure generation, delivery, and independent verification.
+7. [x] Extend `docs/privacy-model.md` with what a disclosed record proves and what it only
    asserts, per grant shape.
-8. State that revocation cannot erase data a recipient already learned.
+8. [x] State that revocation cannot erase data a recipient already learned.
 
 Exit:
 

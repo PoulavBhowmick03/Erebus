@@ -10,7 +10,7 @@
 //! Any weaker check passes on layouts the chain rejects.
 
 use erebus_sdk::actions::{ClientAction, RandomSalt};
-use erebus_sdk::channel::{Channel, ChannelError, Counterparty, OwnedNote, PoolIdentity};
+use erebus_sdk::channel::{ChangeOutput, Channel, Counterparty, OwnedNote, PoolIdentity};
 use erebus_sdk::subchannel::{IndexError, SubchannelCursor};
 use erebus_sdk::wire::{MessageType, WireMessage, NOTES_PER_MESSAGE};
 use starknet_types_core::felt::Felt;
@@ -50,6 +50,7 @@ fn salt() -> RandomSalt {
 
 fn message(kind: MessageType, amount: u128) -> WireMessage {
     WireMessage {
+        deal_id: 0,
         message_type: kind,
         reply_to: None,
         created_at: 1_753_699_200,
@@ -67,12 +68,27 @@ fn inputs() -> Vec<OwnedNote> {
     }]
 }
 
+fn zero_change() -> ChangeOutput {
+    let payer = Counterparty {
+        address: alice().address(),
+        public_key: alice().public_key(),
+    };
+    ChangeOutput::existing(
+        Channel::derive(chain(), pool(), &alice(), payer),
+        0,
+        0,
+        salt(),
+    )
+}
+
 /// Every note index a set writes, in emission order.
 fn created_indices(set: &erebus_sdk::action_set::ActionSet) -> Vec<u32> {
     set.actions()
         .iter()
         .filter_map(|a| match a {
-            ClientAction::CreateEncNote(note) => Some(note.index),
+            ClientAction::CreateEncNote(note) if note.recipient_addr == bob().address => {
+                Some(note.index)
+            }
             _ => None,
         })
         .collect()
@@ -137,33 +153,30 @@ fn consecutive_messages_take_consecutive_grid_slots() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
 
-    for expected in 0..3u32 {
+    for ordinal in 0..3u32 {
         let (index, set) = channel
             .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1))
             .expect("valid message");
+        let expected = ordinal * NOTES_PER_MESSAGE as u32;
         assert_eq!(index, expected);
 
-        let first = expected * NOTES_PER_MESSAGE as u32;
-        let want: Vec<u32> = (first..first + NOTES_PER_MESSAGE as u32).collect();
+        let want: Vec<u32> = (expected..expected + NOTES_PER_MESSAGE as u32).collect();
         assert_eq!(created_indices(&set), want);
     }
 }
 
-/// The reader seeks `5k..5k+4` without a framing search. An off-grid start misframes later
-/// messages. Rounding up leaves a gap, and rounding down overwrites a note.
+/// Wire v3 uses the physical frame start. It can start after an acceptance payment.
 #[test]
-fn a_message_cannot_start_off_the_grid() {
+fn a_message_can_start_after_an_acceptance_payment() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let off_grid = NOTES_PER_MESSAGE as u32 + 1;
     let mut cursor = SubchannelCursor::resume_at(off_grid);
 
-    let error = channel
+    let (start, set) = channel
         .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1))
-        .expect_err("index after the first payment slot is not a message boundary");
-    assert!(matches!(
-        error,
-        ChannelError::Index(IndexError::Misaligned { next }) if next == off_grid
-    ));
+        .expect("wire v3 frames start at the next physical note");
+    assert_eq!(start, off_grid);
+    assert_eq!(created_indices(&set), vec![6, 7, 8, 9, 10]);
 }
 
 // --- Settlement layout ----------------------------------------------------------
@@ -182,13 +195,14 @@ fn settlement_emits_its_notes_in_ascending_index_order() {
         .expect("offer");
 
     let (_, set) = channel
-        .settle_next(
+        .settle_next_with_change(
             token(),
             &mut cursor,
             &inputs(),
             950,
             salt(),
             &message(MessageType::Accept, 950),
+            Some(zero_change()),
         )
         .expect("valid settlement");
 
@@ -208,47 +222,45 @@ fn settlement_puts_the_record_on_the_grid_and_the_payment_after_it() {
         .expect("offer");
 
     let (message_index, set) = channel
-        .settle_next(
+        .settle_next_with_change(
             token(),
             &mut cursor,
             &inputs(),
             950,
             salt(),
             &message(MessageType::Accept, 950),
+            Some(zero_change()),
         )
         .expect("valid settlement");
 
-    assert_eq!(message_index, 1, "the acceptance is message 1");
+    assert_eq!(message_index, 5, "the acceptance starts at physical note 5");
     // Record at 5..9 on the grid, payment at 10 directly after.
     assert_eq!(created_indices(&set), vec![5, 6, 7, 8, 9, 10]);
 }
 
-/// The payment note is one index wide, so settling leaves the cursor at `5k+1`. A second
-/// negotiation in the same subchannel therefore cannot start. Pinned here because it is a
-/// real constraint on multi-deal subchannels, not because it is desirable.
+/// A settlement frame is six notes wide. The next deal starts immediately after it.
 #[test]
-fn settling_ends_the_subchannel_for_further_messages() {
+fn a_new_deal_can_follow_a_settlement() {
     let channel = Channel::derive(chain(), pool(), &alice(), bob());
     let mut cursor = SubchannelCursor::new();
     channel
-        .settle_next(
+        .settle_next_with_change(
             token(),
             &mut cursor,
             &inputs(),
             950,
             salt(),
             &message(MessageType::Accept, 950),
+            Some(zero_change()),
         )
         .expect("valid settlement");
 
     assert_eq!(cursor.next_index(), NOTES_PER_MESSAGE as u32 + 1);
-    let error = channel
+    let (start, set) = channel
         .write_next_message(token(), &mut cursor, &message(MessageType::Offer, 1))
-        .expect_err("the cursor is off the grid after settlement");
-    assert!(matches!(
-        error,
-        ChannelError::Index(IndexError::Misaligned { .. })
-    ));
+        .expect("the next frame starts after the payment");
+    assert_eq!(start, NOTES_PER_MESSAGE as u32 + 1);
+    assert_eq!(created_indices(&set), vec![6, 7, 8, 9, 10]);
 }
 
 // --- The property that matters --------------------------------------------------
@@ -275,13 +287,14 @@ fn a_whole_negotiation_writes_one_contiguous_run() {
     }
 
     let (_, set) = channel
-        .settle_next(
+        .settle_next_with_change(
             token(),
             &mut cursor,
             &inputs(),
             900,
             salt(),
             &message(MessageType::Accept, 900),
+            Some(zero_change()),
         )
         .expect("valid settlement");
     written.extend(created_indices(&set));

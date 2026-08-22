@@ -6,7 +6,7 @@ runs against the operator's prover (``docs/custody-design.md``). ``prover_url`` 
 required for the mock backend so every configuration names its endpoint explicitly.
 
 ``mock`` is the default and needs an address and prover URL. ``seam`` drives the Rust client
-and needs the full protocol-2 configuration. Startup validation catches a missing
+and needs the full protocol-3 configuration. Startup validation catches a missing
 ``POOL_KEY_FILE`` before a tool call starts proving.
 """
 
@@ -50,6 +50,7 @@ class SeamSettings:
     account_key_file: Path
     state_dir: Path
     token: str
+    wire_version: str
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,12 @@ def _seam_settings() -> SeamSettings:
         if not path.exists():
             raise ConfigError(f"{label} points at {path}, which does not exist")
 
+    wire_version = os.environ.get("EREBUS_WIRE_VERSION", "v3").strip().lower()
+    if wire_version not in {"v2", "v3"}:
+        raise ConfigError(
+            f"EREBUS_WIRE_VERSION must be 'v2' or 'v3', got {wire_version!r}"
+        )
+
     return SeamSettings(
         binary=binary,
         rpc_url=_require("STARKNET_RPC_URL"),
@@ -184,6 +191,7 @@ def _seam_settings() -> SeamSettings:
         account_key_file=account_key,
         state_dir=Path(_require("EREBUS_STATE_DIR")),
         token=_require("TOKEN_ADDRESS"),
+        wire_version=wire_version,
     )
 
 

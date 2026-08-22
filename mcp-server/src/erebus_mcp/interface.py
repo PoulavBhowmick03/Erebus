@@ -1,7 +1,7 @@
 """Python mirror of the frozen ``ErebusClient`` contract in ARCHITECTURE.md §4.
 
 This file transcribes the normative §4 block. It does not implement the protocol. ``sdk/py``
-carries the calls over the protocol-2 subprocess binding. Each ``ErebusClient`` has one
+carries the calls over the protocol-3 subprocess binding. Each ``ErebusClient`` has one
 identity, so methods do not accept a caller address.
 
 ``token`` is not a parameter anywhere. It travels inside ``OfferTerms``.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 ChannelHandle = str
 OfferId = str
@@ -37,6 +37,7 @@ class OfferTerms:
 @dataclass(frozen=True)
 class Offer:
     offer_id: OfferId
+    deal_id: int  # u64 on wire; serialized to agent-facing JSON as a decimal string
     channel_id: ChannelHandle
     proposer: AgentId
     terms: OfferTerms
@@ -68,8 +69,10 @@ class NoteBalance:
 @dataclass(frozen=True)
 class ViewingKeyGrant:
     channel_id: ChannelHandle
-    grantee: PublicKey  # metadata in MVP v1; the grant remains a bearer secret
-    viewing_key: str  # versioned and checksummed
+    grantee: AgentId
+    viewing_key: dict[str, Any] | str  # Rust-owned encrypted capsule, or a legacy fixture
+    deal_id: str | None = None
+    expires_at: int | None = None
 
 
 @dataclass(frozen=True)
@@ -208,9 +211,9 @@ class ErebusClient(Protocol):
         ...
 
     async def grant_viewing_key(
-        self, handle: ChannelHandle, grantee: PublicKey
+        self, handle: ChannelHandle, deal_id: str, grantee: AgentId, expires_at: int
     ) -> ViewingKeyGrant:
-        """Export a self-contained bearer viewing grant for a third party."""
+        """Encrypt one wire-v3 deal capability to a registered recipient."""
         ...
 
     async def reveal(self, viewing_key: ViewingKeyGrant) -> DisclosedRecord:

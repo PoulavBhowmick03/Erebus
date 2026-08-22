@@ -47,7 +47,9 @@ uv run mcp dev mcp-server/src/server.py
 
 The env file supplies `AGENT_ADDRESS`, `PROVING_SERVICE_URL`, `STARKNET_RPC_URL`,
 `POOL_ADDRESS`, `STARKNET_CHAIN_ID`, `TOKEN_ADDRESS`, `POOL_KEY_FILE`, `ACCOUNT_KEY_FILE`
-and `EREBUS_STATE_DIR`. Every one is checked at startup, and the two key files are checked
+and `EREBUS_STATE_DIR`. `EREBUS_WIRE_VERSION` selects `v2` or `v3` for newly opened channels
+and defaults to `v3`; existing channel records keep their persisted version. Every required
+setting is checked at startup, and the two key files are checked
 for existence, because discovering a missing key twenty seconds into a proof has already
 cost an agent a turn and some gas.
 
@@ -107,6 +109,14 @@ Payee-role proposals are asks and therefore do not inspect the payee's notes.
 Settlement covers the price from whatever notes it selects and returns any excess as a new
 change note, so any positive amount up to `total` is payable. Add denominations before the
 agent session with `scripts/agent.sh <payer-env> fund <amount>`.
+
+### Deal disclosure
+
+`grant_viewing_key(channel_handle, deal_id, grantee, expires_at, output_path)` encrypts one
+wire-v3 deal to the grantee's registered pool key. It creates `output_path` with mode `0600`
+and refuses to overwrite an existing file. Its tool result contains metadata and the path,
+not the encrypted capsule. Run `reveal(grant_path)` from the grantee's identity-bound server.
+Expiry prevents a later open; it cannot erase data the recipient opened earlier.
 
 ## Using it from outside this repository
 

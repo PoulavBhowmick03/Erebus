@@ -70,7 +70,8 @@ def test_version_round_trips(seam: Seam) -> None:
     result = seam.version()
 
     assert result["name"] == "erebus-sdk"
-    assert result["protocol"] == 2
+    assert result["protocol"] == 3
+    assert result["default_wire_version"] == "v3"
 
 
 def test_generate_pool_key_returns_a_path_and_a_public_key(seam: Seam, tmp_path: Path) -> None:
@@ -184,6 +185,47 @@ def test_approve_sends_amount_and_returns_a_receipt(
     assert isinstance(sent["params"], dict)
     assert sent["params"]["amount"] == "5000000000000000000"  # type: ignore[index]
     assert set(result) == {"tx_hash", "approved"}
+
+
+def test_deal_grant_carries_full_width_id_and_explicit_expiry(
+    seam: Seam, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: dict[str, object] = {}
+    capsule = {"version": 3, "ciphertext": [1, 2, 3]}
+
+    def answer(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        sent.update(json.loads(kwargs["input"]))  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(
+            args=[str(CLI)],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "result": {
+                        "channel_id": "ch_" + "ab" * 32,
+                        "grantee": "0xa0d17",
+                        "deal_id": "18446744073709551615",
+                        "expires_at": 1_800_000_000,
+                        "viewing_key": capsule,
+                    },
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", answer)
+    result = seam.grant_viewing_key(
+        "ch_" + "ab" * 32,
+        "18446744073709551615",
+        "0xa0d17",
+        1_800_000_000,
+    )
+
+    params = sent["params"]
+    assert isinstance(params, dict)
+    assert params["deal_id"] == "18446744073709551615"
+    assert params["expires_at"] == 1_800_000_000
+    assert result["viewing_key"] == capsule
 
 
 # --- Failures arrive as structure, not as crashes -------------------------------

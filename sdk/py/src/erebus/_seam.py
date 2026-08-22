@@ -10,8 +10,8 @@ known-answer test here means that protocol logic crossed the binding boundary. S
 :class:`SeamConfig` contains paths to two key files. The Rust binary opens them. The Python
 heap never holds a pool private key.
 
-Protocol 2, 2026-08-01. Every method except ``version`` and ``generate_pool_key`` carries
-the same nine-field configuration because ``erebus-cli`` keeps no process state. Channel
+Protocol 3, 2026-08-21. Every method except ``version`` and ``generate_pool_key`` carries
+the same configuration because ``erebus-cli`` keeps no process state. Channel
 state lives in ``state_dir`` behind an opaque handle.
 """
 
@@ -31,7 +31,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 #: The request/response contract this binding speaks. The binary reports its own on every
 #: envelope; ``call`` refuses a mismatch by name instead of failing on a changed shape.
-PROTOCOL = 2
+PROTOCOL = 3
 
 
 class SeamUnavailable(RuntimeError):
@@ -73,6 +73,7 @@ class SeamConfig:
     account_key_file: str | Path
     state_dir: str | Path
     token: str
+    wire_version: str = "v3"
 
     def as_params(self) -> dict[str, str]:
         return {
@@ -85,6 +86,7 @@ class SeamConfig:
             "account_key_file": str(self.account_key_file),
             "state_dir": str(self.state_dir),
             "token": self.token,
+            "wire_version": self.wire_version,
         }
 
 
@@ -152,7 +154,7 @@ class Seam:
         # Envelopes carry the contract version they speak. A mismatch means the binary and
         # this binding were installed from different releases; failing here, by name, beats
         # the alternative — a shape error deep inside whichever field changed. Envelopes
-        # from binaries that predate the field pass, because they can only be protocol 2.
+        # from binaries that predate the field pass, because protocol 2 omitted it.
         spoken = envelope.get("protocol", PROTOCOL)
         if spoken != PROTOCOL:
             raise SeamUnavailable(
@@ -220,9 +222,19 @@ class Seam:
             "accept_and_settle", self._with_config({"handle": handle, "offer_id": offer_id})
         )
 
-    def grant_viewing_key(self, handle: str, grantee: str) -> dict[str, Any]:
+    def grant_viewing_key(
+        self, handle: str, deal_id: str, grantee: str, expires_at: int
+    ) -> dict[str, Any]:
         return self.call(
-            "grant_viewing_key", self._with_config({"handle": handle, "grantee": grantee})
+            "grant_viewing_key",
+            self._with_config(
+                {
+                    "handle": handle,
+                    "deal_id": deal_id,
+                    "grantee": grantee,
+                    "expires_at": expires_at,
+                }
+            ),
         )
 
     def reveal(self, viewing_key: dict[str, Any]) -> dict[str, Any]:

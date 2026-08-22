@@ -4,7 +4,7 @@
 them against `compile_actions`, requests a proof, submits `apply_actions`, discovers notes
 by derived ids, and reconstructs scoped disclosures.
 
-## CLI protocol 2
+## CLI protocol 3
 
 `erebus-cli` reads one JSON request from stdin, writes one JSON envelope to stdout, and
 exits. Every stateful request carries this config:
@@ -19,7 +19,8 @@ exits. Every stateful request carries this config:
   "pool_key_file": "/operator/secrets/pool.key",
   "account_key_file": "/operator/secrets/account.key",
   "state_dir": "/operator/state/erebus",
-  "token": "0x..."
+  "token": "0x...",
+  "wire_version": "v3"
 }
 ```
 
@@ -62,12 +63,18 @@ Methods:
 - `reveal`
 - `shield`, administrative funding helper, outside the seven-method negotiation surface
 
-## Negotiation wire v2
+## Negotiation wire v3
 
-New channels encrypt/authenticate the canonical 400-bit negotiation record with
-AES-256-GCM-SIV, then fragment the 50-byte ciphertext plus 16-byte tag across five public
-note salts. HKDF-SHA-256 binds key/nonce derivation to the chain, pool, directional channel
-key, token and message index; chain/pool/token/index are authenticated data.
+New channels default to wire v3. Each authenticated plaintext contains a 64-bit deal ID and
+the 400-bit negotiation record. AES-256-GCM-SIV produces a 58-byte ciphertext and a 16-byte
+tag. Five public note salts carry the result. A derived mask fills the three spare bits.
+HKDF-SHA-256 binds the key, nonce, and authenticated data to the chain, pool, directional
+channel key, token, and physical frame start. Set `wire_version` to `v2` only for an old
+counterparty. Existing channel records never change version implicitly.
+
+Wire v3 uses framed physical note indices. Offer and counter frames use five notes.
+Acceptance frames use five data notes and one payment note. A new deal can start after a
+settlement. Exact and change settlements both create a seventh payer-owned change note.
 
 State created before this change has no `wire_version` and loads as public wire v1. It
 remains readable for disclosure, but every v1 write fails with `LegacyReadOnly`. Viewing
@@ -96,15 +103,16 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   Starknet account signature over the action set.
 - The account signing key never enters proving calldata, but the local Rust process needs
   it to sign the proof invocation and final account transaction.
-- `grant_viewing_key` is the intentional exception: it exports a self-contained bearer
-  secret covering both directions of one counterparty relationship and one token. Its
-  `grantee` field is metadata; secure delivery is the operator's responsibility.
+- `grant_viewing_key` is the intentional exception. On wire v3 it exports native subkeys and
+  exact STRK20 read capabilities for one deal, encrypted to the grantee's registered pool
+  key until an explicit expiry. It exports no parent channel key. Historical wire-v1 and
+  wire-v2 grants remain broader bearer secrets.
 
 ## Current MVP limits
 
 - One configured token per client instance.
-- Settlement selects unspent notes that sum exactly to the offer amount. It will not burn
-  change; general change-note construction is not implemented.
+- Settlement selects unspent notes that cover the offer amount and returns change to the
+  payer. Wire v3 always writes the change frame, including when the change amount is zero.
 - Reverse directional channels are paired by excluding keys already claimed in local state.
   An ambiguous match fails rather than guessing.
 - Channel state records the last accepted write block. A dependent write waits until that
@@ -114,8 +122,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   but before the response can orphan an `open_channel` handle or make a caller retry an
   already-written offer as a second offer. Cursor recovery prevents index reuse; it does not
   recover the lost application result.
-- Shield, two-direction wire-v1 negotiation, atomic settlement and independent disclosure
-  have landed on Sepolia. Wire v2 is verified offline and still needs a fresh live run,
-  fee measurement and independent cryptographic review.
-- `sdk/py` still speaks protocol 1. Updating the shared Python/MCP integration is P2.3 and
-  was intentionally left out of this Rust-only pass.
+- Historical wire-v1 and wire-v2 channels remain readable. Wire v1 is read-only.
+- Wire-v3 repeat deals and recipient-bound per-deal disclosure are implemented. The client
+  rejects the old whole-channel grant on v3.
+- The Python SDK and MCP server speak CLI protocol 3 and default newly opened channels to
+  wire v3.

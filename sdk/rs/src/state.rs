@@ -101,7 +101,7 @@ pub struct StoredChannel {
     pub opened_transaction: Felt,
     /// Most recent accepted local write, used to wait for the historical proof anchor.
     pub last_write_block: u64,
-    /// Once settled, this channel is terminal in the MVP.
+    /// Whether this channel has a settlement. Only historical v1/v2 channels are terminal.
     pub settled: bool,
 }
 
@@ -122,9 +122,43 @@ impl StoredChannel {
         opened_transaction: Felt,
         opened_block: u64,
     ) -> Self {
+        Self::new_with_wire_version(
+            handle,
+            chain_id,
+            pool_address,
+            owner,
+            counterparty_address,
+            counterparty_public_key,
+            token,
+            outgoing_key,
+            channel_index,
+            subchannel_index,
+            opened_transaction,
+            opened_block,
+            WireVersion::V3,
+        )
+    }
+
+    /// Creates a record for a channel opened with an explicit wire generation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_wire_version(
+        handle: ChannelHandle,
+        chain_id: Felt,
+        pool_address: Felt,
+        owner: Felt,
+        counterparty_address: Felt,
+        counterparty_public_key: Felt,
+        token: Felt,
+        outgoing_key: Felt,
+        channel_index: u32,
+        subchannel_index: u32,
+        opened_transaction: Felt,
+        opened_block: u64,
+        wire_version: WireVersion,
+    ) -> Self {
         Self {
             version: STATE_VERSION,
-            wire_version: WireVersion::V2,
+            wire_version,
             chain_id,
             pool_address,
             handle,
@@ -627,7 +661,7 @@ mod tests {
             Felt::from(6u8),
             7,
         );
-        assert_eq!(current.wire_version, WireVersion::V2);
+        assert_eq!(current.wire_version, WireVersion::V3);
 
         let mut serialized = serde_json::to_value(current).expect("serialize");
         serialized

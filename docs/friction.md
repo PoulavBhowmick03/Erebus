@@ -8,6 +8,86 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F40: one reveal document encodes the same quantity two different ways, and the number form breaks above 18.4 STRK (2026-08-22)
+
+Found in the output of the wire-v3 Sepolia run, immediately after F39 made the failure mode
+recognisable.
+
+**What the stack did.** A successful `reveal` returns both of these, in the same JSON object:
+
+```json
+"terms":      { "amount": "750000000000000000" }     // string
+"settlement": { "agreed_amount": 750000000000000000 } // number
+```
+
+One quantity, two encodings, one document. The string form is deliberate and correct. The
+number form is `DisclosedSettlement` at `sdk/rs/src/client.rs:1671-1679`, whose
+`agreed_amount: u128` and `paid_amount: Option<u128>` derive `Serialize` with no string
+conversion.
+
+**Why it matters.** F39 established empirically that `serde_json` rejects a `u128` above
+`u64::MAX` with `number out of range`. At 18 decimals that ceiling is about 18.4 STRK. So a
+settlement larger than that does not merely display oddly — `reveal` fails outright, after the
+settlement has already happened on-chain and is irreversible. Selective disclosure is
+definition-of-done item 3, and it is the leg that silently has an upper bound on deal size.
+
+This run did not hit it: the deal was 0.75 STRK. Nothing in the test suite hits it either.
+`tests/disclosure.rs` asserts `agreed_amount == 900` — nine hundred base units, twelve orders
+of magnitude below the boundary. Every disclosure test uses toy amounts, so the entire suite
+sits on the safe side of a line no test names.
+
+**Whether we worked around it.** Not needed for this run, and not attempted. Recording it
+rather than fixing it mid-run, because the fix changes the seam's response shape and belongs
+in a reviewed commit rather than a live-run patch.
+
+**What would have made it easier.** The same rule F39 asks for: no `u128` reaches
+`serde_json` as a number. Two sites are now known to violate it and both were found by
+running the thing rather than by testing it, which suggests looking for the rest by grep
+rather than by waiting for the third. A disclosure test at a realistic token amount would have
+caught this one without a network.
+
+---
+
+## F39: `approve` reports failure for an allowance it successfully granted (2026-08-22)
+
+Found while provisioning two identities for the wire-v3 Sepolia run.
+
+**What we were trying to do.** Grant the pool a 30 STRK allowance through the seam:
+`erebus-cli approve {"amount":"30000000000000000000"}`.
+
+**What the stack did instead.** Returned
+`{"ok":false,"error":{"code":"INTERNAL","message":"response failed to serialize: number out of range"}}`
+— *after* submitting the transaction. The allowance was granted on-chain. A follow-up
+`allowance` call reports the full 30 STRK.
+
+The cause is on our side of the seam, and it is the same JSON numeric hazard as F37.
+`ApprovalReceipt.approved` is a `u128` (`sdk/rs/src/client.rs:1561`) serialized as a JSON
+number. `serde_json` emits integers as `u64`, so any allowance above `u64::MAX` — about
+18.4 STRK at 18 decimals — fails to serialize. The write already happened by then, so the
+error describes the response, not the transaction.
+
+The neighbouring handler already avoids this: `Request::Allowance` stringifies both fields
+with `.to_string()` (`erebus_cli.rs:350-351`), and `deal_id` crosses the same boundary as a
+string with a dedicated known-answer test,
+`full_width_deal_id_crosses_the_json_boundary_as_a_string`. The convention exists and is
+tested; this one struct was missed.
+
+**Why the tests did not catch it.** Nothing exercises `approve` above `u64::MAX`. A realistic
+allowance sized for the pool's 2 STRK per-write fee crosses that line at eight writes, so the
+first person to provision a working identity through the CLI hits it and no test does.
+
+**Whether we worked around it.** Yes, by reading `allowance` to confirm the write had landed
+and continuing. The dangerous response is the obvious one: an operator who trusts the error
+re-runs `approve`, and ERC-20 `approve` overwrites rather than adds, so a blind retry is
+merely wasteful here — but the same "reported failure, actual success" shape on a
+proof-carrying write would be a double spend of gas and allowance.
+
+**What would have made it easier.** Serialize `approved` as a decimal string, matching
+`allowance`, `amount`, and `deal_id`. More generally: no `u128` should reach `serde_json` as a
+number anywhere in this codebase, and that is a lint-able rule rather than a remembered one.
+
+---
+
 ## F38: `open_channel` writes the counterparty's address in public calldata (2026-08-17)
 
 Found while investigating whether a claim-link flow could avoid giving the claim identity its

@@ -28,8 +28,8 @@ use crate::decrypt;
 use crate::hashes;
 use crate::negotiation::{Author, NegotiationError, OfferBook};
 use crate::wire::{
-    decode_legacy_message, decode_message, WireContext, WireError, WireMessage, WireVersion,
-    LEGACY_NOTES_PER_MESSAGE, NOTES_PER_MESSAGE,
+    decode_legacy_message, decode_message, decode_message_v3, MessageType, WireContext, WireError,
+    WireMessage, WireVersion, LEGACY_NOTES_PER_MESSAGE, NOTES_PER_MESSAGE,
 };
 
 /// Errors from reading.
@@ -47,6 +47,14 @@ pub enum ReadError {
         found: usize,
         /// Number required by this channel's wire generation.
         expected: usize,
+    },
+    /// A wire-v3 acceptance frame did not contain its required payment note.
+    #[error("acceptance frame at note {frame_start} has no payment note at {payment_index}")]
+    MissingSettlementPayment {
+        /// Physical start of the acceptance frame.
+        frame_start: u32,
+        /// Required payment-note index.
+        payment_index: u64,
     },
     /// The notes were found but did not decode.
     #[error(transparent)]
@@ -119,7 +127,7 @@ impl core::fmt::Debug for ChannelReader {
 impl ChannelReader {
     /// A reader for `channel_key`'s subchannel on `token`.
     pub fn new(chain_id: Felt, pool_address: Felt, channel_key: Felt, token: Felt) -> Self {
-        Self::with_version(chain_id, pool_address, channel_key, token, WireVersion::V2)
+        Self::with_version(chain_id, pool_address, channel_key, token, WireVersion::V3)
     }
 
     /// A reader for an explicitly versioned historical channel.
@@ -142,7 +150,10 @@ impl ChannelReader {
     /// Note ids for one versioned message.
     pub fn note_ids(&self, message_index: u32) -> Vec<Felt> {
         let width = self.wire_version.notes_per_message();
-        let first = u64::from(message_index) * width as u64;
+        let first = match self.wire_version {
+            WireVersion::V3 => u64::from(message_index),
+            WireVersion::V1 | WireVersion::V2 => u64::from(message_index) * width as u64,
+        };
         (0..width)
             .map(|slot| hashes::compute_note_id(self.channel_key, self.token, first + slot as u64))
             .collect()
@@ -179,7 +190,10 @@ impl ChannelReader {
         // A settlement payment follows its acceptance where the next message would start.
         // Treat the value note as the end of the transcript, not a partial message.
         let width = self.wire_version.notes_per_message();
-        let first = u64::from(message_index) * width as u64;
+        let first = match self.wire_version {
+            WireVersion::V3 => u64::from(message_index),
+            WireVersion::V1 | WireVersion::V2 => u64::from(message_index) * width as u64,
+        };
         if let Some(note) = self.note(first, source) {
             if note.is_value_note() {
                 return Ok(None);
@@ -224,20 +238,25 @@ impl ChannelReader {
                     .expect("wire-v1 width checked before conversion");
                 decode_legacy_message(&salts)?
             }
-            WireVersion::V2 => {
+            version @ (WireVersion::V2 | WireVersion::V3) => {
                 let salts: [NoteSalt; NOTES_PER_MESSAGE] = salts
                     .try_into()
                     .expect("wire-v2 width checked before conversion");
-                decode_message(
-                    &WireContext {
-                        chain_id: self.chain_id,
-                        pool_address: self.pool_address,
-                        channel_key: self.channel_key,
-                        token: self.token,
-                        message_index,
-                    },
-                    &salts,
-                )?
+                let context = WireContext {
+                    chain_id: self.chain_id,
+                    pool_address: self.pool_address,
+                    channel_key: self.channel_key,
+                    token: self.token,
+                    message_index,
+                };
+                // Not a fallback chain: a channel's version is recorded when it opens, and
+                // trying the other decoder on failure would turn a corrupted note into a
+                // silent version guess. Each version decodes only its own wire.
+                if version == WireVersion::V3 {
+                    decode_message_v3(&context, &salts)?
+                } else {
+                    decode_message(&context, &salts)?
+                }
             }
         };
         Ok(Some(message))
@@ -256,7 +275,32 @@ impl ChannelReader {
                 message_index,
                 message,
             });
-            message_index += 1;
+            if self.wire_version == WireVersion::V3 {
+                let frame_width = if message.message_type == MessageType::Accept {
+                    let payment_index = u64::from(message_index) + NOTES_PER_MESSAGE as u64;
+                    if self
+                        .note(payment_index, source)
+                        .filter(decrypt::NoteView::is_value_note)
+                        .is_none()
+                    {
+                        return Err(ReadError::MissingSettlementPayment {
+                            frame_start: message_index,
+                            payment_index,
+                        });
+                    }
+                    NOTES_PER_MESSAGE as u32 + 1
+                } else {
+                    NOTES_PER_MESSAGE as u32
+                };
+                message_index = message_index
+                    .checked_add(frame_width)
+                    .ok_or(ReadError::Wire(WireError::FieldTooWide {
+                        field: "frameStart",
+                        bits: 32,
+                    }))?;
+            } else {
+                message_index += 1;
+            }
         }
         Ok(messages)
     }
@@ -270,7 +314,12 @@ impl ChannelReader {
         acceptance_index: u32,
         source: &impl NoteSource,
     ) -> Option<decrypt::NoteView> {
-        let index = u64::from(acceptance_index + 1) * self.wire_version.notes_per_message() as u64;
+        let index = match self.wire_version {
+            WireVersion::V3 => u64::from(acceptance_index) + NOTES_PER_MESSAGE as u64,
+            WireVersion::V1 | WireVersion::V2 => {
+                u64::from(acceptance_index + 1) * self.wire_version.notes_per_message() as u64
+            }
+        };
         self.note(index, source)
             .filter(decrypt::NoteView::is_value_note)
     }
@@ -296,7 +345,15 @@ pub fn reconstruct(
     all.sort_by_key(|(_, read)| (read.message.created_at, read.message_index));
 
     let mut book = OfferBook::new();
-    for (author, read) in all {
+    while !all.is_empty() {
+        let ready = all.iter().position(|(author, read)| {
+            read.message.reply_to.is_none_or(|reply_to| {
+                let target = crate::negotiation::OfferId::new(author.opposite(), reply_to);
+                book.entries().any(|(id, _)| id == target)
+            })
+        });
+        let position = ready.unwrap_or(0);
+        let (author, read) = all.remove(position);
         book.record(read.message_index, author, read.message)?;
     }
     Ok(book)
