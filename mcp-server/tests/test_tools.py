@@ -759,69 +759,51 @@ def test_wait_for_offers_rejects_a_non_positive_timeout(tmp_path):
     asyncio.run(run())
 
 
-def test_grant_viewing_key_writes_the_secret_to_disk_not_the_result(tmp_path):
-    """9.2: a bearer viewing grant must never enter a tool result, since a tool result is
-    a tool result the model sees and a transcript that can leave the machine."""
-
-    async def run():
-        store = tmp_path / "store.json"
-        export_path = tmp_path / "grant.json"
-        async with stdio_client(_server_params(store)) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
-                handle = _structured(opened)["result"]["channel_handle"]
-
-                granted = _structured(
-                    await session.call_tool(
-                        "grant_viewing_key",
-                        {
-                            "channel_handle": handle,
-                            "grantee": "0xauditor",
-                            "export_path": str(export_path),
-                        },
-                    )
-                )
-                assert granted["ok"] is True
-                assert granted["result"]["exported_to"] == str(export_path)
-                assert "viewing_key" not in granted["result"]
-
-                on_disk = json.loads(export_path.read_text())
-                assert on_disk["channel_id"] == handle
-                assert on_disk["grantee"] == "0xauditor"
-                assert on_disk["viewing_key"]
-                # The real secret value, not just the field name, must be absent from the
-                # tool result: a false pass here would still leak through a differently
-                # named field.
-                assert on_disk["viewing_key"] not in json.dumps(granted)
-
-    asyncio.run(run())
-
-
 def test_grant_viewing_key_refuses_to_overwrite_an_existing_export(tmp_path):
+    """`_save_grant` publishes via `os.link`, which fails closed rather than clobbering a
+    file that might be a different, earlier grant. Not covered by
+    test_deal_grant_uses_a_private_file_and_never_returns_the_capsule, which only exercises
+    the fresh-path case."""
+
     async def run():
         store = tmp_path / "store.json"
-        export_path = tmp_path / "grant.json"
-        export_path.write_text('{"already": "here"}')
-        async with stdio_client(_server_params(store)) as (read, write):
+        output_path = tmp_path / "deal.grant.json"
+        output_path.write_text('{"already": "here"}')
+        async with stdio_client(_server_params(store, role="payee")) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                opened = await session.call_tool("open_channel", {"counterparty": "0xbuyer"})
                 handle = _structured(opened)["result"]["channel_handle"]
+                await session.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 100,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                deal_id = state["result"]["offers"][0]["deal_id"]
 
                 body = _structured(
                     await session.call_tool(
                         "grant_viewing_key",
                         {
                             "channel_handle": handle,
+                            "deal_id": deal_id,
                             "grantee": "0xauditor",
-                            "export_path": str(export_path),
+                            "expires_at": int(time.time()) + 600,
+                            "output_path": str(output_path),
                         },
                     )
                 )
                 assert body["ok"] is False
                 assert body["error"]["code"] == "INVALID_REQUEST"
-                assert json.loads(export_path.read_text()) == {"already": "here"}
+                assert json.loads(output_path.read_text()) == {"already": "here"}
 
     asyncio.run(run())
 
