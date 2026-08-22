@@ -21,7 +21,10 @@ are confidential and demonstrated to be so. The relationship is not.
 |---|---|
 | Network | Sepolia only. Never run on mainnet |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
-| Live evidence | four settlements: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
+| Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
+  autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
+  an independent third party — definition-of-done 1, 3 and 4 at v3
+  (`docs/runs/2026-08-22-agents-mcp-wire-v3.md`). Plus: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
   `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19), and
   and five wire-v3 settlements on 2026-08-22 through one channel pair with deal-scoped
   disclosure, including `0x60eace8b…a7be` at 19 STRK to clear the u64 boundary F39/F40 named
