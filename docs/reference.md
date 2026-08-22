@@ -119,7 +119,7 @@ loses precision above 2^53, and 1 STRK is 1e18.
 | `counter_offer` | `(channel_handle, reply_to, amount, token, deadline, memo_hash)` | Does not withdraw the offer it replies to |
 | `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement |
 | `wait_for_offers` | `(channel_handle, expected_count, timeout_seconds=300)` | One tool call instead of a poll loop. A timeout is not an error |
-| `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Closes the channel |
+| `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Settles one deal; the channel pair can start another |
 | `grant_viewing_key` | `(channel_handle, deal_id, grantee, expires_at, output_path)` | Encrypts one deal to a registered recipient. Writes a new mode-`0600` file and returns no secret |
 | `reveal` | `(grant_path)` | Reconstructs the selected deal. The configured pool key must match the recipient |
 

@@ -103,14 +103,17 @@ Before naming or accepting a price, establish the shape of the deal:
      operator-configured cap, not a protocol failure. Do not retry at a smaller amount to
      route around it — a daily cumulative cap catches that. Stop and tell the operator.
    Every error carries `retryable: bool` — trust it over guessing from the code name.
-5. **Disclosure.** `grant_viewing_key(handle, grantee, export_path)` writes a bearer grant
-   to `export_path` on this machine, mode 0600, and never returns it — the tool result only
-   confirms the write. Whoever holds the file can reconstruct the whole relationship
+5. **Disclosure.** `grant_viewing_key(channel_handle, deal_id, grantee, expires_at,
+   output_path)` encrypts one wire-v3 deal to a registered recipient and writes the capsule
+   to `output_path` on this machine, mode 0600, refusing to overwrite an existing file — the
+   tool result only confirms the write, never the capsule itself. Whoever holds the file and
+   is the registered recipient can reconstruct that one deal, not the whole relationship
    (ARCHITECTURE.md §3, "disclosure is the intentional exception"). Deliver the file to the
    grantee through an out-of-band channel; this tool does not do that. Never paste the file's
    contents into a chat transcript, a log line, or any output the grantee didn't specifically
-   ask to receive. `reveal(viewing_key)` needs no prior local state; it works from the grant
-   alone, on any machine.
+   ask to receive. `reveal(grant_path)` opens the file itself; it needs no prior local state
+   and works from the grant alone, on any machine whose configured pool key matches the
+   recipient the capsule was encrypted to.
 6. **Evidence capture.** After a real (non-mock) settlement, record `tx_hash`, every
    `nullifier`, and — if the backend is Sepolia or mainnet — the Voyager link for that
    transaction on the matching network. Don't guess the URL format from memory; look up
