@@ -46,6 +46,19 @@ running the thing rather than by testing it, which suggests looking for the rest
 rather than by waiting for the third. A disclosure test at a realistic token amount would have
 caught this one without a network.
 
+**Fixed 2026-08-22.** `agreed_amount` and `paid_amount` now use `u128_boundary::decimal` and a
+new `optional_decimal`, so a reveal document encodes one quantity one way. The grep the entry
+asked for was run: five structs hold `u128` fields, and exactly two of them reached
+`serde_json` through their derive — the two logged here. `AllowanceReport` and `NoteBalance`
+were never wrong, but only because `erebus_cli.rs` reshapes both by hand before serializing.
+That is a latent version of the same trap: the invariant lives in a call site rather than in
+the type.
+
+Both deserialize sides accept the old numeric form, so archived records still read. Four Rust
+tests and two Python tests now pin the boundary; the telling detail is that changing the wire
+format of two fields broke **no** existing test, which is precisely the gap this entry
+described.
+
 ---
 
 ## F39: `approve` reports failure for an allowance it successfully granted (2026-08-22)
@@ -85,6 +98,14 @@ proof-carrying write would be a double spend of gas and allowance.
 **What would have made it easier.** Serialize `approved` as a decimal string, matching
 `allowance`, `amount`, and `deal_id`. More generally: no `u128` should reach `serde_json` as a
 number anywhere in this codebase, and that is a lint-able rule rather than a remembered one.
+
+**Fixed 2026-08-22.** `approved` now carries `#[serde(with = "u128_boundary::decimal")]`, the
+helper `OfferTerms::amount` already used. Verified on Sepolia: a 60 STRK approve returns
+`ok:true` with `"approved":"60000000000000000000"`,
+`0x6c6014b4…c043`. A second benefit was not obvious beforehand — the working response carries
+the transaction hash, so `wait-for-depth.sh` can gate on it. While the response was failing
+there was no hash to wait on, and the block-depth gate that runbook §2 calls mandatory could
+not be run at all.
 
 ---
 

@@ -23,8 +23,9 @@ are confidential and demonstrated to be so. The relationship is not.
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | four settlements: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
   `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19), and
-  `0x190c6b73…8d02` + `0x6bb25aa9…8372` (wire v3, two deals through one channel pair with
-  deal-scoped disclosure, 2026-08-22) |
+  `0x190c6b73…8d02` + `0x6bb25aa9…8372` + `0x60eace8b…a7be` (wire v3, three deals through one
+  channel pair with deal-scoped disclosure, the last at 19 STRK to clear the u64 boundary that
+  F39/F40 named, 2026-08-22) |
 | Version | `0.1.0` across every package |
 | Tests | 238 Rust (plus 2 intentionally ignored live-prover tests), 73 Python, 43 TypeScript |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |

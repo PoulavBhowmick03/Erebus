@@ -117,3 +117,76 @@ deal here settled".
   run.
 - Deal sizes were 0.75 and 0.5 STRK. F40 means a deal above about 18.4 STRK would fail at
   `reveal`, and this run stayed far below that line.
+
+---
+
+# Second round — the same day, after fixing F39 and F40
+
+The first round found two `u128`-to-JSON defects and logged them without fixing them. This
+round fixes both and re-runs on Sepolia, deliberately **above** the boundary that made them
+fail, because below it the fixed and unfixed code are indistinguishable.
+
+Same pair, `d` → `b`, and the same wire-v3 channel `ch_4c47b11b…a3eb8d`. No new pair was
+needed: repeat deals are the feature, so the fourth deal went into the existing channel.
+
+## F39, checked directly
+
+`approve` at 60 STRK — the exact call shape that returned
+`INTERNAL: response failed to serialize: number out of range` in round one:
+
+```json
+{"ok":true,"result":{"approved":"60000000000000000000",
+                     "tx_hash":"0x6c6014b489b398d41e2b69c489ff8b43b2a22184dcc498397435197779bc043"}}
+```
+
+An unplanned consequence worth recording: with the response working, it carries the
+transaction hash, so `scripts/wait-for-depth.sh` can gate on it. In round one the failed
+response swallowed the hash, and the block-depth wait that runbook §2 calls **not optional**
+could not be performed at all. The serialization bug had silently disabled a safety check two
+steps downstream of itself.
+
+## F40, checked where it actually bit
+
+`shield` 20 STRK to `d` (`0x7eec190dcdbef7fd1911c305bf8b49de027c290dcaff6923c4f1f0c4132c6e2`),
+then a deal at **19 STRK** — above the ~18.4 STRK `u64::MAX` ceiling.
+
+| what | transaction |
+|---|---|
+| settlement, deal D (19 STRK) | `0x60eace8bb6ee3027f0b659c22d765e1927f3578d3b0c8b9d7eb4c0ace8ea7be` |
+
+The reveal returned, and returned strings:
+
+```json
+"settlement": { "agreed_amount": "19000000000000000000",
+                "paid_amount":   "19000000000000000000" }
+```
+
+Before the fix this settlement would have landed on chain, irreversibly, and *then* failed to
+disclose. That is the whole reason the amount was chosen: a 0.75 STRK deal exercises the same
+code path and proves nothing about it.
+
+The document is now internally consistent — `terms.amount` and `settlement.agreed_amount`
+carry one quantity in one encoding, which was the specific complaint in F40.
+
+## State after both rounds
+
+One directional channel now holds **ten offers across four distinct deal IDs**, three of them
+settled:
+
+```
+7912199861348341208   proposed                    (abandoned in round one)
+14480521301412463257  countered settled settled   0.75 STRK
+16230669557393962923  countered settled settled   0.50 STRK
+2866947833165484364   countered settled settled   19.0 STRK
+```
+
+Balances: `d` `[1.0, 0.5, 0.25]`, `b` `[19.0, 1.0, 1.0, 0.9, 0.75, 0.5]`. Every settlement
+took change.
+
+## What this round still does not show
+
+Unchanged from round one, and none of it is addressed here: the MCP path is unverified at
+wire v3, the fifth-salt linkage measurement has not been re-run against v3 codec output, and
+`scripts/demo.sh` still cannot demonstrate repeat deals on its own because its uniqueness
+filters match on proposer and amount rather than on `deal_id`. This round routed around that
+filter for the fourth time, using a distinct amount.
