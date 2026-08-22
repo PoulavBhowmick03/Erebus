@@ -4,7 +4,8 @@ The canonical statement of what Erebus hides and what it does not. Everything el
 repository that describes privacy should point here rather than restate it, because a claim
 maintained in five places drifts in five directions.
 
-Scope: the wire-v2 path as implemented in `sdk/rs`, on Sepolia. Not a security review.
+Scope: live wire v2 on Sepolia plus the source-default framed wire-v3 integration path,
+which is verified offline but does not yet have a Sepolia receipt. Not a security review.
 
 ---
 
@@ -34,8 +35,8 @@ The seven steps are the ones in [runbook.md](./runbook.md) and the workflow walk
 | 0 · fund | nothing | depositor account, amount, token, timing — the whole ERC-20 leg |
 | 1 · open channel | the channel key | **the counterparty's address, in the clear** — plus the submitting account and timing |
 | 2–4 · offer, counter, final offer | amount, token, deadline, memo hash, message type, `replyTo` | submitting account, five salt values per message, note count, timing |
-| 5 · accept and settle | amount paid, recipient, change amount | submitting account, that a settlement occurred, note count (6 or 7) |
-| 6 · grant | everything — local only, no transaction | nothing |
+| 5 · accept and settle | amount paid, recipient, change amount | submitting account, that a settlement occurred, seven created notes on wire v3 |
+| 6 · legacy v2 grant | everything — local only, no transaction | nothing |
 | 7 · reveal | everything — local only, no transaction | nothing |
 
 Steps 6 and 7 produce no chain activity at all. Disclosure is a local read against data that
@@ -50,7 +51,7 @@ is already on chain, which is why a grant costs no gas and leaves no trace.
 | Wire-v2 offer content | The submitting Starknet account |
 | Settlement amount and recipient | Pool interaction timing and frequency |
 | Spent-note identity | Public shield and unshield amounts |
-| Channel content without a grant | The fixed fifth-salt shape in wire v2 |
+| Channel content without a grant | Wire v3 removes v2's fixed salt shape; transaction timing and shape remain public |
 | Relationships outside a scoped grant | Note count per settlement, and so one bit about payer holdings |
 | Change amount and change-note content | Proof-bearing transaction size |
 
@@ -84,7 +85,7 @@ preimages include the sender's private key. So an observer learns the edge, not 
 
 Tracked as friction F38.
 
-### 1. The fifth-salt fingerprint
+### 1. The historical wire-v2 fifth-salt fingerprint
 
 Wire v2 fills 536 of 595 payload bits: an 8-bit version marker, 400 bits of message, a
 128-bit authentication tag. The remaining 59 bits are zero-filled. So the fifth salt of every
@@ -96,8 +97,11 @@ the fifth salt identifies an Erebus message essentially every time.
 
 Verified in `sdk/rs/tests/wire_v2_fingerprint.rs`. Tracked as friction F31.
 
-**Fix**: fill the spare bits with random padding rather than zeros. The salt then sits inside
-the set of ordinary random salts and is distinguishable only by bit 119. Not done.
+**Wire-v3 status:** implemented and enabled for new source-built channels. It carries a
+64-bit deal ID and masks all three spare bits with a separately derived HKDF keystream. Rust and TypeScript
+agree on normative vectors, and the historical classifier scores 0.5000 against the
+codec-derived v3 fixture and 10,000 synthetic negatives. This proves a codec property, not
+a live-system property; no Sepolia wire-v3 receipt exists yet.
 
 ### 2. Submission linkability
 
@@ -185,32 +189,40 @@ identity ever does, and is not something you grant — it happens the moment you
 
 ## Trust boundaries in our own stack
 
-The account signing key stays in the Rust process; Python passes only a file path. Python
-does handle bearer viewing grants, so MCP transcripts sit inside the disclosure trust
-boundary.
+The account signing key stays in the Rust process; Python passes only a file path. The MCP
+grant tool writes a new mode-`0600` file and returns only its path. The encrypted capsule
+does not enter the model transcript.
 
-A viewing grant is a **bearer** secret. Possession is what permits reading; the `grantee`
+A legacy wire-v2 viewing grant is a **bearer** secret. Possession is what permits reading; the `grantee`
 field is metadata at the outer API and binds nothing. Its checksum detects edited or
 incompatible grant data but is not a signature and does not authenticate who issued it.
 
-A grant carries both directional channel keys for one pair on one token, and no pool private
+A legacy grant carries both directional channel keys for one pair on one token, and no pool private
 key. So it reads exactly one relationship and cannot spend: nullifiers need the owner's pool
 private key (`compute_nullifier`), which no grant contains.
+
+Wire v3 rejects this export. It derives one key per deal and direction, then adds only the
+exact opaque note IDs and amount masks needed to read that deal from STRK20 storage. The
+capsule contains no parent channel key. It is encrypted to the recipient's registered pool
+key and binds an explicit expiry. A copied capsule is not sufficient without that pool key.
 
 ---
 
 ## What a disclosed record proves, and what it only asserts
 
-**Proves.** That these messages were written to these channels, that an acceptance exists,
-and what the payment note actually carries. `agreed_amount` and `paid_amount` are kept as
-separate fields precisely so a reader can compare what the acceptance said against what was
-paid.
+**Proves.** That the listed on-chain note values authenticate and decrypt under the supplied
+deal capability, that an acceptance exists in that record, and what its listed payment note
+carries. `agreed_amount` and `paid_amount` stay separate so a reader can compare the
+acceptance with the payment.
 
-**Asserts.** Everything about business meaning. `memo_hash` commits to off-chain detail whose
-preimage and semantics live outside this wire. Atomicity is narrower than semantic proof: the
-acceptance and payment share one action set, and the amount-equality check is Rust-side
-validation, not a statement that the STRK20 circuit understands the negotiation. There is no
-separate ZK receipt proving the business meaning to an external verifier.
+**Asserts.** The named participant addresses and issuer. The v3 capsule is encrypted and
+authenticated, but it is not signed by the grantor. The recipient cannot derive the parent
+channel key to verify its address preimage. It also asserts all business meaning.
+`memo_hash` commits to off-chain detail whose preimage and semantics live outside this wire.
+Atomicity is narrower than semantic proof: the acceptance and payment share one action set,
+and the amount-equality check is Rust-side validation, not a statement that the STRK20
+circuit understands the negotiation. There is no separate ZK receipt proving the business
+meaning to an external verifier.
 
 ---
 

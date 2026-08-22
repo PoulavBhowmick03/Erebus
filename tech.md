@@ -1,8 +1,9 @@
 # Erebus Rust SDK and MCP server: source-grounded technical explanation
 
-> **Stale as of 2026-08-07.** This describes the tree at 2026-08-05, before change-note
-> settlement and before the live wire-v2 run. Settlement semantics in §"Payments" are
-> out of date. Read it for orientation and check every current behaviour against source.
+> **Historical snapshot.** This describes the tree at 2026-08-05, before change-note
+> settlement, the live wire-v2 run, and the wire-v3 migration. Its wire, CLI, settlement,
+> repeat-deal, and disclosure statements are out of date. Read it for orientation and check
+> every current behaviour against source.
 > [ARCHITECTURE.md](./ARCHITECTURE.md) is the maintained document.
 
 A citation such as

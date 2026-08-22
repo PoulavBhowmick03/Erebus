@@ -9,22 +9,25 @@ flow in the browser and links to the available on-chain evidence. The browser ru
 simulation and does not ask for a wallet.
 
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
-exchange structured offers over it, and settle atomically through the shielded pool. Either
-side can hand a third party a viewing key afterwards and let them reconstruct that one
-relationship.
+exchange structured offers over it, and settle atomically through the shielded pool.
+Historical wire-v2 channels can export a whole-channel viewing key. Wire v3 disables that
+export until a per-deal grant exists.
 
 ---
 
 ## Status
 
-**Testnet, unaudited, experimental.** The full loop — two agents negotiating, settling
-atomically, and disclosing to a third party — runs on Starknet Sepolia. It has had no
+**Testnet, unaudited, experimental.** The historical wire-v2 loop — two agents negotiating,
+settling atomically, and disclosing to a third party — runs on Starknet Sepolia. Wire v3 is
+verified offline but has no live Sepolia receipt or safe disclosure grant. It has had no
 external security review. Do not put real value through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
 are confidential, and that is demonstrated rather than asserted: an observer with no key
-recovers nothing from a wire-v2 settlement. That a channel was opened, and with whom, is
-still public. [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
+recovers nothing from a wire-v2 settlement. New source-built channels default to wire v3,
+which removes v2's fixed salt-shape classifier; this is verified offline but does not yet
+have a live Sepolia receipt. That a channel was opened, and with whom, is still public.
+[privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
 source to quote for privacy claims.
 
 `v0.1.0` is released and installable — see [Install](#install).
@@ -53,9 +56,9 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Message privacy: live. Relationship privacy: partial** | Wire v2 encrypts the negotiation payload under AES-256-GCM-SIV, so an observer with no key recovers no terms. Two things still leak: opening a channel writes the counterparty's address to public calldata ([F38](./docs/friction.md)), and the fifth salt has a fixed shape that fingerprints Erebus traffic, so an observer can count and time deals without reading them ([F31](./docs/friction.md)). See [privacy-model.md](./docs/privacy-model.md) for the full boundary. |
+| **Message privacy: live. Relationship privacy: partial** | Wire v3 encrypts authenticated deal records under AES-256-GCM-SIV. Its committed codec output removes wire v2's fixed fifth-salt classifier. Opening a channel still writes the counterparty address to public calldata ([F38](./docs/friction.md)), and no live wire-v3 receipt exists yet. See [privacy-model.md](./docs/privacy-model.md). |
 | **Atomic negotiate to settle** | The accepted offer and the shielded payment are one proven state transition. There is no "agreed but never paid" gap and no separate payment hop. |
-| **Selective disclosure** | Either party, or a designated auditor, can later reveal the full record (terms and payment) to a specific counterparty, without exposing anything to the public or leaking data about unrelated users. |
+| **Selective disclosure** | Wire v3 encrypts one deal's directional subkeys and exact note capabilities to a registered recipient, with an explicit expiry. It exports no parent channel key and grants no spending authority. Historical wire-v1/v2 grants remain broader bearer secrets. |
 | **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end: STRK20 ships no paymaster of its own, so this rides on a third party. |
 
 ## Why Starknet, why STRK20
@@ -73,8 +76,8 @@ It provides four things existing rails do not:
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for full diagrams, the interface contract, and the data model.
 
-![Erebus system overview, the stack from agent to pool, the three layers, one deal end to
-end, how an offer becomes five notes, the note grid, who sees what, and what the system does
+![Erebus system overview, the stack from agent to pool, the three layers, a deal end to
+end, how an offer becomes five notes, the note frames, who sees what, and what the system does
 and does not claim](./docs/assets/erebus-overview.excalidraw.svg)
 
 *One-page map of the whole system. Open the image full size to read the panels, or
@@ -212,10 +215,13 @@ async with stdio_client(params) as (read, write):
             "accept_and_settle",
             {"channel_handle": handle, "offer_id": offer["offer_id"]})
 
-        # 6. Let a third party reconstruct the record. The returned viewing_key
-        #    is a bearer secret — deliver it out of band, never log it.
-        await payer.call_tool("grant_viewing_key",
-                              {"channel_handle": handle, "grantee": auditor_address})
+        # Optional operator step: export this deal to a registered auditor. The MCP tool
+        # writes the encrypted capsule to a new mode-0600 file and returns only its path.
+        await payer.call_tool(
+            "grant_viewing_key",
+            {"channel_handle": handle, "deal_id": offer["deal_id"],
+             "grantee": auditor_address, "expires_at": grant_expiry,
+             "output_path": "/secure/path/deal.grant.json"})
 ```
 
 A runnable two-sided version is in

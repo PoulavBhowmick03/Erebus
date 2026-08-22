@@ -3,8 +3,9 @@
 Who can observe Erebus, what each one sees, what we claim against that, and how the claim
 gets measured rather than asserted.
 
-Scope: the wire-v2 path in `sdk/rs` on Sepolia, as of 2026-08-21. This is a threat model, not
-a security review. [privacy-model.md](./privacy-model.md) stays canonical for what leaks;
+Scope: the live wire-v2 path on Sepolia and the source-default wire-v3 path verified offline,
+as of 2026-08-21. This is a threat model, not a security review.
+[privacy-model.md](./privacy-model.md) stays canonical for what leaks;
 this document adds the observers, the anonymity sets, and the metric.
 
 **Why this exists before the wire changes.** Phase 8 reframes the wire — framed entries, deal
@@ -23,11 +24,11 @@ to anyone auditing chain data.
 
 | Observer | What they get | What they cannot get |
 |---|---|---|
-| **Chain reader** | Both addresses at channel-open, in the clear (F38). The submitting account on every write. Note count per action set — six or seven at settlement. Timing and frequency. The fifth-salt shape, which classifies the transaction as Erebus (F31). | Message content, amounts, token, deadline, memo hash, reply structure, which notes were spent. |
+| **Chain reader** | Both addresses at channel-open, in the clear (F38). The submitting account on every write. Seven created notes per wire-v3 settlement. Timing and frequency. Historical wire-v2 records retain the fifth-salt shape (F31). | Message content, amounts, token, deadline, memo hash, reply structure, which notes were spent. |
 | **Prover** | The pool private key, at calldata element 1 of `compile_actions` (`calldata.rs:32`). From it, that identity's entire channel structure and note amounts, past and future. | The account signing key. It cannot forge a different action set: the invoke is signed over exactly this calldata. |
 | **Write RPC** | Identical to the prover. The `starknet_call(compile_actions)` preflight sends the same calldata (`execution.rs:156`, `rpc.rs:66`). | Same as the prover. Also sees the operator's IP and request timing. |
 | **Counterparty** | Everything in the shared channel: every offer, every counter, the settlement, both directional keys. | The other side's other channels, other counterparties, note holdings outside this relationship, pool private key. |
-| **Grant holder** | One relationship on one token, in full, permanently. Both directional channel keys. | The ability to spend — `compute_nullifier` needs the owner's pool private key, which no grant carries. Any other relationship. |
+| **Legacy v2 grant holder** | One relationship on one token, in full, permanently. Both directional channel keys. Wire v3 rejects this grant export. | The ability to spend — `compute_nullifier` needs the owner's pool private key, which no grant carries. Any other relationship. |
 | **Pool auditor** | The pool private key of every registered identity, encrypted to a single pool-wide key at registration (`utils.cairo:220`, `privacy.cairo:329-334`). Set once, no rotation, granted automatically at registration rather than by choice. | Nothing, within this pool. This is the widest standing view in the system and it is not ours. |
 | **Screener** | That a deposit was requested, by whom, for how much. Deposits only; note-to-note transfers are unaffected. | Channel contents. |
 | **Paymaster / relayer** *(if adopted)* | The request, its timing, and the operator's IP. | The pool key. It is not in the submitted transaction, only in the preflight and proving calldata. |
@@ -160,7 +161,7 @@ and unrelated STRK20 pool traffic.
 | # | Question | Metric | Baseline now | Target |
 |---|---|---|---|---|
 | M1 | Can an observer tell an Erebus transaction from other pool traffic? | Precision, recall, balanced accuracy | **1.0000, measured 2026-08-21** (`scripts/linkage.py`, 2 fixtures against 10,000 synthetic negatives, zero false positives) | 0.5, indistinguishable from random salts except bit 119 |
-| M2 | Can an observer read the exact-vs-change bit from a settlement? | Accuracy on a binary guess | **1.0000, measured 2026-08-21** — six notes versus seven | 0.5 |
+| M2 | Can an observer read the exact-vs-change bit from a settlement? | Accuracy on a binary guess | **0.5008, measured offline 2026-08-22** — wire v3 always creates seven notes | 0.5 |
 | M3 | Given a corpus, how accurately can an observer count deals per account? | Error in deals-per-account over a window | Exact, given M1. Not separately measured | Bounded by M1; no separate mechanism |
 | M4 | After relaying, can an observer link a submission to the pool identity acting? | Precision of submitter→identity linkage | 1.0 by construction — the same account signs every write. Not measured; there is no relayer to measure against | ≈0, since nothing in the contract binds submitter to identity outside `collect_fee` |
 

@@ -111,7 +111,7 @@ sequenceDiagram
     Note over POOL: atomic: acceptance + shielded transfer<br/>in one state transition
     POOL-->>SDK: settlement receipt
 
-    K->>SDK: reveal(viewing_key, handle)
+    K->>SDK: reveal(recipient-bound grant)
     SDK->>POOL: reconstruct scoped history
     POOL-->>K: full record: terms + payment<br/>no leakage about other users
 ```
@@ -246,11 +246,13 @@ loses the pool identity.
 
 #### Disclosure is the intentional exception
 
-Ordinary methods never return a channel key. `grantViewingKey`, however, exists specifically
-to release both directional channel keys. It returns a self-contained, checksummed bearer
-grant for out-of-band delivery. `grantee` is metadata in MVP v1, not encryption or access
-control: whoever holds the serialized grant can read that relationship. `reveal` therefore
-consumes the grant on any machine and requires no grantor state directory or private key.
+Ordinary methods never return read capability. For wire v3, `grantViewingKey` derives one
+native subkey for each direction of one deal. It adds only the exact opaque STRK20 note
+locations and amount masks needed for that deal. It encrypts this capability capsule to the
+grantee's registered pool key and authenticates the deal, recipient, chain, pool, token, and
+expiry. It never exports a parent channel key. `reveal` needs the recipient's pool key and no
+grantor state directory. Historical wire-v1 and wire-v2 grants remain bearer secrets that
+contain both directional channel keys.
 
 ---
 
@@ -291,8 +293,13 @@ interface ErebusClient {
   // offer author, atomically. A payee confirms agreement by authoring the final offer.
   acceptAndSettle(handle: ChannelHandle, offerId: OfferId): Promise<SettlementReceipt>;
 
-  // Export a self-contained bearer viewing grant for a third party (the Kleidouchos).
-  grantViewingKey(handle: ChannelHandle, grantee: PublicKey): Promise<ViewingKeyGrant>;
+  // Encrypt one deal capability to a registered recipient until an explicit Unix time.
+  grantViewingKey(
+    handle: ChannelHandle,
+    dealId: string,
+    grantee: AgentId,
+    expiresAt: number
+  ): Promise<ViewingKeyGrant>;
 
   // Reconstruct from chain data. No grantor-local handle state is needed.
   reveal(viewingKey: ViewingKeyGrant): Promise<DisclosedRecord>;
@@ -317,6 +324,7 @@ type OfferStatus =
 
 interface Offer {
   offerId: OfferId;
+  dealId: bigint;            // u64; JSON boundaries carry decimal strings
   channelId: ChannelHandle;
   proposer: AgentId;
   replyTo?: OfferId;
@@ -336,8 +344,10 @@ interface SettlementReceipt {
 
 interface ViewingKeyGrant {
   channelId: ChannelHandle;
-  grantee: PublicKey;        // metadata in MVP v1; the grant remains a bearer secret
-  viewingKey: ViewingKey;    // versioned and checksummed
+  grantee: AgentId;          // recipient account whose registered pool key encrypts v3
+  dealId?: string;           // present on v3; absent on historical grants
+  expiresAt?: number;        // present on v3; absent on historical grants
+  viewingKey: ViewingKey;    // Rust-owned encrypted capsule or historical grant
 }
 
 interface DisclosedRecord {
@@ -380,7 +390,7 @@ type SettlementErrorCode =
   | "IDENTITY_UNAVAILABLE";  // the key file could not be read
 ```
 
-Wire v2 has no serialized nonce field. HKDF derives the AES-GCM-SIV nonce from the chain,
+Wire v3 has no serialized nonce field. HKDF derives the AES-GCM-SIV nonce from the chain,
 pool, directional channel key, token and message index. AES-GCM-SIV was chosen because an attempt
 may fail before WriteOnce applies and then be rebuilt with different terms at the same index;
 ordinary nonce-fragile AEAD would fail catastrophically in that retry case.
@@ -389,9 +399,9 @@ There is also no observable `accepted`-but-not-`settled` state. Acceptance and p
 one `ActionSet`, one proof, and one `apply_actions` transition, so the public state moves
 directly to `settled`.
 
-The Rust protocol-2 CLI implements this corrected disclosure shape. The Python/TypeScript
-mirrors remain on protocol 1 until the shared integration pass; they were intentionally not
-edited as part of the Rust-only completion.
+The Rust CLI and Python seam use protocol 3. TypeScript independently implements the wire-v3
+codec and known-answer vectors. Wire v3 rejects the legacy whole-channel viewing grant and
+uses recipient-bound per-deal capabilities instead.
 
 **`memoHash` is 128-bit, not a `felt252`.** It was declared as a felt and the wire has only
 ever carried 128 bits (`sdk/rs/src/wire.rs:156`). That gap is friction **F19**: pass a

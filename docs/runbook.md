@@ -20,7 +20,7 @@ First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on bloc
 
 ---
 
-## Local wire-v2 verification (no network, no keys)
+## Local wire-v3 verification (no network, no keys)
 
 Run the focused codec and end-to-end Rust paths first:
 
@@ -39,10 +39,10 @@ cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 ```
 
-Expected as of 2026-07-31: 190 passed and two intentionally ignored live-prover probes.
-The focused codec suite has 17 tests: the pinned five-salt known answer, round trips,
-single-bit tamper rejection, chain/pool/channel/token/index binding, canonical padding,
-same-index retry safety, and wire-v1 compatibility.
+Expected as of 2026-08-22: 238 passed and two intentionally ignored live-prover probes.
+The focused codec suite has 21 tests, including the independent TypeScript wire-v3 known
+answer, native deal-key isolation, round trips, tamper rejection, context binding,
+same-index retry safety, and historical reads.
 
 ---
 
@@ -190,9 +190,10 @@ curl -s -X POST $RPC -H 'content-type: application/json' \
 
 ## 3. The demonstration
 
-Use a fresh A/B pair and fresh state directories. A settled pair is terminal because the
-pool permits only one directional channel per sender/recipient pair. The script captures
-every handle and offer id, keeps the bearer grant in a mode-`0600` temporary file, and runs
+Use a pair that has not already opened directional pool channels, and use fresh local state
+for the first run. The pool permits one directional channel per sender/recipient pair, but
+wire v3 can carry later deal IDs in that same pair. The script captures every handle and
+offer id, keeps the recipient-bound deal grant in a mode-`0600` temporary file, and runs
 offer → counter → atomic settlement → reveal:
 
 ```bash
@@ -200,9 +201,10 @@ cd ~/Developer/erebus
 ./scripts/demo.sh 1000000000000000000
 ```
 
-The amount must exactly match A's unspent private notes; the command above matches the
-runbook's 1 STRK shield. It spends that private note and several STRK of Sepolia gas. Do not
-rerun it against the already-settled wire-v1 identities from the reference run.
+The amount must be positive and no larger than A's spendable private total. Settlement can
+select larger notes and return the excess as payer-owned change. The run spends Sepolia gas.
+Do not reuse a pair whose existing directional channels were opened under another wire
+version.
 
 The commands below show the first offer/read portion manually for debugging:
 
@@ -228,11 +230,11 @@ python3 "$REQ" "$REPO/.env" read_channel_state "{\"handle\":\"$H\"}" | "$CLI" | 
 `memo_hash` and `token` match exactly what was sent. Its final reveal contains three records
 (offer, counter, acceptance), and `agreed_amount == paid_amount` for the atomic settlement.
 
-**What wire v2 claims.** The five salts remain public inside `packed_value`, but they now
-contain authenticated ciphertext rather than plaintext terms. Round-trip success proves the
-storage/read path and v2 authentication agree. It does not hide the five-note traffic shape,
-prove relationship anonymity, replace independent cryptographic review, or constitute live
-v2 evidence until this exact run succeeds with fresh v2 state.
+**What wire v3 claims.** The five salts remain public inside `packed_value`, but they contain
+authenticated ciphertext under a native deal key. The three spare bits are derived instead
+of fixed. Round-trip success proves the storage/read path and v3 authentication agree. It
+does not hide the five-note traffic shape, prove relationship anonymity, or replace
+independent cryptographic review.
 
 **What failure looks like, and why it is worth naming.** A wrong derivation does not raise.
 `open_channel` still succeeds, `propose_offer` still succeeds, and `read_channel_state`

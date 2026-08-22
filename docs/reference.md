@@ -120,14 +120,14 @@ loses precision above 2^53, and 1 STRK is 1e18.
 | `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement |
 | `wait_for_offers` | `(channel_handle, expected_count, timeout_seconds=300)` | One tool call instead of a poll loop. A timeout is not an error |
 | `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Closes the channel |
-| `grant_viewing_key` | `(channel_handle, grantee)` | Returns a bearer secret. Deliver out of band |
-| `reveal` | `(channel_id, grantee, viewing_key)` | Reconstructs from chain data. Needs no local state |
+| `grant_viewing_key` | `(channel_handle, deal_id, grantee, expires_at, output_path)` | Encrypts one deal to a registered recipient. Writes a new mode-`0600` file and returns no secret |
+| `reveal` | `(grant_path)` | Reconstructs the selected deal. The configured pool key must match the recipient |
 
 Every result is an envelope: `{"ok": true, "result": {...}}` or
 `{"ok": false, "error": {"code", "message", "retryable"}}`.
 
-**Two protocol rules that surprise people.** One channel per pair of addresses, and one deal
-per channel — a settled channel is terminal. And an offer has no `withdrawn` state; it is
+**Two protocol rules that surprise people.** One channel pair can carry multiple deal IDs,
+and settling one deal does not close the pair. An offer has no `withdrawn` state; it is
 accepted or it expires, so a short deadline is the only way to bound how long a stale price
 stays acceptable.
 
