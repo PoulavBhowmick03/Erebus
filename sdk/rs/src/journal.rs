@@ -422,18 +422,27 @@ impl OperationLease {
 
     /// Starts a fresh attempt, retaining every earlier one.
     ///
-    /// Used by the expired-proof recovery path. The earlier attempt keeps its transaction
-    /// hash, which is the only thing that can later prove it never landed.
+    /// Only recovery calls this, and only after establishing that no earlier attempt can
+    /// still produce an effect. A new attempt is a licence to build a *different*
+    /// transaction, which is why it is refused outright once an effect exists: a rebuilt
+    /// transaction has its own hash and nothing would stop it landing beside the first.
+    ///
+    /// [`OperationStage::Reverted`] is not a bar. A reverted transaction consumed its nonce
+    /// and produced nothing, so trying again is exactly right.
+    ///
+    /// The new attempt starts at [`OperationStage::Claimed`], so the re-issued request walks
+    /// the same stages as a first attempt and gets the same checks. Earlier attempts keep
+    /// their transaction hashes, which is what can still prove they never landed.
     pub fn restart(&mut self, now: u64) -> Result<(), JournalError> {
-        if self.record.stage().is_terminal() {
+        if self.record.stage() == OperationStage::Committed {
             return Err(JournalError::IllegalTransition {
-                from: self.record.stage(),
-                to: OperationStage::Prepared,
+                from: OperationStage::Committed,
+                to: OperationStage::Claimed,
             });
         }
         self.record
             .attempts
-            .push(Attempt::new(OperationStage::Prepared, now));
+            .push(Attempt::new(OperationStage::Claimed, now));
         self.flush()
     }
 

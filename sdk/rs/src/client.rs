@@ -34,6 +34,7 @@ use crate::operation::{BindingBuilder, OperationId, RequestBinding, WriteOperati
 use crate::prover::{BlockId, ProverError, ProvingService};
 use crate::read::{reconstruct, ChannelReader, ReadError};
 use crate::reconcile::{self, Finding};
+use crate::resume::{self, ResumeOutcome, ResumePlan};
 use crate::rpc::{RpcError, StarknetRpc};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
 use crate::subchannel::SubchannelCursor;
@@ -127,9 +128,110 @@ impl Client {
         bind: impl FnOnce(BindingBuilder) -> RequestBinding,
     ) -> Result<OperationLease, ClientError> {
         let binding = bind(self.binding(operation));
-        Ok(self
+        let lease = self
             .journal
-            .claim(operation_id, operation, binding, channel, now()?)?)
+            .claim(operation_id, operation, binding, channel, now()?)?;
+
+        // Reusing an id whose record already got past `Claimed` means an earlier attempt may
+        // have reached the chain. Starting a second attempt here would build a different
+        // transaction with a different hash, which could land beside the first. Only
+        // `resume_operation` may authorise that, and only after proving the first is dead.
+        let stage = lease.record().stage();
+        if stage != OperationStage::Claimed {
+            return Err(ClientError::OperationInProgress {
+                operation_id: operation_id.clone(),
+                stage,
+            });
+        }
+        Ok(lease)
+    }
+
+    /// Acts on one operation's classification, if and only if it is safe to.
+    ///
+    /// This is the only thing in the SDK that may resubmit, and it never decides on its own
+    /// to do so: it reconciles first, and submits only the exact bytes already recorded, so
+    /// the hash cannot change and a duplicate cannot become a second effect.
+    ///
+    /// It never rebuilds. A rebuilt transaction has a different hash and could land beside
+    /// the original, so when rebuilding is the only way forward this reports
+    /// [`ResumeOutcome::RebuildRequired`] and stops. Re-issuing the request is the caller's
+    /// to do, under the same operation id, from the intent it persisted.
+    pub async fn resume_operation(
+        &self,
+        operation_id: &OperationId,
+    ) -> Result<ResumeOutcome, ClientError> {
+        let Some(mut lease) = self.journal.lock(operation_id)? else {
+            return Err(ClientError::InvalidRequest(format!(
+                "no operation is recorded under {operation_id}"
+            )));
+        };
+
+        let findings = reconcile::reconcile(
+            self.executor.rpc(),
+            self.config.account_address,
+            std::slice::from_ref(lease.record()),
+        )
+        .await?;
+        let finding = findings
+            .first()
+            .ok_or_else(|| ClientError::Protocol("reconciliation returned nothing".to_owned()))?;
+
+        let head = self.executor.rpc().block_number().await?;
+        let plan = resume::plan(
+            &lease,
+            finding.outcome,
+            finding.next_action,
+            &finding.reason,
+            head,
+        );
+
+        let (attempt_index, transaction_hash) = match plan {
+            // A rebuild is the one outcome that licenses a second transaction, so this is
+            // where the fresh attempt is opened. After it, the same request under the same
+            // id is accepted again; before it, `begin_operation` refuses.
+            ResumePlan::Report(outcome @ ResumeOutcome::RebuildRequired { .. }) => {
+                lease.restart(now()?)?;
+                return Ok(outcome);
+            }
+            ResumePlan::Report(outcome) => return Ok(outcome),
+            ResumePlan::Resubmit {
+                attempt_index,
+                transaction_hash,
+            } => (attempt_index, transaction_hash),
+        };
+
+        let stored = lease
+            .stored_transaction(attempt_index)?
+            .ok_or_else(|| ClientError::Protocol("stored transaction vanished".to_owned()))?;
+        let wire = resume::stored_wire_transaction(&stored).map_err(|error| {
+            ClientError::Protocol(format!("stored transaction is not wire JSON: {error}"))
+        })?;
+
+        let returned = self
+            .executor
+            .rpc()
+            .resubmit_invoke_transaction(&wire)
+            .await?;
+        if returned != transaction_hash {
+            // Resubmission is only safe because the hash is unchanged. A different hash means
+            // a different transaction is now in flight beside the recorded one.
+            lease.advance(OperationStage::NeedsAttention, now()?)?;
+            return Err(ClientError::Execution(
+                ExecutionError::TransactionHashMismatch {
+                    signed: transaction_hash,
+                    returned,
+                },
+            ));
+        }
+
+        // Only advance a record that had not reached Submitted; one that was already there
+        // stays there, because resubmitting did not change what is true about it.
+        if lease.record().stage() == OperationStage::Signed {
+            lease.advance(OperationStage::Submitted, now()?)?;
+        }
+        Ok(ResumeOutcome::Resubmitted {
+            transaction_hash: returned,
+        })
     }
 
     /// Reads the live pool and funding state that a proof-bearing write depends on.
@@ -2544,6 +2646,17 @@ pub enum ClientError {
         balance: u128,
         /// Gas held back; an estimate, see `DEFAULT_GAS_RESERVE`.
         gas_reserve: u128,
+    },
+    /// An operation id was reused while an earlier attempt is unresolved.
+    #[error(
+        "operation {operation_id} already has an attempt at {stage:?}; \
+         resume it explicitly before re-issuing the request"
+    )]
+    OperationInProgress {
+        /// The reused id.
+        operation_id: OperationId,
+        /// Stage the earlier attempt reached.
+        stage: OperationStage,
     },
     /// An operation id was reused for a request that asks for a different effect.
     ///

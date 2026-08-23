@@ -138,6 +138,32 @@ impl StarknetRpc {
         )
     }
 
+    /// Resubmits a transaction exactly as it was recorded.
+    ///
+    /// The parameter is the stored wire JSON, forwarded without being parsed into our own
+    /// types and re-serialized. Round-tripping it could change a field encoding, which would
+    /// change the hash, and the only reason resubmission is safe is that the hash does not
+    /// change: a duplicate of a transaction the chain already has is a no-op, whereas a
+    /// transaction that differs by one byte is a second transaction that can land alongside
+    /// the first.
+    pub async fn resubmit_invoke_transaction(
+        &self,
+        wire_transaction: &Value,
+    ) -> Result<Felt, RpcError> {
+        let value = self
+            .call(
+                "starknet_addInvokeTransaction",
+                json!({ "invoke_transaction": wire_transaction }),
+            )
+            .await?;
+        parse_felt(
+            "transaction_hash",
+            value.get("transaction_hash").ok_or_else(|| {
+                RpcError::Malformed(format!("submission omitted transaction_hash: {value}"))
+            })?,
+        )
+    }
+
     /// Reads a transaction receipt.
     pub async fn transaction_receipt(&self, transaction_hash: Felt) -> Result<Receipt, RpcError> {
         let value = self

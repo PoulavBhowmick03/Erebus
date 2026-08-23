@@ -37,6 +37,7 @@ pub mod operation;
 pub mod prover;
 pub mod read;
 pub mod reconcile;
+pub mod resume;
 pub mod rpc;
 pub mod signing;
 pub mod state;

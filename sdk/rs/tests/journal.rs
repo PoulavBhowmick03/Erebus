@@ -205,7 +205,11 @@ fn a_restart_keeps_the_earlier_attempts_transaction_hash() {
 
     let record = lease.record();
     assert_eq!(record.attempts.len(), 2);
-    assert_eq!(record.stage(), OperationStage::Prepared);
+    assert_eq!(
+        record.stage(),
+        OperationStage::Claimed,
+        "a new attempt starts from scratch so it walks the same checks as a first one"
+    );
     assert_eq!(
         record.attempts[0].transaction_hash,
         Some(Felt::from_hex_unchecked("0xdeadbeef")),
@@ -387,6 +391,9 @@ fn each_attempt_keeps_its_own_signed_transaction() {
 
     lease.restart(2_000).expect("expired proof restarts");
     lease
+        .advance(OperationStage::Prepared, 2_001)
+        .expect("prepared");
+    lease
         .advance(OperationStage::Proven, 2_001)
         .expect("proven");
     lease
@@ -425,4 +432,52 @@ fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
         .expect("an approve has nothing to prove");
 
     assert_eq!(lease.record().stage(), OperationStage::Signed);
+}
+
+#[test]
+fn a_committed_operation_cannot_be_restarted() {
+    let (_root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(16), WriteOperation::Shield, binding(500), None, 1_000)
+        .expect("claim");
+    for stage in [
+        OperationStage::Prepared,
+        OperationStage::Proven,
+        OperationStage::Signed,
+        OperationStage::Submitted,
+        OperationStage::Accepted,
+        OperationStage::Committed,
+    ] {
+        lease.advance(stage, 1_001).expect("advance");
+    }
+
+    assert!(
+        matches!(
+            lease.restart(2_000),
+            Err(JournalError::IllegalTransition { .. })
+        ),
+        "the effect exists; a rebuilt transaction could land beside it"
+    );
+}
+
+#[test]
+fn a_reverted_operation_can_be_restarted() {
+    let (_root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(17), WriteOperation::Shield, binding(500), None, 1_000)
+        .expect("claim");
+    for stage in [
+        OperationStage::Prepared,
+        OperationStage::Proven,
+        OperationStage::Signed,
+        OperationStage::Submitted,
+        OperationStage::Reverted,
+    ] {
+        lease.advance(stage, 1_001).expect("advance");
+    }
+
+    lease
+        .restart(2_000)
+        .expect("a revert consumed the nonce and produced nothing, so trying again is right");
+    assert_eq!(lease.record().stage(), OperationStage::Claimed);
 }

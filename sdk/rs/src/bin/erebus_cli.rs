@@ -503,6 +503,7 @@ fn client_error_response(error: &ClientError) -> Response {
             ("SUBMIT_FAILED", true)
         }
         ClientError::OperationConflict { .. } => ("OPERATION_CONFLICT", false),
+        ClientError::OperationInProgress { .. } => ("RECONCILIATION_REQUIRED", false),
         // Not retryable by the caller: a journal that cannot be read cannot rule out a
         // pending transaction, so a blind retry is exactly the wrong move.
         ClientError::Journal(_) => ("RECONCILIATION_REQUIRED", false),
