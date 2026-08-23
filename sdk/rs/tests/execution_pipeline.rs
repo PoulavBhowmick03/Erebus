@@ -166,7 +166,13 @@ async fn one_path_preflights_proves_submits_and_waits() {
     .felt(Felt::from(7u8))
     .finish();
     let mut operation = journal
-        .claim(&operation_id, WriteOperation::OpenChannel, binding, 1_000)
+        .claim(
+            &operation_id,
+            WriteOperation::OpenChannel,
+            binding,
+            None,
+            1_000,
+        )
         .expect("claim");
 
     let receipt = executor

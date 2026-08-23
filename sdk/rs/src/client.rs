@@ -33,6 +33,7 @@ use crate::negotiation::{
 use crate::operation::{BindingBuilder, OperationId, RequestBinding, WriteOperation};
 use crate::prover::{BlockId, ProverError, ProvingService};
 use crate::read::{reconstruct, ChannelReader, ReadError};
+use crate::reconcile::{self, Finding};
 use crate::rpc::{RpcError, StarknetRpc};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
 use crate::subchannel::SubchannelCursor;
@@ -122,12 +123,31 @@ impl Client {
         &self,
         operation_id: &OperationId,
         operation: WriteOperation,
+        channel: Option<ChannelHandle>,
         bind: impl FnOnce(BindingBuilder) -> RequestBinding,
     ) -> Result<OperationLease, ClientError> {
         let binding = bind(self.binding(operation));
         Ok(self
             .journal
-            .claim(operation_id, operation, binding, now()?)?)
+            .claim(operation_id, operation, binding, channel, now()?)?)
+    }
+
+    /// Classifies every journalled operation against the chain, without changing anything.
+    ///
+    /// Run this at startup, before any write. It reads receipts and the account nonce and
+    /// reports what each operation did; it submits nothing, resubmits nothing, and does not
+    /// touch the journal. Acting on a finding is [`ErebusClient::resume_operation`]'s job
+    /// and stays explicit.
+    ///
+    /// An unreadable journal fails the whole call rather than returning a short list. A
+    /// partial reconciliation that silently omitted the record it could not parse would
+    /// report "nothing outstanding" for the one operation that needed a person.
+    pub async fn reconcile(&self) -> Result<Vec<Finding>, ClientError> {
+        let records = self.journal.records()?;
+        Ok(
+            reconcile::reconcile(self.executor.rpc(), self.config.account_address, &records)
+                .await?,
+        )
     }
 
     /// Funds the identity with one exact-value private note.
@@ -142,7 +162,7 @@ impl Client {
         amount: u128,
     ) -> Result<SettlementReceipt, ClientError> {
         let mut operation =
-            self.begin_operation(operation_id, WriteOperation::Shield, |binding| {
+            self.begin_operation(operation_id, WriteOperation::Shield, None, |binding| {
                 binding.u128_be(amount).finish()
             })?;
         if amount == 0 {
@@ -472,7 +492,7 @@ impl Client {
         amount: u128,
     ) -> Result<ApprovalReceipt, ClientError> {
         let mut operation =
-            self.begin_operation(operation_id, WriteOperation::ApprovePool, |binding| {
+            self.begin_operation(operation_id, WriteOperation::ApprovePool, None, |binding| {
                 binding.u128_be(amount).finish()
             })?;
         let account_key = read_key(&self.config.account_key_file, "account key")?;
@@ -954,7 +974,7 @@ impl ErebusClient for Client {
         counterparty_address: Felt,
     ) -> Result<ChannelHandle, ClientError> {
         let mut operation =
-            self.begin_operation(operation_id, WriteOperation::OpenChannel, |binding| {
+            self.begin_operation(operation_id, WriteOperation::OpenChannel, None, |binding| {
                 binding.felt(counterparty_address).finish()
             })?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
@@ -1040,10 +1060,12 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::ProposeOffer, |binding| {
-                bind_terms(binding.text(handle.as_str()), &terms)
-            })?;
+        let mut operation = self.begin_operation(
+            operation_id,
+            WriteOperation::ProposeOffer,
+            Some(handle.clone()),
+            |binding| bind_terms(binding.text(handle.as_str()), &terms),
+        )?;
         validate_terms(&terms)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
@@ -1114,13 +1136,17 @@ impl ErebusClient for Client {
         reply_to: OfferId,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::CounterOffer, |binding| {
+        let mut operation = self.begin_operation(
+            operation_id,
+            WriteOperation::CounterOffer,
+            Some(handle.clone()),
+            |binding| {
                 bind_terms(
                     binding.text(handle.as_str()).text(reply_to.as_str()),
                     &terms,
                 )
-            })?;
+            },
+        )?;
         validate_terms(&terms)?;
         let target = parse_offer_id(&handle, &reply_to)?;
         if target.author != Author::Counterparty {
@@ -1220,13 +1246,17 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::AcceptAndSettle, |binding| {
+        let mut operation = self.begin_operation(
+            operation_id,
+            WriteOperation::AcceptAndSettle,
+            Some(handle.clone()),
+            |binding| {
                 binding
                     .text(handle.as_str())
                     .text(offer_id.as_str())
                     .finish()
-            })?;
+            },
+        )?;
         let target = parse_offer_id(&handle, &offer_id)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;

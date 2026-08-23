@@ -46,7 +46,7 @@ fn a_claim_survives_the_process_that_wrote_it() {
 
     {
         let lease = journal
-            .claim(&id(1), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(1), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("first claim succeeds");
         assert_eq!(lease.record().stage(), OperationStage::Claimed);
         assert_eq!(lease.record().version, JOURNAL_VERSION);
@@ -70,7 +70,7 @@ fn reclaiming_an_id_with_the_same_request_reopens_the_record() {
 
     {
         let mut lease = journal
-            .claim(&id(2), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(2), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("first claim");
         lease
             .advance(OperationStage::Prepared, 1_001)
@@ -78,7 +78,7 @@ fn reclaiming_an_id_with_the_same_request_reopens_the_record() {
     }
 
     let lease = journal
-        .claim(&id(2), WriteOperation::Shield, binding(500), 2_000)
+        .claim(&id(2), WriteOperation::Shield, binding(500), None, 2_000)
         .expect("same request reopens rather than conflicting");
 
     assert_eq!(lease.record().stage(), OperationStage::Prepared);
@@ -95,12 +95,12 @@ fn reclaiming_an_id_with_a_different_request_conflicts() {
 
     drop(
         journal
-            .claim(&id(3), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(3), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("first claim"),
     );
 
     let error = journal
-        .claim(&id(3), WriteOperation::Shield, binding(501), 2_000)
+        .claim(&id(3), WriteOperation::Shield, binding(501), None, 2_000)
         .expect_err("a different amount is a different effect");
 
     assert!(matches!(error, JournalError::BindingConflict { .. }));
@@ -120,7 +120,7 @@ fn an_unclaimed_id_locks_to_nothing() {
 fn the_lifecycle_cannot_run_backwards_or_skip_a_stage() {
     let (_root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(5), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(5), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
 
     for (index, stage) in [
@@ -146,7 +146,7 @@ fn the_lifecycle_cannot_run_backwards_or_skip_a_stage() {
     ));
 
     let mut skipping = journal
-        .claim(&id(6), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(6), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
     assert!(
         matches!(
@@ -161,7 +161,7 @@ fn the_lifecycle_cannot_run_backwards_or_skip_a_stage() {
 fn every_stage_change_is_on_disk_before_it_returns() {
     let (root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(7), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(7), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
     lease
         .advance(OperationStage::Prepared, 1_001)
@@ -182,7 +182,7 @@ fn every_stage_change_is_on_disk_before_it_returns() {
 fn a_restart_keeps_the_earlier_attempts_transaction_hash() {
     let (_root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(8), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(8), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
 
     for stage in [
@@ -222,7 +222,7 @@ fn a_record_that_cannot_be_parsed_fails_closed() {
     let (root, journal) = temporary_journal();
     drop(
         journal
-            .claim(&id(9), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(9), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("claim"),
     );
 
@@ -246,7 +246,7 @@ fn a_record_from_a_newer_schema_is_refused() {
     let (root, journal) = temporary_journal();
     drop(
         journal
-            .claim(&id(10), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(10), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("claim"),
     );
 
@@ -278,7 +278,7 @@ fn records_are_not_readable_by_anyone_else() {
     let (root, journal) = temporary_journal();
     drop(
         journal
-            .claim(&id(11), WriteOperation::Shield, binding(500), 1_000)
+            .claim(&id(11), WriteOperation::Shield, binding(500), None, 1_000)
             .expect("claim"),
     );
 
@@ -304,7 +304,7 @@ fn records_are_not_readable_by_anyone_else() {
 fn the_signed_transaction_is_on_disk_before_the_stage_says_signed() {
     let (root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(12), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(12), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
     lease
         .advance(OperationStage::Prepared, 1_001)
@@ -345,7 +345,7 @@ fn the_signed_transaction_is_on_disk_before_the_stage_says_signed() {
 fn a_missing_transaction_file_is_not_read_as_never_submitted() {
     let (root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(13), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(13), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
     for stage in [OperationStage::Prepared, OperationStage::Proven] {
         lease.advance(stage, 1_001).expect("advance");
@@ -373,7 +373,7 @@ fn a_missing_transaction_file_is_not_read_as_never_submitted() {
 fn each_attempt_keeps_its_own_signed_transaction() {
     let (_root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(14), WriteOperation::Shield, binding(500), 1_000)
+        .claim(&id(14), WriteOperation::Shield, binding(500), None, 1_000)
         .expect("claim");
     for stage in [OperationStage::Prepared, OperationStage::Proven] {
         lease.advance(stage, 1_001).expect("advance");
@@ -408,7 +408,13 @@ fn each_attempt_keeps_its_own_signed_transaction() {
 fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
     let (_root, journal) = temporary_journal();
     let mut lease = journal
-        .claim(&id(15), WriteOperation::ApprovePool, binding(500), 1_000)
+        .claim(
+            &id(15),
+            WriteOperation::ApprovePool,
+            binding(500),
+            None,
+            1_000,
+        )
         .expect("claim");
     lease
         .advance(OperationStage::Prepared, 1_001)

@@ -257,6 +257,9 @@ impl Executor {
         // The crash window this closes: the hash is computable before submission, so it is
         // written down before the chain can ever have seen it. Everything after this point
         // may have produced an effect, and the journal can name it.
+        operation.amend(now(), |attempt| {
+            attempt.account_nonce = Some(account_nonce);
+        })?;
         persist_transaction(operation, signed_hash, &transaction)?;
 
         stage("submitting apply_actions and waiting for the receipt");
@@ -322,6 +325,9 @@ impl Executor {
         let signature = signing::sign(&account_private_key, &signed_hash)?;
         let transaction = invoke.with_signature(signature);
 
+        operation.amend(now(), |attempt| {
+            attempt.account_nonce = Some(nonce);
+        })?;
         persist_transaction(operation, signed_hash, &transaction)?;
 
         let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;

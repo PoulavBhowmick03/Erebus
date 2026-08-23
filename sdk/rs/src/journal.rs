@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
 use crate::operation::{OperationId, RequestBinding, WriteOperation};
+use crate::state::ChannelHandle;
 
 /// Journal record schema version. A record written by a newer SDK fails closed.
 pub const JOURNAL_VERSION: u32 = 1;
@@ -117,6 +118,13 @@ pub struct Attempt {
     pub valid_until_block: Option<u64>,
     /// Hash of the signed transaction, persisted before submission.
     pub transaction_hash: Option<Felt>,
+    /// Account nonce the transaction was signed against.
+    ///
+    /// Reconciliation needs this to tell "not on chain yet" from "can never be on chain".
+    /// A missing receipt proves nothing on its own; a missing receipt while the account has
+    /// moved past this nonce proves the transaction was never included.
+    #[serde(default)]
+    pub account_nonce: Option<Felt>,
     /// Whether the exact signed transaction is stored beside this record.
     ///
     /// The transaction itself lives in its own file because it carries the proof blob, and a
@@ -136,6 +144,7 @@ impl Attempt {
             proving_block: None,
             valid_until_block: None,
             transaction_hash: None,
+            account_nonce: None,
             transaction_stored: false,
             accepted_at: None,
         }
@@ -156,6 +165,13 @@ pub struct OperationRecord {
     pub operation: WriteOperation,
     /// Fingerprint of the canonical request parameters.
     pub binding: RequestBinding,
+    /// Channel this write belongs to, when it has one.
+    ///
+    /// `open_channel` has no handle yet when the id is claimed, and the funding writes have
+    /// no channel of their own, so this is absent for them. It exists so reconciliation can
+    /// name the local record an accepted-but-uncommitted operation left behind.
+    #[serde(default)]
+    pub channel: Option<ChannelHandle>,
     /// Unix seconds when the id was first claimed.
     pub created_at: u64,
     /// Every attempt, oldest first. Never empty.
@@ -211,6 +227,7 @@ impl OperationJournal {
         operation_id: &OperationId,
         operation: WriteOperation,
         binding: RequestBinding,
+        channel: Option<ChannelHandle>,
         now: u64,
     ) -> Result<OperationLease, JournalError> {
         let lock = self.lock_file(operation_id)?;
@@ -239,6 +256,7 @@ impl OperationJournal {
                     operation_id: operation_id.clone(),
                     operation,
                     binding,
+                    channel,
                     created_at: now,
                     attempts: vec![Attempt::new(OperationStage::Claimed, now)],
                 };
