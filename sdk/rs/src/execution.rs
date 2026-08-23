@@ -40,8 +40,13 @@ pub const DEFAULT_PROVING_BLOCK_LAG: u64 = 10;
 pub const DEFAULT_RECEIPT_TIMEOUT: Duration = Duration::from_secs(180);
 /// Receipt polling interval.
 pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_secs(2);
-/// Deployed Sepolia pool proof-validity window.
-pub const DEFAULT_PROOF_VALIDITY_BLOCKS: u64 = 450;
+/// What the Sepolia pool returned for `get_proof_validity_blocks` on 2026-08-22.
+///
+/// Reference only. It is not authoritative and nothing on the write path reads it: the pool
+/// owns this number, it has no reason to stay fixed, and a recovered proof that is judged
+/// against a stale window is either resubmitted when it cannot land or re-proven when it did
+/// not need to be. [`Executor::execute`] takes the live value as an argument.
+pub const OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS: u64 = 450;
 
 /// Network addresses and timing for action execution.
 #[derive(Debug, Clone)]
@@ -59,8 +64,6 @@ pub struct ExecutionConfig {
     pub receipt_timeout: Duration,
     /// Delay between receipt reads.
     pub receipt_poll_interval: Duration,
-    /// Maximum blocks between proof anchor and submission.
-    pub proof_validity_blocks: u64,
 }
 
 impl ExecutionConfig {
@@ -73,7 +76,6 @@ impl ExecutionConfig {
             proving_block_lag: DEFAULT_PROVING_BLOCK_LAG,
             receipt_timeout: DEFAULT_RECEIPT_TIMEOUT,
             receipt_poll_interval: DEFAULT_RECEIPT_POLL_INTERVAL,
-            proof_validity_blocks: DEFAULT_PROOF_VALIDITY_BLOCKS,
         }
     }
 }
@@ -145,6 +147,7 @@ impl Executor {
     pub async fn execute(
         &self,
         operation: &mut OperationLease,
+        proof_validity_blocks: u64,
         user_address: Felt,
         pool_private_key: Felt,
         account_private_key: Felt,
@@ -170,8 +173,7 @@ impl Executor {
         // reached the chain, so this stage records only where the attempt is anchored.
         operation.amend(now(), |attempt| {
             attempt.proving_block = Some(proving_number);
-            attempt.valid_until_block =
-                Some(proving_number.saturating_add(self.config.proof_validity_blocks));
+            attempt.valid_until_block = Some(proving_number.saturating_add(proof_validity_blocks));
         })?;
         operation.advance(OperationStage::Prepared, now())?;
 
@@ -205,7 +207,7 @@ impl Executor {
         operation.advance(OperationStage::Proven, now())?;
 
         let submission_head = self.rpc.block_number().await?;
-        if submission_head > proving_number.saturating_add(self.config.proof_validity_blocks) {
+        if submission_head > proving_number.saturating_add(proof_validity_blocks) {
             return Err(ExecutionError::ProofExpired {
                 proving_block: proving_number,
                 current_block: submission_head,

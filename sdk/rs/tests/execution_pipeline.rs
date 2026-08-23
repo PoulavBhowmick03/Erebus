@@ -12,7 +12,7 @@ use std::thread;
 use erebus_sdk::action_set::ActionSetBuilder;
 use erebus_sdk::actions::{ClientAction, OpenChannelInput};
 use erebus_sdk::calldata;
-use erebus_sdk::execution::{ExecutionConfig, Executor};
+use erebus_sdk::execution::{ExecutionConfig, Executor, OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS};
 use erebus_sdk::journal::{OperationJournal, OperationStage};
 use erebus_sdk::operation::{OperationId, RequestBinding, WriteOperation};
 use erebus_sdk::prover::ProvingService;
@@ -178,6 +178,7 @@ async fn one_path_preflights_proves_submits_and_waits() {
     let receipt = executor
         .execute(
             &mut operation,
+            OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS,
             account,
             Felt::from(0xabc_u64),
             Felt::from(0xdef_u64),

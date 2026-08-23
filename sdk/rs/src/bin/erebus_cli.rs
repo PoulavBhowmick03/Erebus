@@ -509,6 +509,10 @@ fn client_error_response(error: &ClientError) -> Response {
         ClientError::NotCounterpartyOffer => ("NOT_YOUR_OFFER", false),
         ClientError::AlreadySettled => ("ALREADY_SETTLED", false),
         ClientError::InsufficientNotes { .. } => ("INSUFFICIENT_NOTES", false),
+        // Not retryable: both need an operator to approve or fund before the same call can
+        // succeed, and an automatic retry would just burn RPC reads reaching the same answer.
+        ClientError::InsufficientAllowance { .. } => ("INSUFFICIENT_ALLOWANCE", false),
+        ClientError::InsufficientPublicBalance { .. } => ("INSUFFICIENT_BALANCE", false),
         ClientError::ClockBeforeEpoch => ("INVALID_REQUEST", false),
         ClientError::State(StateError::NotFound(_)) => ("INVALID_REQUEST", false),
         ClientError::State(_) | ClientError::Rpc(_) => ("SUBMIT_FAILED", true),

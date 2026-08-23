@@ -132,6 +132,48 @@ impl Client {
             .claim(operation_id, operation, binding, channel, now()?)?)
     }
 
+    /// Reads the live pool and funding state that a proof-bearing write depends on.
+    ///
+    /// Everything here is read from the chain at call time. None of it is compiled in: the
+    /// fee is pool storage that has already differed between networks, and the proof
+    /// validity window is what decides whether a recovered proof is still usable, so a
+    /// stale constant is the difference between resubmitting and re-proving.
+    ///
+    /// `deposit` is the value the pool will pull on top of its fee. Only `shield` has one.
+    async fn prepared_checks(&self, deposit: u128) -> Result<PreparedChecks, ClientError> {
+        let validity = self
+            .view("get_proof_validity_blocks", &[], &BlockId::Latest)
+            .await?;
+        let validity = one_felt("get_proof_validity_blocks", &validity)?;
+        let proof_validity_blocks = u64::try_from(validity).map_err(|_| {
+            ClientError::Protocol(format!(
+                "get_proof_validity_blocks returned {validity:#x}, wider than u64"
+            ))
+        })?;
+
+        let report = self.pool_allowance().await?;
+        let balance = self
+            .executor
+            .rpc()
+            .call_contract(
+                self.config.token,
+                "balanceOf",
+                &erc20::balance_of_calldata(self.config.account_address),
+                &BlockId::Latest,
+            )
+            .await?;
+        let public_balance = erc20::parse_u256("balanceOf", &balance)?;
+
+        let checks = PreparedChecks {
+            proof_validity_blocks,
+            fee_per_write: report.fee_per_write,
+            allowance: report.allowance,
+            public_balance,
+        };
+        checks.verify(deposit)?;
+        Ok(checks)
+    }
+
     /// Classifies every journalled operation against the chain, without changing anything.
     ///
     /// Run this at startup, before any write. It reads receipts and the account nonce and
@@ -225,10 +267,12 @@ impl Client {
                 random_salt(),
             )?
         };
+        let checks = self.prepared_checks(amount).await?;
         let receipt = self
             .executor
             .execute(
                 &mut operation,
+                checks.proof_validity_blocks,
                 identity.address(),
                 pool_key,
                 account_key,
@@ -1021,10 +1065,12 @@ impl ErebusClient for Client {
                 subchannel_salt: entropy(),
             },
         )?;
+        let checks = self.prepared_checks(0).await?;
         let receipt = self
             .executor
             .execute(
                 &mut operation,
+                checks.proof_validity_blocks,
                 identity.address(),
                 pool_key,
                 account_key,
@@ -1112,10 +1158,12 @@ impl ErebusClient for Client {
             memo_hash: terms.memo_hash,
         };
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
+        let checks = self.prepared_checks(0).await?;
         let receipt = self
             .executor
             .execute(
                 &mut operation,
+                checks.proof_validity_blocks,
                 identity.address(),
                 pool_key,
                 account_key,
@@ -1199,10 +1247,12 @@ impl ErebusClient for Client {
             memo_hash: terms.memo_hash,
         };
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
+        let checks = self.prepared_checks(0).await?;
         let receipt = self
             .executor
             .execute(
                 &mut operation,
+                checks.proof_validity_blocks,
                 identity.address(),
                 pool_key,
                 account_key,
@@ -1373,10 +1423,12 @@ impl ErebusClient for Client {
             &acceptance,
             change,
         )?;
+        let checks = self.prepared_checks(0).await?;
         let receipt = self
             .executor
             .execute(
                 &mut operation,
+                checks.proof_validity_blocks,
                 identity.address(),
                 pool_key,
                 account_key,
@@ -1770,6 +1822,66 @@ impl AllowanceReport {
             .checked_mul(u128::from(writes))
             .and_then(|fees| fees.checked_add(deposits))
             .is_some_and(|needed| self.allowance >= needed)
+    }
+}
+
+/// Gas held back for one proof-carrying `apply_actions`, in token base units.
+///
+/// The pool's fee and the transaction's gas are separate charges against the same public
+/// balance, and only the fee is readable in advance: gas is not known until fee estimation,
+/// which happens after proving. F27 measured a proof-carrying `apply_actions` at roughly
+/// 3 STRK, so that is what is reserved.
+///
+/// This is an estimate, and it is the only estimated number in the prepared checks. It is
+/// deliberately conservative: a write that clears this and still runs out of gas costs a
+/// proof, while one that is blocked here costs nothing.
+pub const DEFAULT_GAS_RESERVE: u128 = 3_000_000_000_000_000_000;
+
+/// Live pool and funding state, read immediately before proving.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreparedChecks {
+    /// Blocks a proof stays valid for, read from the pool rather than compiled in.
+    pub proof_validity_blocks: u64,
+    /// What the pool charges per charged call, right now.
+    #[serde(with = "u128_boundary::decimal")]
+    pub fee_per_write: u128,
+    /// What the pool is currently allowed to pull.
+    #[serde(with = "u128_boundary::decimal")]
+    pub allowance: u128,
+    /// Public token balance of the submitting account.
+    #[serde(with = "u128_boundary::decimal")]
+    pub public_balance: u128,
+}
+
+impl PreparedChecks {
+    /// Rejects a write the chain state says cannot succeed.
+    ///
+    /// The two limits are not the same quantity. The allowance bounds what the pool may pull
+    /// through `transfer_from`, so it covers the fee and any deposit exactly. The balance has
+    /// to cover that *and* the transaction's own gas, which nothing pulls and no allowance
+    /// governs.
+    pub fn verify(&self, deposit: u128) -> Result<(), ClientError> {
+        let pulled = self
+            .fee_per_write
+            .checked_add(deposit)
+            .ok_or_else(|| ClientError::InvalidRequest("deposit plus fee overflows".to_owned()))?;
+
+        if self.allowance < pulled {
+            return Err(ClientError::InsufficientAllowance {
+                required: pulled,
+                allowance: self.allowance,
+            });
+        }
+
+        let spent = pulled.saturating_add(DEFAULT_GAS_RESERVE);
+        if self.public_balance < spent {
+            return Err(ClientError::InsufficientPublicBalance {
+                required: spent,
+                balance: self.public_balance,
+                gas_reserve: DEFAULT_GAS_RESERVE,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -2412,6 +2524,27 @@ pub enum ClientError {
     /// cannot rule out a pending transaction.
     #[error(transparent)]
     Journal(JournalError),
+    /// The pool is not allowed to pull what this write costs.
+    #[error("pool allowance {allowance} does not cover the {required} this write pulls")]
+    InsufficientAllowance {
+        /// Fee plus any deposit.
+        required: u128,
+        /// Current allowance.
+        allowance: u128,
+    },
+    /// The submitting account cannot pay the fee, deposit, and gas.
+    #[error(
+        "public balance {balance} does not cover {required} \
+         (fee, deposit, and {gas_reserve} reserved for gas)"
+    )]
+    InsufficientPublicBalance {
+        /// Fee, deposit, and the gas reserve.
+        required: u128,
+        /// Current public balance.
+        balance: u128,
+        /// Gas held back; an estimate, see `DEFAULT_GAS_RESERVE`.
+        gas_reserve: u128,
+    },
     /// An operation id was reused for a request that asks for a different effect.
     ///
     /// Raised before any proving or submission work, so a caller bug costs an RPC read
