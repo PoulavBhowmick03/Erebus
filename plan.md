@@ -113,9 +113,14 @@ Complete these tasks one at a time, with review and focused verification after e
    CLI seam is task 10.*
 6. **Explicit dual-mode resume.** Implement the valid-proof exact-resubmission path and the
    expired-proof rebuild path described above.
-   *Deferred until after task 7, which it depends on: judging whether a recovered proof is
-   still usable needs the live validity window, and building resume first would have
-   hardcoded the constant task 7 removes.*
+   *Done 2026-08-23 — `448146e`, after task 7 supplied the live validity window. One
+   correction to this task as written: the two paths are not symmetric. Resubmission is safe
+   because the hash is a function of the transaction, so a duplicate is the same transaction
+   — it does not depend on proving the original dead. Rebuilding creates a different
+   transaction with the same effect and nothing stops it landing beside the original, so
+   resume never rebuilds; it reports `RebuildRequired`, opens a fresh attempt, and leaves
+   re-issuing to the caller that still holds the parameters. Resubmission is refused in three
+   cases the plan does not separate: nonce passed, proof window closed, bytes not recorded.*
 7. **Live prepared-stage checks.** Read live proof validity, the pool's current per-write fee,
    public STRK balance, and allowance before proving. `shield` requires the deposit plus fee;
    other proof-bearing writes require the fee. Recheck before creating a replacement proof.

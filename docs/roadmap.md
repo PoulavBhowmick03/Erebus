@@ -1373,8 +1373,10 @@ exist before Phase 10 gives an agent more ways to spend.
       read-only (`f9bda51`).
 - [x] Live prepared-stage checks: proof validity, fee, allowance and public balance read
       from the chain before proving, with gas reserved (`03c058c`).
-- [ ] Crash and chain-state recovery: explicit resume, both the valid-proof and
-      expired-proof paths.
+- [x] Explicit resume: reconcile, then resubmit the recorded transaction unchanged or
+      report that the request must be re-issued. Never rebuilds by itself (`448146e`).
+- [ ] Chain-state recovery: rebuild handles and cursors from keys and chain data when the
+      state directory is lost.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
 - [ ] Read cursor, cache, and discovery support.
