@@ -32,6 +32,7 @@ pub mod execution;
 pub mod hashes;
 pub mod keys;
 pub mod negotiation;
+pub mod operation;
 pub mod prover;
 pub mod read;
 pub mod rpc;
