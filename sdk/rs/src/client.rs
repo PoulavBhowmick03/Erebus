@@ -26,6 +26,7 @@ use crate::doctor::{Check, Report};
 use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
 use crate::hashes;
+use crate::journal::{JournalError, OperationJournal, OperationLease};
 use crate::negotiation::{
     Author, NegotiationError, OfferBook, OfferId as InternalOfferId, OfferStatus as InternalStatus,
 };
@@ -79,6 +80,7 @@ pub struct Client {
     config: ClientConfig,
     executor: Executor,
     state: StateStore,
+    journal: OperationJournal,
 }
 
 impl Client {
@@ -89,10 +91,12 @@ impl Client {
         let execution =
             ExecutionConfig::new(config.pool_address, config.chain_id, config.account_address);
         let state = StateStore::new(&config.state_dir)?;
+        let journal = OperationJournal::new(&config.state_dir)?;
         Ok(Self {
             config,
             executor: Executor::new(rpc, prover, execution),
             state,
+            journal,
         })
     }
 
@@ -111,16 +115,19 @@ impl Client {
     /// The binding is computed before any RPC read, proving, or submission work, so a caller
     /// that reuses an id for a different effect pays an error rather than a proof.
     ///
-    /// The recorded binding it compares against lives in the durable operation journal,
-    /// which plan.md assigns to task 3. Until that lands there is nothing to compare with
-    /// and every claim succeeds: this seam fixes the call sites and the failure mode, not
-    /// yet the persistence.
+    /// The returned lease holds an exclusive lock on the record for as long as it is alive.
+    /// Callers keep it across the whole write so a second process cannot advance the same
+    /// operation underneath them.
     fn begin_operation(
         &self,
-        _operation_id: &OperationId,
-        _binding: RequestBinding,
-    ) -> Result<(), ClientError> {
-        Ok(())
+        operation_id: &OperationId,
+        operation: WriteOperation,
+        bind: impl FnOnce(BindingBuilder) -> RequestBinding,
+    ) -> Result<OperationLease, ClientError> {
+        let binding = bind(self.binding(operation));
+        Ok(self
+            .journal
+            .claim(operation_id, operation, binding, now()?)?)
     }
 
     /// Funds the identity with one exact-value private note.
@@ -134,12 +141,9 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<SettlementReceipt, ClientError> {
-        self.begin_operation(
-            operation_id,
-            self.binding(WriteOperation::Shield)
-                .u128_be(amount)
-                .finish(),
-        )?;
+        let _operation = self.begin_operation(operation_id, WriteOperation::Shield, |binding| {
+            binding.u128_be(amount).finish()
+        })?;
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
                 "shield amount must be non-zero".to_owned(),
@@ -459,12 +463,10 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<ApprovalReceipt, ClientError> {
-        self.begin_operation(
-            operation_id,
-            self.binding(WriteOperation::ApprovePool)
-                .u128_be(amount)
-                .finish(),
-        )?;
+        let _operation =
+            self.begin_operation(operation_id, WriteOperation::ApprovePool, |binding| {
+                binding.u128_be(amount).finish()
+            })?;
         let account_key = read_key(&self.config.account_key_file, "account key")?;
         let calldata = erc20::approve_calldata(self.config.pool_address, amount);
         let receipt = self
@@ -936,12 +938,10 @@ impl ErebusClient for Client {
         operation_id: &OperationId,
         counterparty_address: Felt,
     ) -> Result<ChannelHandle, ClientError> {
-        self.begin_operation(
-            operation_id,
-            self.binding(WriteOperation::OpenChannel)
-                .felt(counterparty_address)
-                .finish(),
-        )?;
+        let _operation =
+            self.begin_operation(operation_id, WriteOperation::OpenChannel, |binding| {
+                binding.felt(counterparty_address).finish()
+            })?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let registered = self.registered_public_key(identity.address()).await?;
         self.verify_own_registration(&identity, registered)?;
@@ -1018,14 +1018,10 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        self.begin_operation(
-            operation_id,
-            bind_terms(
-                self.binding(WriteOperation::ProposeOffer)
-                    .text(handle.as_str()),
-                &terms,
-            ),
-        )?;
+        let _operation =
+            self.begin_operation(operation_id, WriteOperation::ProposeOffer, |binding| {
+                bind_terms(binding.text(handle.as_str()), &terms)
+            })?;
         validate_terms(&terms)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
@@ -1089,15 +1085,13 @@ impl ErebusClient for Client {
         reply_to: OfferId,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        self.begin_operation(
-            operation_id,
-            bind_terms(
-                self.binding(WriteOperation::CounterOffer)
-                    .text(handle.as_str())
-                    .text(reply_to.as_str()),
-                &terms,
-            ),
-        )?;
+        let _operation =
+            self.begin_operation(operation_id, WriteOperation::CounterOffer, |binding| {
+                bind_terms(
+                    binding.text(handle.as_str()).text(reply_to.as_str()),
+                    &terms,
+                )
+            })?;
         validate_terms(&terms)?;
         let target = parse_offer_id(&handle, &reply_to)?;
         if target.author != Author::Counterparty {
@@ -1190,13 +1184,13 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
-        self.begin_operation(
-            operation_id,
-            self.binding(WriteOperation::AcceptAndSettle)
-                .text(handle.as_str())
-                .text(offer_id.as_str())
-                .finish(),
-        )?;
+        let _operation =
+            self.begin_operation(operation_id, WriteOperation::AcceptAndSettle, |binding| {
+                binding
+                    .text(handle.as_str())
+                    .text(offer_id.as_str())
+                    .finish()
+            })?;
         let target = parse_offer_id(&handle, &offer_id)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
@@ -2339,6 +2333,12 @@ pub enum ClientError {
     /// Caller input was malformed.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// The operation journal could not be read or advanced.
+    ///
+    /// Never treat this as "no effect": a journal that cannot be read is a journal that
+    /// cannot rule out a pending transaction.
+    #[error(transparent)]
+    Journal(JournalError),
     /// An operation id was reused for a request that asks for a different effect.
     ///
     /// Raised before any proving or submission work, so a caller bug costs an RPC read
@@ -2467,6 +2467,26 @@ pub enum ClientError {
     /// Recipient-bound disclosure failure.
     #[error(transparent)]
     Disclosure(#[from] disclosure::DisclosureError),
+}
+
+impl From<JournalError> for ClientError {
+    fn from(error: JournalError) -> Self {
+        // A binding conflict is a caller mistake with a specific remedy — use a fresh id, or
+        // repeat the original request — so it is surfaced as its own error rather than as a
+        // generic journal failure.
+        match error {
+            JournalError::BindingConflict {
+                operation_id,
+                recorded,
+                received,
+            } => Self::OperationConflict {
+                operation_id,
+                recorded,
+                received,
+            },
+            other => Self::Journal(other),
+        }
+    }
 }
 
 #[cfg(test)]

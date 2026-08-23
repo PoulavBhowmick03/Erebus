@@ -30,6 +30,7 @@ pub mod doctor;
 pub mod erc20;
 pub mod execution;
 pub mod hashes;
+pub mod journal;
 pub mod keys;
 pub mod negotiation;
 pub mod operation;
