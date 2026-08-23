@@ -1371,6 +1371,8 @@ exist before Phase 10 gives an agent more ways to spend.
       request that fails local validation still leaves a record behind.
 - [x] Startup reconciliation: every journalled operation classified against the chain,
       read-only (`f9bda51`).
+- [x] Live prepared-stage checks: proof validity, fee, allowance and public balance read
+      from the chain before proving, with gas reserved (`03c058c`).
 - [ ] Crash and chain-state recovery: explicit resume, both the valid-proof and
       expired-proof paths.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,

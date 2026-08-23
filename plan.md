@@ -113,9 +113,20 @@ Complete these tasks one at a time, with review and focused verification after e
    CLI seam is task 10.*
 6. **Explicit dual-mode resume.** Implement the valid-proof exact-resubmission path and the
    expired-proof rebuild path described above.
+   *Deferred until after task 7, which it depends on: judging whether a recovered proof is
+   still usable needs the live validity window, and building resume first would have
+   hardcoded the constant task 7 removes.*
 7. **Live prepared-stage checks.** Read live proof validity, the pool's current per-write fee,
    public STRK balance, and allowance before proving. `shield` requires the deposit plus fee;
    other proof-bearing writes require the fee. Recheck before creating a replacement proof.
+   *Done 2026-08-23 — `03c058c`, taken ahead of task 6. `DEFAULT_PROOF_VALIDITY_BLOCKS` no
+   longer exists on the write path; `execute` takes the live value. One correction to this
+   task as written: the allowance and the public balance are not the same quantity. The
+   allowance bounds what the pool pulls (fee plus deposit, exactly as specified), but the
+   balance must also carry the transaction's own gas, which nothing pulls and which is not
+   knowable before proving. F27 measured ~3 STRK, now reserved as `DEFAULT_GAS_RESERVE` —
+   the only estimated number in the checks. Rechecking before a replacement proof is task
+   6's to call.*
 8. **Type-owned wide-number serialization.** Put the decimal-string invariants for
    `AllowanceReport` and `NoteBalance` on their Rust types and remove manual response
    reshaping from `erebus_cli.rs`.
