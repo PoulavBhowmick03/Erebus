@@ -29,6 +29,7 @@ use crate::hashes;
 use crate::negotiation::{
     Author, NegotiationError, OfferBook, OfferId as InternalOfferId, OfferStatus as InternalStatus,
 };
+use crate::operation::{BindingBuilder, OperationId, RequestBinding, WriteOperation};
 use crate::prover::{BlockId, ProverError, ProvingService};
 use crate::read::{reconstruct, ChannelReader, ReadError};
 use crate::rpc::{RpcError, StarknetRpc};
@@ -95,13 +96,50 @@ impl Client {
         })
     }
 
+    /// Seeds a request binding with this client's pool-scoped prefix.
+    fn binding(&self, operation: WriteOperation) -> BindingBuilder {
+        RequestBinding::builder(
+            operation,
+            self.config.chain_id,
+            self.config.pool_address,
+            self.config.token,
+        )
+    }
+
+    /// Claims an operation id for one write and rejects a conflicting reuse.
+    ///
+    /// The binding is computed before any RPC read, proving, or submission work, so a caller
+    /// that reuses an id for a different effect pays an error rather than a proof.
+    ///
+    /// The recorded binding it compares against lives in the durable operation journal,
+    /// which plan.md assigns to task 3. Until that lands there is nothing to compare with
+    /// and every claim succeeds: this seam fixes the call sites and the failure mode, not
+    /// yet the persistence.
+    fn begin_operation(
+        &self,
+        _operation_id: &OperationId,
+        _binding: RequestBinding,
+    ) -> Result<(), ClientError> {
+        Ok(())
+    }
+
     /// Funds the identity with one exact-value private note.
     ///
     /// This administrative helper is outside the seven negotiation methods. The first call
     /// opens the self-channel. Later calls append a note because the channel marker is
     /// `WriteOnce` and reopening it reverts. See
     /// [`Channel::deposit_into_open_channel`] and friction.md F32.
-    pub async fn shield(&self, amount: u128) -> Result<SettlementReceipt, ClientError> {
+    pub async fn shield(
+        &self,
+        operation_id: &OperationId,
+        amount: u128,
+    ) -> Result<SettlementReceipt, ClientError> {
+        self.begin_operation(
+            operation_id,
+            self.binding(WriteOperation::Shield)
+                .u128_be(amount)
+                .finish(),
+        )?;
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
                 "shield amount must be non-zero".to_owned(),
@@ -416,7 +454,17 @@ impl Client {
     ///
     /// This overwrites any existing allowance rather than adding to it, which is what ERC-20
     /// `approve` does. Read [`Self::pool_allowance`] first if the current value matters.
-    pub async fn approve_pool(&self, amount: u128) -> Result<ApprovalReceipt, ClientError> {
+    pub async fn approve_pool(
+        &self,
+        operation_id: &OperationId,
+        amount: u128,
+    ) -> Result<ApprovalReceipt, ClientError> {
+        self.begin_operation(
+            operation_id,
+            self.binding(WriteOperation::ApprovePool)
+                .u128_be(amount)
+                .finish(),
+        )?;
         let account_key = read_key(&self.config.account_key_file, "account key")?;
         let calldata = erc20::approve_calldata(self.config.pool_address, amount);
         let receipt = self
@@ -841,16 +889,22 @@ impl Client {
 #[allow(async_fn_in_trait)]
 pub trait ErebusClient {
     /// Establishes and submits a private channel.
-    async fn open_channel(&self, counterparty: Felt) -> Result<ChannelHandle, ClientError>;
+    async fn open_channel(
+        &self,
+        operation_id: &OperationId,
+        counterparty: Felt,
+    ) -> Result<ChannelHandle, ClientError>;
     /// Writes an offer.
     async fn propose_offer(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError>;
     /// Writes a counter-offer.
     async fn counter_offer(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         reply_to: OfferId,
         terms: OfferTerms,
@@ -860,6 +914,7 @@ pub trait ErebusClient {
     /// Accepts the counterparty's offer and settles in one action set.
     async fn accept_and_settle(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError>;
@@ -876,7 +931,17 @@ pub trait ErebusClient {
 }
 
 impl ErebusClient for Client {
-    async fn open_channel(&self, counterparty_address: Felt) -> Result<ChannelHandle, ClientError> {
+    async fn open_channel(
+        &self,
+        operation_id: &OperationId,
+        counterparty_address: Felt,
+    ) -> Result<ChannelHandle, ClientError> {
+        self.begin_operation(
+            operation_id,
+            self.binding(WriteOperation::OpenChannel)
+                .felt(counterparty_address)
+                .finish(),
+        )?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let registered = self.registered_public_key(identity.address()).await?;
         self.verify_own_registration(&identity, registered)?;
@@ -949,9 +1014,18 @@ impl ErebusClient for Client {
 
     async fn propose_offer(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
+        self.begin_operation(
+            operation_id,
+            bind_terms(
+                self.binding(WriteOperation::ProposeOffer)
+                    .text(handle.as_str()),
+                &terms,
+            ),
+        )?;
         validate_terms(&terms)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
@@ -1010,10 +1084,20 @@ impl ErebusClient for Client {
 
     async fn counter_offer(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         reply_to: OfferId,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
+        self.begin_operation(
+            operation_id,
+            bind_terms(
+                self.binding(WriteOperation::CounterOffer)
+                    .text(handle.as_str())
+                    .text(reply_to.as_str()),
+                &terms,
+            ),
+        )?;
         validate_terms(&terms)?;
         let target = parse_offer_id(&handle, &reply_to)?;
         if target.author != Author::Counterparty {
@@ -1102,9 +1186,17 @@ impl ErebusClient for Client {
 
     async fn accept_and_settle(
         &self,
+        operation_id: &OperationId,
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
+        self.begin_operation(
+            operation_id,
+            self.binding(WriteOperation::AcceptAndSettle)
+                .text(handle.as_str())
+                .text(offer_id.as_str())
+                .finish(),
+        )?;
         let target = parse_offer_id(&handle, &offer_id)?;
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
@@ -2013,6 +2105,20 @@ fn parse_offer_id(
     Ok(InternalOfferId::new(author, index))
 }
 
+/// Binds every field of the offer terms.
+///
+/// `terms.token` is bound even though the pool-scoped prefix already carries the configured
+/// token: the binding must describe the request as the caller made it, and a caller that
+/// asks for the wrong token is asking for a different effect.
+fn bind_terms(builder: BindingBuilder, terms: &OfferTerms) -> RequestBinding {
+    builder
+        .u128_be(terms.amount)
+        .felt(terms.token)
+        .u64_be(terms.deadline)
+        .u128_be(terms.memo_hash)
+        .finish()
+}
+
 fn validate_terms(terms: &OfferTerms) -> Result<(), ClientError> {
     if terms.amount == 0 {
         return Err(ClientError::InvalidRequest(
@@ -2233,6 +2339,22 @@ pub enum ClientError {
     /// Caller input was malformed.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// An operation id was reused for a request that asks for a different effect.
+    ///
+    /// Raised before any proving or submission work, so a caller bug costs an RPC read
+    /// rather than a proof.
+    #[error(
+        "operation {operation_id} was already used for a different request \
+         (recorded binding {recorded}, this request binds {received})"
+    )]
+    OperationConflict {
+        /// The reused id.
+        operation_id: OperationId,
+        /// Binding stored against the id.
+        recorded: RequestBinding,
+        /// Binding of the request that collided with it.
+        received: RequestBinding,
+    },
     /// An ERC-20 return value was malformed.
     #[error(transparent)]
     Erc20(#[from] Erc20Error),

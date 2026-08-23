@@ -17,6 +17,7 @@ use erebus_sdk::client::{
 use erebus_sdk::execution::ExecutionError;
 use erebus_sdk::keys::{generate_pool_key_file, KeyFileError};
 use erebus_sdk::negotiation::NegotiationError;
+use erebus_sdk::operation::OperationId;
 use erebus_sdk::prover::ProverError;
 use erebus_sdk::state::{ChannelHandle, StateError};
 use erebus_sdk::subchannel::IndexError;
@@ -240,6 +241,27 @@ impl CliError {
     }
 }
 
+/// Mints an operation id for one CLI invocation.
+///
+/// A real caller persists its id *before* calling, so that a crash mid-write leaves
+/// something to reconcile against. A fresh id per process cannot do that: it is a bridge
+/// that keeps the protocol-3 request shape unchanged while the Rust write path grows the
+/// operation contract underneath it. plan.md task 10 replaces this with a caller-supplied
+/// id, and Ishita's task 1 supplies the durable intent above the binding.
+fn bridge_operation_id() -> OperationId {
+    use rand::RngCore as _;
+
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let mut value = String::with_capacity(67);
+    value.push_str("op_");
+    for byte in bytes {
+        use core::fmt::Write as _;
+        write!(&mut value, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    OperationId::parse(value).expect("a 64-hex-digit id is well formed by construction")
+}
+
 async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
     match request {
         Request::Version => Ok(serde_json::json!({
@@ -261,7 +283,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         } => {
             let client = config.build()?;
             let handle = client
-                .open_channel(felt("counterparty", &counterparty)?)
+                .open_channel(&bridge_operation_id(), felt("counterparty", &counterparty)?)
                 .await?;
             serialize(serde_json::json!({ "channel_handle": handle }))
         }
@@ -272,7 +294,11 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         } => {
             let client = config.build()?;
             let offer_id = client
-                .propose_offer(ChannelHandle::parse(handle)?, terms.parse()?)
+                .propose_offer(
+                    &bridge_operation_id(),
+                    ChannelHandle::parse(handle)?,
+                    terms.parse()?,
+                )
                 .await?;
             serialize(serde_json::json!({ "offer_id": offer_id }))
         }
@@ -285,6 +311,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let client = config.build()?;
             let offer_id = client
                 .counter_offer(
+                    &bridge_operation_id(),
                     ChannelHandle::parse(handle)?,
                     offer_id(reply_to),
                     terms.parse()?,
@@ -308,7 +335,11 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let client = config.build()?;
             serialize(
                 client
-                    .accept_and_settle(ChannelHandle::parse(handle)?, offer_id(id))
+                    .accept_and_settle(
+                        &bridge_operation_id(),
+                        ChannelHandle::parse(handle)?,
+                        offer_id(id),
+                    )
                     .await?,
             )
         }
@@ -341,7 +372,11 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::Approve { config, amount } => {
             let client = config.build()?;
-            serialize(client.approve_pool(u128_value("amount", &amount)?).await?)
+            serialize(
+                client
+                    .approve_pool(&bridge_operation_id(), u128_value("amount", &amount)?)
+                    .await?,
+            )
         }
         Request::Allowance { config } => {
             let client = config.build()?;
@@ -365,7 +400,11 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::Shield { config, amount } => {
             let client = config.build()?;
-            serialize(client.shield(u128_value("amount", &amount)?).await?)
+            serialize(
+                client
+                    .shield(&bridge_operation_id(), u128_value("amount", &amount)?)
+                    .await?,
+            )
         }
         Request::Balance { config } => {
             let client = config.build()?;
@@ -463,6 +502,7 @@ fn client_error_response(error: &ClientError) -> Response {
         ClientError::CounterpartyUnregistered(_) | ClientError::ChannelNotReady => {
             ("SUBMIT_FAILED", true)
         }
+        ClientError::OperationConflict { .. } => ("OPERATION_CONFLICT", false),
         ClientError::NotCounterpartyOffer => ("NOT_YOUR_OFFER", false),
         ClientError::AlreadySettled => ("ALREADY_SETTLED", false),
         ClientError::InsufficientNotes { .. } => ("INSUFFICIENT_NOTES", false),
