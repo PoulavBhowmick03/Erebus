@@ -75,6 +75,19 @@ class ViewingKeyGrant:
     expires_at: int | None = None
 
 
+class Consistency(str, Enum):
+    """Whether a settlement's paid amount matches what was agreed (F23).
+
+    ``UNKNOWN`` is not a synonym for ``CONSISTENT``: a caller that could not obtain
+    ``paid_amount`` has not verified anything, and reporting that as consistent would be a
+    tool answering "yes" when it means "I could not check" (roadmap 9.2).
+    """
+
+    CONSISTENT = "consistent"
+    INCONSISTENT = "inconsistent"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class DisclosedSettlement:
     acceptance: OfferId
@@ -82,9 +95,17 @@ class DisclosedSettlement:
     accepted_offer: OfferId | None = None
     paid_amount: int | None = None
 
-    def is_consistent(self) -> bool:
-        """Checks records from clients that did not enforce AMOUNT_MISMATCH (F23)."""
-        return self.paid_amount is None or self.paid_amount == self.agreed_amount
+    def consistency(self) -> Consistency:
+        """Checks records from clients that did not enforce AMOUNT_MISMATCH (F23).
+
+        Fails closed to ``UNKNOWN`` when ``paid_amount`` is missing, rather than treating
+        absent evidence as a pass.
+        """
+        if self.paid_amount is None:
+            return Consistency.UNKNOWN
+        if self.paid_amount == self.agreed_amount:
+            return Consistency.CONSISTENT
+        return Consistency.INCONSISTENT
 
 
 @dataclass(frozen=True)

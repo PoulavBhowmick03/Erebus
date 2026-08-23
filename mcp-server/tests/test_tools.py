@@ -688,5 +688,125 @@ def test_an_invalid_amount_is_refused_before_any_write(tmp_path):
     asyncio.run(run())
 
 
+def test_every_result_names_its_backend_and_network(tmp_path):
+    """9.2: a model must be able to tell mock from a live network from the transcript
+    alone, on both success and failure results."""
+
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                ok = _structured(await session.call_tool("get_note_balance", {}))
+                assert ok["backend"] == "mock"
+                assert ok["network"] == "mock"
+
+                failure = _structured(
+                    await session.call_tool(
+                        "accept_and_settle",
+                        {"channel_handle": "ch_doesnotexist", "offer_id": "anything"},
+                    )
+                )
+                assert failure["ok"] is False
+                assert failure["backend"] == "mock"
+                assert failure["network"] == "mock"
+
+    asyncio.run(run())
+
+
+def test_wait_for_offers_rejects_a_non_positive_expected_count(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                for bad in (0, -1):
+                    body = _structured(
+                        await session.call_tool(
+                            "wait_for_offers",
+                            {"channel_handle": handle, "expected_count": bad},
+                        )
+                    )
+                    assert body["ok"] is False
+                    assert body["error"]["code"] == "INVALID_REQUEST"
+
+    asyncio.run(run())
+
+
+def test_wait_for_offers_rejects_a_non_positive_timeout(tmp_path):
+    async def run():
+        async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                body = _structured(
+                    await session.call_tool(
+                        "wait_for_offers",
+                        {
+                            "channel_handle": handle,
+                            "expected_count": 1,
+                            "timeout_seconds": 0,
+                        },
+                    )
+                )
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INVALID_REQUEST"
+
+    asyncio.run(run())
+
+
+def test_grant_viewing_key_refuses_to_overwrite_an_existing_export(tmp_path):
+    """`_save_grant` publishes via `os.link`, which fails closed rather than clobbering a
+    file that might be a different, earlier grant. Not covered by
+    test_deal_grant_uses_a_private_file_and_never_returns_the_capsule, which only exercises
+    the fresh-path case."""
+
+    async def run():
+        store = tmp_path / "store.json"
+        output_path = tmp_path / "deal.grant.json"
+        output_path.write_text('{"already": "here"}')
+        async with stdio_client(_server_params(store, role="payee")) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                opened = await session.call_tool("open_channel", {"counterparty": "0xbuyer"})
+                handle = _structured(opened)["result"]["channel_handle"]
+                await session.call_tool(
+                    "propose_offer",
+                    {
+                        "channel_handle": handle,
+                        "amount": 100,
+                        "token": "0xtoken",
+                        "deadline": 9999999999,
+                        "memo_hash": 0,
+                    },
+                )
+                state = _structured(
+                    await session.call_tool("read_channel_state", {"channel_handle": handle})
+                )
+                deal_id = state["result"]["offers"][0]["deal_id"]
+
+                body = _structured(
+                    await session.call_tool(
+                        "grant_viewing_key",
+                        {
+                            "channel_handle": handle,
+                            "deal_id": deal_id,
+                            "grantee": "0xauditor",
+                            "expires_at": int(time.time()) + 600,
+                            "output_path": str(output_path),
+                        },
+                    )
+                )
+                assert body["ok"] is False
+                assert body["error"]["code"] == "INVALID_REQUEST"
+                assert json.loads(output_path.read_text()) == {"already": "here"}
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
