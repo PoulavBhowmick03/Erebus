@@ -81,10 +81,18 @@ Complete these tasks one at a time, with review and focused verification after e
 
 1. **Foundational `OperationId` type.** Add a transparent Rust newtype, strict parsing,
    display, and validated serde. Do not connect it to requests yet.
+   *Done 2026-08-23 — `d352f7e`.*
 2. **Write-operation contract.** Require `OperationId` on every chain-writing Rust client
    method. Define canonical parameter binding and reject same-ID/different-parameter reuse.
+   *Done 2026-08-23 — `c91a792` bound the six chain-writing methods. The reuse check only
+   became enforceable once task 3 supplied a record to compare against.*
 3. **Durable Rust journal.** Add the versioned operation record, explicit lifecycle states,
    mode-`0600` locked storage, atomic replacement, and directory sync where required.
+   *Done 2026-08-23 — `b784f3f`. One record per id under `state_dir/operations`, stage
+   derived from the latest attempt. Two things this exposed and did not fix: a request that
+   fails local validation still leaves a `Claimed` record and a lock file with nothing to
+   prune them, and `state.rs` renames channel records without the directory sync the journal
+   now performs.*
 4. **Persist-before-submit execution.** Record preflight inputs, proof metadata, exact signed
    transaction bytes, and transaction hash before calling the RPC submission method. Record
    the receipt and local state commit separately.

@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-20.
+Last source audit: 2026-08-23.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -191,7 +191,7 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 | Settlement agreement is client policy | The pool does not compare payment with the accepted offer | Keep the SDK amount check and publish this trust boundary |
 | One token per client | `ClientConfig.token` fixes one token | Move token selection to channel or operation scope |
 | Reads restart from index zero | `fetch_notes` walks each note on every read | Store a read cursor and cache the immutable prefix |
-| No idempotency | A lost response can cause a duplicate operation | Add operation IDs and a durable submission journal |
+| No idempotency | A lost response can cause a duplicate operation. Operation IDs and the journal landed 2026-08-23, but a repeated call still re-runs rather than returning the recorded outcome | Record the outcome at each write boundary and return it on replay |
 | No state reconstruction command | Lost handles can be derived in principle | Rebuild handles and cursors from keys and chain state |
 | No signer abstraction | Rust reads a raw account-key file | Add an account signer interface before production |
 | Protocol code lacks review | `Unreviewed` markers cleared 2026-08-17, but the 2026-08-19 diff was pushed to `main` on Poulav's instruction before line review | Both owners review the 2026-08-19 push, then keep review-before-merge |
@@ -620,8 +620,13 @@ Owners: Poulav owns SDK state. Ishita owns agent recovery and operator output.
 
 Work:
 
-1. Add operation IDs to every write request.
-2. Journal preflight, proof, transaction hash, receipt, and state commit.
+1. ~~Add operation IDs to every write request.~~ Done 2026-08-23: `c91a792`. All six
+   chain-writing client methods take a caller-supplied `OperationId` and fingerprint their
+   canonical parameters before any RPC, proof, or submission.
+2. Journal preflight, proof, transaction hash, receipt, and state commit. Storage done
+   2026-08-23: `b784f3f`. The record, its lifecycle stages, and the locked `0600` store
+   exist and reject a conflicting id reuse; nothing populates the proof or transaction
+   fields yet. That is plan.md task 4.
 3. Reconcile the journal with chain state after restart.
 4. Add fault injection at every write boundary.
 5. Rebuild channel handles and cursors from keys and chain state.
@@ -1355,7 +1360,9 @@ exist before Phase 10 gives an agent more ways to spend.
 
 ### P2: Operator alpha
 
-- [ ] Durable operation journal and idempotency.
+- [x] Durable operation journal: record, lifecycle stages, locked `0600` storage, atomic
+      replacement with directory sync (`b784f3f`).
+- [ ] Idempotency: a replayed operation returns its recorded outcome instead of re-running.
 - [ ] Crash and chain-state recovery.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
