@@ -542,6 +542,11 @@ fn execution_error_code(error: &ExecutionError) -> (&'static str, bool) {
         | ExecutionError::MaturityTimeout { .. } => ("SUBMIT_FAILED", true),
         ExecutionError::ProofExpired { .. } => ("PROOF_EXPIRED", true),
         ExecutionError::Reverted(_) => ("SUBMIT_FAILED", false),
+        // Both leave the operation in a state only an operator can resolve: the journal
+        // either could not record what was about to happen, or could not record what did.
+        ExecutionError::Journal(_)
+        | ExecutionError::TransactionNotSerializable(_)
+        | ExecutionError::TransactionHashMismatch { .. } => ("RECONCILIATION_REQUIRED", false),
         ExecutionError::PoolInvocation(_)
         | ExecutionError::Signing(_)
         | ExecutionError::Calldata(_)

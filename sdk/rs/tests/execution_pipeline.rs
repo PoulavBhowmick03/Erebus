@@ -13,10 +13,19 @@ use erebus_sdk::action_set::ActionSetBuilder;
 use erebus_sdk::actions::{ClientAction, OpenChannelInput};
 use erebus_sdk::calldata;
 use erebus_sdk::execution::{ExecutionConfig, Executor};
+use erebus_sdk::journal::{OperationJournal, OperationStage};
+use erebus_sdk::operation::{OperationId, RequestBinding, WriteOperation};
 use erebus_sdk::prover::ProvingService;
 use erebus_sdk::rpc::StarknetRpc;
 use serde_json::{json, Value};
 use starknet_types_core::felt::Felt;
+
+/// The v3 hash of the exact `apply_actions` invoke this fixture builds.
+///
+/// Pinned rather than echoed from the mock: the executor now refuses a node that answers a
+/// submission with a hash other than the one it signed, so a mock returning an arbitrary
+/// value would exercise the failure path instead of the success path.
+const SUBMITTED_HASH: &str = "0x5ce3fae88e0faa5a41a1e063b29f0c594acb6482105beef4c86ecf1a197d3e6";
 
 fn server(responses: Vec<Value>) -> (String, Receiver<Value>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -95,9 +104,9 @@ async fn one_path_preflights_proves_submits_and_waits() {
             "overall_fee":"0x1",
             "unit":"FRI"
         }]}),
-        json!({"jsonrpc":"2.0","id":1,"result":{"transaction_hash":"0x999"}}),
+        json!({"jsonrpc":"2.0","id":1,"result":{"transaction_hash":SUBMITTED_HASH}}),
         json!({"jsonrpc":"2.0","id":1,"result":{
-            "transaction_hash":"0x999",
+            "transaction_hash":SUBMITTED_HASH,
             "block_number":21,
             "finality_status":"ACCEPTED_ON_L2",
             "execution_status":"SUCCEEDED"
@@ -140,8 +149,29 @@ async fn one_path_preflights_proves_submits_and_waits() {
         }))
         .expect("action");
     let actions = builder.build().expect("set");
+
+    let state_dir = std::env::temp_dir().join(format!(
+        "erebus-pipeline-{}-{}",
+        std::process::id(),
+        rand_suffix()
+    ));
+    let journal = OperationJournal::new(&state_dir).expect("journal");
+    let operation_id = OperationId::parse(format!("op_{}", "5c".repeat(32))).expect("operation id");
+    let binding = RequestBinding::builder(
+        WriteOperation::OpenChannel,
+        Felt::from(0x534eu64),
+        pool,
+        Felt::from(3u8),
+    )
+    .felt(Felt::from(7u8))
+    .finish();
+    let mut operation = journal
+        .claim(&operation_id, WriteOperation::OpenChannel, binding, 1_000)
+        .expect("claim");
+
     let receipt = executor
         .execute(
+            &mut operation,
             account,
             Felt::from(0xabc_u64),
             Felt::from(0xdef_u64),
@@ -150,8 +180,34 @@ async fn one_path_preflights_proves_submits_and_waits() {
         .await
         .expect("pipeline");
 
-    assert_eq!(receipt.transaction_hash, Felt::from(0x999u64));
+    assert_eq!(
+        receipt.transaction_hash,
+        Felt::from_hex_unchecked(SUBMITTED_HASH)
+    );
     assert_eq!(receipt.proving_block, 10);
+
+    // The journal walked every durable boundary, and the hash it wrote down before
+    // submitting is the hash the chain reported back.
+    let record = operation.record();
+    assert_eq!(record.stage(), OperationStage::Accepted);
+    assert_eq!(record.attempt().proving_block, Some(10));
+    assert_eq!(
+        record.attempt().transaction_hash,
+        Some(Felt::from_hex_unchecked(SUBMITTED_HASH))
+    );
+    assert!(record.attempt().transaction_stored);
+    assert!(record.attempt().accepted_at.is_some());
+
+    // The stored transaction is the exact wire request, so a resume can resubmit it
+    // without recomputing anything that would change the hash.
+    let stored = operation
+        .stored_transaction(0)
+        .expect("stored transaction reads")
+        .expect("a transaction was stored");
+    let stored: Value = serde_json::from_str(&stored).expect("stored transaction is wire JSON");
+    assert_eq!(stored["type"], "INVOKE");
+    assert_eq!(stored["proof"], "opaque-proof");
+    assert_eq!(stored["proof_facts"], json!(["0xaa"]));
 
     rpc_thread.join().expect("rpc server");
     prover_thread.join().expect("prover server");
@@ -201,4 +257,12 @@ async fn one_path_preflights_proves_submits_and_waits() {
     );
     assert!(proof_tx.get("proof").is_none());
     assert!(proof_tx.get("proof_facts").is_none());
+}
+
+fn rand_suffix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock is after the epoch")
+        .subsec_nanos()
+        .into()
 }

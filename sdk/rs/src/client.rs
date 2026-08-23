@@ -26,7 +26,7 @@ use crate::doctor::{Check, Report};
 use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
 use crate::hashes;
-use crate::journal::{JournalError, OperationJournal, OperationLease};
+use crate::journal::{JournalError, OperationJournal, OperationLease, OperationStage};
 use crate::negotiation::{
     Author, NegotiationError, OfferBook, OfferId as InternalOfferId, OfferStatus as InternalStatus,
 };
@@ -141,9 +141,10 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<SettlementReceipt, ClientError> {
-        let _operation = self.begin_operation(operation_id, WriteOperation::Shield, |binding| {
-            binding.u128_be(amount).finish()
-        })?;
+        let mut operation =
+            self.begin_operation(operation_id, WriteOperation::Shield, |binding| {
+                binding.u128_be(amount).finish()
+            })?;
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
                 "shield amount must be non-zero".to_owned(),
@@ -206,8 +207,15 @@ impl Client {
         };
         let receipt = self
             .executor
-            .execute(identity.address(), pool_key, account_key, &actions)
+            .execute(
+                &mut operation,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
             .await?;
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(SettlementReceipt {
             offer_id: None,
             tx_hash: hex(receipt.transaction_hash),
@@ -463,7 +471,7 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<ApprovalReceipt, ClientError> {
-        let _operation =
+        let mut operation =
             self.begin_operation(operation_id, WriteOperation::ApprovePool, |binding| {
                 binding.u128_be(amount).finish()
             })?;
@@ -471,8 +479,15 @@ impl Client {
         let calldata = erc20::approve_calldata(self.config.pool_address, amount);
         let receipt = self
             .executor
-            .submit_call(account_key, self.config.token, "approve", &calldata)
+            .submit_call(
+                &mut operation,
+                account_key,
+                self.config.token,
+                "approve",
+                &calldata,
+            )
             .await?;
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(ApprovalReceipt {
             tx_hash: hex(receipt.transaction_hash),
             approved: amount,
@@ -938,7 +953,7 @@ impl ErebusClient for Client {
         operation_id: &OperationId,
         counterparty_address: Felt,
     ) -> Result<ChannelHandle, ClientError> {
-        let _operation =
+        let mut operation =
             self.begin_operation(operation_id, WriteOperation::OpenChannel, |binding| {
                 binding.felt(counterparty_address).finish()
             })?;
@@ -988,7 +1003,13 @@ impl ErebusClient for Client {
         )?;
         let receipt = self
             .executor
-            .execute(identity.address(), pool_key, account_key, &actions)
+            .execute(
+                &mut operation,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
             .await?;
         let tx_hash = receipt.transaction_hash;
         let opened_block = accepted_block(&receipt)?;
@@ -1009,6 +1030,7 @@ impl ErebusClient for Client {
                 self.config.new_channel_wire_version,
             )
         })?;
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(handle)
     }
 
@@ -1018,7 +1040,7 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let _operation =
+        let mut operation =
             self.begin_operation(operation_id, WriteOperation::ProposeOffer, |binding| {
                 bind_terms(binding.text(handle.as_str()), &terms)
             })?;
@@ -1070,11 +1092,18 @@ impl ErebusClient for Client {
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
         let receipt = self
             .executor
-            .execute(identity.address(), pool_key, account_key, &actions)
+            .execute(
+                &mut operation,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
             .await?;
         lease.state_mut().outgoing_next_note = cursor.next_index();
         lease.state_mut().last_write_block = accepted_block(&receipt)?;
         lease.commit()?;
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(external_offer_id(&handle, Author::Us, index))
     }
 
@@ -1085,7 +1114,7 @@ impl ErebusClient for Client {
         reply_to: OfferId,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let _operation =
+        let mut operation =
             self.begin_operation(operation_id, WriteOperation::CounterOffer, |binding| {
                 bind_terms(
                     binding.text(handle.as_str()).text(reply_to.as_str()),
@@ -1146,12 +1175,19 @@ impl ErebusClient for Client {
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
         let receipt = self
             .executor
-            .execute(identity.address(), pool_key, account_key, &actions)
+            .execute(
+                &mut operation,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
             .await?;
         lease.state_mut().incoming_key = state.incoming_key;
         lease.state_mut().outgoing_next_note = cursor.next_index();
         lease.state_mut().last_write_block = accepted_block(&receipt)?;
         lease.commit()?;
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(external_offer_id(&handle, Author::Us, index))
     }
 
@@ -1184,7 +1220,7 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
-        let _operation =
+        let mut operation =
             self.begin_operation(operation_id, WriteOperation::AcceptAndSettle, |binding| {
                 binding
                     .text(handle.as_str())
@@ -1309,7 +1345,13 @@ impl ErebusClient for Client {
         )?;
         let receipt = self
             .executor
-            .execute(identity.address(), pool_key, account_key, &actions)
+            .execute(
+                &mut operation,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
             .await?;
         lease.state_mut().outgoing_next_note = cursor.next_index();
         lease.state_mut().last_write_block = accepted_block(&receipt)?;
@@ -1324,6 +1366,7 @@ impl ErebusClient for Client {
             .iter()
             .fold(0u128, |total, note| total.saturating_add(note.amount));
 
+        operation.advance(OperationStage::Committed, now()?)?;
         Ok(SettlementReceipt {
             offer_id: Some(offer_id),
             tx_hash: hex(receipt.transaction_hash),

@@ -5,6 +5,7 @@
 //! request, and a lifecycle that cannot run backwards.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erebus_sdk::journal::{JournalError, OperationJournal, OperationStage, JOURNAL_VERSION};
 use erebus_sdk::operation::{OperationId, RequestBinding, WriteOperation};
@@ -26,13 +27,14 @@ fn binding(amount: u128) -> RequestBinding {
 }
 
 fn temporary_journal() -> (PathBuf, OperationJournal) {
+    // A counter, not a timestamp: these tests run in parallel and macOS reports coarse
+    // nanoseconds, so two of them collided on one directory and saw each other's records.
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
     let root = std::env::temp_dir().join(format!(
-        "erebus-journal-{}-{:?}",
+        "erebus-journal-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock is after the epoch")
-            .as_nanos()
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let journal = OperationJournal::new(&root).expect("journal opens");
     (root, journal)
@@ -296,4 +298,125 @@ fn records_are_not_readable_by_anyone_else() {
 
     assert_eq!(directory_mode, 0o700);
     assert_eq!(record_mode, 0o600);
+}
+
+#[test]
+fn the_signed_transaction_is_on_disk_before_the_stage_says_signed() {
+    let (root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(12), WriteOperation::Shield, binding(500), 1_000)
+        .expect("claim");
+    lease
+        .advance(OperationStage::Prepared, 1_001)
+        .expect("prepared");
+    lease
+        .advance(OperationStage::Proven, 1_002)
+        .expect("proven");
+
+    lease
+        .persist_signed(
+            Felt::from_hex_unchecked("0xfeed"),
+            r#"{"type":"INVOKE"}"#,
+            1_003,
+        )
+        .expect("persist");
+
+    // Read the bytes straight off disk while the lease is still held, which is what a
+    // process killed at this instant would leave behind. Both the transaction and the hash
+    // naming it have to be there; either one alone is a state recovery cannot act on.
+    // (Deliberately not `lock()`: re-locking a held id blocks, it does not fail.)
+    let directory = root.join("operations");
+    let record: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.join(format!("{}.json", id(12).as_str())))
+            .expect("record is on disk"),
+    )
+    .expect("record parses");
+    let stored = std::fs::read_to_string(directory.join(format!("{}.0.tx", id(12).as_str())))
+        .expect("transaction is on disk");
+
+    let attempt = record["attempts"].as_array().expect("attempts")[0].clone();
+    assert_eq!(attempt["stage"], "signed");
+    assert_eq!(attempt["transaction_stored"], true);
+    assert_eq!(stored, r#"{"type":"INVOKE"}"#);
+    assert_eq!(lease.record().stage(), OperationStage::Signed);
+}
+
+#[test]
+fn a_missing_transaction_file_is_not_read_as_never_submitted() {
+    let (root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(13), WriteOperation::Shield, binding(500), 1_000)
+        .expect("claim");
+    for stage in [OperationStage::Prepared, OperationStage::Proven] {
+        lease.advance(stage, 1_001).expect("advance");
+    }
+    lease
+        .persist_signed(Felt::from_hex_unchecked("0xfeed"), "{}", 1_002)
+        .expect("persist");
+
+    std::fs::remove_file(
+        root.join("operations")
+            .join(format!("{}.0.tx", id(13).as_str())),
+    )
+    .expect("delete the stored transaction");
+
+    assert!(
+        matches!(
+            lease.stored_transaction(0),
+            Err(JournalError::Corrupt { .. })
+        ),
+        "a record naming a transaction that is gone must fail closed, not report absence"
+    );
+}
+
+#[test]
+fn each_attempt_keeps_its_own_signed_transaction() {
+    let (_root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(14), WriteOperation::Shield, binding(500), 1_000)
+        .expect("claim");
+    for stage in [OperationStage::Prepared, OperationStage::Proven] {
+        lease.advance(stage, 1_001).expect("advance");
+    }
+    lease
+        .persist_signed(Felt::from_hex_unchecked("0x1111"), "first", 1_002)
+        .expect("persist");
+    lease
+        .advance(OperationStage::Submitted, 1_003)
+        .expect("submitted");
+
+    lease.restart(2_000).expect("expired proof restarts");
+    lease
+        .advance(OperationStage::Proven, 2_001)
+        .expect("proven");
+    lease
+        .persist_signed(Felt::from_hex_unchecked("0x2222"), "second", 2_002)
+        .expect("persist");
+
+    assert_eq!(
+        lease.stored_transaction(0).expect("read"),
+        Some("first".to_owned()),
+        "the old attempt's transaction is what proves whether it landed"
+    );
+    assert_eq!(
+        lease.stored_transaction(1).expect("read"),
+        Some("second".to_owned())
+    );
+}
+
+#[test]
+fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
+    let (_root, journal) = temporary_journal();
+    let mut lease = journal
+        .claim(&id(15), WriteOperation::ApprovePool, binding(500), 1_000)
+        .expect("claim");
+    lease
+        .advance(OperationStage::Prepared, 1_001)
+        .expect("prepared");
+
+    lease
+        .persist_signed(Felt::from_hex_unchecked("0xabc"), "{}", 1_002)
+        .expect("an approve has nothing to prove");
+
+    assert_eq!(lease.record().stage(), OperationStage::Signed);
 }

@@ -80,7 +80,10 @@ impl OperationStage {
     pub const fn can_advance_to(self, next: Self) -> bool {
         match (self, next) {
             (Self::Claimed, Self::Prepared)
-            | (Self::Prepared, Self::Proven)
+            // `Prepared -> Signed` is the no-proof path: the ERC-20 approve that must land
+            // before a charged `apply_actions` is an ordinary account call with nothing to
+            // prove. Every pool state transition goes the long way round.
+            | (Self::Prepared, Self::Proven | Self::Signed)
             | (Self::Proven, Self::Signed)
             | (Self::Signed, Self::Submitted)
             | (Self::Submitted, Self::Accepted | Self::Reverted)
@@ -114,6 +117,12 @@ pub struct Attempt {
     pub valid_until_block: Option<u64>,
     /// Hash of the signed transaction, persisted before submission.
     pub transaction_hash: Option<Felt>,
+    /// Whether the exact signed transaction is stored beside this record.
+    ///
+    /// The transaction itself lives in its own file because it carries the proof blob, and a
+    /// record that reconciliation must scan should stay small enough to read cheaply.
+    #[serde(default)]
+    pub transaction_stored: bool,
     /// Unix seconds at which the chain accepted the transaction.
     pub accepted_at: Option<u64>,
 }
@@ -127,6 +136,7 @@ impl Attempt {
             proving_block: None,
             valid_until_block: None,
             transaction_hash: None,
+            transaction_stored: false,
             accepted_at: None,
         }
     }
@@ -409,6 +419,68 @@ impl OperationLease {
         self.flush()
     }
 
+    /// Persists the exact signed transaction, then records its hash and moves to
+    /// [`OperationStage::Signed`].
+    ///
+    /// This is the boundary the whole journal exists for. After it returns, a crash at any
+    /// point can still discover that a transaction with this hash may be on the chain, and
+    /// recovery can resubmit these exact bytes without changing the hash.
+    ///
+    /// The order is deliberate: the transaction file is written and synced first, and only
+    /// then does the record claim a hash. A crash between the two leaves an orphan file and
+    /// a record that still reads as unsubmitted, which is the safe direction to fail. The
+    /// reverse order would leave a hash that nothing can resubmit.
+    pub fn persist_signed(
+        &mut self,
+        transaction_hash: Felt,
+        transaction: &str,
+        now: u64,
+    ) -> Result<(), JournalError> {
+        let path = self.transaction_path(self.record.attempts.len() - 1);
+        write_bytes_atomic(&self.root, &path, transaction.as_bytes())?;
+
+        let attempt = self
+            .record
+            .attempts
+            .last_mut()
+            .expect("attempts are never empty");
+        attempt.transaction_hash = Some(transaction_hash);
+        attempt.transaction_stored = true;
+        self.advance(OperationStage::Signed, now)
+    }
+
+    /// Reads back the exact signed transaction stored for one attempt.
+    pub fn stored_transaction(&self, attempt_index: usize) -> Result<Option<String>, JournalError> {
+        let Some(attempt) = self.record.attempts.get(attempt_index) else {
+            return Ok(None);
+        };
+        if !attempt.transaction_stored {
+            return Ok(None);
+        }
+        let path = self.transaction_path(attempt_index);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(Some(text)),
+            // The record says a transaction was stored and it is not there. Reconciliation
+            // must not read that as "nothing was submitted".
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(JournalError::Corrupt {
+                    path,
+                    reason: "record claims a stored transaction that is missing",
+                })
+            }
+            Err(source) => Err(JournalError::Io { path, source }),
+        }
+    }
+
+    fn transaction_path(&self, attempt_index: usize) -> PathBuf {
+        // Deliberately not `.json`: `records()` parses every `.json` file in the directory
+        // as an operation record, and a transaction blob is not one.
+        self.root.join(format!(
+            "{}.{attempt_index}.tx",
+            self.record.operation_id.as_str()
+        ))
+    }
+
     fn flush(&mut self) -> Result<(), JournalError> {
         write_atomic(&self.root, &self.path, &self.record)
     }
@@ -424,9 +496,16 @@ impl core::fmt::Debug for OperationLease {
 }
 
 fn write_atomic(root: &Path, path: &Path, record: &OperationRecord) -> Result<(), JournalError> {
+    let encoded = serde_json::to_vec(record).map_err(|source| JournalError::Json {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    write_bytes_atomic(root, path, &encoded)
+}
+
+fn write_bytes_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
     let temporary = root.join(format!(
-        ".{}.{}.{:016x}.tmp",
-        record.operation_id.as_str(),
+        ".{}.{:016x}.tmp",
         std::process::id(),
         OsRng.next_u64(),
     ));
@@ -440,7 +519,7 @@ fn write_atomic(root: &Path, path: &Path, record: &OperationRecord) -> Result<()
         })?;
     set_file_mode(&file, &temporary, 0o600)?;
     let mut writer = BufWriter::new(file);
-    serde_json::to_writer(&mut writer, record).map_err(|source| JournalError::Json {
+    writer.write_all(bytes).map_err(|source| JournalError::Io {
         path: temporary.clone(),
         source,
     })?;

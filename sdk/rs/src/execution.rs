@@ -25,6 +25,7 @@ use starknet_types_core::felt::Felt;
 
 use crate::action_set::ActionSet;
 use crate::calldata;
+use crate::journal::{JournalError, OperationLease, OperationStage};
 use crate::prover::{BlockId, ProveTransactionResult, ProverError, ProvingService};
 use crate::rpc::{Receipt, RpcError, StarknetRpc};
 use crate::signing::{self, SigningError};
@@ -143,6 +144,7 @@ impl Executor {
     /// material, no addresses, and no amounts.
     pub async fn execute(
         &self,
+        operation: &mut OperationLease,
         user_address: Felt,
         pool_private_key: Felt,
         account_private_key: Felt,
@@ -163,6 +165,15 @@ impl Executor {
                 &proving_block,
             )
             .await?;
+
+        // Preflight is done and agreed with. Nothing is proven and nothing can have
+        // reached the chain, so this stage records only where the attempt is anchored.
+        operation.amend(now(), |attempt| {
+            attempt.proving_block = Some(proving_number);
+            attempt.valid_until_block =
+                Some(proving_number.saturating_add(self.config.proof_validity_blocks));
+        })?;
+        operation.advance(OperationStage::Prepared, now())?;
 
         let proof_nonce = self
             .rpc
@@ -190,6 +201,8 @@ impl Executor {
                 proved_len: server_actions.len(),
             });
         }
+
+        operation.advance(OperationStage::Proven, now())?;
 
         let submission_head = self.rpc.block_number().await?;
         if submission_head > proving_number.saturating_add(self.config.proof_validity_blocks) {
@@ -237,11 +250,22 @@ impl Executor {
             bounds,
             proof_facts,
         );
-        let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
+        let signed_hash = invoke.transaction_hash();
+        let signature = signing::sign(&account_private_key, &signed_hash)?;
         let transaction = invoke.with_signature(signature).with_proof(proof.proof);
+
+        // The crash window this closes: the hash is computable before submission, so it is
+        // written down before the chain can ever have seen it. Everything after this point
+        // may have produced an effect, and the journal can name it.
+        persist_transaction(operation, signed_hash, &transaction)?;
+
         stage("submitting apply_actions and waiting for the receipt");
         let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;
-        let receipt = self.wait_for_receipt(transaction_hash).await?;
+        operation.advance(OperationStage::Submitted, now())?;
+        confirm_hash(operation, signed_hash, transaction_hash)?;
+        let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        operation.advance(OperationStage::Accepted, now())?;
 
         Ok(ExecutionReceipt {
             transaction_hash,
@@ -261,11 +285,14 @@ impl Executor {
     /// Read `account_private_key` from its file immediately before calling. Not retained.
     pub async fn submit_call(
         &self,
+        operation: &mut OperationLease,
         account_private_key: Felt,
         target: Felt,
         entrypoint: &str,
         call_calldata: &[Felt],
     ) -> Result<CallReceipt, ExecutionError> {
+        // No proof, so this attempt goes straight from prepared to signed.
+        operation.advance(OperationStage::Prepared, now())?;
         let account_calldata = calldata::single_call(target, entrypoint, call_calldata);
         let nonce = self
             .rpc
@@ -291,10 +318,18 @@ impl Executor {
             .await?;
 
         let invoke = submission_invoke(&self.config, account_calldata, nonce, bounds, Vec::new());
-        let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
+        let signed_hash = invoke.transaction_hash();
+        let signature = signing::sign(&account_private_key, &signed_hash)?;
         let transaction = invoke.with_signature(signature);
+
+        persist_transaction(operation, signed_hash, &transaction)?;
+
         let transaction_hash = self.rpc.add_invoke_transaction(&transaction).await?;
-        let receipt = self.wait_for_receipt(transaction_hash).await?;
+        operation.advance(OperationStage::Submitted, now())?;
+        confirm_hash(operation, signed_hash, transaction_hash)?;
+        let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        operation.advance(OperationStage::Accepted, now())?;
 
         Ok(CallReceipt {
             transaction_hash,
@@ -302,12 +337,19 @@ impl Executor {
         })
     }
 
-    async fn wait_for_receipt(&self, transaction_hash: Felt) -> Result<Receipt, ExecutionError> {
+    async fn wait_for_receipt(
+        &self,
+        operation: &mut OperationLease,
+        transaction_hash: Felt,
+    ) -> Result<Receipt, ExecutionError> {
         let started = Instant::now();
         loop {
             match self.rpc.transaction_receipt(transaction_hash).await {
                 Ok(receipt) if receipt.is_accepted() => return Ok(receipt),
                 Ok(receipt) if receipt.is_reverted() => {
+                    // Recorded before returning: a revert is the one outcome that proves no
+                    // effect exists, and losing it would leave the attempt looking pending.
+                    operation.advance(OperationStage::Reverted, now())?;
                     return Err(ExecutionError::Reverted(
                         receipt
                             .revert_reason
@@ -511,6 +553,20 @@ pub enum ExecutionError {
         /// Configured wait.
         waited: Duration,
     },
+    /// The operation journal could not be advanced.
+    #[error(transparent)]
+    Journal(#[from] JournalError),
+    /// The signed transaction could not be encoded for persistence.
+    #[error("signed transaction could not be recorded: {0}")]
+    TransactionNotSerializable(serde_json::Error),
+    /// The node answered a submission with a hash other than the one that was signed.
+    #[error("submitted transaction {signed:#x} but the node returned {returned:#x}")]
+    TransactionHashMismatch {
+        /// Hash computed locally and written to the journal before submission.
+        signed: Felt,
+        /// Hash the node answered with.
+        returned: Felt,
+    },
     /// Final transaction reverted.
     #[error("apply_actions transaction reverted: {0}")]
     Reverted(String),
@@ -527,6 +583,51 @@ pub enum ExecutionError {
 /// One stage line on stderr. Freestanding so the write path reads as its stages.
 fn stage(name: &str) {
     eprintln!("stage: {name}");
+}
+
+/// Unix seconds, saturating at the epoch.
+///
+/// The journal timestamps are for operator reporting, not for any protocol decision, so a
+/// clock behind the epoch degrades to zero rather than failing a write that is already in
+/// flight.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+}
+
+/// Writes the exact transaction the RPC is about to receive, then records its hash.
+fn persist_transaction(
+    operation: &mut OperationLease,
+    transaction_hash: Felt,
+    transaction: &SignedInvokeV3,
+) -> Result<(), ExecutionError> {
+    // Stored in RPC wire form rather than as our own struct: resubmission has to reproduce
+    // the request byte for byte, and this is the shape that goes on the wire.
+    let encoded = serde_json::to_string(&transaction.to_wire())
+        .map_err(ExecutionError::TransactionNotSerializable)?;
+    operation.persist_signed(transaction_hash, &encoded, now())?;
+    Ok(())
+}
+
+/// Checks that the node accepted the transaction we actually signed.
+///
+/// The hash is computed locally before submission and written to the journal, so a node that
+/// answers with a different one has left the journal naming a transaction nobody is
+/// watching, while the one being watched is not the one that was recorded. Polling the
+/// returned hash and reporting success would hide a signed transaction still in flight, so
+/// this escalates instead.
+fn confirm_hash(
+    operation: &mut OperationLease,
+    signed: Felt,
+    returned: Felt,
+) -> Result<(), ExecutionError> {
+    if signed == returned {
+        return Ok(());
+    }
+    operation.advance(OperationStage::NeedsAttention, now())?;
+    Err(ExecutionError::TransactionHashMismatch { signed, returned })
 }
 
 #[cfg(test)]
