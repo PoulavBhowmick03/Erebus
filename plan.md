@@ -105,6 +105,12 @@ Complete these tasks one at a time, with review and focused verification after e
 5. **Read-only startup reconciliation.** Reconcile journal entries against transaction
    receipts, relevant chain state, and local channel state. Classify ambiguous cases as
    `needs_attention`; never submit during startup.
+   *Done 2026-08-23 — `f9bda51`. `Client::reconcile()`, pure classification, no journal
+   writes. A missing receipt is not proof on its own, so the attempt now records the account
+   nonce it signed against and a transaction is only ruled out once the account has moved
+   past it; no recorded nonce classifies as unknown. Records carry their channel handle so an
+   accepted-but-uncommitted operation can name the local record. Nothing calls it yet — the
+   CLI seam is task 10.*
 6. **Explicit dual-mode resume.** Implement the valid-proof exact-resubmission path and the
    expired-proof rebuild path described above.
 7. **Live prepared-stage checks.** Read live proof validity, the pool's current per-write fee,

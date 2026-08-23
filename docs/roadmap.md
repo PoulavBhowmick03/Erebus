@@ -627,7 +627,9 @@ Work:
    2026-08-23: `b784f3f` and `7b7b4c8`. Every write walks prepared, proven, signed,
    submitted, accepted, committed, and the exact signed transaction is persisted before
    submission so a crash can still name what may have landed.
-3. Reconcile the journal with chain state after restart.
+3. ~~Reconcile the journal with chain state after restart.~~ Done 2026-08-23: `f9bda51`.
+   Read-only classification against receipts and the account nonce; ambiguity is reported,
+   never resolved by guessing. Not yet reachable from the CLI.
 4. Add fault injection at every write boundary.
 5. Rebuild channel handles and cursors from keys and chain state.
 6. Cache immutable note prefixes and read from the last known cursor.
@@ -1367,7 +1369,10 @@ exist before Phase 10 gives an agent more ways to spend.
 - [ ] Idempotency: a replayed operation returns its recorded outcome instead of re-running.
 - [ ] Journal retention: nothing prunes records, lock files, or stored transactions, and a
       request that fails local validation still leaves a record behind.
-- [ ] Crash and chain-state recovery.
+- [x] Startup reconciliation: every journalled operation classified against the chain,
+      read-only (`f9bda51`).
+- [ ] Crash and chain-state recovery: explicit resume, both the valid-proof and
+      expired-proof paths.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
 - [ ] Read cursor, cache, and discovery support.
