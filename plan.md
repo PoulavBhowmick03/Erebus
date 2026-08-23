@@ -96,6 +96,12 @@ Complete these tasks one at a time, with review and focused verification after e
 4. **Persist-before-submit execution.** Record preflight inputs, proof metadata, exact signed
    transaction bytes, and transaction hash before calling the RPC submission method. Record
    the receipt and local state commit separately.
+   *Done 2026-08-23 — `7b7b4c8`. The signed wire transaction is written and synced before
+   the RPC call, then the record claims its hash. Two things this turned up: nothing
+   compared the locally signed hash with the one the node returns (now
+   `TransactionHashMismatch`, parked at `needs_attention`), and re-locking an operation id
+   whose lease is already held blocks rather than failing — harmless for the one-shot CLI,
+   a self-deadlock for any long-running holder. Stored transactions are still unpruned.*
 5. **Read-only startup reconciliation.** Reconcile journal entries against transaction
    receipts, relevant chain state, and local channel state. Classify ambiguous cases as
    `needs_attention`; never submit during startup.

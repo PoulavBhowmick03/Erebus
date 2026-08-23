@@ -31,8 +31,8 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
-| Tests | 266 Rust (plus 2 intentionally ignored live-prover tests), 118 Python, 43 TypeScript |
-| In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 1–3 landed 2026-08-23: caller-supplied operation IDs on every chain write, canonical request bindings, and a durable operation journal. Nothing populates the journal's proof or transaction fields yet, so there is still no crash recovery and no idempotent replay |
+| Tests | 270 Rust (plus 2 intentionally ignored live-prover tests), 118 Python, 43 TypeScript |
+| In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 1–4 landed 2026-08-23: caller-supplied operation IDs on every chain write, canonical request bindings, a durable operation journal, and persist-before-submit. The journal now records what may have landed; nothing yet reads it back, so there is still no startup reconciliation, no resume, and no idempotent replay |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
   arm64 built and canary-verified. Intel macOS unsupported. Published at the `v0.1.0` tag |

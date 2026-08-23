@@ -623,10 +623,10 @@ Work:
 1. ~~Add operation IDs to every write request.~~ Done 2026-08-23: `c91a792`. All six
    chain-writing client methods take a caller-supplied `OperationId` and fingerprint their
    canonical parameters before any RPC, proof, or submission.
-2. Journal preflight, proof, transaction hash, receipt, and state commit. Storage done
-   2026-08-23: `b784f3f`. The record, its lifecycle stages, and the locked `0600` store
-   exist and reject a conflicting id reuse; nothing populates the proof or transaction
-   fields yet. That is plan.md task 4.
+2. ~~Journal preflight, proof, transaction hash, receipt, and state commit.~~ Done
+   2026-08-23: `b784f3f` and `7b7b4c8`. Every write walks prepared, proven, signed,
+   submitted, accepted, committed, and the exact signed transaction is persisted before
+   submission so a crash can still name what may have landed.
 3. Reconcile the journal with chain state after restart.
 4. Add fault injection at every write boundary.
 5. Rebuild channel handles and cursors from keys and chain state.
@@ -1362,7 +1362,11 @@ exist before Phase 10 gives an agent more ways to spend.
 
 - [x] Durable operation journal: record, lifecycle stages, locked `0600` storage, atomic
       replacement with directory sync (`b784f3f`).
+- [x] Persist-before-submit: the exact signed transaction and its hash are on disk before
+      the RPC call (`7b7b4c8`).
 - [ ] Idempotency: a replayed operation returns its recorded outcome instead of re-running.
+- [ ] Journal retention: nothing prunes records, lock files, or stored transactions, and a
+      request that fails local validation still leaves a record behind.
 - [ ] Crash and chain-state recovery.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
