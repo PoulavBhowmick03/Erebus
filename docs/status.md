@@ -31,8 +31,8 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
-| Tests | 299 Rust (plus 2 intentionally ignored live-prover tests), 118 Python, 43 TypeScript |
-| In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 1–7 landed 2026-08-23: caller-supplied operation IDs on every chain write, canonical request bindings, a durable operation journal, persist-before-submit, read-only startup reconciliation, live prepared-stage funding checks, and explicit resume. A crashed write can be classified against the chain and resumed explicitly. None of it is reachable from the CLI, Python or MCP until the protocol-4 seam lands (task 10), and none of it has been exercised against a live chain (task 11) |
+| Tests | 311 Rust (plus 2 intentionally ignored live-prover tests), 118 Python, 43 TypeScript |
+| In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 2, 4, 5, and 6 are complete in the 2026-08-23 working tree: complete request binding and result replay, durable prepared/receipt/local-result facts, a read-only pre-write reconciliation gate, and both exact-resubmission and proven-dead rebuild recovery. Task 8 is also complete in the working tree. Recovery is still not reachable from the CLI, Python, or MCP until the protocol-4 seam lands (task 10), fault injection is not yet exhaustive, and none of the recovery paths has been exercised against a live chain (task 11) |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
   arm64 built and canary-verified. Intel macOS unsupported. Published at the `v0.1.0` tag |
@@ -145,5 +145,7 @@ only metadata and the path. The capsule does not enter the model transcript.
    Wire v3 is live as of 2026-08-22 (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`). The
    linkage measurement now scores M1 `0.5000` against three live wire-v3 transactions, so
    this item is about the remaining leaks, not about missing evidence.
-4. **Phase 7: the operation journal and crash recovery.** Nothing on this list makes a
-   killed process recoverable, and one-deal-per-pair makes a lost mid-settlement permanent.
+4. **Finish the Phase 7 product seam and fault matrix.** Rust now retains enough information
+   to reconcile and explicitly resume both recovery modes, but CLI, Python, MCP, and agents
+   cannot invoke that path yet. Kill tests at every write boundary and live-chain recovery
+   evidence also remain open.

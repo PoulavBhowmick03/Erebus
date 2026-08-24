@@ -65,7 +65,7 @@ impl core::fmt::Display for ChannelHandle {
 }
 
 /// Secret-bearing state for one bilateral channel.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredChannel {
     version: u32,
     /// Negotiation wire generation. Missing means legacy v1 when loading old records.
@@ -259,6 +259,70 @@ impl StateStore {
         Err(StateError::HandleCollision)
     }
 
+    /// Allocates an opaque handle without writing channel state yet.
+    ///
+    /// A crash-safe channel open must put the chosen handle in the operation journal before
+    /// submission. The handle has 256 random bits, and the later recovered write still uses
+    /// `create_new` semantics, so an intervening collision fails closed instead of
+    /// overwriting another record.
+    pub fn allocate_handle(&self) -> Result<ChannelHandle, StateError> {
+        for _ in 0..16 {
+            let handle = ChannelHandle::random();
+            if !self.state_path(&handle).exists() && !self.lock_path(&handle).exists() {
+                return Ok(handle);
+            }
+        }
+        Err(StateError::HandleCollision)
+    }
+
+    /// Creates an exact journal-planned channel, or accepts an identical existing record.
+    ///
+    /// Recovery calls this after the chain accepted an open but before the original process
+    /// durably saved its local state. Reapplying the same mutation is harmless; a different
+    /// record under the planned handle is a contradiction and fails closed.
+    pub fn create_recovered(&self, state: StoredChannel) -> Result<(), StateError> {
+        let handle = state.handle.clone();
+        let lock_path = self.lock_path(&handle);
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| StateError::Io {
+                path: lock_path.clone(),
+                source,
+            })?;
+        set_file_mode(&lock, &lock_path, 0o600)?;
+        lock.lock_exclusive().map_err(|source| StateError::Io {
+            path: lock_path,
+            source,
+        })?;
+
+        let path = self.state_path(&handle);
+        if path.exists() {
+            let existing = self.read_state(&handle)?;
+            if existing == state {
+                return Ok(());
+            }
+            return Err(StateError::RecoveryConflict {
+                handle,
+                reason: "the planned channel handle already contains different state".to_owned(),
+            });
+        }
+
+        self.write_atomic(&state)
+    }
+
+    /// Reads one channel snapshot without leaving its lock held.
+    pub fn snapshot(&self, handle: &ChannelHandle) -> Result<Option<StoredChannel>, StateError> {
+        if !self.state_path(handle).exists() {
+            return Ok(None);
+        }
+        let lease = self.lock(handle)?;
+        Ok(Some(lease.state().clone()))
+    }
+
     /// Locks and loads a channel. Keep the returned lease alive through any async operation
     /// that uses or advances its cursor.
     pub fn lock(&self, handle: &ChannelHandle) -> Result<ChannelLease, StateError> {
@@ -289,6 +353,16 @@ impl StateStore {
             source,
         })?;
 
+        let state = self.read_state(handle)?;
+
+        Ok(ChannelLease {
+            store: self.clone(),
+            _lock: lock,
+            state,
+        })
+    }
+
+    fn read_state(&self, handle: &ChannelHandle) -> Result<StoredChannel, StateError> {
         let state_path = self.state_path(handle);
         let file = File::open(&state_path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
@@ -315,11 +389,7 @@ impl StateStore {
             });
         }
 
-        Ok(ChannelLease {
-            store: self.clone(),
-            _lock: lock,
-            state,
-        })
+        Ok(state)
     }
 
     /// Finds an existing channel to `counterparty` for `token`, if this identity has one.
@@ -450,7 +520,8 @@ impl StateStore {
                 path: temporary.clone(),
                 source,
             })?;
-        std::fs::rename(&temporary, &path).map_err(|source| StateError::Io { path, source })
+        std::fs::rename(&temporary, &path).map_err(|source| StateError::Io { path, source })?;
+        sync_dir(&self.root)
     }
 
     fn state_path(&self, handle: &ChannelHandle) -> PathBuf {
@@ -518,6 +589,14 @@ pub enum StateError {
     /// Sixteen cryptographically random handles collided with existing files.
     #[error("could not allocate a unique channel handle")]
     HandleCollision,
+    /// A recovery mutation would overwrite state that does not match its durable plan.
+    #[error("cannot recover channel {handle}: {reason}")]
+    RecoveryConflict {
+        /// Planned handle.
+        handle: ChannelHandle,
+        /// Contradiction found on disk.
+        reason: String,
+    },
     /// Filesystem failure.
     #[error("state I/O at {}: {source}", path.display())]
     Io {
@@ -564,6 +643,23 @@ fn set_file_mode(file: &File, path: &Path, mode: u32) -> Result<(), StateError> 
 
 #[cfg(not(unix))]
 fn set_file_mode(_file: &File, _path: &Path, _mode: u32) -> Result<(), StateError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_dir(path: &Path) -> Result<(), StateError> {
+    let directory = File::open(path).map_err(|source| StateError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    directory.sync_all().map_err(|source| StateError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_path: &Path) -> Result<(), StateError> {
     Ok(())
 }
 
@@ -636,6 +732,53 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn recovered_channel_creation_is_idempotent_and_never_overwrites() {
+        let (_root, store) = temporary_store();
+        let handle = store.allocate_handle().expect("handle");
+        let planned = StoredChannel::new(
+            handle.clone(),
+            Felt::from(0xaau8),
+            Felt::from(0xbbu8),
+            Felt::from(1u8),
+            Felt::from(2u8),
+            Felt::from(3u8),
+            Felt::from(4u8),
+            Felt::from(5u8),
+            0,
+            0,
+            Felt::from(6u8),
+            7,
+        );
+
+        store
+            .create_recovered(planned.clone())
+            .expect("first recovery creates");
+        store
+            .create_recovered(planned.clone())
+            .expect("same recovery is idempotent");
+        assert_eq!(store.snapshot(&handle).expect("snapshot"), Some(planned));
+
+        let conflicting = StoredChannel::new(
+            handle,
+            Felt::from(0xaau8),
+            Felt::from(0xbbu8),
+            Felt::from(1u8),
+            Felt::from(99u8),
+            Felt::from(3u8),
+            Felt::from(4u8),
+            Felt::from(5u8),
+            0,
+            0,
+            Felt::from(6u8),
+            7,
+        );
+        assert!(matches!(
+            store.create_recovered(conflicting),
+            Err(StateError::RecoveryConflict { .. })
+        ));
     }
 
     #[test]

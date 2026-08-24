@@ -187,6 +187,22 @@ fn an_accepted_write_reports_local_state_behind_rather_than_resubmitting() {
 }
 
 #[test]
+fn an_effect_with_conflicting_local_state_requires_an_operator() {
+    let (_root, lease) = lease_at(OperationStage::Accepted);
+
+    assert!(matches!(
+        plan(
+            &lease,
+            Outcome::Effect,
+            NextAction::OperatorAttention,
+            "the local channel conflicts with the accepted effect",
+            100
+        ),
+        ResumePlan::Report(ResumeOutcome::ReconciliationRequired { .. })
+    ));
+}
+
+#[test]
 fn a_reverted_transaction_is_rebuilt_not_resubmitted() {
     let (_root, lease) = lease_at(OperationStage::Reverted);
 

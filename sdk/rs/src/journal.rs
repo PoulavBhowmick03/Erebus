@@ -18,13 +18,19 @@ use fs2::FileExt;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use starknet_types_core::felt::Felt;
 
 use crate::operation::{OperationId, RequestBinding, WriteOperation};
+use crate::rpc::Receipt;
 use crate::state::ChannelHandle;
 
 /// Journal record schema version. A record written by a newer SDK fails closed.
-pub const JOURNAL_VERSION: u32 = 1;
+pub const JOURNAL_VERSION: u32 = 2;
+
+/// Oldest schema this SDK can classify. Version 1 has no replayable request or completion
+/// plan, so it remains readable but cannot be rebuilt automatically.
+const MIN_READABLE_JOURNAL_VERSION: u32 = 1;
 
 /// Directory holding operation records, relative to the identity state directory.
 const JOURNAL_DIR: &str = "operations";
@@ -48,7 +54,11 @@ pub enum OperationStage {
     Submitted,
     /// The chain accepted it. The effect exists.
     Accepted,
-    /// Local state was updated to match the accepted effect.
+    /// The requested effect and result are durably reflected locally.
+    ///
+    /// Most committed operations reached [`Self::Accepted`] first. A request whose effect
+    /// already existed can move directly from [`Self::Claimed`] once that no-op result is
+    /// recorded; it must not remain an indefinitely claimed write.
     Committed,
     /// The chain rejected it. No effect exists.
     Reverted,
@@ -64,12 +74,16 @@ impl OperationStage {
 
     /// Whether an on-chain effect may exist for this attempt.
     ///
-    /// True from [`Self::Submitted`] onwards, and true for [`Self::NeedsAttention`] because
-    /// "we do not know" must be treated as "it might have landed".
+    /// True from [`Self::Signed`] onwards. `Signed` is included because a process can die
+    /// after the RPC accepted the bytes but before it durably records `Submitted`.
     pub const fn may_have_landed(self) -> bool {
         matches!(
             self,
-            Self::Submitted | Self::Accepted | Self::Committed | Self::NeedsAttention
+            Self::Signed
+                | Self::Submitted
+                | Self::Accepted
+                | Self::Committed
+                | Self::NeedsAttention
         )
     }
 
@@ -80,7 +94,9 @@ impl OperationStage {
     /// review question rather than an arithmetic accident.
     pub const fn can_advance_to(self, next: Self) -> bool {
         match (self, next) {
-            (Self::Claimed, Self::Prepared)
+            // `Claimed -> Committed` is an idempotent no-chain result: for example, opening
+            // a channel that already exists with the requested peer and wire version.
+            (Self::Claimed, Self::Prepared | Self::Committed)
             // `Prepared -> Signed` is the no-proof path: the ERC-20 approve that must land
             // before a charged `apply_actions` is an ordinary account call with nothing to
             // prove. Every pool state transition goes the long way round.
@@ -131,6 +147,15 @@ pub struct Attempt {
     /// record that reconciliation must scan should stay small enough to read cheaply.
     #[serde(default)]
     pub transaction_stored: bool,
+    /// Live funding and proof-validity inputs read before proof generation.
+    #[serde(default)]
+    pub prepared: Option<PreparedSnapshot>,
+    /// Result recipe and idempotent local-state mutation fixed before submission.
+    #[serde(default)]
+    pub completion: Option<Value>,
+    /// Accepted or reverted receipt, persisted before the matching terminal stage.
+    #[serde(default)]
+    pub receipt: Option<Receipt>,
     /// Unix seconds at which the chain accepted the transaction.
     pub accepted_at: Option<u64>,
 }
@@ -146,9 +171,27 @@ impl Attempt {
             transaction_hash: None,
             account_nonce: None,
             transaction_stored: false,
+            prepared: None,
+            completion: None,
+            receipt: None,
             accepted_at: None,
         }
     }
+}
+
+/// Live prepared-stage values that explain why proving was allowed to start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparedSnapshot {
+    /// Deposit pulled in addition to the pool fee.
+    pub deposit: String,
+    /// Pool-owned proof-validity window read at call time.
+    pub proof_validity_blocks: u64,
+    /// Pool fee read at call time.
+    pub fee_per_write: String,
+    /// Allowance read at call time.
+    pub allowance: String,
+    /// Public token balance read at call time.
+    pub public_balance: String,
 }
 
 /// The durable record for one operation id.
@@ -165,6 +208,9 @@ pub struct OperationRecord {
     pub operation: WriteOperation,
     /// Fingerprint of the canonical request parameters.
     pub binding: RequestBinding,
+    /// Canonical replayable request. Missing only on readable legacy version-1 records.
+    #[serde(default)]
+    pub request: Option<Value>,
     /// Channel this write belongs to, when it has one.
     ///
     /// `open_channel` has no handle yet when the id is claimed, and the funding writes have
@@ -174,6 +220,9 @@ pub struct OperationRecord {
     pub channel: Option<ChannelHandle>,
     /// Unix seconds when the id was first claimed.
     pub created_at: u64,
+    /// Final method result, persisted before the operation becomes committed.
+    #[serde(default)]
+    pub result: Option<Value>,
     /// Every attempt, oldest first. Never empty.
     pub attempts: Vec<Attempt>,
 }
@@ -230,11 +279,44 @@ impl OperationJournal {
         channel: Option<ChannelHandle>,
         now: u64,
     ) -> Result<OperationLease, JournalError> {
+        self.claim_inner(operation_id, operation, binding, channel, None, now)
+    }
+
+    /// Claims an operation together with the canonical request needed for durable replay.
+    pub fn claim_with_request(
+        &self,
+        operation_id: &OperationId,
+        operation: WriteOperation,
+        binding: RequestBinding,
+        channel: Option<ChannelHandle>,
+        request: Value,
+        now: u64,
+    ) -> Result<OperationLease, JournalError> {
+        self.claim_inner(
+            operation_id,
+            operation,
+            binding,
+            channel,
+            Some(request),
+            now,
+        )
+    }
+
+    fn claim_inner(
+        &self,
+        operation_id: &OperationId,
+        operation: WriteOperation,
+        binding: RequestBinding,
+        channel: Option<ChannelHandle>,
+        request: Option<Value>,
+        now: u64,
+    ) -> Result<OperationLease, JournalError> {
+        let identity_lock = self.identity_lock()?;
         let lock = self.lock_file(operation_id)?;
         let path = self.record_path(operation_id);
 
         let record = match self.read(&path)? {
-            Some(record) => {
+            Some(mut record) => {
                 if record.binding != binding {
                     return Err(JournalError::BindingConflict {
                         operation_id: operation_id.clone(),
@@ -248,26 +330,47 @@ impl OperationJournal {
                         found: record.operation_id,
                     });
                 }
+                if record.operation != operation {
+                    return Err(JournalError::OperationConflict {
+                        operation_id: operation_id.clone(),
+                        recorded: record.operation,
+                        received: operation,
+                    });
+                }
+                match (&record.request, &request) {
+                    (Some(recorded), Some(received)) if recorded != received => {
+                        return Err(JournalError::RequestConflict {
+                            operation_id: operation_id.clone(),
+                        });
+                    }
+                    (None, Some(received)) if record.stage() == OperationStage::Claimed => {
+                        record.version = JOURNAL_VERSION;
+                        record.request = Some(received.clone());
+                    }
+                    _ => {}
+                }
                 record
             }
-            None => {
-                let record = OperationRecord {
-                    version: JOURNAL_VERSION,
-                    operation_id: operation_id.clone(),
-                    operation,
-                    binding,
-                    channel,
-                    created_at: now,
-                    attempts: vec![Attempt::new(OperationStage::Claimed, now)],
-                };
-                write_atomic(&self.root, &path, &record)?;
-                record
-            }
+            None => OperationRecord {
+                version: JOURNAL_VERSION,
+                operation_id: operation_id.clone(),
+                operation,
+                binding,
+                request,
+                channel,
+                created_at: now,
+                result: None,
+                attempts: vec![Attempt::new(OperationStage::Claimed, now)],
+            },
         };
+        if record.version == JOURNAL_VERSION {
+            write_atomic(&self.root, &path, &record)?;
+        }
 
         Ok(OperationLease {
             root: self.root.clone(),
             path,
+            _identity_lock: identity_lock,
             _lock: lock,
             record,
         })
@@ -279,6 +382,7 @@ impl OperationJournal {
         if !path.exists() {
             return Ok(None);
         }
+        let identity_lock = self.identity_lock()?;
         let lock = self.lock_file(operation_id)?;
         let Some(record) = self.read(&path)? else {
             return Ok(None);
@@ -286,9 +390,28 @@ impl OperationJournal {
         Ok(Some(OperationLease {
             root: self.root.clone(),
             path,
+            _identity_lock: identity_lock,
             _lock: lock,
             record,
         }))
+    }
+
+    fn identity_lock(&self) -> Result<File, JournalError> {
+        let path = self.root.join(".identity.lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| JournalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        set_file_mode(&lock, &path, 0o600)?;
+        lock.lock_exclusive()
+            .map_err(|source| JournalError::Io { path, source })?;
+        Ok(lock)
     }
 
     /// Every record in the journal, in unspecified order.
@@ -334,13 +457,30 @@ impl OperationJournal {
                 path: path.to_path_buf(),
                 source,
             })?;
-        if record.version != JOURNAL_VERSION {
+        if !(MIN_READABLE_JOURNAL_VERSION..=JOURNAL_VERSION).contains(&record.version) {
             return Err(JournalError::UnsupportedVersion(record.version));
         }
         if record.attempts.is_empty() {
             return Err(JournalError::Corrupt {
                 path: path.to_path_buf(),
                 reason: "record has no attempts",
+            });
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| JournalError::Corrupt {
+                path: path.to_path_buf(),
+                reason: "record filename is not a valid operation id",
+            })?;
+        let expected = OperationId::parse(stem.to_owned()).map_err(|_| JournalError::Corrupt {
+            path: path.to_path_buf(),
+            reason: "record filename is not a valid operation id",
+        })?;
+        if record.operation_id != expected {
+            return Err(JournalError::IdMismatch {
+                expected,
+                found: record.operation_id,
             });
         }
         Ok(Some(record))
@@ -379,6 +519,7 @@ impl OperationJournal {
 pub struct OperationLease {
     root: PathBuf,
     path: PathBuf,
+    _identity_lock: File,
     _lock: File,
     record: OperationRecord,
 }
@@ -420,6 +561,70 @@ impl OperationLease {
         self.flush()
     }
 
+    /// Persists the live funding and validity inputs before proof generation starts.
+    pub fn record_prepared(
+        &mut self,
+        prepared: PreparedSnapshot,
+        now: u64,
+    ) -> Result<(), JournalError> {
+        self.amend(now, |attempt| attempt.prepared = Some(prepared))
+    }
+
+    /// Persists the result recipe and local mutation before submission can happen.
+    pub fn record_completion(&mut self, completion: Value, now: u64) -> Result<(), JournalError> {
+        self.amend(now, |attempt| attempt.completion = Some(completion))
+    }
+
+    /// Persists a chain receipt before the corresponding lifecycle stage is advanced.
+    pub fn record_receipt(&mut self, receipt: Receipt, now: u64) -> Result<(), JournalError> {
+        let receipt_hash = Felt::from_hex(&receipt.transaction_hash).map_err(|_| {
+            JournalError::ReceiptConflict {
+                operation_id: self.record.operation_id.clone(),
+                reason: "receipt transaction hash is not a felt".to_owned(),
+            }
+        })?;
+        let attempt = self.record.attempt();
+        if attempt.transaction_hash != Some(receipt_hash) {
+            return Err(JournalError::ReceiptConflict {
+                operation_id: self.record.operation_id.clone(),
+                reason: "receipt transaction hash does not match the signed transaction".to_owned(),
+            });
+        }
+        if attempt
+            .receipt
+            .as_ref()
+            .is_some_and(|recorded| recorded != &receipt)
+        {
+            return Err(JournalError::ReceiptConflict {
+                operation_id: self.record.operation_id.clone(),
+                reason: "a different receipt is already recorded".to_owned(),
+            });
+        }
+        self.amend(now, |attempt| attempt.receipt = Some(receipt))
+    }
+
+    /// Persists the final method result before marking local state committed.
+    pub fn record_result(&mut self, result: Value, now: u64) -> Result<(), JournalError> {
+        if self
+            .record
+            .result
+            .as_ref()
+            .is_some_and(|recorded| recorded != &result)
+        {
+            return Err(JournalError::ResultConflict {
+                operation_id: self.record.operation_id.clone(),
+            });
+        }
+        self.record.result = Some(result);
+        self.record.version = JOURNAL_VERSION;
+        self.record
+            .attempts
+            .last_mut()
+            .expect("attempts are never empty")
+            .updated_at = now;
+        self.flush()
+    }
+
     /// Starts a fresh attempt, retaining every earlier one.
     ///
     /// Only recovery calls this, and only after establishing that no earlier attempt can
@@ -433,7 +638,7 @@ impl OperationLease {
     /// The new attempt starts at [`OperationStage::Claimed`], so the re-issued request walks
     /// the same stages as a first attempt and gets the same checks. Earlier attempts keep
     /// their transaction hashes, which is what can still prove they never landed.
-    pub fn restart(&mut self, now: u64) -> Result<(), JournalError> {
+    pub(crate) fn restart(&mut self, now: u64) -> Result<(), JournalError> {
         if self.record.stage() == OperationStage::Committed {
             return Err(JournalError::IllegalTransition {
                 from: OperationStage::Committed,
@@ -668,6 +873,36 @@ pub enum JournalError {
         /// Binding of the request that collided with it.
         received: RequestBinding,
     },
+    /// The digest matched but the canonical request did not.
+    #[error("operation {operation_id} is already bound to different canonical parameters")]
+    RequestConflict {
+        /// Reused id.
+        operation_id: OperationId,
+    },
+    /// The record names a different method even though its binding was reused.
+    #[error("operation {operation_id} records {recorded:?}, not {received:?}")]
+    OperationConflict {
+        /// Reused id.
+        operation_id: OperationId,
+        /// Method already stored.
+        recorded: WriteOperation,
+        /// Method just requested.
+        received: WriteOperation,
+    },
+    /// A receipt contradicts the transaction facts already stored for the attempt.
+    #[error("operation {operation_id} has a contradictory receipt: {reason}")]
+    ReceiptConflict {
+        /// Affected operation.
+        operation_id: OperationId,
+        /// Contradiction.
+        reason: String,
+    },
+    /// Finalization tried to replace a previously recorded method result.
+    #[error("operation {operation_id} already has a different final result")]
+    ResultConflict {
+        /// Affected operation.
+        operation_id: OperationId,
+    },
     /// A stage change would skip or reverse the lifecycle.
     #[error("operation cannot move from {from:?} to {to:?}")]
     IllegalTransition {
@@ -676,4 +911,120 @@ pub enum JournalError {
         /// Requested stage.
         to: OperationStage,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    const CHAIN: Felt = Felt::from_hex_unchecked("0x534e5f5345504f4c4941");
+    const POOL: Felt = Felt::from_hex_unchecked("0x4e4f");
+    const TOKEN: Felt = Felt::from_hex_unchecked("0x53545f");
+
+    fn id(seed: u8) -> OperationId {
+        OperationId::parse(format!("op_{}", format!("{seed:02x}").repeat(32)))
+            .expect("constructed id is valid")
+    }
+
+    fn binding() -> RequestBinding {
+        RequestBinding::builder(WriteOperation::Shield, CHAIN, POOL, TOKEN)
+            .u128_be(500)
+            .finish()
+    }
+
+    fn journal() -> OperationJournal {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "erebus-journal-private-restart-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        OperationJournal::new(root).expect("journal opens")
+    }
+
+    fn signed_lease(seed: u8) -> OperationLease {
+        let journal = journal();
+        let mut lease = journal
+            .claim(&id(seed), WriteOperation::Shield, binding(), None, 1_000)
+            .expect("claim");
+        lease
+            .advance(OperationStage::Prepared, 1_001)
+            .expect("prepare");
+        lease.advance(OperationStage::Proven, 1_002).expect("prove");
+        lease
+            .persist_signed(Felt::from_hex_unchecked("0x1111"), "first", 1_003)
+            .expect("persist signed transaction");
+        lease
+    }
+
+    #[test]
+    fn replacement_attempt_retains_every_earlier_hash_and_transaction() {
+        let mut lease = signed_lease(1);
+        lease
+            .advance(OperationStage::Submitted, 1_004)
+            .expect("submit");
+
+        lease.restart(2_000).expect("proven-dead attempt restarts");
+
+        assert_eq!(lease.record().attempts.len(), 2);
+        assert_eq!(lease.record().stage(), OperationStage::Claimed);
+        assert_eq!(
+            lease.record().attempts[0].transaction_hash,
+            Some(Felt::from_hex_unchecked("0x1111"))
+        );
+        assert_eq!(
+            lease.stored_transaction(0).expect("read first"),
+            Some("first".to_owned())
+        );
+
+        lease
+            .advance(OperationStage::Prepared, 2_001)
+            .expect("prepare replacement");
+        lease
+            .advance(OperationStage::Proven, 2_002)
+            .expect("prove replacement");
+        lease
+            .persist_signed(Felt::from_hex_unchecked("0x2222"), "second", 2_003)
+            .expect("persist replacement");
+
+        assert_eq!(
+            lease.stored_transaction(1).expect("read replacement"),
+            Some("second".to_owned())
+        );
+    }
+
+    #[test]
+    fn committed_operation_cannot_start_a_replacement_attempt() {
+        let mut lease = signed_lease(2);
+        for stage in [
+            OperationStage::Submitted,
+            OperationStage::Accepted,
+            OperationStage::Committed,
+        ] {
+            lease.advance(stage, 1_004).expect("advance");
+        }
+
+        assert!(matches!(
+            lease.restart(2_000),
+            Err(JournalError::IllegalTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn reverted_operation_can_start_a_replacement_attempt() {
+        let mut lease = signed_lease(3);
+        lease
+            .advance(OperationStage::Submitted, 1_004)
+            .expect("submit");
+        lease
+            .advance(OperationStage::Reverted, 1_005)
+            .expect("revert");
+
+        lease
+            .restart(2_000)
+            .expect("reverted attempt produced no effect");
+        assert_eq!(lease.record().stage(), OperationStage::Claimed);
+    }
 }

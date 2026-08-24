@@ -380,11 +380,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::Allowance { config } => {
             let client = config.build()?;
-            let report = client.pool_allowance().await?;
-            serialize(serde_json::json!({
-                "allowance": report.allowance.to_string(),
-                "fee_per_write": report.fee_per_write.to_string(),
-            }))
+            serialize(client.pool_allowance().await?)
         }
         Request::Doctor { config } => {
             let client = config.build()?;
@@ -408,12 +404,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::Balance { config } => {
             let client = config.build()?;
-            let balance = client.note_balance().await?;
-            serialize(serde_json::json!({
-                "notes": balance.spendable.iter().map(u128::to_string).collect::<Vec<_>>(),
-                "total": balance.spendable.iter().sum::<u128>().to_string(),
-                "pending": balance.pending.iter().map(u128::to_string).collect::<Vec<_>>(),
-            }))
+            serialize(client.note_balance().await?)
         }
     }
 }
@@ -503,7 +494,9 @@ fn client_error_response(error: &ClientError) -> Response {
             ("SUBMIT_FAILED", true)
         }
         ClientError::OperationConflict { .. } => ("OPERATION_CONFLICT", false),
-        ClientError::OperationInProgress { .. } => ("RECONCILIATION_REQUIRED", false),
+        ClientError::OperationInProgress { .. } | ClientError::RecoveryRequired { .. } => {
+            ("RECONCILIATION_REQUIRED", false)
+        }
         // Not retryable by the caller: a journal that cannot be read cannot rule out a
         // pending transaction, so a blind retry is exactly the wrong move.
         ClientError::Journal(_) => ("RECONCILIATION_REQUIRED", false),

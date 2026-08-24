@@ -10,23 +10,24 @@ simulation and does not ask for a wallet.
 
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
 exchange structured offers over it, and settle atomically through the shielded pool.
-Historical wire-v2 channels can export a whole-channel viewing key. Wire v3 disables that
-export until a per-deal grant exists.
+Historical wire-v2 channels can export a whole-channel viewing key. Wire v3 replaces that
+with a grant scoped to one deal and one named recipient.
 
 ---
 
 ## Status
 
-**Testnet, unaudited, experimental.** The historical wire-v2 loop — two agents negotiating,
-settling atomically, and disclosing to a third party — runs on Starknet Sepolia. Wire v3 is
-verified offline but has no live Sepolia receipt or safe disclosure grant. It has had no
+**Testnet, unaudited, experimental.** The full loop — two agents negotiating, settling
+atomically, and disclosing to a third party — runs on Starknet Sepolia at wire v3, including
+repeat deals through one channel pair and disclosure scoped to a single deal. It has had no
 external security review. Do not put real value through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
 are confidential, and that is demonstrated rather than asserted: an observer with no key
-recovers nothing from a wire-v2 settlement. New source-built channels default to wire v3,
-which removes v2's fixed salt-shape classifier; this is verified offline but does not yet
-have a live Sepolia receipt. That a channel was opened, and with whom, is still public.
+recovers nothing from a settlement. New source-built channels default to wire v3, which
+removes v2's fixed salt-shape classifier: against live Sepolia wire-v3 transactions that
+classifier scores 0.5000 balanced accuracy, which is chance. That a channel was opened, and
+with whom, is still public.
 [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
 source to quote for privacy claims.
 
@@ -56,7 +57,7 @@ It provides four things existing rails do not:
 
 | Property | What it means |
 |---|---|
-| **Message privacy: live. Relationship privacy: partial** | Wire v3 encrypts authenticated deal records under AES-256-GCM-SIV. Its committed codec output removes wire v2's fixed fifth-salt classifier. Opening a channel still writes the counterparty address to public calldata ([F38](./docs/friction.md)), and no live wire-v3 receipt exists yet. See [privacy-model.md](./docs/privacy-model.md). |
+| **Message privacy: live. Relationship privacy: partial** | Wire v3 encrypts authenticated deal records under AES-256-GCM-SIV. Measured against live Sepolia transactions, it removes wire v2's fixed fifth-salt classifier. Opening a channel still writes the counterparty address to public calldata ([F38](./docs/friction.md)). See [privacy-model.md](./docs/privacy-model.md). |
 | **Atomic negotiate to settle** | The accepted offer and the shielded payment are one proven state transition. There is no "agreed but never paid" gap and no separate payment hop. |
 | **Selective disclosure** | Wire v3 encrypts one deal's directional subkeys and exact note capabilities to a registered recipient, with an explicit expiry. It exports no parent channel key and grants no spending authority. Historical wire-v1/v2 grants remain broader bearer secrets. |
 | **Agent autonomy** | Starknet account abstraction means an agent is a first-class actor rather than a bolted-on EOA. Gasless operation via a paymaster is possible but not yet verified end-to-end: STRK20 ships no paymaster of its own, so this rides on a third party. |

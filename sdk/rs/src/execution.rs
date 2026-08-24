@@ -269,6 +269,7 @@ impl Executor {
         operation.advance(OperationStage::Submitted, now())?;
         confirm_hash(operation, signed_hash, transaction_hash)?;
         let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
+        operation.record_receipt(receipt.clone(), now())?;
         operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
         operation.advance(OperationStage::Accepted, now())?;
 
@@ -336,6 +337,7 @@ impl Executor {
         operation.advance(OperationStage::Submitted, now())?;
         confirm_hash(operation, signed_hash, transaction_hash)?;
         let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
+        operation.record_receipt(receipt.clone(), now())?;
         operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
         operation.advance(OperationStage::Accepted, now())?;
 
@@ -357,12 +359,13 @@ impl Executor {
                 Ok(receipt) if receipt.is_reverted() => {
                     // Recorded before returning: a revert is the one outcome that proves no
                     // effect exists, and losing it would leave the attempt looking pending.
+                    let reason = receipt
+                        .revert_reason
+                        .clone()
+                        .unwrap_or_else(|| "<no revert reason>".to_owned());
+                    operation.record_receipt(receipt, now())?;
                     operation.advance(OperationStage::Reverted, now())?;
-                    return Err(ExecutionError::Reverted(
-                        receipt
-                            .revert_reason
-                            .unwrap_or_else(|| "<no revert reason>".to_owned()),
-                    ));
+                    return Err(ExecutionError::Reverted(reason));
                 }
                 Ok(_) | Err(RpcError::Rpc { code: 29, .. }) => {}
                 Err(error) => return Err(error.into()),
@@ -376,6 +379,22 @@ impl Executor {
             }
             tokio::time::sleep(self.config.receipt_poll_interval).await;
         }
+    }
+
+    /// Waits for a transaction submitted by recovery and durably records its outcome.
+    pub(crate) async fn finish_resubmission(
+        &self,
+        operation: &mut OperationLease,
+        transaction_hash: Felt,
+    ) -> Result<Receipt, ExecutionError> {
+        if operation.record().stage() == OperationStage::Signed {
+            operation.advance(OperationStage::Submitted, now())?;
+        }
+        let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
+        operation.record_receipt(receipt.clone(), now())?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        operation.advance(OperationStage::Accepted, now())?;
+        Ok(receipt)
     }
 }
 

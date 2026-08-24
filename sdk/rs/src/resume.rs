@@ -14,8 +14,8 @@
 //! Rebuilding is the dangerous path, because a rebuilt transaction is a *different*
 //! transaction that produces the *same* effect. Nothing about its hash prevents it from
 //! landing beside the original. So rebuilding is only ever offered once the original has been
-//! proven dead, and this module will not do the rebuilding itself — it says the request must
-//! be re-issued, and leaves that to the caller that still holds the parameters.
+//! proven unable to produce an effect. This module authorizes the rebuild; `Client` then
+//! reissues the canonical request stored in the journal through the ordinary write path.
 
 use serde_json::Value;
 use starknet_types_core::felt::Felt;
@@ -45,7 +45,12 @@ pub enum ResumeOutcome {
         /// Its hash, which resubmission cannot change.
         transaction_hash: Felt,
     },
-    /// Proven dead. The original request may be re-issued under the same operation id.
+    /// The earlier attempt was proven unable to produce an effect and the request was rebuilt.
+    Rebuilt {
+        /// Final result of the replacement attempt.
+        operation_result: Value,
+    },
+    /// Proven unable to produce an effect. The request may be rebuilt under the same id.
     RebuildRequired {
         /// Why the recorded transaction can no longer land.
         reason: String,
@@ -102,9 +107,14 @@ pub fn plan(
                             .to_owned(),
                     },
                 },
-                _ => ResumeOutcome::AlreadyComplete {
+                NextAction::None | NextAction::CommitJournal => ResumeOutcome::AlreadyComplete {
                     transaction_hash: attempt.transaction_hash,
                 },
+                NextAction::OperatorAttention | NextAction::Wait | NextAction::SafeToRetry => {
+                    ResumeOutcome::ReconciliationRequired {
+                        reason: reason.to_owned(),
+                    }
+                }
             });
         }
         // Both mean no effect exists, so the request may be re-issued. Neither means the

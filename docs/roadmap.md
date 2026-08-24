@@ -191,7 +191,7 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 | Settlement agreement is client policy | The pool does not compare payment with the accepted offer | Keep the SDK amount check and publish this trust boundary |
 | One token per client | `ClientConfig.token` fixes one token | Move token selection to channel or operation scope |
 | Reads restart from index zero | `fetch_notes` walks each note on every read | Store a read cursor and cache the immutable prefix |
-| No idempotency | A lost response can cause a duplicate operation. Operation IDs and the journal landed 2026-08-23, but a repeated call still re-runs rather than returning the recorded outcome | Record the outcome at each write boundary and return it on replay |
+| Idempotency stops at Rust | The Rust write path is idempotent in the 2026-08-23 working tree, but CLI, Python, MCP, and agents cannot yet supply and persist the contract | Carry the same contract through protocol 4, Python, MCP, and agents |
 | No state reconstruction command | Lost handles can be derived in principle | Rebuild handles and cursors from keys and chain state |
 | No signer abstraction | Rust reads a raw account-key file | Add an account signer interface before production |
 | Protocol code lacks review | `Unreviewed` markers cleared 2026-08-17, but the 2026-08-19 diff was pushed to `main` on Poulav's instruction before line review | Both owners review the 2026-08-19 push, then keep review-before-merge |
@@ -620,23 +620,28 @@ Owners: Poulav owns SDK state. Ishita owns agent recovery and operator output.
 
 Work:
 
-1. ~~Add operation IDs to every write request.~~ Done 2026-08-23: `c91a792`. All six
-   chain-writing client methods take a caller-supplied `OperationId` and fingerprint their
-   canonical parameters before any RPC, proof, or submission.
-2. ~~Journal preflight, proof, transaction hash, receipt, and state commit.~~ Done
-   2026-08-23: `b784f3f` and `7b7b4c8`. Every write walks prepared, proven, signed,
-   submitted, accepted, committed, and the exact signed transaction is persisted before
-   submission so a crash can still name what may have landed.
-3. ~~Reconcile the journal with chain state after restart.~~ Done 2026-08-23: `f9bda51`.
-   Read-only classification against receipts and the account nonce; ambiguity is reported,
-   never resolved by guessing. Not yet reachable from the CLI.
-4. Add fault injection at every write boundary.
-5. Rebuild channel handles and cursors from keys and chain state.
-6. Cache immutable note prefixes and read from the last known cursor.
-7. Add discovery-provider support after Q3 defines a supported endpoint.
-8. Add multi-token client state.
-9. Add account signer interfaces for hardware, wallet, or session signers.
-10. Define backup, restore, key-loss, and key-rotation behavior.
+1. ~~Add operation IDs to every write request.~~ Complete in the 2026-08-23 working tree.
+   All six Rust writes require a caller-supplied `OperationId`; the submitting account, wire
+   version, and complete canonical request are bound before RPC, proving, or submission.
+   Identical committed requests replay their recorded result.
+2. ~~Journal preflight, proof, transaction hash, receipt, and state commit.~~ Complete in the
+   2026-08-23 working tree. Journal v2 stores the canonical request, live prepared snapshot,
+   proof facts, signed bytes and hash, receipt, planned local mutation, and result. Each crash
+   boundary is synced before the next side effect.
+3. ~~Reconcile the journal with chain state after restart.~~ Complete in the 2026-08-23
+   working tree. Read-only classification uses receipts, the account nonce, and exact local
+   channel state. Every Rust write runs the gate and refuses a new submission while an older
+   operation is pending, ambiguous, or needs a local repair. The CLI seam is still task 10.
+4. ~~Implement both explicit resume modes.~~ Complete in the 2026-08-23 working tree. A valid
+   transaction is resubmitted byte-for-byte. An attempt proven unable to produce an effect is
+   rebuilt from its durable request under the same id and re-enters all ordinary live checks.
+5. Add fault injection at every write boundary.
+6. Rebuild channel handles and cursors from keys and chain state.
+7. Cache immutable note prefixes and read from the last known cursor.
+8. Add discovery-provider support after Q3 defines a supported endpoint.
+9. Add multi-token client state.
+10. Add account signer interfaces for hardware, wallet, or session signers.
+11. Define backup, restore, key-loss, and key-rotation behavior.
 
 Exit:
 
@@ -1365,16 +1370,20 @@ exist before Phase 10 gives an agent more ways to spend.
 - [x] Durable operation journal: record, lifecycle stages, locked `0600` storage, atomic
       replacement with directory sync (`b784f3f`).
 - [x] Persist-before-submit: the exact signed transaction and its hash are on disk before
-      the RPC call (`7b7b4c8`).
-- [ ] Idempotency: a replayed operation returns its recorded outcome instead of re-running.
+      the RPC call; receipts and local commit facts are recorded separately.
+- [x] Idempotency: the same id and canonical request returns the durable typed result;
+      different parameters fail before RPC or proving.
 - [ ] Journal retention: nothing prunes records, lock files, or stored transactions, and a
       request that fails local validation still leaves a record behind.
 - [x] Startup reconciliation: every journalled operation classified against the chain,
-      read-only (`f9bda51`).
+      account nonce, and local state, read-only. Every Rust write is gated by the result.
 - [x] Live prepared-stage checks: proof validity, fee, allowance and public balance read
       from the chain before proving, with gas reserved (`03c058c`).
-- [x] Explicit resume: reconcile, then resubmit the recorded transaction unchanged or
-      report that the request must be re-issued. Never rebuilds by itself (`448146e`).
+- [x] Explicit resume: reconcile, then resubmit the recorded transaction unchanged or,
+      only after the earlier attempt cannot produce an effect, rebuild its durable request
+      through the normal checked write path under the same id.
+- [x] Type-owned wide-number serialization: `AllowanceReport` and `NoteBalance` emit
+      full-width decimal strings themselves; the CLI no longer repairs their JSON shapes.
 - [ ] Chain-state recovery: rebuild handles and cursors from keys and chain data when the
       state directory is lost.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,

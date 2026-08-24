@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::{rngs::OsRng, RngCore};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, de::Error as _, ser::Error as _, Deserialize, Serialize};
 use starknet_types_core::felt::Felt;
 
 use crate::actions::{FeltEntropy, RandomSalt};
@@ -26,14 +26,16 @@ use crate::doctor::{Check, Report};
 use crate::erc20::{self, Erc20Error};
 use crate::execution::{ExecutionConfig, ExecutionError, Executor};
 use crate::hashes;
-use crate::journal::{JournalError, OperationJournal, OperationLease, OperationStage};
+use crate::journal::{
+    Attempt, JournalError, OperationJournal, OperationLease, OperationStage, PreparedSnapshot,
+};
 use crate::negotiation::{
     Author, NegotiationError, OfferBook, OfferId as InternalOfferId, OfferStatus as InternalStatus,
 };
 use crate::operation::{BindingBuilder, OperationId, RequestBinding, WriteOperation};
 use crate::prover::{BlockId, ProverError, ProvingService};
 use crate::read::{reconstruct, ChannelReader, ReadError};
-use crate::reconcile::{self, Finding};
+use crate::reconcile::{self, Finding, NextAction, Outcome};
 use crate::resume::{self, ResumeOutcome, ResumePlan};
 use crate::rpc::{RpcError, StarknetRpc};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
@@ -85,6 +87,108 @@ pub struct Client {
     journal: OperationJournal,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+enum DurableRequest {
+    Shield {
+        #[serde(with = "u128_boundary::decimal")]
+        amount: u128,
+        wire_version: WireVersion,
+    },
+    ApprovePool {
+        #[serde(with = "u128_boundary::decimal")]
+        amount: u128,
+    },
+    OpenChannel {
+        counterparty: Felt,
+        wire_version: WireVersion,
+    },
+    ProposeOffer {
+        handle: ChannelHandle,
+        terms: OfferTerms,
+    },
+    CounterOffer {
+        handle: ChannelHandle,
+        reply_to: OfferId,
+        terms: OfferTerms,
+    },
+    AcceptAndSettle {
+        handle: ChannelHandle,
+        offer_id: OfferId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DurableCompletion {
+    result: DurableResultPlan,
+    local_mutation: Option<DurableLocalMutation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum DurableResultPlan {
+    Approval {
+        #[serde(with = "u128_boundary::decimal")]
+        approved: u128,
+    },
+    Channel {
+        handle: ChannelHandle,
+    },
+    Offer {
+        offer_id: OfferId,
+    },
+    Settlement {
+        offer_id: Option<OfferId>,
+        nullifiers: Vec<String>,
+        selected_input: Option<String>,
+        change: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum DurableLocalMutation {
+    CreateChannel {
+        handle: ChannelHandle,
+        chain_id: Felt,
+        pool_address: Felt,
+        owner: Felt,
+        counterparty_address: Felt,
+        counterparty_public_key: Felt,
+        token: Felt,
+        outgoing_key: Felt,
+        channel_index: u32,
+        subchannel_index: u32,
+        wire_version: WireVersion,
+    },
+    AdvanceChannel {
+        handle: ChannelHandle,
+        outgoing_next_note: u32,
+        incoming_key: Option<Felt>,
+        settled: bool,
+    },
+}
+
+enum OperationStart {
+    Execute(Box<OperationLease>),
+    Replay(serde_json::Value),
+}
+
+enum LocalMutationStatus {
+    Behind,
+    Applied,
+    Conflict(String),
+}
+
+/// Which key files a write needs before it may claim an operation id.
+enum KeyScope {
+    /// Pool key and account key. Every pool-bound write.
+    Both,
+    /// Account key only. `approve_pool` is an ordinary ERC-20 call and touches no pool
+    /// identity, so requiring a pool key there would invent a failure mode it does not have.
+    AccountOnly,
+}
+
 impl Client {
     /// Builds the client without touching either key file.
     pub fn new(config: ClientConfig) -> Result<Self, ClientError> {
@@ -110,6 +214,7 @@ impl Client {
             self.config.pool_address,
             self.config.token,
         )
+        .felt(self.config.account_address)
     }
 
     /// Claims an operation id for one write and rejects a conflicting reuse.
@@ -120,30 +225,435 @@ impl Client {
     /// The returned lease holds an exclusive lock on the record for as long as it is alive.
     /// Callers keep it across the whole write so a second process cannot advance the same
     /// operation underneath them.
-    fn begin_operation(
+    async fn begin_operation(
         &self,
         operation_id: &OperationId,
         operation: WriteOperation,
         channel: Option<ChannelHandle>,
+        request: &DurableRequest,
         bind: impl FnOnce(BindingBuilder) -> RequestBinding,
-    ) -> Result<OperationLease, ClientError> {
+    ) -> Result<OperationStart, ClientError> {
         let binding = bind(self.binding(operation));
-        let lease = self
-            .journal
-            .claim(operation_id, operation, binding, channel, now()?)?;
+        let request = serde_json::to_value(request)
+            .map_err(|error| ClientError::Protocol(format!("cannot persist request: {error}")))?;
+        let mut lease = self.journal.claim_with_request(
+            operation_id,
+            operation,
+            binding,
+            channel,
+            request,
+            now()?,
+        )?;
 
-        // Reusing an id whose record already got past `Claimed` means an earlier attempt may
-        // have reached the chain. Starting a second attempt here would build a different
-        // transaction with a different hash, which could land beside the first. Only
-        // `resume_operation` may authorise that, and only after proving the first is dead.
         let stage = lease.record().stage();
-        if stage != OperationStage::Claimed {
-            return Err(ClientError::OperationInProgress {
-                operation_id: operation_id.clone(),
-                stage,
-            });
+        if stage == OperationStage::Committed {
+            return Ok(OperationStart::Replay(self.recorded_result(&lease)?));
         }
-        Ok(lease)
+        self.ensure_startup_reconciled(operation_id).await?;
+        if stage == OperationStage::Claimed {
+            return Ok(OperationStart::Execute(Box::new(lease)));
+        }
+
+        let finding = self.reconcile_lease(&lease).await?;
+        if finding.outcome == Outcome::Effect
+            && matches!(
+                finding.next_action,
+                NextAction::CommitLocalState | NextAction::CommitJournal | NextAction::None
+            )
+        {
+            let result = self.complete_operation(&mut lease).await?;
+            return Ok(OperationStart::Replay(result));
+        }
+
+        Err(ClientError::OperationInProgress {
+            operation_id: operation_id.clone(),
+            stage,
+        })
+    }
+
+    async fn ensure_startup_reconciled(
+        &self,
+        current_operation: &OperationId,
+    ) -> Result<(), ClientError> {
+        for finding in self.reconcile().await? {
+            if finding.operation_id == *current_operation {
+                continue;
+            }
+            if matches!(
+                finding.next_action,
+                NextAction::Wait
+                    | NextAction::OperatorAttention
+                    | NextAction::CommitLocalState
+                    | NextAction::CommitJournal
+            ) {
+                return Err(ClientError::RecoveryRequired {
+                    operation_id: finding.operation_id,
+                    stage: finding.stage,
+                    next_action: finding.next_action,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    async fn reconcile_lease(&self, lease: &OperationLease) -> Result<Finding, ClientError> {
+        let findings = reconcile::reconcile(
+            self.executor.rpc(),
+            self.config.account_address,
+            std::slice::from_ref(lease.record()),
+        )
+        .await?;
+        let mut finding = findings
+            .into_iter()
+            .next()
+            .ok_or_else(|| ClientError::Protocol("reconciliation returned nothing".to_owned()))?;
+        self.refine_local_finding(lease.record(), &mut finding);
+        Ok(finding)
+    }
+
+    fn recorded_result(&self, lease: &OperationLease) -> Result<serde_json::Value, ClientError> {
+        lease.record().result.clone().ok_or_else(|| {
+            ClientError::Protocol(format!(
+                "committed operation {} has no recorded result",
+                lease.record().operation_id
+            ))
+        })
+    }
+
+    fn decode_result<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, ClientError> {
+        serde_json::from_value(value).map_err(|error| {
+            ClientError::Protocol(format!("recorded operation result is invalid: {error}"))
+        })
+    }
+
+    fn persist_completion(
+        &self,
+        lease: &mut OperationLease,
+        completion: &DurableCompletion,
+    ) -> Result<(), ClientError> {
+        let value = serde_json::to_value(completion).map_err(|error| {
+            ClientError::Protocol(format!("cannot persist completion plan: {error}"))
+        })?;
+        lease.record_completion(value, now()?)?;
+        Ok(())
+    }
+
+    fn persist_prepared(
+        &self,
+        lease: &mut OperationLease,
+        deposit: u128,
+        checks: PreparedChecks,
+    ) -> Result<(), ClientError> {
+        lease.record_prepared(
+            PreparedSnapshot {
+                deposit: deposit.to_string(),
+                proof_validity_blocks: checks.proof_validity_blocks,
+                fee_per_write: checks.fee_per_write.to_string(),
+                allowance: checks.allowance.to_string(),
+                public_balance: checks.public_balance.to_string(),
+            },
+            now()?,
+        )?;
+        Ok(())
+    }
+
+    fn completion(record: &crate::journal::OperationRecord) -> Result<DurableCompletion, String> {
+        let value = record
+            .attempt()
+            .completion
+            .clone()
+            .ok_or_else(|| "the attempt has no durable completion plan".to_owned())?;
+        serde_json::from_value(value)
+            .map_err(|error| format!("the durable completion plan is invalid: {error}"))
+    }
+
+    fn refine_local_finding(
+        &self,
+        record: &crate::journal::OperationRecord,
+        finding: &mut Finding,
+    ) {
+        if finding.outcome != Outcome::Effect {
+            return;
+        }
+
+        let completion = match Self::completion(record) {
+            Ok(completion) => completion,
+            Err(reason) => {
+                finding.next_action = NextAction::OperatorAttention;
+                finding.reason = reason;
+                return;
+            }
+        };
+        let transaction_hash = record.attempt().transaction_hash;
+        let status = completion
+            .local_mutation
+            .as_ref()
+            .map_or(LocalMutationStatus::Applied, |mutation| {
+                self.local_mutation_status(mutation, transaction_hash)
+            });
+
+        match status {
+            LocalMutationStatus::Behind => {
+                finding.next_action = NextAction::CommitLocalState;
+                finding.reason =
+                    "the chain effect exists and the planned local mutation is not applied"
+                        .to_owned();
+            }
+            LocalMutationStatus::Applied => {
+                if record.stage() == OperationStage::Committed && record.result.is_some() {
+                    finding.next_action = NextAction::None;
+                    finding.reason = "the chain effect, local state, and result agree".to_owned();
+                } else {
+                    finding.next_action = NextAction::CommitJournal;
+                    finding.reason =
+                        "the chain effect and local state agree; the journal needs its final result"
+                            .to_owned();
+                }
+            }
+            LocalMutationStatus::Conflict(reason) => {
+                finding.next_action = NextAction::OperatorAttention;
+                finding.reason = reason;
+            }
+        }
+    }
+
+    fn local_mutation_status(
+        &self,
+        mutation: &DurableLocalMutation,
+        transaction_hash: Option<Felt>,
+    ) -> LocalMutationStatus {
+        match mutation {
+            DurableLocalMutation::CreateChannel {
+                handle,
+                chain_id,
+                pool_address,
+                owner,
+                counterparty_address,
+                counterparty_public_key,
+                token,
+                outgoing_key,
+                channel_index,
+                subchannel_index,
+                wire_version,
+            } => match self.state.snapshot(handle) {
+                Ok(None) => LocalMutationStatus::Behind,
+                Ok(Some(state))
+                    if state.chain_id == *chain_id
+                        && state.pool_address == *pool_address
+                        && state.owner == *owner
+                        && state.counterparty_address == *counterparty_address
+                        && state.counterparty_public_key == *counterparty_public_key
+                        && state.token == *token
+                        && state.outgoing_key == *outgoing_key
+                        && state.channel_index == *channel_index
+                        && state.subchannel_index == *subchannel_index
+                        && state.wire_version == *wire_version
+                        && transaction_hash.is_none_or(|hash| state.opened_transaction == hash) =>
+                {
+                    LocalMutationStatus::Applied
+                }
+                Ok(Some(_)) => LocalMutationStatus::Conflict(format!(
+                    "channel {handle} exists but does not match the accepted open"
+                )),
+                Err(error) => LocalMutationStatus::Conflict(error.to_string()),
+            },
+            DurableLocalMutation::AdvanceChannel {
+                handle,
+                outgoing_next_note,
+                incoming_key,
+                settled,
+            } => match self.state.snapshot(handle) {
+                Ok(None) => LocalMutationStatus::Conflict(format!(
+                    "channel {handle} is missing, so a cursor-only mutation cannot rebuild it"
+                )),
+                Ok(Some(state))
+                    if incoming_key.is_some_and(|planned| {
+                        state.incoming_key.is_some_and(|live| live != planned)
+                    }) =>
+                {
+                    LocalMutationStatus::Conflict(format!(
+                        "channel {handle} has a different incoming key"
+                    ))
+                }
+                Ok(Some(state))
+                    if state.outgoing_next_note >= *outgoing_next_note
+                        && incoming_key
+                            .is_none_or(|planned| state.incoming_key == Some(planned))
+                        && (!*settled || state.settled) =>
+                {
+                    LocalMutationStatus::Applied
+                }
+                Ok(Some(_)) => LocalMutationStatus::Behind,
+                Err(error) => LocalMutationStatus::Conflict(error.to_string()),
+            },
+        }
+    }
+
+    async fn complete_operation(
+        &self,
+        lease: &mut OperationLease,
+    ) -> Result<serde_json::Value, ClientError> {
+        if lease.record().stage() == OperationStage::Committed {
+            if let Some(result) = lease.record().result.clone() {
+                return Ok(result);
+            }
+        }
+
+        if lease.record().attempt().receipt.is_none() {
+            let transaction_hash = lease.record().attempt().transaction_hash.ok_or_else(|| {
+                ClientError::Protocol(
+                    "cannot complete an accepted operation without a transaction hash".to_owned(),
+                )
+            })?;
+            let receipt = self
+                .executor
+                .rpc()
+                .transaction_receipt(transaction_hash)
+                .await?;
+            if !receipt.is_accepted() {
+                return Err(ClientError::Protocol(format!(
+                    "transaction {transaction_hash:#x} is not accepted"
+                )));
+            }
+            lease.record_receipt(receipt, now()?)?;
+        }
+
+        match lease.record().stage() {
+            OperationStage::Signed => {
+                lease.advance(OperationStage::Submitted, now()?)?;
+                lease.advance(OperationStage::Accepted, now()?)?;
+            }
+            OperationStage::Submitted | OperationStage::NeedsAttention => {
+                lease.advance(OperationStage::Accepted, now()?)?;
+            }
+            OperationStage::Accepted | OperationStage::Committed => {}
+            stage => {
+                return Err(ClientError::Protocol(format!(
+                    "cannot complete an accepted operation from {stage:?}"
+                )))
+            }
+        }
+
+        let completion = Self::completion(lease.record()).map_err(ClientError::Protocol)?;
+        if let Some(mutation) = &completion.local_mutation {
+            self.apply_local_mutation(mutation, lease.record().attempt())?;
+        }
+        let result = self.materialize_result(&completion.result, lease.record().attempt())?;
+        lease.record_result(result.clone(), now()?)?;
+        if lease.record().stage() != OperationStage::Committed {
+            lease.advance(OperationStage::Committed, now()?)?;
+        }
+        Ok(result)
+    }
+
+    fn apply_local_mutation(
+        &self,
+        mutation: &DurableLocalMutation,
+        attempt: &Attempt,
+    ) -> Result<(), ClientError> {
+        let receipt = attempt.receipt.as_ref().ok_or_else(|| {
+            ClientError::Protocol("accepted operation has no durable receipt".to_owned())
+        })?;
+        let accepted_block = receipt.block_number.ok_or_else(|| {
+            ClientError::Protocol("accepted receipt omitted its block number".to_owned())
+        })?;
+        let transaction_hash = attempt.transaction_hash.ok_or_else(|| {
+            ClientError::Protocol("accepted operation has no transaction hash".to_owned())
+        })?;
+
+        match mutation {
+            DurableLocalMutation::CreateChannel {
+                handle,
+                chain_id,
+                pool_address,
+                owner,
+                counterparty_address,
+                counterparty_public_key,
+                token,
+                outgoing_key,
+                channel_index,
+                subchannel_index,
+                wire_version,
+            } => self
+                .state
+                .create_recovered(StoredChannel::new_with_wire_version(
+                    handle.clone(),
+                    *chain_id,
+                    *pool_address,
+                    *owner,
+                    *counterparty_address,
+                    *counterparty_public_key,
+                    *token,
+                    *outgoing_key,
+                    *channel_index,
+                    *subchannel_index,
+                    transaction_hash,
+                    accepted_block,
+                    *wire_version,
+                ))?,
+            DurableLocalMutation::AdvanceChannel {
+                handle,
+                outgoing_next_note,
+                incoming_key,
+                settled,
+            } => {
+                let mut channel = self.state.lock(handle)?;
+                if incoming_key.is_some_and(|planned| {
+                    channel
+                        .state()
+                        .incoming_key
+                        .is_some_and(|live| live != planned)
+                }) {
+                    return Err(ClientError::Protocol(format!(
+                        "channel {handle} has a different incoming key"
+                    )));
+                }
+                if channel.state().incoming_key.is_none() {
+                    channel.state_mut().incoming_key = *incoming_key;
+                }
+                channel.state_mut().outgoing_next_note =
+                    channel.state().outgoing_next_note.max(*outgoing_next_note);
+                channel.state_mut().last_write_block =
+                    channel.state().last_write_block.max(accepted_block);
+                channel.state_mut().settled |= *settled;
+                channel.commit()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn materialize_result(
+        &self,
+        plan: &DurableResultPlan,
+        attempt: &Attempt,
+    ) -> Result<serde_json::Value, ClientError> {
+        let transaction_hash = attempt.transaction_hash.ok_or_else(|| {
+            ClientError::Protocol("accepted operation has no transaction hash".to_owned())
+        })?;
+        let value = match plan {
+            DurableResultPlan::Approval { approved } => serde_json::to_value(ApprovalReceipt {
+                tx_hash: hex(transaction_hash),
+                approved: *approved,
+            }),
+            DurableResultPlan::Channel { handle } => serde_json::to_value(handle),
+            DurableResultPlan::Offer { offer_id } => serde_json::to_value(offer_id),
+            DurableResultPlan::Settlement {
+                offer_id,
+                nullifiers,
+                selected_input,
+                change,
+            } => serde_json::to_value(SettlementReceipt {
+                offer_id: offer_id.clone(),
+                tx_hash: hex(transaction_hash),
+                nullifiers: nullifiers.clone(),
+                proved_at: attempt.proving_block.ok_or_else(|| {
+                    ClientError::Protocol("proof-bearing result has no proving block".to_owned())
+                })?,
+                selected_input: selected_input.clone(),
+                change: change.clone(),
+            }),
+        };
+        value.map_err(|error| ClientError::Protocol(format!("cannot persist result: {error}")))
     }
 
     /// Acts on one operation's classification, if and only if it is safe to.
@@ -152,10 +662,9 @@ impl Client {
     /// to do so: it reconciles first, and submits only the exact bytes already recorded, so
     /// the hash cannot change and a duplicate cannot become a second effect.
     ///
-    /// It never rebuilds. A rebuilt transaction has a different hash and could land beside
-    /// the original, so when rebuilding is the only way forward this reports
-    /// [`ResumeOutcome::RebuildRequired`] and stops. Re-issuing the request is the caller's
-    /// to do, under the same operation id, from the intent it persisted.
+    /// An expired or nonce-dead attempt is rebuilt only after reconciliation establishes
+    /// that it cannot produce an effect. The replacement goes through the ordinary write
+    /// path, which re-reads chain state, validity, fees, allowance, balance, and nonce.
     pub async fn resume_operation(
         &self,
         operation_id: &OperationId,
@@ -166,15 +675,20 @@ impl Client {
             )));
         };
 
-        let findings = reconcile::reconcile(
-            self.executor.rpc(),
-            self.config.account_address,
-            std::slice::from_ref(lease.record()),
-        )
-        .await?;
-        let finding = findings
-            .first()
-            .ok_or_else(|| ClientError::Protocol("reconciliation returned nothing".to_owned()))?;
+        let finding = self.reconcile_lease(&lease).await?;
+        if finding.outcome == Outcome::Effect {
+            if matches!(
+                finding.next_action,
+                NextAction::CommitLocalState | NextAction::CommitJournal | NextAction::None
+            ) {
+                let transaction_hash = lease.record().attempt().transaction_hash;
+                self.complete_operation(&mut lease).await?;
+                return Ok(ResumeOutcome::AlreadyComplete { transaction_hash });
+            }
+            return Ok(ResumeOutcome::ReconciliationRequired {
+                reason: finding.reason,
+            });
+        }
 
         let head = self.executor.rpc().block_number().await?;
         let plan = resume::plan(
@@ -186,12 +700,23 @@ impl Client {
         );
 
         let (attempt_index, transaction_hash) = match plan {
-            // A rebuild is the one outcome that licenses a second transaction, so this is
-            // where the fresh attempt is opened. After it, the same request under the same
-            // id is accepted again; before it, `begin_operation` refuses.
-            ResumePlan::Report(outcome @ ResumeOutcome::RebuildRequired { .. }) => {
+            ResumePlan::Report(ResumeOutcome::RebuildRequired { .. }) => {
+                let request = lease.record().request.clone().ok_or_else(|| {
+                    ClientError::Protocol(
+                        "this legacy operation has no canonical request to rebuild".to_owned(),
+                    )
+                })?;
+                let request: DurableRequest = serde_json::from_value(request).map_err(|error| {
+                    ClientError::Protocol(format!(
+                        "recorded operation request cannot be rebuilt: {error}"
+                    ))
+                })?;
                 lease.restart(now()?)?;
-                return Ok(outcome);
+                drop(lease);
+                let result = self.reissue_request(operation_id, request).await?;
+                return Ok(ResumeOutcome::Rebuilt {
+                    operation_result: result,
+                });
             }
             ResumePlan::Report(outcome) => return Ok(outcome),
             ResumePlan::Resubmit {
@@ -224,14 +749,67 @@ impl Client {
             ));
         }
 
-        // Only advance a record that had not reached Submitted; one that was already there
-        // stays there, because resubmitting did not change what is true about it.
-        if lease.record().stage() == OperationStage::Signed {
-            lease.advance(OperationStage::Submitted, now()?)?;
-        }
+        self.executor
+            .finish_resubmission(&mut lease, returned)
+            .await?;
+        self.complete_operation(&mut lease).await?;
         Ok(ResumeOutcome::Resubmitted {
             transaction_hash: returned,
         })
+    }
+
+    async fn reissue_request(
+        &self,
+        operation_id: &OperationId,
+        request: DurableRequest,
+    ) -> Result<serde_json::Value, ClientError> {
+        let result = match request {
+            DurableRequest::Shield {
+                amount,
+                wire_version,
+            } => {
+                self.require_wire_version(wire_version)?;
+                serde_json::to_value(self.shield(operation_id, amount).await?)
+            }
+            DurableRequest::ApprovePool { amount } => {
+                serde_json::to_value(self.approve_pool(operation_id, amount).await?)
+            }
+            DurableRequest::OpenChannel {
+                counterparty,
+                wire_version,
+            } => {
+                self.require_wire_version(wire_version)?;
+                serde_json::to_value(self.open_channel(operation_id, counterparty).await?)
+            }
+            DurableRequest::ProposeOffer { handle, terms } => {
+                serde_json::to_value(self.propose_offer(operation_id, handle, terms).await?)
+            }
+            DurableRequest::CounterOffer {
+                handle,
+                reply_to,
+                terms,
+            } => serde_json::to_value(
+                self.counter_offer(operation_id, handle, reply_to, terms)
+                    .await?,
+            ),
+            DurableRequest::AcceptAndSettle { handle, offer_id } => serde_json::to_value(
+                self.accept_and_settle(operation_id, handle, offer_id)
+                    .await?,
+            ),
+        };
+        result.map_err(|error| {
+            ClientError::Protocol(format!("cannot encode rebuilt operation result: {error}"))
+        })
+    }
+
+    fn require_wire_version(&self, recorded: WireVersion) -> Result<(), ClientError> {
+        if recorded != self.config.new_channel_wire_version {
+            return Err(ClientError::Protocol(format!(
+                "recorded request uses {recorded:?}, current configuration uses {:?}",
+                self.config.new_channel_wire_version
+            )));
+        }
+        Ok(())
     }
 
     /// Reads the live pool and funding state that a proof-bearing write depends on.
@@ -288,10 +866,13 @@ impl Client {
     /// report "nothing outstanding" for the one operation that needed a person.
     pub async fn reconcile(&self) -> Result<Vec<Finding>, ClientError> {
         let records = self.journal.records()?;
-        Ok(
+        let mut findings =
             reconcile::reconcile(self.executor.rpc(), self.config.account_address, &records)
-                .await?,
-        )
+                .await?;
+        for (record, finding) in records.iter().zip(&mut findings) {
+            self.refine_local_finding(record, finding);
+        }
+        Ok(findings)
     }
 
     /// Funds the identity with one exact-value private note.
@@ -305,15 +886,34 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<SettlementReceipt, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::Shield, None, |binding| {
-                binding.u128_be(amount).finish()
-            })?;
         if amount == 0 {
             return Err(ClientError::InvalidRequest(
                 "shield amount must be non-zero".to_owned(),
             ));
         }
+        let request = DurableRequest::Shield {
+            amount,
+            wire_version: self.config.new_channel_wire_version,
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::Shield,
+                None,
+                &request,
+                |binding| {
+                    binding
+                        .u128_be(amount)
+                        .u64_be(wire_version_tag(self.config.new_channel_wire_version))
+                        .finish()
+                },
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let registered = self.registered_public_key(identity.address()).await?;
         self.verify_own_registration(&identity, registered)?;
@@ -369,9 +969,21 @@ impl Client {
                 random_salt(),
             )?
         };
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Settlement {
+                    offer_id: None,
+                    nullifiers: Vec::new(),
+                    selected_input: None,
+                    change: None,
+                },
+                local_mutation: None,
+            },
+        )?;
         let checks = self.prepared_checks(amount).await?;
-        let receipt = self
-            .executor
+        self.persist_prepared(&mut operation, amount, checks)?;
+        self.executor
             .execute(
                 &mut operation,
                 checks.proof_validity_blocks,
@@ -381,17 +993,8 @@ impl Client {
                 &actions,
             )
             .await?;
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(SettlementReceipt {
-            offer_id: None,
-            tx_hash: hex(receipt.transaction_hash),
-            nullifiers: Vec::new(),
-            proved_at: receipt.proving_block,
-            // A shield creates a note from public funds. It selects nothing and returns
-            // nothing, so these are absent rather than zero.
-            selected_input: None,
-            change: None,
-        })
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     /// Inspects configuration, identity, and chain state before anything is spent.
@@ -637,14 +1240,31 @@ impl Client {
         operation_id: &OperationId,
         amount: u128,
     ) -> Result<ApprovalReceipt, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::ApprovePool, None, |binding| {
-                binding.u128_be(amount).finish()
-            })?;
+        let request = DurableRequest::ApprovePool { amount };
+        self.check_keys(KeyScope::AccountOnly)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::ApprovePool,
+                None,
+                &request,
+                |binding| binding.u128_be(amount).finish(),
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Approval { approved: amount },
+                local_mutation: None,
+            },
+        )?;
         let account_key = read_key(&self.config.account_key_file, "account key")?;
         let calldata = erc20::approve_calldata(self.config.pool_address, amount);
-        let receipt = self
-            .executor
+        self.executor
             .submit_call(
                 &mut operation,
                 account_key,
@@ -653,11 +1273,8 @@ impl Client {
                 &calldata,
             )
             .await?;
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(ApprovalReceipt {
-            tx_hash: hex(receipt.transaction_hash),
-            approved: amount,
-        })
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     /// The pool's current STRK allowance against this account, and the fee it charges.
@@ -725,6 +1342,24 @@ impl Client {
             .discover_owned_notes(pool_key, self.config.token, block)
             .await?;
         Ok(notes.iter().map(|note| note.amount).collect())
+    }
+
+    /// Fails before any journal or RPC work if key material is unreadable.
+    ///
+    /// Reads and drops. Nothing is retained, so the "read immediately before use" discipline
+    /// documented on [`Executor::execute`] still holds.
+    ///
+    /// This exists for ordering, not for validation that is missing elsewhere.
+    /// [`Self::begin_operation`] claims a journal record and reconciles against the chain, so
+    /// without this a missing key file costs a record and an RPC round-trip before anyone
+    /// notices, and reaches the caller as a retryable `SUBMIT_FAILED` rather than
+    /// `IDENTITY_UNAVAILABLE`. The cheap local check belongs first.
+    fn check_keys(&self, scope: KeyScope) -> Result<(), ClientError> {
+        if matches!(scope, KeyScope::Both) {
+            read_key(&self.config.pool_key_file, "pool key")?;
+        }
+        read_key(&self.config.account_key_file, "account key")?;
+        Ok(())
     }
 
     fn identity_keys(&self) -> Result<(PoolIdentity, Felt, Felt), ClientError> {
@@ -1119,10 +1754,29 @@ impl ErebusClient for Client {
         operation_id: &OperationId,
         counterparty_address: Felt,
     ) -> Result<ChannelHandle, ClientError> {
-        let mut operation =
-            self.begin_operation(operation_id, WriteOperation::OpenChannel, None, |binding| {
-                binding.felt(counterparty_address).finish()
-            })?;
+        let request = DurableRequest::OpenChannel {
+            counterparty: counterparty_address,
+            wire_version: self.config.new_channel_wire_version,
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::OpenChannel,
+                None,
+                &request,
+                |binding| {
+                    binding
+                        .felt(counterparty_address)
+                        .u64_be(wire_version_tag(self.config.new_channel_wire_version))
+                        .finish()
+                },
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let registered = self.registered_public_key(identity.address()).await?;
         self.verify_own_registration(&identity, registered)?;
@@ -1141,6 +1795,20 @@ impl ErebusClient for Client {
             counterparty_address,
             self.config.token,
         )? {
+            self.persist_completion(
+                &mut operation,
+                &DurableCompletion {
+                    result: DurableResultPlan::Channel {
+                        handle: existing.clone(),
+                    },
+                    local_mutation: None,
+                },
+            )?;
+            let result = serde_json::to_value(&existing).map_err(|error| {
+                ClientError::Protocol(format!("cannot persist existing channel result: {error}"))
+            })?;
+            operation.record_result(result, now()?)?;
+            operation.advance(OperationStage::Committed, now()?)?;
             return Ok(existing);
         }
 
@@ -1149,12 +1817,14 @@ impl ErebusClient for Client {
             address: counterparty_address,
             public_key: counterparty_public_key,
         };
-        let channel = Channel::derive(
+        let channel = Channel::derive_with_version(
             self.config.chain_id,
             self.config.pool_address,
             &identity,
             counterparty,
+            self.config.new_channel_wire_version,
         );
+        let handle = self.state.allocate_handle()?;
         let actions = channel.setup(
             &identity,
             SetupParams {
@@ -1167,9 +1837,30 @@ impl ErebusClient for Client {
                 subchannel_salt: entropy(),
             },
         )?;
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Channel {
+                    handle: handle.clone(),
+                },
+                local_mutation: Some(DurableLocalMutation::CreateChannel {
+                    handle: handle.clone(),
+                    chain_id: self.config.chain_id,
+                    pool_address: self.config.pool_address,
+                    owner: identity.address(),
+                    counterparty_address,
+                    counterparty_public_key,
+                    token: self.config.token,
+                    outgoing_key: channel.key(),
+                    channel_index,
+                    subchannel_index: 0,
+                    wire_version: self.config.new_channel_wire_version,
+                }),
+            },
+        )?;
         let checks = self.prepared_checks(0).await?;
-        let receipt = self
-            .executor
+        self.persist_prepared(&mut operation, 0, checks)?;
+        self.executor
             .execute(
                 &mut operation,
                 checks.proof_validity_blocks,
@@ -1179,27 +1870,8 @@ impl ErebusClient for Client {
                 &actions,
             )
             .await?;
-        let tx_hash = receipt.transaction_hash;
-        let opened_block = accepted_block(&receipt)?;
-        let handle = self.state.create(|handle| {
-            StoredChannel::new_with_wire_version(
-                handle,
-                self.config.chain_id,
-                self.config.pool_address,
-                identity.address(),
-                counterparty_address,
-                counterparty_public_key,
-                self.config.token,
-                channel.key(),
-                channel_index,
-                0,
-                tx_hash,
-                opened_block,
-                self.config.new_channel_wire_version,
-            )
-        })?;
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(handle)
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     async fn propose_offer(
@@ -1208,15 +1880,27 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let mut operation = self.begin_operation(
-            operation_id,
-            WriteOperation::ProposeOffer,
-            Some(handle.clone()),
-            |binding| bind_terms(binding.text(handle.as_str()), &terms),
-        )?;
         validate_terms(&terms)?;
+        let request = DurableRequest::ProposeOffer {
+            handle: handle.clone(),
+            terms,
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::ProposeOffer,
+                Some(handle.clone()),
+                &request,
+                |binding| bind_terms(binding.text(handle.as_str()), &terms),
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
         let (identity, pool_key, account_key) = self.identity_keys()?;
-        let mut lease = self.state.lock(&handle)?;
+        let lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
         validate_scope(lease.state(), &self.config)?;
         validate_token(lease.state(), terms.token)?;
@@ -1260,9 +1944,24 @@ impl ErebusClient for Client {
             memo_hash: terms.memo_hash,
         };
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
+        let offer_id = external_offer_id(&handle, Author::Us, index);
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Offer {
+                    offer_id: offer_id.clone(),
+                },
+                local_mutation: Some(DurableLocalMutation::AdvanceChannel {
+                    handle: handle.clone(),
+                    outgoing_next_note: cursor.next_index(),
+                    incoming_key: state.incoming_key,
+                    settled: false,
+                }),
+            },
+        )?;
         let checks = self.prepared_checks(0).await?;
-        let receipt = self
-            .executor
+        self.persist_prepared(&mut operation, 0, checks)?;
+        self.executor
             .execute(
                 &mut operation,
                 checks.proof_validity_blocks,
@@ -1272,11 +1971,9 @@ impl ErebusClient for Client {
                 &actions,
             )
             .await?;
-        lease.state_mut().outgoing_next_note = cursor.next_index();
-        lease.state_mut().last_write_block = accepted_block(&receipt)?;
-        lease.commit()?;
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(external_offer_id(&handle, Author::Us, index))
+        drop(lease);
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     async fn counter_offer(
@@ -1286,22 +1983,35 @@ impl ErebusClient for Client {
         reply_to: OfferId,
         terms: OfferTerms,
     ) -> Result<OfferId, ClientError> {
-        let mut operation = self.begin_operation(
-            operation_id,
-            WriteOperation::CounterOffer,
-            Some(handle.clone()),
-            |binding| {
-                bind_terms(
-                    binding.text(handle.as_str()).text(reply_to.as_str()),
-                    &terms,
-                )
-            },
-        )?;
         validate_terms(&terms)?;
         let target = parse_offer_id(&handle, &reply_to)?;
         if target.author != Author::Counterparty {
             return Err(ClientError::NotCounterpartyOffer);
         }
+        let request = DurableRequest::CounterOffer {
+            handle: handle.clone(),
+            reply_to: reply_to.clone(),
+            terms,
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::CounterOffer,
+                Some(handle.clone()),
+                &request,
+                |binding| {
+                    bind_terms(
+                        binding.text(handle.as_str()).text(reply_to.as_str()),
+                        &terms,
+                    )
+                },
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
@@ -1349,9 +2059,24 @@ impl ErebusClient for Client {
             memo_hash: terms.memo_hash,
         };
         let (index, actions) = channel.write_next_message(state.token, &mut cursor, &message)?;
+        let offer_id = external_offer_id(&handle, Author::Us, index);
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Offer {
+                    offer_id: offer_id.clone(),
+                },
+                local_mutation: Some(DurableLocalMutation::AdvanceChannel {
+                    handle: handle.clone(),
+                    outgoing_next_note: cursor.next_index(),
+                    incoming_key: state.incoming_key,
+                    settled: false,
+                }),
+            },
+        )?;
         let checks = self.prepared_checks(0).await?;
-        let receipt = self
-            .executor
+        self.persist_prepared(&mut operation, 0, checks)?;
+        self.executor
             .execute(
                 &mut operation,
                 checks.proof_validity_blocks,
@@ -1361,12 +2086,9 @@ impl ErebusClient for Client {
                 &actions,
             )
             .await?;
-        lease.state_mut().incoming_key = state.incoming_key;
-        lease.state_mut().outgoing_next_note = cursor.next_index();
-        lease.state_mut().last_write_block = accepted_block(&receipt)?;
-        lease.commit()?;
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(external_offer_id(&handle, Author::Us, index))
+        drop(lease);
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     async fn read_channel_state(&self, handle: ChannelHandle) -> Result<ChannelState, ClientError> {
@@ -1398,18 +2120,30 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
-        let mut operation = self.begin_operation(
-            operation_id,
-            WriteOperation::AcceptAndSettle,
-            Some(handle.clone()),
-            |binding| {
-                binding
-                    .text(handle.as_str())
-                    .text(offer_id.as_str())
-                    .finish()
-            },
-        )?;
         let target = parse_offer_id(&handle, &offer_id)?;
+        let request = DurableRequest::AcceptAndSettle {
+            handle: handle.clone(),
+            offer_id: offer_id.clone(),
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::AcceptAndSettle,
+                Some(handle.clone()),
+                &request,
+                |binding| {
+                    binding
+                        .text(handle.as_str())
+                        .text(offer_id.as_str())
+                        .finish()
+                },
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
         let (identity, pool_key, account_key) = self.identity_keys()?;
         let mut lease = self.state.lock(&handle)?;
         validate_owner(lease.state(), identity.address())?;
@@ -1525,9 +2259,34 @@ impl ErebusClient for Client {
             &acceptance,
             change,
         )?;
+        let selected_input = selected
+            .notes
+            .iter()
+            .fold(0u128, |total, note| total.saturating_add(note.amount));
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Settlement {
+                    offer_id: Some(offer_id.clone()),
+                    nullifiers: selected
+                        .notes
+                        .iter()
+                        .map(|note| hex(note.nullifier))
+                        .collect(),
+                    selected_input: Some(selected_input.to_string()),
+                    change: Some(selected.change.to_string()),
+                },
+                local_mutation: Some(DurableLocalMutation::AdvanceChannel {
+                    handle: handle.clone(),
+                    outgoing_next_note: cursor.next_index(),
+                    incoming_key: state.incoming_key,
+                    settled: true,
+                }),
+            },
+        )?;
         let checks = self.prepared_checks(0).await?;
-        let receipt = self
-            .executor
+        self.persist_prepared(&mut operation, 0, checks)?;
+        self.executor
             .execute(
                 &mut operation,
                 checks.proof_validity_blocks,
@@ -1537,32 +2296,9 @@ impl ErebusClient for Client {
                 &actions,
             )
             .await?;
-        lease.state_mut().outgoing_next_note = cursor.next_index();
-        lease.state_mut().last_write_block = accepted_block(&receipt)?;
-        lease.state_mut().settled = true;
-        lease.commit()?;
-
-        // Report from the same selection the action set was built from, not from a fresh
-        // read. A later balance query anchors at a different block and would answer a
-        // different question.
-        let selected_input = selected
-            .notes
-            .iter()
-            .fold(0u128, |total, note| total.saturating_add(note.amount));
-
-        operation.advance(OperationStage::Committed, now()?)?;
-        Ok(SettlementReceipt {
-            offer_id: Some(offer_id),
-            tx_hash: hex(receipt.transaction_hash),
-            nullifiers: selected
-                .notes
-                .iter()
-                .map(|note| hex(note.nullifier))
-                .collect(),
-            proved_at: receipt.proving_block,
-            selected_input: Some(selected_input.to_string()),
-            change: Some(selected.change.to_string()),
-        })
+        drop(lease);
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
     }
 
     async fn grant_viewing_key(
@@ -1726,7 +2462,7 @@ impl ErebusClient for Client {
     }
 }
 
-/// JSON representations for the two `u128` fields that cross the CLI boundary.
+/// JSON representations for `u128` values that cross the CLI boundary.
 ///
 /// serde_json refuses any integer above `u64::MAX`, and the failure lands on the *read*:
 /// the offer writes fine, and then every `read_channel_state` of that channel returns an
@@ -1762,6 +2498,33 @@ mod u128_boundary {
                     .map_err(|_| D::Error::custom(format!("not a decimal amount: {text}"))),
                 Repr::Legacy(value) => Ok(u128::from(value)),
             }
+        }
+    }
+
+    /// A sequence of token amounts, each encoded as a decimal string.
+    pub mod decimal_vec {
+        use super::*;
+
+        pub fn serialize<S, T>(values: &T, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+            T: ?Sized + AsRef<[u128]>,
+        {
+            serializer.collect_seq(values.as_ref().iter().map(u128::to_string))
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Vec<u128>, D::Error> {
+            Vec::<Repr>::deserialize(deserializer)?
+                .into_iter()
+                .map(|value| match value {
+                    Repr::Text(text) => text
+                        .parse()
+                        .map_err(|_| D::Error::custom(format!("not a decimal amount: {text}"))),
+                    Repr::Legacy(value) => Ok(u128::from(value)),
+                })
+                .collect()
         }
     }
 
@@ -1911,9 +2674,11 @@ pub struct ApprovalReceipt {
 /// same account. A settlement that also shields therefore needs headroom for both.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AllowanceReport {
-    /// Standing allowance granted to the pool.
+    /// Standing allowance granted to the pool. A decimal string in JSON.
+    #[serde(with = "u128_boundary::decimal")]
     pub allowance: u128,
-    /// Live `get_fee_amount`. Zero on a pool that charges nothing.
+    /// Live `get_fee_amount`. A decimal string in JSON; zero means the pool charges nothing.
+    #[serde(with = "u128_boundary::decimal")]
     pub fee_per_write: u128,
 }
 
@@ -1988,12 +2753,81 @@ impl PreparedChecks {
 }
 
 /// What an identity can pay now, and what it will be able to pay shortly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// JSON preserves the existing CLI shape: `notes`, their checked `total`, and `pending`.
+/// Every amount is a decimal string, and deserialization rejects a total that disagrees
+/// with the spendable notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteBalance {
     /// Note denominations spendable at the proving block, largest first.
     pub spendable: Vec<u128>,
     /// Notes on chain but newer than the proving block, so not yet spendable.
     pub pending: Vec<u128>,
+}
+
+impl Serialize for NoteBalance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Repr<'a> {
+            #[serde(with = "u128_boundary::decimal_vec")]
+            notes: &'a [u128],
+            #[serde(with = "u128_boundary::decimal")]
+            total: u128,
+            #[serde(with = "u128_boundary::decimal_vec")]
+            pending: &'a [u128],
+        }
+
+        let total = note_total(&self.spendable)
+            .ok_or_else(|| S::Error::custom("spendable note total exceeds u128"))?;
+        Repr {
+            notes: &self.spendable,
+            total,
+            pending: &self.pending,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NoteBalance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Repr {
+            #[serde(with = "u128_boundary::decimal_vec")]
+            notes: Vec<u128>,
+            #[serde(with = "u128_boundary::decimal")]
+            total: u128,
+            #[serde(with = "u128_boundary::decimal_vec")]
+            pending: Vec<u128>,
+        }
+
+        let value = Repr::deserialize(deserializer)?;
+        let total = note_total(&value.notes)
+            .ok_or_else(|| D::Error::custom("spendable note total exceeds u128"))?;
+        if total != value.total {
+            return Err(D::Error::custom(format!(
+                "note balance total {} does not match spendable notes {total}",
+                value.total
+            )));
+        }
+
+        Ok(Self {
+            spendable: value.notes,
+            pending: value.pending,
+        })
+    }
+}
+
+fn note_total(notes: &[u128]) -> Option<u128> {
+    notes
+        .iter()
+        .try_fold(0u128, |total, amount| total.checked_add(*amount))
 }
 
 /// Submitted settlement or administrative shielding receipt.
@@ -2164,12 +2998,6 @@ fn select_notes(notes: &[ValueNote], target: u128) -> Option<NoteSelection> {
     Some(NoteSelection {
         notes: picks.into_iter().map(|pick| notes[pick]).collect(),
         change: selected_total - target,
-    })
-}
-
-fn accepted_block(receipt: &crate::execution::ExecutionReceipt) -> Result<u64, ClientError> {
-    receipt.receipt.block_number.ok_or_else(|| {
-        ClientError::Protocol("accepted transaction receipt omitted its block number".to_owned())
     })
 }
 
@@ -2614,6 +3442,14 @@ fn hex(value: Felt) -> String {
     format!("{value:#x}")
 }
 
+fn wire_version_tag(version: WireVersion) -> u64 {
+    match version {
+        WireVersion::V1 => 1,
+        WireVersion::V2 => 2,
+        WireVersion::V3 => 3,
+    }
+}
+
 /// High-level client failure.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -2657,6 +3493,18 @@ pub enum ClientError {
         operation_id: OperationId,
         /// Stage the earlier attempt reached.
         stage: OperationStage,
+    },
+    /// Another durable operation must be reconciled before this account submits again.
+    #[error(
+        "operation {operation_id} requires recovery at {stage:?} ({next_action:?}) before a new write"
+    )]
+    RecoveryRequired {
+        /// Operation blocking new writes.
+        operation_id: OperationId,
+        /// Durable stage found at startup.
+        stage: OperationStage,
+        /// Safe next action from read-only reconciliation.
+        next_action: NextAction,
     },
     /// An operation id was reused for a request that asks for a different effect.
     ///
@@ -2816,6 +3664,233 @@ mod tests {
         ChannelHandle::parse(format!("ch_{}", "ab".repeat(32))).expect("handle")
     }
 
+    fn recovery_client(root: PathBuf, account_address: Felt) -> Client {
+        Client::new(ClientConfig {
+            rpc_url: "http://127.0.0.1:9".to_owned(),
+            prover_url: "http://127.0.0.1:9".to_owned(),
+            pool_address: Felt::from(0x22u8),
+            chain_id: Felt::from(0x33u8),
+            account_address,
+            pool_key_file: root.join("pool.key"),
+            account_key_file: root.join("account.key"),
+            state_dir: root,
+            token: Felt::from(0x44u8),
+            new_channel_wire_version: WireVersion::V3,
+        })
+        .expect("client")
+    }
+
+    #[test]
+    fn bindings_include_the_submitting_account_and_new_channel_wire() {
+        let first = std::env::temp_dir().join(format!(
+            "erebus-binding-client-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let second = std::env::temp_dir().join(format!(
+            "erebus-binding-client-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let first = recovery_client(first, Felt::from(1u8));
+        let second = recovery_client(second, Felt::from(2u8));
+
+        let account_one = first
+            .binding(WriteOperation::Shield)
+            .u128_be(7)
+            .u64_be(wire_version_tag(WireVersion::V3))
+            .finish();
+        let account_two = second
+            .binding(WriteOperation::Shield)
+            .u128_be(7)
+            .u64_be(wire_version_tag(WireVersion::V3))
+            .finish();
+        let wire_two = first
+            .binding(WriteOperation::Shield)
+            .u128_be(7)
+            .u64_be(wire_version_tag(WireVersion::V2))
+            .finish();
+
+        assert_ne!(account_one, account_two);
+        assert_ne!(account_one, wire_two);
+    }
+
+    #[test]
+    fn reconciliation_repairs_a_missing_planned_incoming_key() {
+        let root = std::env::temp_dir().join(format!(
+            "erebus-local-mutation-client-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let account = Felt::from(0x11u8);
+        let client = recovery_client(root, account);
+        let channel_handle = client.state.allocate_handle().expect("handle");
+        client
+            .state
+            .create_recovered(StoredChannel::new_with_wire_version(
+                channel_handle.clone(),
+                client.config.chain_id,
+                client.config.pool_address,
+                account,
+                Felt::from(0x55u8),
+                Felt::from(0x66u8),
+                client.config.token,
+                Felt::from(0x77u8),
+                3,
+                0,
+                Felt::from(0xbeefu16),
+                99,
+                WireVersion::V3,
+            ))
+            .expect("channel state");
+
+        let mutation = DurableLocalMutation::AdvanceChannel {
+            handle: channel_handle,
+            outgoing_next_note: 0,
+            incoming_key: Some(Felt::from(0x88u8)),
+            settled: false,
+        };
+
+        assert!(matches!(
+            client.local_mutation_status(&mutation, None),
+            LocalMutationStatus::Behind
+        ));
+    }
+
+    #[tokio::test]
+    async fn accepted_open_repairs_local_state_and_then_replays_its_result() {
+        let root = std::env::temp_dir().join(format!(
+            "erebus-open-recovery-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let account = Felt::from(0x11u8);
+        let client = recovery_client(root, account);
+        let operation_id = OperationId::parse(format!("op_{}", "8a".repeat(32))).expect("id");
+        let counterparty = Felt::from(0x55u8);
+        let channel_handle = client.state.allocate_handle().expect("handle");
+        let request = DurableRequest::OpenChannel {
+            counterparty,
+            wire_version: WireVersion::V3,
+        };
+        let completion = DurableCompletion {
+            result: DurableResultPlan::Channel {
+                handle: channel_handle.clone(),
+            },
+            local_mutation: Some(DurableLocalMutation::CreateChannel {
+                handle: channel_handle.clone(),
+                chain_id: client.config.chain_id,
+                pool_address: client.config.pool_address,
+                owner: account,
+                counterparty_address: counterparty,
+                counterparty_public_key: Felt::from(0x66u8),
+                token: client.config.token,
+                outgoing_key: Felt::from(0x77u8),
+                channel_index: 3,
+                subchannel_index: 0,
+                wire_version: WireVersion::V3,
+            }),
+        };
+        let binding = client
+            .binding(WriteOperation::OpenChannel)
+            .felt(counterparty)
+            .u64_be(wire_version_tag(WireVersion::V3))
+            .finish();
+        let mut operation = client
+            .journal
+            .claim_with_request(
+                &operation_id,
+                WriteOperation::OpenChannel,
+                binding,
+                None,
+                serde_json::to_value(&request).expect("request"),
+                1_000,
+            )
+            .expect("claim");
+        client
+            .persist_completion(&mut operation, &completion)
+            .expect("completion");
+        operation
+            .advance(OperationStage::Prepared, 1_001)
+            .expect("prepared");
+        operation
+            .advance(OperationStage::Proven, 1_002)
+            .expect("proven");
+        operation
+            .persist_signed(Felt::from_hex_unchecked("0xbeef"), "{}", 1_003)
+            .expect("signed");
+        operation
+            .advance(OperationStage::Submitted, 1_004)
+            .expect("submitted");
+        operation
+            .record_receipt(
+                crate::rpc::Receipt {
+                    transaction_hash: "0xbeef".to_owned(),
+                    block_number: Some(99),
+                    finality_status: Some("ACCEPTED_ON_L2".to_owned()),
+                    execution_status: Some("SUCCEEDED".to_owned()),
+                    revert_reason: None,
+                },
+                1_005,
+            )
+            .expect("receipt");
+        operation
+            .advance(OperationStage::Accepted, 1_006)
+            .expect("accepted");
+
+        let mut finding = Finding {
+            operation_id: operation_id.clone(),
+            operation: WriteOperation::OpenChannel,
+            stage: OperationStage::Accepted,
+            channel: None,
+            transaction_hash: Some(Felt::from_hex_unchecked("0xbeef")),
+            outcome: Outcome::Effect,
+            next_action: NextAction::CommitLocalState,
+            reason: String::new(),
+        };
+        client.refine_local_finding(operation.record(), &mut finding);
+        assert_eq!(finding.next_action, NextAction::CommitLocalState);
+
+        let result = client
+            .complete_operation(&mut operation)
+            .await
+            .expect("repair");
+        assert_eq!(
+            Client::decode_result::<ChannelHandle>(result).expect("handle result"),
+            channel_handle
+        );
+        assert_eq!(operation.record().stage(), OperationStage::Committed);
+        assert!(client
+            .state
+            .snapshot(&channel_handle)
+            .expect("state")
+            .is_some());
+        drop(operation);
+
+        let replay = client
+            .begin_operation(
+                &operation_id,
+                WriteOperation::OpenChannel,
+                None,
+                &request,
+                |builder| {
+                    builder
+                        .felt(counterparty)
+                        .u64_be(wire_version_tag(WireVersion::V3))
+                        .finish()
+                },
+            )
+            .await
+            .expect("replay");
+        let OperationStart::Replay(replayed) = replay else {
+            panic!("committed operation executed again");
+        };
+        assert_eq!(
+            Client::decode_result::<ChannelHandle>(replayed).expect("replayed handle"),
+            channel_handle
+        );
+    }
+
     /// Both `u128` fields must survive the JSON boundary at full width. serde_json caps
     /// numbers at `u64::MAX`, and the first live offer carrying a real digest tail as its
     /// memo_hash made every read of its channel fail permanently — the note was already
@@ -2873,6 +3948,60 @@ mod tests {
         assert!(value["approved"].is_string());
         let back: ApprovalReceipt = serde_json::from_value(value).expect("round trip");
         assert_eq!(back, receipt);
+    }
+
+    #[test]
+    fn allowance_report_owns_its_full_width_json_representation() {
+        let report = AllowanceReport {
+            allowance: u128::MAX,
+            fee_per_write: 30_000_000_000_000_000_000,
+        };
+        let value = serde_json::to_value(&report).expect("full-width allowance serializes");
+
+        assert_eq!(
+            value["allowance"],
+            "340282366920938463463374607431768211455"
+        );
+        assert_eq!(value["fee_per_write"], "30000000000000000000");
+        let back: AllowanceReport = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, report);
+    }
+
+    #[test]
+    fn note_balance_owns_the_existing_cli_shape_and_full_width_strings() {
+        let balance = NoteBalance {
+            spendable: vec![u128::MAX],
+            pending: vec![30_000_000_000_000_000_000],
+        };
+        let value = serde_json::to_value(&balance).expect("full-width balance serializes");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "notes": ["340282366920938463463374607431768211455"],
+                "total": "340282366920938463463374607431768211455",
+                "pending": ["30000000000000000000"],
+            })
+        );
+        assert!(value.get("spendable").is_none());
+        let back: NoteBalance = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back, balance);
+    }
+
+    #[test]
+    fn note_balance_rejects_a_false_or_overflowing_total() {
+        let false_total = serde_json::json!({
+            "notes": ["2", "3"],
+            "total": "4",
+            "pending": [],
+        });
+        assert!(serde_json::from_value::<NoteBalance>(false_total).is_err());
+
+        let overflowing = NoteBalance {
+            spendable: vec![u128::MAX, 1],
+            pending: Vec::new(),
+        };
+        assert!(serde_json::to_value(&overflowing).is_err());
     }
 
     /// F40. `reveal` is the disclosure leg, and it ran with the same defect: a settlement above

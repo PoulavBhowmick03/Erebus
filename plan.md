@@ -84,43 +84,46 @@ Complete these tasks one at a time, with review and focused verification after e
    *Done 2026-08-23 — `d352f7e`.*
 2. **Write-operation contract.** Require `OperationId` on every chain-writing Rust client
    method. Define canonical parameter binding and reject same-ID/different-parameter reuse.
-   *Done 2026-08-23 — `c91a792` bound the six chain-writing methods. The reuse check only
-   became enforceable once task 3 supplied a record to compare against.*
+   *Complete in the 2026-08-23 working tree. All six writes require a caller-supplied id;
+   the binding includes the submitting account and selected wire version, and the journal
+   compares the full canonical request before any RPC or proving work. An identical replay
+   returns the recorded typed result instead of running the write again. The Rust library
+   never generates an id. The protocol-3 CLI still creates a per-call bridge id until task 10
+   makes caller-supplied, durable ids part of the public seam.*
 3. **Durable Rust journal.** Add the versioned operation record, explicit lifecycle states,
    mode-`0600` locked storage, atomic replacement, and directory sync where required.
-   *Done 2026-08-23 — `b784f3f`. One record per id under `state_dir/operations`, stage
-   derived from the latest attempt. Two things this exposed and did not fix: a request that
-   fails local validation still leaves a `Claimed` record and a lock file with nothing to
-   prune them, and `state.rs` renames channel records without the directory sync the journal
-   now performs.*
+   *Done 2026-08-23 — `b784f3f`, extended by the current working tree to schema v2 and an
+   identity-wide write lock. One record per id lives under `state_dir/operations`, with stage
+   derived from the latest retained attempt. State and journal atomic renames both sync their
+   parent directories. Records, lock files, and stored transactions are still unpruned.*
 4. **Persist-before-submit execution.** Record preflight inputs, proof metadata, exact signed
    transaction bytes, and transaction hash before calling the RPC submission method. Record
    the receipt and local state commit separately.
-   *Done 2026-08-23 — `7b7b4c8`. The signed wire transaction is written and synced before
-   the RPC call, then the record claims its hash. Two things this turned up: nothing
-   compared the locally signed hash with the one the node returns (now
-   `TransactionHashMismatch`, parked at `needs_attention`), and re-locking an operation id
-   whose lease is already held blocks rather than failing — harmless for the one-shot CLI,
-   a self-deadlock for any long-running holder. Stored transactions are still unpruned.*
+   *Complete in the 2026-08-23 working tree. Journal schema v2 retains the canonical request,
+   live prepared checks, proof anchor and validity, exact signed bytes and hash, receipt,
+   planned local mutation, and final result. Bytes are synced before submission; the node's
+   returned hash must match. Receipts, local state, and the committed result are persisted as
+   separate crash boundaries. Channel handles are chosen and journalled before an open is
+   submitted, state-file renames now sync their directory, and an identity-wide write lock
+   removes the cross-operation TOCTOU window. Retention and pruning remain separate work.*
 5. **Read-only startup reconciliation.** Reconcile journal entries against transaction
    receipts, relevant chain state, and local channel state. Classify ambiguous cases as
    `needs_attention`; never submit during startup.
-   *Done 2026-08-23 — `f9bda51`. `Client::reconcile()`, pure classification, no journal
-   writes. A missing receipt is not proof on its own, so the attempt now records the account
-   nonce it signed against and a transaction is only ruled out once the account has moved
-   past it; no recorded nonce classifies as unknown. Records carry their channel handle so an
-   accepted-but-uncommitted operation can name the local record. Nothing calls it yet — the
-   CLI seam is task 10.*
+   *Complete in the 2026-08-23 working tree. `Client::reconcile()` is read-only and compares
+   durable or live receipts, the submitting account nonce, and the exact planned local channel
+   mutation. Every Rust write is gated by this scan: pending, ambiguous, or locally incomplete
+   older operations block a new submission. Startup never submits or repairs by itself;
+   explicit CLI, Python, and MCP recovery remain task 10.*
 6. **Explicit dual-mode resume.** Implement the valid-proof exact-resubmission path and the
    expired-proof rebuild path described above.
-   *Done 2026-08-23 — `448146e`, after task 7 supplied the live validity window. One
-   correction to this task as written: the two paths are not symmetric. Resubmission is safe
-   because the hash is a function of the transaction, so a duplicate is the same transaction
-   — it does not depend on proving the original dead. Rebuilding creates a different
-   transaction with the same effect and nothing stops it landing beside the original, so
-   resume never rebuilds; it reports `RebuildRequired`, opens a fresh attempt, and leaves
-   re-issuing to the caller that still holds the parameters. Resubmission is refused in three
-   cases the plan does not separate: nonce passed, proof window closed, bytes not recorded.*
+   *Complete in the 2026-08-23 working tree. A still-valid attempt resubmits the stored wire
+   transaction unchanged, verifies the returned hash, waits for and persists its receipt, and
+   finishes the planned local mutation and result. A reverted, nonce-dead, unsigned, or
+   proof-expired attempt can rebuild only after reconciliation proves that it cannot produce
+   an effect. Rust opens a retained second attempt under the same id and reissues the stored
+   canonical request through the ordinary write method, which re-reads state, proof validity,
+   fee, allowance, balance, nonce, and proof inputs. Replacement-attempt creation is private
+   to SDK recovery. Mock-RPC tests cover both modes; live-chain evidence remains task 11.*
 7. **Live prepared-stage checks.** Read live proof validity, the pool's current per-write fee,
    public STRK balance, and allowance before proving. `shield` requires the deposit plus fee;
    other proof-bearing writes require the fee. Recheck before creating a replacement proof.
@@ -135,6 +138,10 @@ Complete these tasks one at a time, with review and focused verification after e
 8. **Type-owned wide-number serialization.** Put the decimal-string invariants for
    `AllowanceReport` and `NoteBalance` on their Rust types and remove manual response
    reshaping from `erebus_cli.rs`.
+   *Done 2026-08-23. Both types now own their full-width decimal-string representation and
+   the CLI serializes them directly. `NoteBalance` preserves the protocol-3
+   `{notes, total, pending}` shape, calculates `total` with checked arithmetic, and rejects
+   inconsistent input. The wire shape did not change, so this did not bump the protocol.*
 9. **Repeat-deal state shape.** Replace the ambiguous channel-level `settled` flag and
    singular settlement response with `settlements: Vec<SettlementRecord>`, keyed by deal ID.
    Each record carries acceptance, accepted offer, agreed amount, paid amount, and a nullable

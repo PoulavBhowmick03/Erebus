@@ -46,6 +46,8 @@ pub enum NextAction {
     SafeToRetry,
     /// The chain effect exists but local state does not reflect it yet.
     CommitLocalState,
+    /// Local state reflects the effect but the journal/result is not finalized.
+    CommitJournal,
     /// Wait: the transaction may still be included.
     Wait,
     /// A person has to look at this.
@@ -174,6 +176,23 @@ async fn resolve_on_chain(
             "the record reached a signed stage without recording a transaction hash".to_owned(),
         ));
     };
+
+    if let Some(receipt) = &attempt.receipt {
+        if receipt.is_accepted() {
+            return Ok((
+                Outcome::Effect,
+                NextAction::CommitLocalState,
+                format!("the durable receipt says transaction {transaction_hash:#x} was accepted"),
+            ));
+        }
+        if receipt.is_reverted() {
+            return Ok((
+                Outcome::Reverted,
+                NextAction::SafeToRetry,
+                format!("the durable receipt says transaction {transaction_hash:#x} reverted"),
+            ));
+        }
+    }
 
     match rpc.transaction_receipt(transaction_hash).await {
         Ok(receipt) if receipt.is_accepted() => Ok((

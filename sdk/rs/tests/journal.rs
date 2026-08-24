@@ -7,8 +7,13 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use erebus_sdk::journal::{JournalError, OperationJournal, OperationStage, JOURNAL_VERSION};
+use erebus_sdk::journal::{
+    JournalError, OperationJournal, OperationStage, PreparedSnapshot, JOURNAL_VERSION,
+};
 use erebus_sdk::operation::{OperationId, RequestBinding, WriteOperation};
+use erebus_sdk::rpc::Receipt;
+use fs2::FileExt;
+use serde_json::json;
 use starknet_types_core::felt::Felt;
 
 const CHAIN: Felt = Felt::from_hex_unchecked("0x534e5f5345504f4c4941");
@@ -107,6 +112,153 @@ fn reclaiming_an_id_with_a_different_request_conflicts() {
 }
 
 #[test]
+fn canonical_request_must_match_even_when_the_binding_matches() {
+    let (_root, journal) = temporary_journal();
+    let operation_id = id(31);
+    drop(
+        journal
+            .claim_with_request(
+                &operation_id,
+                WriteOperation::Shield,
+                binding(500),
+                None,
+                json!({"method":"shield","amount":"500"}),
+                1_000,
+            )
+            .expect("first claim"),
+    );
+
+    let error = journal
+        .claim_with_request(
+            &operation_id,
+            WriteOperation::Shield,
+            binding(500),
+            None,
+            json!({"method":"shield","amount":"501"}),
+            2_000,
+        )
+        .expect_err("canonical parameters cannot change under the same digest");
+
+    assert!(matches!(error, JournalError::RequestConflict { .. }));
+}
+
+#[test]
+fn every_recovery_fact_survives_a_restart() {
+    let (root, journal) = temporary_journal();
+    let operation_id = id(32);
+    let request = json!({"method":"shield","amount":"500","wire_version":"v3"});
+    let completion = json!({
+        "result": {"kind":"settlement","offer_id":null,"nullifiers":[],
+                   "selected_input":null,"change":null},
+        "local_mutation": null
+    });
+    let result = json!({
+        "offer_id": null,
+        "tx_hash": "0xbeef",
+        "nullifiers": [],
+        "proved_at": 10,
+    });
+    {
+        let mut lease = journal
+            .claim_with_request(
+                &operation_id,
+                WriteOperation::Shield,
+                binding(500),
+                None,
+                request.clone(),
+                1_000,
+            )
+            .expect("claim");
+        lease
+            .record_prepared(
+                PreparedSnapshot {
+                    deposit: "500".to_owned(),
+                    proof_validity_blocks: 450,
+                    fee_per_write: "2".to_owned(),
+                    allowance: "502".to_owned(),
+                    public_balance: "1000".to_owned(),
+                },
+                1_001,
+            )
+            .expect("prepared inputs");
+        lease
+            .record_completion(completion.clone(), 1_002)
+            .expect("completion");
+        lease
+            .advance(OperationStage::Prepared, 1_003)
+            .expect("prepared");
+        lease
+            .advance(OperationStage::Proven, 1_004)
+            .expect("proven");
+        lease
+            .persist_signed(Felt::from_hex_unchecked("0xbeef"), "{}", 1_005)
+            .expect("signed");
+        lease
+            .advance(OperationStage::Submitted, 1_006)
+            .expect("submitted");
+        lease
+            .record_receipt(
+                Receipt {
+                    transaction_hash: "0xbeef".to_owned(),
+                    block_number: Some(11),
+                    finality_status: Some("ACCEPTED_ON_L2".to_owned()),
+                    execution_status: Some("SUCCEEDED".to_owned()),
+                    revert_reason: None,
+                },
+                1_007,
+            )
+            .expect("receipt");
+        lease
+            .advance(OperationStage::Accepted, 1_008)
+            .expect("accepted");
+        lease.record_result(result.clone(), 1_009).expect("result");
+        lease
+            .advance(OperationStage::Committed, 1_010)
+            .expect("committed");
+    }
+
+    let reopened = OperationJournal::new(&root).expect("reopen");
+    let lease = reopened
+        .lock(&operation_id)
+        .expect("lock")
+        .expect("record exists");
+    assert_eq!(lease.record().request.as_ref(), Some(&request));
+    assert_eq!(
+        lease.record().attempt().completion.as_ref(),
+        Some(&completion)
+    );
+    assert_eq!(lease.record().result.as_ref(), Some(&result));
+    assert_eq!(
+        lease
+            .record()
+            .attempt()
+            .prepared
+            .as_ref()
+            .map(|value| value.deposit.as_str()),
+        Some("500")
+    );
+    assert!(lease.record().attempt().receipt.is_some());
+}
+
+#[test]
+fn an_operation_lease_also_holds_the_identity_write_lock() {
+    let (root, journal) = temporary_journal();
+    let _lease = journal
+        .claim(&id(33), WriteOperation::Shield, binding(500), None, 1_000)
+        .expect("claim");
+    let identity_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join("operations/.identity.lock"))
+        .expect("identity lock file");
+
+    assert!(
+        identity_lock.try_lock_exclusive().is_err(),
+        "a different operation must not pass startup reconciliation while this write runs"
+    );
+}
+
+#[test]
 fn an_unclaimed_id_locks_to_nothing() {
     let (_root, journal) = temporary_journal();
 
@@ -144,6 +296,7 @@ fn the_lifecycle_cannot_run_backwards_or_skip_a_stage() {
         lease.advance(OperationStage::Submitted, 2_000),
         Err(JournalError::IllegalTransition { .. })
     ));
+    drop(lease);
 
     let mut skipping = journal
         .claim(&id(6), WriteOperation::Shield, binding(500), None, 1_000)
@@ -176,49 +329,6 @@ fn every_stage_change_is_on_disk_before_it_returns() {
 
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].stage(), OperationStage::Prepared);
-}
-
-#[test]
-fn a_restart_keeps_the_earlier_attempts_transaction_hash() {
-    let (_root, journal) = temporary_journal();
-    let mut lease = journal
-        .claim(&id(8), WriteOperation::Shield, binding(500), None, 1_000)
-        .expect("claim");
-
-    for stage in [
-        OperationStage::Prepared,
-        OperationStage::Proven,
-        OperationStage::Signed,
-    ] {
-        lease.advance(stage, 1_001).expect("advance");
-    }
-    lease
-        .amend(1_002, |attempt| {
-            attempt.transaction_hash = Some(Felt::from_hex_unchecked("0xdeadbeef"));
-        })
-        .expect("amend");
-    lease
-        .advance(OperationStage::Submitted, 1_003)
-        .expect("advance");
-
-    lease.restart(2_000).expect("an expired proof restarts");
-
-    let record = lease.record();
-    assert_eq!(record.attempts.len(), 2);
-    assert_eq!(
-        record.stage(),
-        OperationStage::Claimed,
-        "a new attempt starts from scratch so it walks the same checks as a first one"
-    );
-    assert_eq!(
-        record.attempts[0].transaction_hash,
-        Some(Felt::from_hex_unchecked("0xdeadbeef")),
-        "the old hash is the only thing that can prove the old attempt never landed"
-    );
-    assert!(
-        record.may_have_landed(),
-        "a submitted earlier attempt still counts as possibly landed"
-    );
 }
 
 #[test]
@@ -374,44 +484,6 @@ fn a_missing_transaction_file_is_not_read_as_never_submitted() {
 }
 
 #[test]
-fn each_attempt_keeps_its_own_signed_transaction() {
-    let (_root, journal) = temporary_journal();
-    let mut lease = journal
-        .claim(&id(14), WriteOperation::Shield, binding(500), None, 1_000)
-        .expect("claim");
-    for stage in [OperationStage::Prepared, OperationStage::Proven] {
-        lease.advance(stage, 1_001).expect("advance");
-    }
-    lease
-        .persist_signed(Felt::from_hex_unchecked("0x1111"), "first", 1_002)
-        .expect("persist");
-    lease
-        .advance(OperationStage::Submitted, 1_003)
-        .expect("submitted");
-
-    lease.restart(2_000).expect("expired proof restarts");
-    lease
-        .advance(OperationStage::Prepared, 2_001)
-        .expect("prepared");
-    lease
-        .advance(OperationStage::Proven, 2_001)
-        .expect("proven");
-    lease
-        .persist_signed(Felt::from_hex_unchecked("0x2222"), "second", 2_002)
-        .expect("persist");
-
-    assert_eq!(
-        lease.stored_transaction(0).expect("read"),
-        Some("first".to_owned()),
-        "the old attempt's transaction is what proves whether it landed"
-    );
-    assert_eq!(
-        lease.stored_transaction(1).expect("read"),
-        Some("second".to_owned())
-    );
-}
-
-#[test]
 fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
     let (_root, journal) = temporary_journal();
     let mut lease = journal
@@ -432,52 +504,4 @@ fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
         .expect("an approve has nothing to prove");
 
     assert_eq!(lease.record().stage(), OperationStage::Signed);
-}
-
-#[test]
-fn a_committed_operation_cannot_be_restarted() {
-    let (_root, journal) = temporary_journal();
-    let mut lease = journal
-        .claim(&id(16), WriteOperation::Shield, binding(500), None, 1_000)
-        .expect("claim");
-    for stage in [
-        OperationStage::Prepared,
-        OperationStage::Proven,
-        OperationStage::Signed,
-        OperationStage::Submitted,
-        OperationStage::Accepted,
-        OperationStage::Committed,
-    ] {
-        lease.advance(stage, 1_001).expect("advance");
-    }
-
-    assert!(
-        matches!(
-            lease.restart(2_000),
-            Err(JournalError::IllegalTransition { .. })
-        ),
-        "the effect exists; a rebuilt transaction could land beside it"
-    );
-}
-
-#[test]
-fn a_reverted_operation_can_be_restarted() {
-    let (_root, journal) = temporary_journal();
-    let mut lease = journal
-        .claim(&id(17), WriteOperation::Shield, binding(500), None, 1_000)
-        .expect("claim");
-    for stage in [
-        OperationStage::Prepared,
-        OperationStage::Proven,
-        OperationStage::Signed,
-        OperationStage::Submitted,
-        OperationStage::Reverted,
-    ] {
-        lease.advance(stage, 1_001).expect("advance");
-    }
-
-    lease
-        .restart(2_000)
-        .expect("a revert consumed the nonce and produced nothing, so trying again is right");
-    assert_eq!(lease.record().stage(), OperationStage::Claimed);
 }
