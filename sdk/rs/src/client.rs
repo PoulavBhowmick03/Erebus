@@ -1477,40 +1477,34 @@ impl Client {
         Err(ClientError::DiscoveryLimit("outgoing channels"))
     }
 
+    /// Readers for both directions of a channel, outgoing first.
+    ///
+    /// A channel with no reverse direction yet gets a zero-key incoming reader, which finds
+    /// nothing. Callers must not fetch through it.
+    fn channel_readers(&self, state: &StoredChannel) -> (ChannelReader, ChannelReader) {
+        let reader = |key: Felt| {
+            ChannelReader::with_version(
+                self.config.chain_id,
+                self.config.pool_address,
+                key,
+                state.token,
+                state.wire_version,
+            )
+        };
+        (
+            reader(state.outgoing_key),
+            reader(state.incoming_key.unwrap_or(Felt::ZERO)),
+        )
+    }
+
     async fn sync_book(
         &self,
         state: &StoredChannel,
     ) -> Result<(OfferBook, HashMap<Felt, Felt>, u32), ClientError> {
-        let outgoing = ChannelReader::with_version(
-            self.config.chain_id,
-            self.config.pool_address,
-            state.outgoing_key,
-            state.token,
-            state.wire_version,
-        );
+        let (outgoing, incoming_reader) = self.channel_readers(state);
         let mut source = HashMap::new();
         let outgoing_next = self.fetch_notes(outgoing, state.token, &mut source).await?;
 
-        let incoming_reader = state
-            .incoming_key
-            .map(|key| {
-                ChannelReader::with_version(
-                    self.config.chain_id,
-                    self.config.pool_address,
-                    key,
-                    state.token,
-                    state.wire_version,
-                )
-            })
-            .unwrap_or_else(|| {
-                ChannelReader::with_version(
-                    self.config.chain_id,
-                    self.config.pool_address,
-                    Felt::ZERO,
-                    state.token,
-                    state.wire_version,
-                )
-            });
         if state.incoming_key.is_some() {
             self.fetch_notes(incoming_reader, state.token, &mut source)
                 .await?;
@@ -2106,10 +2100,13 @@ impl ErebusClient for Client {
                 return Err(error);
             }
         }
-        let (book, _, chain_next) = self.sync_book(lease.state()).await?;
-        let result = channel_state(&handle, lease.state(), &book, now()?);
+        let (book, source, chain_next) = self.sync_book(lease.state()).await?;
+        let readers = self.channel_readers(lease.state());
+        let result = channel_state(&handle, lease.state(), &book, now()?, readers, &source);
         lease.state_mut().outgoing_next_note = chain_next;
-        lease.state_mut().settled = result.settled;
+        // `StoredChannel::settled` stays a local terminal flag for wire v1 and v2, where one
+        // deal per channel really is the end of it. It is not the response's answer any more.
+        lease.state_mut().settled = result.is_settled();
         lease.commit()?;
         Ok(result)
     }
@@ -2644,6 +2641,35 @@ pub struct Offer {
     pub created_at: u64,
 }
 
+/// One settled deal within a channel.
+///
+/// Wire v3 lets a pair settle repeatedly over one channel, so a settlement is a per-deal
+/// fact rather than a channel-level one. `agreed_amount` and `paid_amount` stay separate
+/// fields, as they do in [`crate::disclosure::DisclosedSettlement`], so a reader can compare
+/// what the acceptance committed to against what the payment note actually carried.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SettlementRecord {
+    /// Wire-v3 deal identifier. Decimal string in JSON to preserve all 64 bits; a `u64`
+    /// deal id routinely exceeds 2^53 and would be silently rounded by a JSON number.
+    /// Historical wire-v1 and wire-v2 settlements report `"0"`.
+    pub deal_id: String,
+    /// The acceptance message that settled this deal.
+    pub acceptance: OfferId,
+    /// The offer the acceptance named, when it named one.
+    pub accepted_offer: Option<OfferId>,
+    /// Amount the acceptance committed to, in token base units. Decimal string in JSON.
+    #[serde(with = "u128_boundary::decimal")]
+    pub agreed_amount: u128,
+    /// Amount the payment note actually carried, when that note was found. Decimal string
+    /// or `null`; absent is not the same as zero.
+    #[serde(with = "u128_boundary::optional_decimal")]
+    pub paid_amount: Option<u128>,
+    /// Whether paid matches agreed. `null` when no payment note was found, which is a
+    /// different answer from `false`: unknown must never read as a mismatch, and a mismatch
+    /// must never read as unknown.
+    pub consistency: Option<bool>,
+}
+
 /// Current negotiation state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelState {
@@ -2653,8 +2679,23 @@ pub struct ChannelState {
     pub participants: [Felt; 2],
     /// Every visible message.
     pub offers: Vec<Offer>,
-    /// Whether an acceptance/payment has landed.
-    pub settled: bool,
+    /// Every settled deal, oldest first, one record per deal id.
+    ///
+    /// This replaces a channel-level `settled: bool`, which became ambiguous the moment a
+    /// channel could carry more than one deal: it answered "did anything settle here?" when
+    /// the caller needs "which deals settled, and for how much?". An empty list means
+    /// nothing has settled.
+    pub settlements: Vec<SettlementRecord>,
+}
+
+impl ChannelState {
+    /// Whether any deal in this channel has settled.
+    ///
+    /// Kept as a helper rather than a field so the answer cannot drift from the records it
+    /// summarizes.
+    pub fn is_settled(&self) -> bool {
+        !self.settlements.is_empty()
+    }
 }
 
 /// Result of granting the pool an allowance.
@@ -3080,6 +3121,8 @@ fn channel_state(
     state: &StoredChannel,
     book: &OfferBook,
     now: u64,
+    readers: (ChannelReader, ChannelReader),
+    source: &HashMap<Felt, Felt>,
 ) -> ChannelState {
     let offers = book
         .entries()
@@ -3089,11 +3132,44 @@ fn channel_state(
         channel_id: handle.clone(),
         participants: [state.owner, state.counterparty_address],
         offers,
-        settled: state.settled
-            || book
-                .entries()
-                .any(|(_, message)| message.message_type == MessageType::Accept),
+        settlements: settlement_records(handle, book, readers, source),
     }
+}
+
+/// One record per acceptance in the book, oldest first.
+///
+/// The payment note lives in the *accepting* party's outgoing channel, because in Erebus the
+/// accepting identity pays. So the reader used to locate it is chosen by the acceptance's
+/// author, not by whose client is asking.
+fn settlement_records(
+    handle: &ChannelHandle,
+    book: &OfferBook,
+    (ours, theirs): (ChannelReader, ChannelReader),
+    source: &HashMap<Felt, Felt>,
+) -> Vec<SettlementRecord> {
+    let note_source = |id: Felt| source.get(&id).copied();
+    book.entries()
+        .filter(|(_, message)| message.message_type == MessageType::Accept)
+        .map(|(id, message)| {
+            let payer = match id.author {
+                Author::Us => ours,
+                Author::Counterparty => theirs,
+            };
+            let paid_amount = payer
+                .settlement_note(id.index, &note_source)
+                .map(|note| note.amount);
+            SettlementRecord {
+                deal_id: message.deal_id.to_string(),
+                acceptance: external_offer_id(handle, id.author, id.index),
+                accepted_offer: message
+                    .reply_to
+                    .map(|index| external_offer_id(handle, id.author.opposite(), index)),
+                agreed_amount: message.amount,
+                paid_amount,
+                consistency: paid_amount.map(|paid| paid == message.amount),
+            }
+        })
+        .collect()
 }
 
 fn offer(
@@ -4249,7 +4325,175 @@ mod tests {
         )
         .expect("acceptance");
 
-        assert!(channel_state(&handle, &state, &book, 20).settled);
+        let readers = test_readers(&state);
+        let source = HashMap::new();
+        let result = channel_state(&handle, &state, &book, 20, readers, &source);
+
+        assert!(result.is_settled());
+        assert_eq!(result.settlements.len(), 1);
+        // No payment note in the source, so the amount is unknown rather than mismatched.
+        // `None` and `Some(false)` are different answers and must not collapse into one.
+        assert_eq!(result.settlements[0].paid_amount, None);
+        assert_eq!(result.settlements[0].consistency, None);
+        assert_eq!(result.settlements[0].agreed_amount, 100);
+        assert_eq!(result.settlements[0].deal_id, "0");
+    }
+
+    /// One record per acceptance, in book order, each carrying its own deal id.
+    #[test]
+    fn a_channel_reports_one_settlement_record_per_deal() {
+        let handle = handle();
+        let state = test_channel(&handle);
+        let mut book = OfferBook::new();
+
+        for (slot, deal_id, amount) in [(0u32, 11u64, 100u128), (1, 22, 250)] {
+            let offer = WireMessage {
+                deal_id,
+                message_type: MessageType::Offer,
+                reply_to: None,
+                created_at: 10 + u64::from(slot),
+                amount,
+                deadline: 1000,
+                memo_hash: 7,
+            };
+            book.record(slot, Author::Counterparty, offer)
+                .expect("offer");
+            book.record(
+                slot,
+                Author::Us,
+                WireMessage {
+                    message_type: MessageType::Accept,
+                    reply_to: Some(slot),
+                    ..offer
+                },
+            )
+            .expect("acceptance");
+        }
+
+        let source = HashMap::new();
+        let result = channel_state(&handle, &state, &book, 20, test_readers(&state), &source);
+
+        assert_eq!(result.settlements.len(), 2);
+        assert_eq!(
+            result
+                .settlements
+                .iter()
+                .map(|record| record.deal_id.as_str())
+                .collect::<Vec<_>>(),
+            ["11", "22"]
+        );
+        assert_eq!(result.settlements[0].agreed_amount, 100);
+        assert_eq!(result.settlements[1].agreed_amount, 250);
+    }
+
+    /// A 64-bit deal id exceeds 2^53, so a JSON number would round it. The whole class of
+    /// silent-rounding bugs this repository has already fixed once (F37) starts exactly here.
+    #[test]
+    fn a_wide_deal_id_and_amount_survive_the_json_boundary() {
+        let record = SettlementRecord {
+            deal_id: u64::MAX.to_string(),
+            acceptance: OfferId("ch_x:us:0".to_owned()),
+            accepted_offer: None,
+            agreed_amount: u128::MAX,
+            paid_amount: Some(u128::MAX),
+            consistency: Some(true),
+        };
+
+        let json = serde_json::to_value(&record).expect("serializes");
+        assert_eq!(json["deal_id"], u64::MAX.to_string());
+        assert_eq!(json["agreed_amount"], u128::MAX.to_string());
+        assert_eq!(json["paid_amount"], u128::MAX.to_string());
+        assert!(json["deal_id"].is_string());
+        assert!(json["agreed_amount"].is_string());
+
+        let back: SettlementRecord = serde_json::from_value(json).expect("round trips");
+        assert_eq!(back, record);
+    }
+
+    /// Unknown and mismatched must stay distinguishable in JSON.
+    #[test]
+    fn an_unknown_payment_serializes_as_null_not_false() {
+        let unknown = SettlementRecord {
+            deal_id: "1".to_owned(),
+            acceptance: OfferId("ch_x:us:0".to_owned()),
+            accepted_offer: None,
+            agreed_amount: 5,
+            paid_amount: None,
+            consistency: None,
+        };
+        let json = serde_json::to_value(&unknown).expect("serializes");
+        assert!(json["paid_amount"].is_null());
+        assert!(json["consistency"].is_null());
+
+        let mismatched = SettlementRecord {
+            paid_amount: Some(4),
+            consistency: Some(false),
+            ..unknown
+        };
+        let json = serde_json::to_value(&mismatched).expect("serializes");
+        assert_eq!(json["consistency"], false);
+        assert!(!json["consistency"].is_null());
+    }
+
+    /// An empty channel reports no settlements rather than a false-y settled flag.
+    #[test]
+    fn an_unsettled_channel_reports_an_empty_settlement_list() {
+        let handle = handle();
+        let state = test_channel(&handle);
+        let mut book = OfferBook::new();
+        book.record(
+            0,
+            Author::Counterparty,
+            WireMessage {
+                deal_id: 3,
+                message_type: MessageType::Offer,
+                reply_to: None,
+                created_at: 10,
+                amount: 100,
+                deadline: 1000,
+                memo_hash: 7,
+            },
+        )
+        .expect("offer");
+
+        let source = HashMap::new();
+        let result = channel_state(&handle, &state, &book, 20, test_readers(&state), &source);
+
+        assert!(result.settlements.is_empty());
+        assert!(!result.is_settled());
+    }
+
+    fn test_channel(handle: &ChannelHandle) -> StoredChannel {
+        StoredChannel::new(
+            handle.clone(),
+            Felt::from_hex("0x534e5f5345504f4c4941").expect("chain"),
+            Felt::from_hex("0x9001").expect("pool"),
+            Felt::ONE,
+            Felt::TWO,
+            Felt::THREE,
+            Felt::from(4u8),
+            Felt::from(5u8),
+            0,
+            0,
+            Felt::from(6u8),
+            7,
+        )
+    }
+
+    fn test_readers(state: &StoredChannel) -> (ChannelReader, ChannelReader) {
+        let reader = |key: Felt| {
+            ChannelReader::with_version(
+                state.chain_id,
+                state.pool_address,
+                key,
+                state.token,
+                state.wire_version,
+            )
+        };
+        (
+            reader(state.outgoing_key),
+            reader(state.incoming_key.unwrap_or(Felt::ZERO)),
+        )
     }
 
     #[test]

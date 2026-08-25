@@ -321,11 +321,21 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::ReadChannelState { config, handle } => {
             let client = config.build()?;
-            serialize(
-                client
-                    .read_channel_state(ChannelHandle::parse(handle)?)
-                    .await?,
-            )
+            let state = client
+                .read_channel_state(ChannelHandle::parse(handle)?)
+                .await?;
+            // Protocol 3 answered "did anything settle here?" with a boolean. Task 9 replaced
+            // that with per-deal records, but plan.md decision 6 requires the CLI, sdk/py and
+            // the MCP server to move to protocol 4 together, so the boolean is retained here
+            // as a derived compatibility field. Task 10 removes it with the coordinated
+            // change; nothing downstream reads it today.
+            let settled = state.is_settled();
+            let mut value = serde_json::to_value(state)
+                .map_err(|error| CliError::BadResponse(error.to_string()))?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("settled".to_owned(), serde_json::Value::Bool(settled));
+            }
+            Ok(value)
         }
         Request::AcceptAndSettle {
             config,
