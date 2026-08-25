@@ -505,3 +505,223 @@ fn a_write_with_no_proof_goes_straight_from_prepared_to_signed() {
 
     assert_eq!(lease.record().stage(), OperationStage::Signed);
 }
+
+/// A finished record older than the window is removed, with everything filed under its id.
+#[test]
+fn pruning_removes_a_finished_record_and_its_files() {
+    let (root, journal) = temporary_journal();
+    let id = id(0x31);
+    {
+        let mut lease = journal
+            .claim_with_request(
+                &id,
+                WriteOperation::Shield,
+                binding(1),
+                None,
+                json!({}),
+                1_000,
+            )
+            .expect("claim");
+        lease
+            .advance(OperationStage::Prepared, 1_001)
+            .expect("prepared");
+        lease
+            .advance(OperationStage::Proven, 1_002)
+            .expect("proven");
+        lease
+            .persist_signed(Felt::from_hex_unchecked("0xbeef"), "{}", 1_003)
+            .expect("signed");
+        lease
+            .advance(OperationStage::Submitted, 1_004)
+            .expect("submitted");
+        lease
+            .advance(OperationStage::Accepted, 1_005)
+            .expect("accepted");
+        lease
+            .advance(OperationStage::Committed, 1_006)
+            .expect("committed");
+    }
+
+    let record_file = root.join(format!("operations/{}.json", id.as_str()));
+    let transaction_file = root.join(format!("operations/{}.0.tx", id.as_str()));
+    assert!(record_file.exists() && transaction_file.exists());
+
+    let report = journal.prune(3_600, 1_006 + 3_600).expect("prune");
+
+    assert_eq!(report.pruned, 1);
+    assert_eq!(report.examined(), 1);
+    assert!(!record_file.exists(), "the record survived");
+    assert!(
+        !transaction_file.exists(),
+        "the stored transaction survived"
+    );
+    assert!(
+        !root
+            .join(format!("operations/{}.lock", id.as_str()))
+            .exists(),
+        "the lock file survived"
+    );
+    assert!(journal.records().expect("records").is_empty());
+}
+
+/// Every stage that is not terminal survives a prune, whatever its age.
+///
+/// This is the property that matters: a record is the only thing that knows a transaction
+/// was signed, so pruning an unfinished one turns a recoverable operation into an invisible
+/// one. Ages are set absurdly old so that age cannot be what saves them.
+#[test]
+fn pruning_never_touches_an_unfinished_record() {
+    for stage in [
+        OperationStage::Claimed,
+        OperationStage::Prepared,
+        OperationStage::Proven,
+        OperationStage::Signed,
+        OperationStage::Submitted,
+        OperationStage::Accepted,
+    ] {
+        let (_root, journal) = temporary_journal();
+        let id = id(0x32);
+        {
+            let mut lease = journal
+                .claim_with_request(&id, WriteOperation::Shield, binding(1), None, json!({}), 10)
+                .expect("claim");
+            if stage != OperationStage::Claimed {
+                lease
+                    .advance(OperationStage::Prepared, 11)
+                    .expect("prepared");
+            }
+            if matches!(
+                stage,
+                OperationStage::Proven
+                    | OperationStage::Signed
+                    | OperationStage::Submitted
+                    | OperationStage::Accepted
+            ) {
+                lease.advance(OperationStage::Proven, 12).expect("proven");
+            }
+            if matches!(
+                stage,
+                OperationStage::Signed | OperationStage::Submitted | OperationStage::Accepted
+            ) {
+                lease
+                    .persist_signed(Felt::from_hex_unchecked("0xbeef"), "{}", 13)
+                    .expect("signed");
+            }
+            if matches!(stage, OperationStage::Submitted | OperationStage::Accepted) {
+                lease
+                    .advance(OperationStage::Submitted, 14)
+                    .expect("submitted");
+            }
+            if stage == OperationStage::Accepted {
+                lease
+                    .advance(OperationStage::Accepted, 15)
+                    .expect("accepted");
+            }
+        }
+
+        let report = journal.prune(1, 10_000_000).expect("prune");
+
+        assert_eq!(report.pruned, 0, "{stage:?} was pruned");
+        assert_eq!(report.retained_unfinished, 1, "{stage:?}");
+        assert_eq!(journal.records().expect("records").len(), 1, "{stage:?}");
+    }
+}
+
+/// `NeedsAttention` is never pruned, at any age.
+///
+/// It is not terminal precisely because a person still has to look at it. Deleting it
+/// destroys the evidence they were going to look at, and the operation would afterwards
+/// reconcile as though it had never happened.
+#[test]
+fn pruning_never_touches_a_record_waiting_for_an_operator() {
+    let (_root, journal) = temporary_journal();
+    let id = id(0x33);
+    {
+        let mut lease = journal
+            .claim_with_request(&id, WriteOperation::Shield, binding(1), None, json!({}), 10)
+            .expect("claim");
+        lease
+            .advance(OperationStage::Prepared, 11)
+            .expect("prepared");
+        lease.advance(OperationStage::Proven, 12).expect("proven");
+        lease
+            .persist_signed(Felt::from_hex_unchecked("0xbeef"), "{}", 13)
+            .expect("signed");
+        lease
+            .advance(OperationStage::Submitted, 14)
+            .expect("submitted");
+        lease
+            .advance(OperationStage::NeedsAttention, 15)
+            .expect("needs attention");
+    }
+
+    let report = journal.prune(1, 10_000_000).expect("prune");
+
+    assert_eq!(report.pruned, 0);
+    assert_eq!(report.retained_unfinished, 1);
+    assert_eq!(journal.records().expect("records").len(), 1);
+}
+
+/// A record that finished inside the window is kept, and reported as kept.
+#[test]
+fn pruning_keeps_a_recently_finished_record_and_says_so() {
+    let (_root, journal) = temporary_journal();
+    let id = id(0x34);
+    {
+        let mut lease = journal
+            .claim_with_request(
+                &id,
+                WriteOperation::Shield,
+                binding(1),
+                None,
+                json!({}),
+                1_000,
+            )
+            .expect("claim");
+        // Claimed -> Committed is the legal idempotent no-chain edge (see can_advance_to);
+        // Prepared -> Committed is not, which is what a settled effect that needed no write
+        // looks like in the journal.
+        lease
+            .advance(OperationStage::Committed, 1_002)
+            .expect("committed");
+    }
+
+    let report = journal.prune(3_600, 1_002 + 60).expect("prune");
+
+    assert_eq!(report.pruned, 0);
+    assert_eq!(report.retained_recent, 1);
+    assert_eq!(journal.records().expect("records").len(), 1);
+}
+
+/// A clock that moved backwards must not read as "infinitely old".
+///
+/// `now` before the record's own timestamp would underflow a subtraction into a huge age and
+/// delete something written seconds ago. Saturating arithmetic makes it read as age zero,
+/// which keeps the record.
+#[test]
+fn a_clock_that_went_backwards_does_not_delete_everything() {
+    let (_root, journal) = temporary_journal();
+    let id = id(0x35);
+    {
+        let mut lease = journal
+            .claim_with_request(
+                &id,
+                WriteOperation::Shield,
+                binding(1),
+                None,
+                json!({}),
+                9_000,
+            )
+            .expect("claim");
+        lease
+            .advance(OperationStage::Committed, 9_002)
+            .expect("committed");
+    }
+
+    let report = journal
+        .prune(3_600, 5_000)
+        .expect("prune with an earlier clock");
+
+    assert_eq!(report.pruned, 0);
+    assert_eq!(report.retained_recent, 1);
+}

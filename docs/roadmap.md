@@ -1379,8 +1379,11 @@ exist before Phase 10 gives an agent more ways to spend.
       the RPC call; receipts and local commit facts are recorded separately.
 - [x] Idempotency: the same id and canonical request returns the durable typed result;
       different parameters fail before RPC or proving.
-- [ ] Journal retention: nothing prunes records, lock files, or stored transactions, and a
-      request that fails local validation still leaves a record behind.
+- [x] Journal retention: `OperationJournal::prune` removes terminal records older than a
+      caller-supplied window, with their lock files and stored transactions, and reports what
+      it kept and why. Unfinished and `NeedsAttention` records are never pruned at any age.
+- [ ] Journal retention, remaining: a request that fails local validation still leaves a
+      record behind, and nothing calls `prune` on a schedule yet.
 - [x] Startup reconciliation: every journalled operation classified against the chain,
       account nonce, and local state, read-only. Every Rust write is gated by the result.
 - [x] Live prepared-stage checks: proof validity, fee, allowance and public balance read
