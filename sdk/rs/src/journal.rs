@@ -249,6 +249,33 @@ impl OperationRecord {
 }
 
 /// Locked, on-disk store of operation records.
+/// What a [`OperationJournal::prune`] sweep did, and what it deliberately left alone.
+///
+/// The retained counts are the useful half. A prune that silently kept things would be
+/// indistinguishable from one that had nothing to do, and "the journal is not growing" is
+/// exactly the belief an operator should not hold on faith.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct PruneReport {
+    /// Records removed, with their lock files and stored transactions.
+    pub pruned: usize,
+    /// Kept because they are not terminal, so they may still need an explicit resume.
+    /// `NeedsAttention` is counted here: it is not terminal precisely because a person still
+    /// has to look at it.
+    pub retained_unfinished: usize,
+    /// Kept because they finished more recently than the retention window.
+    pub retained_recent: usize,
+    /// Kept because another process holds the record's lock. Pruning never waits.
+    pub retained_locked: usize,
+}
+
+impl PruneReport {
+    /// Total records the sweep looked at.
+    pub fn examined(&self) -> usize {
+        self.pruned + self.retained_unfinished + self.retained_recent + self.retained_locked
+    }
+}
+
+/// Locked, on-disk store of operation records.
 #[derive(Debug, Clone)]
 pub struct OperationJournal {
     root: PathBuf,
@@ -412,6 +439,95 @@ impl OperationJournal {
         lock.lock_exclusive()
             .map_err(|source| JournalError::Io { path, source })?;
         Ok(lock)
+    }
+
+    /// What a prune did, and what it deliberately left alone.
+    ///
+    /// The retained counts are the useful half. A prune that silently kept things would be
+    /// indistinguishable from one that had nothing to do, and "the journal is not growing"
+    /// is exactly the belief an operator should not hold on faith.
+    ///
+    /// Removing a record removes its lock file and every stored transaction with it, so the
+    /// counts below describe whole operations rather than files.
+    ///
+    /// Deletes finished records older than `older_than_seconds`.
+    ///
+    /// Nothing here is a judgement call about disk space. The rule is narrow on purpose:
+    ///
+    /// - **Only terminal records.** `Committed` and `Reverted` are the two stages that will
+    ///   never advance again. Everything else may still need an explicit resume, and a
+    ///   record is the only thing that knows a transaction was signed.
+    /// - **`NeedsAttention` is never pruned, at any age.** It is not terminal precisely
+    ///   because a person still has to look at it; deleting it destroys the evidence they
+    ///   were going to look at, and the operation would then reconcile as though it had
+    ///   never happened.
+    /// - **Age is measured from the last update**, not from the claim, so a long-running
+    ///   operation is not pruned for having started early.
+    ///
+    /// Holds the identity write lock for the whole sweep, so a prune cannot race a write
+    /// that is midway through claiming or advancing. A record whose own lock is held by
+    /// another process is skipped rather than waited for: pruning is maintenance and must
+    /// never block, or stall, a real operation.
+    pub fn prune(&self, older_than_seconds: u64, now: u64) -> Result<PruneReport, JournalError> {
+        let _identity_lock = self.identity_lock()?;
+        let mut report = PruneReport::default();
+
+        for record in self.records()? {
+            if !record.stage().is_terminal() {
+                report.retained_unfinished += 1;
+                continue;
+            }
+            // Saturating: a clock that moved backwards must not underflow into "infinitely
+            // old" and delete a record that was written seconds ago.
+            let age = now.saturating_sub(record.attempt().updated_at);
+            if age < older_than_seconds {
+                report.retained_recent += 1;
+                continue;
+            }
+            if self.remove(&record)? {
+                report.pruned += 1;
+            } else {
+                report.retained_locked += 1;
+            }
+        }
+        Ok(report)
+    }
+
+    /// Removes one record and everything filed under its id. `false` if it is locked.
+    ///
+    /// The record goes last. If the process dies mid-removal, what is left is a record whose
+    /// stored transaction is missing, and the journal already treats that as a distinct,
+    /// loud condition rather than as "never submitted". Removing the record first would
+    /// instead leave orphan blobs that nothing knows the id of.
+    fn remove(&self, record: &OperationRecord) -> Result<bool, JournalError> {
+        let lock_path = self
+            .root
+            .join(format!("{}.lock", record.operation_id.as_str()));
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| JournalError::Io {
+                path: lock_path.clone(),
+                source,
+            })?;
+        if lock.try_lock_exclusive().is_err() {
+            return Ok(false);
+        }
+
+        for index in 0..record.attempts.len() {
+            let path = self
+                .root
+                .join(format!("{}.{index}.tx", record.operation_id.as_str()));
+            remove_if_present(&path)?;
+        }
+        remove_if_present(&self.record_path(&record.operation_id))?;
+        drop(lock);
+        remove_if_present(&lock_path)?;
+        sync_dir(&self.root)?;
+        Ok(true)
     }
 
     /// Every record in the journal, in unspecified order.
@@ -777,6 +893,22 @@ fn write_bytes_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), Jour
 ///
 /// Without this the file contents are durable but the name is not, so a crash can leave the
 /// record at its previous version while the caller believes it advanced.
+#[cfg(unix)]
+/// Removes a path, treating "already gone" as success.
+///
+/// A prune interrupted partway through leaves some of an operation's files removed. Rerunning
+/// it must finish the job rather than fail on the ones it already deleted.
+fn remove_if_present(path: &Path) -> Result<(), JournalError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(JournalError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 #[cfg(unix)]
 fn sync_dir(path: &Path) -> Result<(), JournalError> {
     File::open(path)
