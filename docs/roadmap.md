@@ -664,7 +664,12 @@ Work:
     a runtime thread on a hardware prompt. `Client::with_signer` refuses a signer whose
     address disagrees with the configured account, since the pool validates against that
     account's own contract and a mismatch would fail only after a proof was paid for.
-11. Define backup, restore, key-loss, and key-rotation behavior.
+11. ~~Define backup, restore, key-loss, and key-rotation behavior.~~ Done 2026-08-25 in
+    [custody-operations.md](../docs/custody-operations.md). Behaviour is defined, tooling is
+    not: there is no `erebus-cli backup` and no rehearsed key-loss drill, and the page says so
+    rather than reading as complete. The finding worth carrying: registration is write-once
+    (`privacy.cairo:337-343`), so an address's pool key is bound the first time it registers
+    and rotating one means a new address, which under F29 abandons every existing channel.
 
 Exit:
 
@@ -1427,7 +1432,9 @@ exist before Phase 10 gives an agent more ways to spend.
       request-shape change and waits for protocol 4.
 - [x] Signer abstraction: `AccountSigner` behind `Client::with_signer`, with the account
       key read at signing time rather than threaded through a write.
-- [ ] Backup and restore process.
+- [x] Backup, restore, key-loss and rotation behaviour defined in `custody-operations.md`.
+- [ ] Backup and restore *tooling*: no `erebus-cli backup`, no encrypted bundle, no restore
+      verification, no rehearsed key-loss drill.
 - [ ] Secret-safe monitoring.
 
 ### P3: Protocol and privacy
