@@ -86,6 +86,7 @@ Never describe this as private in an absolute sense.
 | Does this fit my use case | [usecases.md](./usecases.md) | **stale**, see below |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | **stale**, see below |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
+| What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
 | The pitch | [poc.md](./poc.md) | current |
 | How to operate it as an agent | [skills/erebus/SKILL.md](../skills/erebus/SKILL.md) | current, all five unsafe-behavior evals pass |
 
