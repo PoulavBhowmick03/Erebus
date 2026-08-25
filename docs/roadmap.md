@@ -190,7 +190,7 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 | Client-side deadlines | The pool does not enforce offer expiry | Keep the limit explicit and bind external policy to signed terms |
 | Settlement agreement is client policy | The pool does not compare payment with the accepted offer | Keep the SDK amount check and publish this trust boundary |
 | One token per client | `ClientConfig.token` fixes one token | Move token selection to channel or operation scope |
-| Reads restart from index zero | `fetch_notes` walks each note on every read | Store a read cursor and cache the immutable prefix |
+| ~~Reads restart from index zero~~ | `NoteCache` serves the immutable prefix from disk, so an unchanged channel costs one RPC rather than one per note (2026-08-25) | Done |
 | Idempotency stops at Rust | The Rust write path is idempotent in the 2026-08-23 working tree, but CLI, Python, MCP, and agents cannot yet supply and persist the contract | Carry the same contract through protocol 4, Python, MCP, and agents |
 | No state reconstruction command | Lost handles can be derived in principle | Rebuild handles and cursors from keys and chain state |
 | No signer abstraction | Rust reads a raw account-key file | Add an account signer interface before production |
@@ -648,7 +648,13 @@ Work:
    token subchannel, and read the note cursor rather than assuming it. Additive: an existing
    record is kept byte for byte, never overwritten. Handles, `opened_transaction` and
    `last_write_block` do not come back, and the report says so.
-7. Cache immutable note prefixes and read from the last known cursor.
+7. ~~Cache immutable note prefixes and read from the last known cursor.~~ Done 2026-08-25.
+   `sdk/rs/src/notecache.rs`. Notes are `WriteOnce` and contiguous, so everything below the
+   first empty slot is immutable and cacheable soundly rather than as a bet. The cache file is
+   named by a hash over the same channel key and token a note id derives from, so a cache
+   written under one subchannel is not *found* under another. The empty slot that ends a walk
+   is never cached: a zero means "nothing here yet", and caching absence would freeze a
+   channel at the length it had when first read.
 8. Add discovery-provider support after Q3 defines a supported endpoint.
 9. Add multi-token client state. *Partly done 2026-08-25.* Funding checks now follow the
    asset an operation moves rather than `ClientConfig::token`: `prepared_checks` and
@@ -1425,7 +1431,9 @@ exist before Phase 10 gives an agent more ways to spend.
       anything holding an old handle string will not resolve against a rebuilt record.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
-- [ ] Read cursor, cache, and discovery support.
+- [x] Read cursor and note cache: an unchanged channel read costs one RPC rather than one
+      per note, durable so it survives the CLI's process-per-call shape.
+- [ ] Discovery-provider support, blocked on Q3.
 - [x] Multi-token correctness: funding checks read the allowance and balance of the token
       an operation actually moves, not the configured one.
 - [ ] Multi-token surface: choosing a token per operation at the CLI, which is a

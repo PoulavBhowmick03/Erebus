@@ -19,6 +19,7 @@ key costs the identity, and the pool key cannot be rotated.**
 | **Account key** | Signs the Starknet invoke that carries a proof | `account_key_file`, or never in this process at all — see `AccountSigner` | Yes, if the account contract supports it |
 | **State directory** | Channel records: handles, both directional keys, cursors | `state_dir`, mode `0700` | n/a — rebuildable |
 | **Operation journal** | What each write prepared, proved, signed, submitted, committed | `state_dir/operations` | n/a — **not** rebuildable |
+| **Note cache** | Immutable note prefixes, a read optimisation | `state_dir/notecache` | n/a — pure derived data, safe to delete |
 | **Viewing grants** | Bearer or recipient-bound disclosure capsules | wherever the operator exported them | n/a |
 
 The auditor key is StarkWare's, not the operator's. It is set once per pool, covers every
@@ -44,6 +45,10 @@ What does not come back, and why:
   proof-anchor wait on the next write and nothing else.
 - **Channels on a token this client is not configured for.** Reported as `other_token` rather
   than silently skipped, so a partial rebuild is visible.
+
+The note cache under `state_dir/notecache` needs no thought: it is derived from the chain
+and discarded whenever it does not parse, so deleting it costs a slower first read and
+nothing else.
 
 **Procedure.** Restore the pool key, run `doctor`, run `rebuild_state`, read the report. Treat
 a non-zero `unrecoverable` or `other_token` count as a partial rebuild, not a complete one.

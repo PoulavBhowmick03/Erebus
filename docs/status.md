@@ -31,7 +31,7 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
-| Tests | 324 Rust (plus 2 intentionally ignored live-prover tests), 125 Python, 43 TypeScript |
+| Tests | 349 Rust (plus 2 intentionally ignored live-prover tests), 125 Python, 43 TypeScript |
 | In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 2, 4, 5, and 6 are complete in the 2026-08-23 working tree: complete request binding and result replay, durable prepared/receipt/local-result facts, a read-only pre-write reconciliation gate, and both exact-resubmission and proven-dead rebuild recovery. Task 8 is also complete in the working tree. Recovery is still not reachable from the CLI, Python, or MCP until the protocol-4 seam lands (task 10), fault injection is not yet exhaustive, and none of the recovery paths has been exercised against a live chain (task 11) |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
@@ -122,7 +122,9 @@ and the wire-v3 cryptographic/bit-level oracle.
 
 Three distinct keys, and conflating them is the usual mistake:
 
-- **Starknet account key** — signs transactions. Custody. Never leaves the Rust process.
+- **Starknet account key** — signs transactions. Custody. Never leaves the Rust process,
+  and behind an `AccountSigner` it need never enter it: a hardware, wallet, or session
+  signer produces the signature without the SDK holding a key at all.
 - **Pool private key** — the STRK20 identity. Confidentiality. Sent in `compile_actions`
   calldata to two operator-chosen endpoints: the prover and the preflight RPC. Both can
   reconstruct that identity's full history. The submitted transaction does not carry it.

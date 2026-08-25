@@ -33,6 +33,7 @@ use crate::journal::{
 use crate::negotiation::{
     Author, NegotiationError, OfferBook, OfferId as InternalOfferId, OfferStatus as InternalStatus,
 };
+use crate::notecache::NoteCache;
 use crate::operation::{BindingBuilder, OperationId, RequestBinding, WriteOperation};
 use crate::prover::{BlockId, ProverError, ProvingService};
 use crate::read::{reconstruct, ChannelReader, ReadError};
@@ -87,6 +88,10 @@ pub struct Client {
     executor: Executor,
     state: StateStore,
     journal: OperationJournal,
+    /// Immutable note prefixes, so an unchanged channel read costs one RPC rather than one
+    /// per note. Durable because the CLI is one process per call: an in-memory cache would
+    /// never survive to be used.
+    notes: NoteCache,
     /// Produces the account signature. A `LocalKeySigner` over `account_key_file` by
     /// default; [`Client::with_signer`] replaces it with a hardware, wallet, or session
     /// signer without the SDK ever seeing a private key.
@@ -208,11 +213,13 @@ impl Client {
             config.account_address,
             &config.account_key_file,
         ));
+        let notes = NoteCache::new(&config.state_dir);
         Ok(Self {
             config,
             executor: Executor::new(rpc, prover, execution),
             state,
             journal,
+            notes,
             signer,
         })
     }
@@ -1564,22 +1571,51 @@ impl Client {
         Ok((book, source, outgoing_next))
     }
 
+    /// Walks a subchannel's notes, serving the immutable prefix from cache.
+    ///
+    /// Notes are written through `WriteOnce` and their indices are contiguous, so every note
+    /// below the first empty slot is immutable. Those come from the local cache with no round
+    /// trip; the walk only reaches the chain at the first index the cache does not have.
+    ///
+    /// An unchanged channel therefore costs exactly one RPC: the read of the still-empty slot
+    /// that ends the walk. That read is never cached — a zero means "nothing here *yet*", and
+    /// the counterparty can write there at any moment. Caching absence would freeze a channel
+    /// at the length it had when it was first read, which is a stalled negotiation that looks
+    /// perfectly healthy.
     async fn fetch_notes(
         &self,
         reader: ChannelReader,
         token: Felt,
         source: &mut HashMap<Felt, Felt>,
     ) -> Result<u32, ClientError> {
+        let channel_key = reader.channel_key();
+        let cached = self.notes.load(channel_key, token);
+        let mut prefix: Vec<(Felt, Felt)> = Vec::with_capacity(cached.len());
+
         for index in 0..MAX_DISCOVERY_ITEMS {
             let id = reader.note_id(index);
+
+            if let Some((packed, stored)) = cached.get(index as usize).copied() {
+                // Re-checked rather than trusted wholesale: the check is cheap and a cache is
+                // the last place that should be allowed to skip a validation. Both felts are
+                // cached precisely so this check sees what the chain returned.
+                check_note_token(packed, stored, token)?;
+                source.insert(id, packed);
+                prefix.push((packed, stored));
+                continue;
+            }
+
             let result = self.view("get_note", &[id], &BlockId::Latest).await?;
             require_len("get_note", &result, 2)?;
             if result[0] == Felt::ZERO {
+                // Only the confirmed prefix is stored, never the empty slot that ends it.
+                self.notes.store(channel_key, token, &prefix);
                 return u32::try_from(index)
                     .map_err(|_| ClientError::Protocol("note index exceeds u32".to_owned()));
             }
             check_note_token(result[0], result[1], token)?;
             source.insert(id, result[0]);
+            prefix.push((result[0], result[1]));
         }
         Err(ClientError::DiscoveryLimit("notes"))
     }

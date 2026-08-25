@@ -33,6 +33,7 @@ pub mod hashes;
 pub mod journal;
 pub mod keys;
 pub mod negotiation;
+pub mod notecache;
 pub mod operation;
 pub mod prover;
 pub mod read;

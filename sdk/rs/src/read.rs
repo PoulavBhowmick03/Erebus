@@ -148,6 +148,15 @@ impl ChannelReader {
     }
 
     /// Note ids for one versioned message.
+    /// The channel key this reader locates notes with.
+    ///
+    /// Exposed so a caller can scope a cache to the same subchannel a note id derives from.
+    /// It is a secret: anything that stores or logs it is disclosing the channel.
+    pub fn channel_key(&self) -> Felt {
+        self.channel_key
+    }
+
+    /// Note ids for one versioned message.
     pub fn note_ids(&self, message_index: u32) -> Vec<Felt> {
         let width = self.wire_version.notes_per_message();
         let first = match self.wire_version {

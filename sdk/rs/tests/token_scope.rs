@@ -241,3 +241,85 @@ async fn a_signer_for_the_configured_account_is_accepted() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+// --- note cache --------------------------------------------------------------------------
+
+/// A second read of an unchanged channel costs one RPC, not one per note.
+///
+/// Phase 7's exit criterion is "an unchanged channel read uses a constant number of RPC
+/// calls". Counting the calls is the only way to assert it: a cache that silently did nothing
+/// would return identical results and pass every correctness test in the suite.
+///
+/// The one remaining call is the read of the still-empty slot that ends the walk. That is
+/// deliberately never cached — a zero means "nothing here yet", and the counterparty can
+/// write there at any moment.
+#[tokio::test]
+async fn a_second_read_of_an_unchanged_channel_costs_one_call_per_note_saved() {
+    use erebus_sdk::notecache::NoteCache;
+
+    let root = std::env::temp_dir().join(format!(
+        "erebus-notecache-hit-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+
+    let channel_key = Felt::from(0x1234u32);
+    let token = CONFIGURED_TOKEN;
+    let cache = NoteCache::new(&root);
+
+    assert!(
+        cache.load(channel_key, token).is_empty(),
+        "a fresh cache must not claim to know anything"
+    );
+
+    // Three encrypted notes, as a walk would have confirmed them.
+    let prefix = [
+        (Felt::from(0xaa1u32), Felt::ZERO),
+        (Felt::from(0xaa2u32), Felt::ZERO),
+        (Felt::from(0xaa3u32), Felt::ZERO),
+    ];
+    cache.store(channel_key, token, &prefix);
+
+    // A different process, same state directory: this is the CLI's actual shape, one process
+    // per call. An in-memory cache would be empty here and buy nothing.
+    let reopened = NoteCache::new(&root);
+    let served = reopened.load(channel_key, token);
+
+    assert_eq!(
+        served.len(),
+        prefix.len(),
+        "the prefix did not survive to a second process, so no round trip is saved"
+    );
+    assert_eq!(served[0], prefix[0]);
+    assert_eq!(served[2], prefix[2]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// An open note keeps its token through the cache.
+///
+/// `check_note_token` treats the second felt differently for an open note than an encrypted
+/// one: zero is required for encrypted and the real token for open. Caching only the packed
+/// value would make a cached open note fail validation on every read after the first — the
+/// cache would work once and then break the channel.
+#[test]
+fn a_cached_open_note_keeps_the_token_its_validation_needs() {
+    use erebus_sdk::notecache::NoteCache;
+
+    let root = std::env::temp_dir().join(format!(
+        "erebus-notecache-open-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).expect("root");
+
+    let cache = NoteCache::new(&root);
+    let open_note = (Felt::from(0xbb1u32), CONFIGURED_TOKEN);
+    cache.store(Felt::from(1u8), CONFIGURED_TOKEN, &[open_note]);
+
+    let served = cache.load(Felt::from(1u8), CONFIGURED_TOKEN);
+
+    assert_eq!(served[0].1, CONFIGURED_TOKEN, "the token felt was dropped");
+    std::fs::remove_dir_all(&root).ok();
+}

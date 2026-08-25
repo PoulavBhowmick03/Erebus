@@ -26,7 +26,14 @@ exits. Every stateful request carries this config:
 
 The values of both private keys must not appear in JSON or argv. Rust opens the supplied
 paths when an operation needs them. `state_dir` contains mode-`0600` secret-bearing channel
-records under a mode-`0700` directory.
+records under a mode-`0700` directory, plus two subdirectories: `operations/`, the durable
+operation journal, and `notecache/`, cached immutable note prefixes.
+
+The three are not equally precious. Channel records are rebuildable from the pool key and the
+chain (`rebuild_state`), and the note cache is pure derived data that is discarded whenever it
+does not parse. **The journal is the one that cannot be reconstructed**, because it is the only
+record that a transaction was signed. Back it up with the channel records, from the same
+moment: see [custody-operations.md](../../docs/custody-operations.md).
 
 ### Provision the two keys
 
