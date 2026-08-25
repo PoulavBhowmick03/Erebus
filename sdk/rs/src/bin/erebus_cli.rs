@@ -68,6 +68,11 @@ enum Request {
         config: ConfigParams,
         operation_id: String,
     },
+    /// Rebuild channel records from the pool key and chain data. Additive: an existing
+    /// record is left alone, never overwritten.
+    RebuildState {
+        config: ConfigParams,
+    },
     AcceptAndSettle {
         config: ConfigParams,
         handle: String,
@@ -351,6 +356,10 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         Request::Reconcile { config } => {
             let client = config.build()?;
             serialize(client.reconcile().await?)
+        }
+        Request::RebuildState { config } => {
+            let client = config.build()?;
+            serialize(client.rebuild_state().await?)
         }
         Request::ResumeOperation {
             config,

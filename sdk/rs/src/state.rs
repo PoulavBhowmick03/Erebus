@@ -450,12 +450,14 @@ impl StateStore {
         Ok(records)
     }
 
-    /// Incoming channel keys already paired with local handles.
+    /// Every channel record in the store, in unspecified order.
     ///
-    /// Reverse channels have no on-chain pair identifier. Excluding claimed keys identifies
-    /// a new reverse channel without exposing a key outside Rust.
-    pub fn claimed_incoming_keys(&self) -> Result<Vec<Felt>, StateError> {
-        let mut claimed = Vec::new();
+    /// A single unreadable record fails the whole listing, for the same reason the journal
+    /// does it: a listing that silently skipped a record it could not parse would let a
+    /// rebuild recreate a channel that already exists, and two records for one relationship
+    /// is how a note index gets written twice.
+    pub fn snapshots(&self) -> Result<Vec<StoredChannel>, StateError> {
+        let mut records = Vec::new();
         let entries = std::fs::read_dir(&self.root).map_err(|source| StateError::Io {
             path: self.root.clone(),
             source,
@@ -480,11 +482,21 @@ impl StateStore {
                         source,
                     }
                 })?;
-            if let Some(key) = state.incoming_key {
-                claimed.push(key);
-            }
+            records.push(state);
         }
-        Ok(claimed)
+        Ok(records)
+    }
+
+    /// Incoming channel keys already paired with local handles.
+    ///
+    /// Reverse channels have no on-chain pair identifier. Excluding claimed keys identifies
+    /// a new reverse channel without exposing a key outside Rust.
+    pub fn claimed_incoming_keys(&self) -> Result<Vec<Felt>, StateError> {
+        Ok(self
+            .snapshots()?
+            .into_iter()
+            .filter_map(|state| state.incoming_key)
+            .collect())
     }
 
     fn write_atomic(&self, state: &StoredChannel) -> Result<(), StateError> {
