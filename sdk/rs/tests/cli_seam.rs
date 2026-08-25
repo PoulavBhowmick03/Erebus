@@ -397,3 +397,124 @@ fn wire_v1_cannot_be_selected_for_a_new_channel() {
         .as_str()
         .is_some_and(|message| message.contains("v1 is read-only")));
 }
+
+/// The recovery surface is reachable over the seam, and shaped like every other request.
+///
+/// Run against an unreachable RPC on purpose. What is under test is dispatch, not the chain:
+/// a routed method gets as far as the network and fails `SUBMIT_FAILED`, while a method that
+/// was never routed fails `INVALID_REQUEST` with "unknown variant" before touching anything.
+/// Those two are distinguishable, which is what makes this test mean something.
+#[test]
+fn the_recovery_methods_are_routed_rather_than_unknown() {
+    let pool = temporary_path("recon-pool");
+    let account = temporary_path("recon-account");
+    std::fs::write(&pool, "0x1").expect("pool key");
+    std::fs::write(&account, "0x2").expect("account key");
+    let pool_path = pool.to_str().expect("path");
+    let account_path = account.to_str().expect("path");
+
+    // Each method proves it routed by failing at its own first real obstacle, which differs:
+    // `reconcile` reads the chain, so it dies at the dead RPC. `resume_operation` looks the id
+    // up in the journal first and dies there, which is the stronger signal of the two — it
+    // reached the journal, not merely the dispatcher.
+    for (method, params, expected_code, expected_fragment) in [
+        (
+            "reconcile",
+            serde_json::json!({ "config": config("recon", pool_path, account_path) }),
+            "SUBMIT_FAILED",
+            "transport error",
+        ),
+        (
+            "resume_operation",
+            serde_json::json!({
+                "config": config("resume", pool_path, account_path),
+                "operation_id": format!("op_{}", "a".repeat(64))
+            }),
+            "INVALID_REQUEST",
+            "no operation is recorded",
+        ),
+    ] {
+        let request = serde_json::json!({ "method": method, "params": params });
+        let (response, ok) = run(&request.to_string());
+        let message = response["error"]["message"].as_str().unwrap_or_default();
+
+        assert!(!ok, "{method} unexpectedly succeeded");
+        assert_eq!(
+            response["error"]["code"], expected_code,
+            "{method}: {response}"
+        );
+        assert!(
+            message.contains(expected_fragment),
+            "{method} should fail at {expected_fragment}: {response}"
+        );
+        assert!(
+            !message.contains("unknown variant"),
+            "{method} was never routed: {response}"
+        );
+    }
+
+    // The control: an unrouted method fails differently, and before the network.
+    let (unknown, _) = run(r#"{"method":"not_a_method"}"#);
+    assert_eq!(unknown["error"]["code"], "INVALID_REQUEST");
+    assert!(unknown["error"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("unknown variant"));
+
+    let _ = std::fs::remove_file(&pool);
+    let _ = std::fs::remove_file(&account);
+}
+
+/// A malformed operation id is rejected by name, before any network call.
+///
+/// The id is the whole basis of idempotency, so a caller that mistypes one must be told
+/// which field was wrong rather than watching a resume fail somewhere downstream.
+#[test]
+fn a_malformed_operation_id_names_the_field() {
+    let pool = temporary_path("badop-pool");
+    let account = temporary_path("badop-account");
+    std::fs::write(&pool, "0x1").expect("pool key");
+    std::fs::write(&account, "0x2").expect("account key");
+
+    let request = serde_json::json!({
+        "method": "resume_operation",
+        "params": {
+            "config": config("badop", pool.to_str().unwrap(), account.to_str().unwrap()),
+            "operation_id": "op_notavalidid"
+        }
+    });
+    let (response, ok) = run(&request.to_string());
+
+    assert!(!ok);
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("operation_id"),
+        "the message should name the field: {response}"
+    );
+
+    let _ = std::fs::remove_file(&pool);
+    let _ = std::fs::remove_file(&account);
+}
+
+/// Every envelope carries the protocol it speaks, including failures.
+///
+/// The Python binding refuses a mismatched CLI by this tag rather than failing on a changed
+/// field somewhere inside the response. A failure envelope that omitted it would make a
+/// version mismatch look like an ordinary error.
+#[test]
+fn the_protocol_tag_is_present_on_failures_as_well_as_successes() {
+    let (success, _) = run(r#"{"method":"version"}"#);
+    assert_eq!(success["protocol"], 3);
+
+    let (unknown_method, _) = run(r#"{"method":"no_such_method"}"#);
+    assert_eq!(unknown_method["protocol"], 3);
+    assert_eq!(unknown_method["ok"], false);
+
+    let (malformed, _) = run("{not json");
+    assert_eq!(malformed["protocol"], 3);
+    assert_eq!(malformed["ok"], false);
+}

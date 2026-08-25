@@ -57,6 +57,17 @@ enum Request {
         config: ConfigParams,
         handle: String,
     },
+    /// Classify every journalled operation against the chain. Read-only: it submits
+    /// nothing and never repairs by itself (plan.md decision 5).
+    Reconcile {
+        config: ConfigParams,
+    },
+    /// Act on one reconciled operation. The only path that may resubmit, and only when
+    /// asked by name.
+    ResumeOperation {
+        config: ConfigParams,
+        operation_id: String,
+    },
     AcceptAndSettle {
         config: ConfigParams,
         handle: String,
@@ -336,6 +347,21 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
                 object.insert("settled".to_owned(), serde_json::Value::Bool(settled));
             }
             Ok(value)
+        }
+        Request::Reconcile { config } => {
+            let client = config.build()?;
+            serialize(client.reconcile().await?)
+        }
+        Request::ResumeOperation {
+            config,
+            operation_id,
+        } => {
+            let client = config.build()?;
+            let id = OperationId::parse(&operation_id).map_err(|_| CliError::BadValue {
+                field: "operation_id",
+                value: operation_id.clone(),
+            })?;
+            serialize(client.resume_operation(&id).await?)
         }
         Request::AcceptAndSettle {
             config,
