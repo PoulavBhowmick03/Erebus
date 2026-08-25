@@ -657,7 +657,13 @@ Work:
    balance, then spent notes of another, wherever a channel's token differed from the
    configured one. What remains is surface, not correctness: choosing a token per operation
    at the CLI is a request-shape change and therefore waits for protocol 4.
-10. Add account signer interfaces for hardware, wallet, or session signers.
+10. ~~Add account signer interfaces for hardware, wallet, or session signers.~~ Done
+    2026-08-25. `AccountSigner` in `sdk/rs/src/signer.rs`; `LocalKeySigner` is the default and
+    reads the key file at signing time rather than holding it across a write. Signing is async
+    behind a boxed future, because every non-local signer is I/O and a sync trait would block
+    a runtime thread on a hardware prompt. `Client::with_signer` refuses a signer whose
+    address disagrees with the configured account, since the pool validates against that
+    account's own contract and a mismatch would fail only after a proof was paid for.
 11. Define backup, restore, key-loss, and key-rotation behavior.
 
 Exit:
@@ -1419,7 +1425,8 @@ exist before Phase 10 gives an agent more ways to spend.
       an operation actually moves, not the configured one.
 - [ ] Multi-token surface: choosing a token per operation at the CLI, which is a
       request-shape change and waits for protocol 4.
-- [ ] Signer abstraction.
+- [x] Signer abstraction: `AccountSigner` behind `Client::with_signer`, with the account
+      key read at signing time rather than threaded through a write.
 - [ ] Backup and restore process.
 - [ ] Secret-safe monitoring.
 

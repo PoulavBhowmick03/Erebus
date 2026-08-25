@@ -590,6 +590,9 @@ fn execution_error_code(error: &ExecutionError) -> (&'static str, bool) {
         ExecutionError::Journal(_)
         | ExecutionError::TransactionNotSerializable(_)
         | ExecutionError::TransactionHashMismatch { .. } => ("RECONCILIATION_REQUIRED", false),
+        // A signer failure is the key file, a declining device, or a wallet the user
+        // dismissed. Not retryable by the SDK: something outside it has to change.
+        ExecutionError::Signer(_) => ("IDENTITY_UNAVAILABLE", false),
         ExecutionError::PoolInvocation(_)
         | ExecutionError::Signing(_)
         | ExecutionError::Calldata(_)

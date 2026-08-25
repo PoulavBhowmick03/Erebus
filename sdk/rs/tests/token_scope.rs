@@ -190,3 +190,54 @@ async fn the_default_allowance_still_uses_the_configured_token() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+// --- account signer ----------------------------------------------------------------------
+
+/// A signer whose address disagrees with the client is refused before any proof is paid for.
+///
+/// The pool validates a signature against the account contract at `ClientConfig::account_address`
+/// (`utils.cairo:383`), so a mismatched signer produces a signature the chain rejects — after
+/// roughly thirty seconds of proving and a fee. Catching it at injection makes it free.
+#[tokio::test]
+async fn a_signer_for_the_wrong_account_is_refused_at_injection() {
+    use erebus_sdk::signer::LocalKeySigner;
+    use std::sync::Arc;
+
+    let (rpc_url, _seen, server) = recording_server(vec![]);
+    let (client, root) = client(rpc_url);
+    drop(server);
+
+    let wrong = Arc::new(LocalKeySigner::new(
+        Felt::from_hex_unchecked("0x999"),
+        root.join("account.key"),
+    ));
+    let error = client
+        .with_signer(wrong)
+        .expect_err("a signer for another account must be refused");
+
+    let message = error.to_string();
+    assert!(message.contains("0x999"), "{message}");
+    assert!(message.contains("0x11"), "{message}");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A signer for the configured account is accepted, so the injection point is usable.
+///
+/// Without this the refusal test above would pass just as well if `with_signer` rejected
+/// everything.
+#[tokio::test]
+async fn a_signer_for_the_configured_account_is_accepted() {
+    use erebus_sdk::signer::LocalKeySigner;
+    use std::sync::Arc;
+
+    let (rpc_url, _seen, server) = recording_server(vec![]);
+    let (client, root) = client(rpc_url);
+    drop(server);
+
+    let right = Arc::new(LocalKeySigner::new(ACCOUNT, root.join("account.key")));
+
+    assert!(client.with_signer(right).is_ok());
+
+    std::fs::remove_dir_all(&root).ok();
+}

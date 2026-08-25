@@ -28,6 +28,7 @@ use crate::calldata;
 use crate::journal::{JournalError, OperationLease, OperationStage};
 use crate::prover::{BlockId, ProveTransactionResult, ProverError, ProvingService};
 use crate::rpc::{Receipt, RpcError, StarknetRpc};
+use crate::signer::AccountSigner;
 use crate::signing::{self, SigningError};
 use crate::tx::{
     DataAvailabilityMode, InvokeV3, PoolInvocation, PoolInvocationError, ResourceBounds,
@@ -150,7 +151,7 @@ impl Executor {
         proof_validity_blocks: u64,
         user_address: Felt,
         pool_private_key: Felt,
-        account_private_key: Felt,
+        signer: &dyn AccountSigner,
         actions: &ActionSet,
     ) -> Result<ExecutionReceipt, ExecutionError> {
         let head = self.rpc.block_number().await?;
@@ -186,7 +187,7 @@ impl Executor {
             self.config.chain_id,
             user_address,
             pool_private_key,
-            account_private_key,
+            signer.address(),
             proof_nonce,
             actions,
         )?;
@@ -253,7 +254,9 @@ impl Executor {
             proof_facts,
         );
         let signed_hash = invoke.transaction_hash();
-        let signature = signing::sign(&account_private_key, &signed_hash)?;
+        // The account key is read inside the signer and dropped when this returns, so it
+        // never exists in this frame. A hardware or wallet signer never produces one at all.
+        let signature = signer.sign(&signed_hash).await?;
         let transaction = invoke.with_signature(signature).with_proof(proof.proof);
 
         // The crash window this closes: the hash is computable before submission, so it is
@@ -288,11 +291,11 @@ impl Executor {
     /// exists for is the ERC-20 `approve` that has to land *before* a charged `apply_actions`,
     /// which is an ordinary token call with no actions, no simulation, and no prover.
     ///
-    /// Read `account_private_key` from its file immediately before calling. Not retained.
+    /// Signs through `signer`, so the account key is never held by this frame.
     pub async fn submit_call(
         &self,
         operation: &mut OperationLease,
-        account_private_key: Felt,
+        signer: &dyn AccountSigner,
         target: Felt,
         entrypoint: &str,
         call_calldata: &[Felt],
@@ -325,7 +328,7 @@ impl Executor {
 
         let invoke = submission_invoke(&self.config, account_calldata, nonce, bounds, Vec::new());
         let signed_hash = invoke.transaction_hash();
-        let signature = signing::sign(&account_private_key, &signed_hash)?;
+        let signature = signer.sign(&signed_hash).await?;
         let transaction = invoke.with_signature(signature);
 
         operation.amend(now(), |attempt| {
@@ -518,6 +521,9 @@ pub enum ExecutionError {
     /// Signing failed.
     #[error(transparent)]
     Signing(#[from] SigningError),
+    /// The account signer could not, or would not, produce a signature.
+    #[error(transparent)]
+    Signer(#[from] crate::signer::SignerError),
     /// Starknet node failure.
     #[error(transparent)]
     Rpc(#[from] RpcError),

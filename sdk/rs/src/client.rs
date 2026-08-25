@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::{rngs::OsRng, RngCore};
@@ -38,6 +39,7 @@ use crate::read::{reconstruct, ChannelReader, ReadError};
 use crate::reconcile::{self, Finding, NextAction, Outcome};
 use crate::resume::{self, ResumeOutcome, ResumePlan};
 use crate::rpc::{RpcError, StarknetRpc};
+use crate::signer::{AccountSigner, LocalKeySigner};
 use crate::state::{ChannelHandle, StateError, StateStore, StoredChannel};
 use crate::subchannel::SubchannelCursor;
 use crate::wire::{
@@ -85,6 +87,10 @@ pub struct Client {
     executor: Executor,
     state: StateStore,
     journal: OperationJournal,
+    /// Produces the account signature. A `LocalKeySigner` over `account_key_file` by
+    /// default; [`Client::with_signer`] replaces it with a hardware, wallet, or session
+    /// signer without the SDK ever seeing a private key.
+    signer: Arc<dyn AccountSigner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,11 +204,16 @@ impl Client {
             ExecutionConfig::new(config.pool_address, config.chain_id, config.account_address);
         let state = StateStore::new(&config.state_dir)?;
         let journal = OperationJournal::new(&config.state_dir)?;
+        let signer = Arc::new(LocalKeySigner::new(
+            config.account_address,
+            &config.account_key_file,
+        ));
         Ok(Self {
             config,
             executor: Executor::new(rpc, prover, execution),
             state,
             journal,
+            signer,
         })
     }
 
@@ -1277,12 +1288,11 @@ impl Client {
                 local_mutation: None,
             },
         )?;
-        let account_key = read_key(&self.config.account_key_file, "account key")?;
         let calldata = erc20::approve_calldata(self.config.pool_address, amount);
         self.executor
             .submit_call(
                 &mut operation,
-                account_key,
+                self.signer.as_ref(),
                 self.config.token,
                 "approve",
                 &calldata,
@@ -1382,10 +1392,30 @@ impl Client {
         Ok(())
     }
 
-    fn identity_keys(&self) -> Result<(PoolIdentity, Felt, Felt), ClientError> {
+    fn identity_keys(&self) -> Result<(PoolIdentity, Felt, &dyn AccountSigner), ClientError> {
         let (identity, pool_key) = self.pool_identity()?;
-        let account_key = read_key(&self.config.account_key_file, "account key")?;
-        Ok((identity, pool_key, account_key))
+        Ok((identity, pool_key, self.signer.as_ref()))
+    }
+
+    /// Replaces the account signer.
+    ///
+    /// The default reads `ClientConfig::account_key_file`. A hardware wallet, browser wallet,
+    /// or scoped session key implements [`AccountSigner`] instead, and then no account
+    /// private key exists in this process at all.
+    ///
+    /// The signer's address must match `ClientConfig::account_address`: the pool validates
+    /// against that address's own account contract (`utils.cairo:383`), so a mismatch buys a
+    /// proof and then fails signature validation on chain.
+    pub fn with_signer(mut self, signer: Arc<dyn AccountSigner>) -> Result<Self, ClientError> {
+        if signer.address() != self.config.account_address {
+            return Err(ClientError::InvalidRequest(format!(
+                "signer signs for {:#x} but the client is configured for {:#x}",
+                signer.address(),
+                self.config.account_address
+            )));
+        }
+        self.signer = signer;
+        Ok(self)
     }
 
     fn pool_identity(&self) -> Result<(PoolIdentity, Felt), ClientError> {
