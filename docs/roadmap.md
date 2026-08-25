@@ -650,7 +650,13 @@ Work:
    `last_write_block` do not come back, and the report says so.
 7. Cache immutable note prefixes and read from the last known cursor.
 8. Add discovery-provider support after Q3 defines a supported endpoint.
-9. Add multi-token client state.
+9. Add multi-token client state. *Partly done 2026-08-25.* Funding checks now follow the
+   asset an operation moves rather than `ClientConfig::token`: `prepared_checks` and
+   `pool_allowance_for` take the token, and the three channel operations pass the channel's
+   own. That closes a real mismatch — `accept_and_settle` checked one token's allowance and
+   balance, then spent notes of another, wherever a channel's token differed from the
+   configured one. What remains is surface, not correctness: choosing a token per operation
+   at the CLI is a request-shape change and therefore waits for protocol 4.
 10. Add account signer interfaces for hardware, wallet, or session signers.
 11. Define backup, restore, key-loss, and key-rotation behavior.
 
@@ -1409,7 +1415,10 @@ exist before Phase 10 gives an agent more ways to spend.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
 - [ ] Read cursor, cache, and discovery support.
-- [ ] Multi-token client.
+- [x] Multi-token correctness: funding checks read the allowance and balance of the token
+      an operation actually moves, not the configured one.
+- [ ] Multi-token surface: choosing a token per operation at the CLI, which is a
+      request-shape change and waits for protocol 4.
 - [ ] Signer abstraction.
 - [ ] Backup and restore process.
 - [ ] Secret-safe monitoring.
