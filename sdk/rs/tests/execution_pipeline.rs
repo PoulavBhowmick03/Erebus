@@ -175,13 +175,22 @@ async fn one_path_preflights_proves_submits_and_waits() {
         )
         .expect("claim");
 
+    // The account key the pipeline used to take inline now lives behind a signer, which is
+    // the whole point of the abstraction: the key exists for one call rather than a write.
+    let key_file = std::env::temp_dir().join(format!(
+        "erebus-pipeline-account-{}.key",
+        std::process::id()
+    ));
+    std::fs::write(&key_file, "0xdef\n").expect("account key");
+    let signer = erebus_sdk::signer::LocalKeySigner::new(account, &key_file);
+
     let receipt = executor
         .execute(
             &mut operation,
             OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS,
             account,
             Felt::from(0xabc_u64),
-            Felt::from(0xdef_u64),
+            &signer,
             &actions,
         )
         .await

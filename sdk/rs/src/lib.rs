@@ -39,6 +39,7 @@ pub mod read;
 pub mod reconcile;
 pub mod resume;
 pub mod rpc;
+pub mod signer;
 pub mod signing;
 pub mod state;
 pub mod subchannel;
