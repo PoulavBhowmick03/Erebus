@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-23.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-25.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -31,7 +31,7 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
-| Tests | 311 Rust (plus 2 intentionally ignored live-prover tests), 118 Python, 43 TypeScript |
+| Tests | 324 Rust (plus 2 intentionally ignored live-prover tests), 125 Python, 43 TypeScript |
 | In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 2, 4, 5, and 6 are complete in the 2026-08-23 working tree: complete request binding and result replay, durable prepared/receipt/local-result facts, a read-only pre-write reconciliation gate, and both exact-resubmission and proven-dead rebuild recovery. Task 8 is also complete in the working tree. Recovery is still not reachable from the CLI, Python, or MCP until the protocol-4 seam lands (task 10), fault injection is not yet exhaustive, and none of the recovery paths has been exercised against a live chain (task 11) |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS

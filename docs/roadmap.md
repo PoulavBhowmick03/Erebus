@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-23.
+Last source audit: 2026-08-25.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -635,7 +635,13 @@ Work:
 4. ~~Implement both explicit resume modes.~~ Complete in the 2026-08-23 working tree. A valid
    transaction is resubmitted byte-for-byte. An attempt proven unable to produce an effect is
    rebuilt from its durable request under the same id and re-enters all ordinary live checks.
-5. Add fault injection at every write boundary.
+5. ~~Add fault injection at every write boundary.~~ Done 2026-08-25 in
+   `sdk/rs/tests/fault_matrix.rs` (#27). Faults are injected by writing a journal record
+   stopped at each boundary, which is what a killed process leaves behind, so no production
+   code carries a test hook. The mock node records the JSON-RPC methods it is asked for,
+   which is what makes "startup is read-only" an assertion rather than an assumption; a
+   companion test proves the recorder would notice a submission, so the sweep cannot pass
+   vacuously.
 6. Rebuild channel handles and cursors from keys and chain state.
 7. Cache immutable note prefixes and read from the last known cursor.
 8. Add discovery-provider support after Q3 defines a supported endpoint.
@@ -1384,6 +1390,11 @@ exist before Phase 10 gives an agent more ways to spend.
       through the normal checked write path under the same id.
 - [x] Type-owned wide-number serialization: `AllowanceReport` and `NoteBalance` emit
       full-width decimal strings themselves; the CLI no longer repairs their JSON shapes.
+- [x] Fault matrix: every durable boundary swept for stable binding, read-only startup,
+      no silent "finished" classification, safe-to-retry holding exactly before the
+      signature, and exactly-once replay (#27).
+- [x] Recovery is reachable from outside Rust: `reconcile` and `resume_operation` are CLI
+      methods, with dispatch, malformed-id, and protocol-tag tests (#26).
 - [ ] Chain-state recovery: rebuild handles and cursors from keys and chain data when the
       state directory is lost.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
@@ -1400,7 +1411,10 @@ exist before Phase 10 gives an agent more ways to spend.
 
 - [ ] Written relationship threat model.
 - [ ] Final framed wire with randomized spare bits.
-- [ ] Repeat deals through the same directional channel pair.
+- [x] Repeat deals through the same directional channel pair. The wire carries deal ids;
+      `ChannelState` reports `settlements: Vec<SettlementRecord>` rather than a channel-level
+      boolean, one record per deal with agreed and paid amounts kept separate and a nullable
+      consistency result (#24).
 - [ ] TypeScript final-wire oracle and normative vectors.
 - [ ] Submission unlinkability research.
 - [ ] Independent cryptographic and security review.
