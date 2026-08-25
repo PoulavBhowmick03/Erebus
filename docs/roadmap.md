@@ -642,7 +642,12 @@ Work:
    which is what makes "startup is read-only" an assertion rather than an assumption; a
    companion test proves the recorder would notice a submission, so the sweep cannot pass
    vacuously.
-6. Rebuild channel handles and cursors from keys and chain state.
+6. ~~Rebuild channel handles and cursors from keys and chain state.~~ Done 2026-08-25.
+   `Client::rebuild_state` and `erebus-cli rebuild_state` enumerate outgoing channels by
+   keyed id, decrypt each recipient with the pool key, re-derive the channel key, confirm the
+   token subchannel, and read the note cursor rather than assuming it. Additive: an existing
+   record is kept byte for byte, never overwritten. Handles, `opened_transaction` and
+   `last_write_block` do not come back, and the report says so.
 7. Cache immutable note prefixes and read from the last known cursor.
 8. Add discovery-provider support after Q3 defines a supported endpoint.
 9. Add multi-token client state.
@@ -1398,8 +1403,9 @@ exist before Phase 10 gives an agent more ways to spend.
       signature, and exactly-once replay (#27).
 - [x] Recovery is reachable from outside Rust: `reconcile` and `resume_operation` are CLI
       methods, with dispatch, malformed-id, and protocol-tag tests (#26).
-- [ ] Chain-state recovery: rebuild handles and cursors from keys and chain data when the
-      state directory is lost.
+- [x] Chain-state recovery: `rebuild_state` reconstructs channel records from the pool key
+      and chain data by keyed discovery. New handles: the originals are random and local, so
+      anything holding an old handle string will not resolve against a rebuilt record.
 - [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
       after the journal lands).
 - [ ] Read cursor, cache, and discovery support.

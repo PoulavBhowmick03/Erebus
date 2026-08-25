@@ -1587,6 +1587,120 @@ impl Client {
         }
     }
 
+    /// Rebuilds channel records from the pool key and chain data.
+    ///
+    /// The state directory is a local convenience, not the source of truth. Everything in a
+    /// `StoredChannel` except its handle is either derived from the pool key or written on
+    /// chain, so losing the directory should cost an operator a rebuild rather than the
+    /// channels themselves.
+    ///
+    /// This is keyed discovery, not scanning (CLAUDE.md constraint 3): outgoing channels are
+    /// enumerated by `h(OUTGOING_CHANNEL_ID_TAG, owner, pool_key, index)`, which only the
+    /// holder of the pool key can compute, and each record's recipient address is decrypted
+    /// with that same key. No public event or global storage is read.
+    ///
+    /// **Additive and non-destructive.** A channel already in the store is left exactly as it
+    /// is and reported as `kept`. Nothing is overwritten, because a live record knows things
+    /// this cannot recover and a rebuild must never be able to make an operator worse off.
+    ///
+    /// ## What does not come back
+    ///
+    /// - **The original handle.** It is random and local, so a rebuilt channel gets a new
+    ///   one. Anything holding an old handle string — a journal entry, an agent's notes —
+    ///   will not resolve against the rebuilt record.
+    /// - **`opened_transaction` and `last_write_block`.** Recovering them means finding which
+    ///   transaction wrote a slot, which is event scanning. They are set to zero, and a zero
+    ///   `last_write_block` only costs a wider proof-anchor wait on the next write.
+    ///
+    /// The cursor is not guessed: `outgoing_next_note` is read by walking the subchannel the
+    /// same way an ordinary read does, so a rebuilt channel writes at the right index.
+    pub async fn rebuild_state(&self) -> Result<RebuildReport, ClientError> {
+        let (identity, pool_key) = self.pool_identity()?;
+        let owner = identity.address();
+        let mut report = RebuildReport::default();
+
+        let known: HashSet<(Felt, Felt)> = self
+            .state
+            .snapshots()?
+            .into_iter()
+            .map(|state| (state.counterparty_address, state.token))
+            .collect();
+
+        for index in 0..MAX_DISCOVERY_ITEMS {
+            let id = hashes::compute_outgoing_channel_id(owner, pool_key, index);
+            let record = self
+                .view("get_outgoing_channel_info", &[id], &BlockId::Latest)
+                .await?;
+            require_len("get_outgoing_channel_info", &record, 2)?;
+            if record[0] == Felt::ZERO {
+                break;
+            }
+            report.channels_found += 1;
+
+            let counterparty =
+                decrypt::outgoing_recipient_addr(record[1], owner, &pool_key, index, record[0]);
+            let counterparty_public_key = self.registered_public_key(counterparty).await?;
+            if counterparty_public_key == Felt::ZERO {
+                // The counterparty deregistered or never finished registering. Without their
+                // public key the channel key cannot be derived, and guessing one would
+                // produce a record that silently reads nothing.
+                report.unrecoverable += 1;
+                continue;
+            }
+            let channel_key =
+                hashes::compute_channel_key(owner, pool_key, counterparty, counterparty_public_key);
+
+            if !self
+                .channel_has_token(channel_key, self.config.token)
+                .await?
+            {
+                // A real channel, but not on this client's configured token. Multi-token
+                // state is separate work; reporting it is how an operator learns the rebuild
+                // was partial rather than complete.
+                report.other_token += 1;
+                continue;
+            }
+            if known.contains(&(counterparty, self.config.token)) {
+                report.kept += 1;
+                continue;
+            }
+
+            let channel_index = u32::try_from(index)
+                .map_err(|_| ClientError::Protocol("channel index exceeds u32".to_owned()))?;
+            let handle = self.state.create(|handle| {
+                StoredChannel::new_with_wire_version(
+                    handle,
+                    self.config.chain_id,
+                    self.config.pool_address,
+                    owner,
+                    counterparty,
+                    counterparty_public_key,
+                    self.config.token,
+                    channel_key,
+                    channel_index,
+                    0,
+                    Felt::ZERO,
+                    0,
+                    self.config.new_channel_wire_version,
+                )
+            })?;
+
+            // Read the cursor rather than assume it. A rebuilt channel that started writing
+            // at index zero would collide with every note already there.
+            let mut lease = self.state.lock(&handle)?;
+            let (_, _, chain_next) = self.sync_book(lease.state()).await?;
+            lease.state_mut().outgoing_next_note = chain_next;
+            let _ = self
+                .attach_reverse_channel(lease.state_mut(), pool_key)
+                .await;
+            lease.commit()?;
+
+            report.rebuilt.push(handle);
+        }
+
+        Ok(report)
+    }
+
     async fn channel_has_token(&self, channel_key: Felt, token: Felt) -> Result<bool, ClientError> {
         for index in 0..MAX_DISCOVERY_ITEMS {
             let id = hashes::compute_subchannel_id(channel_key, index);
@@ -2639,6 +2753,26 @@ pub struct Offer {
     pub status: OfferStatus,
     /// Unix creation time.
     pub created_at: u64,
+}
+
+/// What [`Client::rebuild_state`] recovered, and what it could not.
+///
+/// The counts that are not `rebuilt` are the important ones. A rebuild that reported only its
+/// successes would let an operator believe the directory is whole when a counterparty's
+/// deregistration or a second token left part of it behind.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RebuildReport {
+    /// Outgoing channels found on chain under this pool key.
+    pub channels_found: usize,
+    /// Handles created by this rebuild. New handles: the originals are not recoverable.
+    pub rebuilt: Vec<ChannelHandle>,
+    /// Already present locally and left exactly as they were.
+    pub kept: usize,
+    /// Real channels on a token this client is not configured for.
+    pub other_token: usize,
+    /// Found, but the counterparty has no registered pool public key, so the channel key
+    /// cannot be derived. Not an error: it is a channel this identity can no longer use.
+    pub unrecoverable: usize,
 }
 
 /// One settled deal within a channel.
