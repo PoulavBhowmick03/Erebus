@@ -146,6 +146,17 @@ Complete these tasks one at a time, with review and focused verification after e
    singular settlement response with `settlements: Vec<SettlementRecord>`, keyed by deal ID.
    Each record carries acceptance, accepted offer, agreed amount, paid amount, and a nullable
    consistency result.
+   *Done 2026-08-25. `ChannelState.settled: bool` is now `settlements: Vec<SettlementRecord>`,
+   one record per acceptance in book order. `paid_amount` comes from the payment note the
+   accepting party wrote, located through that party's own reader, because the accepting
+   identity pays. `deal_id` crosses JSON as a decimal string: a `u64` deal id routinely
+   exceeds 2^53, and the live run's `12092566798693785331` would have been rounded by a JSON
+   number. `consistency` stays nullable so "no payment note found" cannot read as "amounts
+   disagree". `ChannelState::is_settled()` is a helper rather than a field so the summary
+   cannot drift from the records. `StoredChannel::settled` survives unchanged as the local
+   terminal flag for wire v1 and v2, where one deal per channel really is the end. Per
+   decision 6 the CLI stays on protocol 3 and still emits a derived `settled` boolean;
+   task 10 removes it as part of the coordinated protocol-4 change.*
 10. **Protocol-4 Rust seam.** Expose the operation and recovery shapes through the CLI only
     after the Rust behavior is complete. Add mismatch and response-shape tests.
 11. **Fault-injection matrix.** Stop execution after each durable boundary: prepared, proven,
