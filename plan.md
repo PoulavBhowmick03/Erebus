@@ -159,6 +159,19 @@ Complete these tasks one at a time, with review and focused verification after e
    task 10 removes it as part of the coordinated protocol-4 change.*
 10. **Protocol-4 Rust seam.** Expose the operation and recovery shapes through the CLI only
     after the Rust behavior is complete. Add mismatch and response-shape tests.
+    *Partly done 2026-08-25. The recovery surface is exposed: `reconcile` and
+    `resume_operation` are CLI methods, and response-shape and dispatch tests cover them,
+    the protocol tag on failure envelopes, and a malformed operation id. That half is
+    additive, so it landed on protocol 3 without breaking anything.*
+    *The remaining half is blocked, and not on Rust. Making `operation_id` a required,
+    caller-supplied field is what earns protocol 4, and nothing above the seam supplies one
+    yet: `mcp-server` has no `operation_id`, so Ishita's task 1 (durable caller intent) has
+    to land first. Requiring it now would fail every MCP call. Decision 6 also puts the CLI,
+    `sdk/py` and the MCP server in one coordinated change, so bumping the CLI alone would
+    strand the binding at `PROTOCOL = 3`. Still to do when unblocked: require
+    `OperationId` on every write request, delete `bridge_operation_id`, remove the derived
+    `settled` compatibility field left by task 9, bump `PROTOCOL` to 4 with the binding, and
+    update `CLAUDE.md` per the scope boundary above.*
 11. **Fault-injection matrix.** Stop execution after each durable boundary: prepared, proven,
     signed/hash-persisted, submitted, and accepted-before-state-commit. At every point verify
     no duplicate chain effect, stable parameter binding, read-only startup, correct explicit
