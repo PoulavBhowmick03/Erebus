@@ -176,6 +176,20 @@ Complete these tasks one at a time, with review and focused verification after e
     signed/hash-persisted, submitted, and accepted-before-state-commit. At every point verify
     no duplicate chain effect, stable parameter binding, read-only startup, correct explicit
     resume mode, and exactly-once local outcome.
+    *Done 2026-08-25 in `tests/fault_matrix.rs`. Faults are injected by writing a journal
+    record stopped at each boundary, which is what a killed process leaves behind, so no
+    production code carries a test hook. The mock node now records the JSON-RPC method names
+    it is asked for, which is what turns "startup is read-only" from an assumption into an
+    assertion; a companion test proves that recorder would in fact notice a submission, so
+    the sweep cannot pass vacuously. Sweeps cover: the binding survives a crash at every
+    boundary including `Claimed` and still conflicts on different parameters; reconciliation
+    submits nothing at any boundary; no incomplete boundary is ever classified `None`, which
+    is the silent-finish failure the matrix exists to rule out; safe-to-retry holds exactly
+    before the signature and nowhere after it, the signature rather than the submission being
+    the line past which an effect may exist; and a committed operation replays its recorded
+    result without touching the chain. Per-cell behaviour that already had focused coverage
+    stays in `reconcile.rs`, `resume.rs` and `recovery.rs`; this file is the sweep that makes
+    a missing cell visible rather than inferred.*
 
 ## Ishita: Python, MCP, skills, and agents
 
