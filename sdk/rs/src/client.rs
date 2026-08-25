@@ -820,7 +820,17 @@ impl Client {
     /// stale constant is the difference between resubmitting and re-proving.
     ///
     /// `deposit` is the value the pool will pull on top of its fee. Only `shield` has one.
-    async fn prepared_checks(&self, deposit: u128) -> Result<PreparedChecks, ClientError> {
+    /// Live pre-proof checks for `token`.
+    ///
+    /// `token` is the asset the operation will actually move, which for a channel operation
+    /// is the channel's token rather than the client's configured one. A settlement that
+    /// checked one token's allowance and balance and then spent another's would pass or fail
+    /// for the wrong asset.
+    async fn prepared_checks(
+        &self,
+        token: Felt,
+        deposit: u128,
+    ) -> Result<PreparedChecks, ClientError> {
         let validity = self
             .view("get_proof_validity_blocks", &[], &BlockId::Latest)
             .await?;
@@ -831,12 +841,12 @@ impl Client {
             ))
         })?;
 
-        let report = self.pool_allowance().await?;
+        let report = self.pool_allowance_for(token).await?;
         let balance = self
             .executor
             .rpc()
             .call_contract(
-                self.config.token,
+                token,
                 "balanceOf",
                 &erc20::balance_of_calldata(self.config.account_address),
                 &BlockId::Latest,
@@ -852,6 +862,11 @@ impl Client {
         };
         checks.verify(deposit)?;
         Ok(checks)
+    }
+
+    /// The pool's allowance and fee for this client's configured token.
+    pub async fn pool_allowance(&self) -> Result<AllowanceReport, ClientError> {
+        self.pool_allowance_for(self.config.token).await
     }
 
     /// Classifies every journalled operation against the chain, without changing anything.
@@ -981,7 +996,7 @@ impl Client {
                 local_mutation: None,
             },
         )?;
-        let checks = self.prepared_checks(amount).await?;
+        let checks = self.prepared_checks(self.config.token, amount).await?;
         self.persist_prepared(&mut operation, amount, checks)?;
         self.executor
             .execute(
@@ -1277,16 +1292,21 @@ impl Client {
         Self::decode_result(result)
     }
 
-    /// The pool's current STRK allowance against this account, and the fee it charges.
+    /// The pool's standing allowance and per-write fee for `token`.
     ///
     /// Both are live reads. The fee is pool storage that `set_fee_amount` can change, and it
     /// already differs by network, so nothing should hard-code it.
-    pub async fn pool_allowance(&self) -> Result<AllowanceReport, ClientError> {
+    ///
+    /// Takes the token explicitly rather than reading `ClientConfig::token`, because an
+    /// allowance is a per-token fact and a channel does not have to be on the client's
+    /// configured token. Reading one token's allowance to authorise another token's spend
+    /// is the mismatch this parameter exists to make impossible.
+    pub async fn pool_allowance_for(&self, token: Felt) -> Result<AllowanceReport, ClientError> {
         let allowance = self
             .executor
             .rpc()
             .call_contract(
-                self.config.token,
+                token,
                 "allowance",
                 &erc20::allowance_calldata(self.config.account_address, self.config.pool_address),
                 &BlockId::Latest,
@@ -1966,7 +1986,7 @@ impl ErebusClient for Client {
                 }),
             },
         )?;
-        let checks = self.prepared_checks(0).await?;
+        let checks = self.prepared_checks(self.config.token, 0).await?;
         self.persist_prepared(&mut operation, 0, checks)?;
         self.executor
             .execute(
@@ -2067,7 +2087,9 @@ impl ErebusClient for Client {
                 }),
             },
         )?;
-        let checks = self.prepared_checks(0).await?;
+        // The channel's own token, not the client's configured one: this is the asset
+        // the operation moves, and the two need not be the same channel to channel.
+        let checks = self.prepared_checks(state.token, 0).await?;
         self.persist_prepared(&mut operation, 0, checks)?;
         self.executor
             .execute(
@@ -2182,7 +2204,9 @@ impl ErebusClient for Client {
                 }),
             },
         )?;
-        let checks = self.prepared_checks(0).await?;
+        // The channel's own token, not the client's configured one: this is the asset
+        // the operation moves, and the two need not be the same channel to channel.
+        let checks = self.prepared_checks(state.token, 0).await?;
         self.persist_prepared(&mut operation, 0, checks)?;
         self.executor
             .execute(
@@ -2395,7 +2419,9 @@ impl ErebusClient for Client {
                 }),
             },
         )?;
-        let checks = self.prepared_checks(0).await?;
+        // The channel's own token, not the client's configured one: this is the asset
+        // the operation moves, and the two need not be the same channel to channel.
+        let checks = self.prepared_checks(state.token, 0).await?;
         self.persist_prepared(&mut operation, 0, checks)?;
         self.executor
             .execute(
