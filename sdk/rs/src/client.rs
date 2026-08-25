@@ -858,7 +858,7 @@ impl Client {
     ///
     /// Run this at startup, before any write. It reads receipts and the account nonce and
     /// reports what each operation did; it submits nothing, resubmits nothing, and does not
-    /// touch the journal. Acting on a finding is [`ErebusClient::resume_operation`]'s job
+    /// touch the journal. Acting on a finding is [`Client::resume_operation`]'s job
     /// and stays explicit.
     ///
     /// An unreadable journal fails the whole call rather than returning a short list. A
