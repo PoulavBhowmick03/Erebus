@@ -32,6 +32,7 @@ from erebus_mcp.interface import (
     SettlementErrorCode,
     ViewingKeyGrant,
 )
+from erebus_mcp.intent import IntentStore
 from erebus_mcp.spending import SpendGuard
 
 
@@ -76,6 +77,7 @@ def register_tools(
     client: ErebusClient,
     settlement_role: SettlementRole,
     spend_guard: SpendGuard,
+    intent_store: IntentStore,
     backend: str,
     network: str,
 ) -> None:
@@ -84,6 +86,12 @@ def register_tools(
     `spend_guard` enforces per-token, per-deal, and daily-cumulative spending caps below
     the agent (roadmap 9.1). An unconfigured guard (no `EREBUS_SPENDING_LIMITS`) never
     refuses anything, so passing one is always safe.
+
+    `intent_store` persists an operation id and its canonical parameters before each
+    chain-writing call, so a process killed mid-call leaves a record instead of silence
+    (plan.md, Ishita task 1). It is not yet threaded into the seam call itself — that
+    needs protocol 4 — so today it only protects against this process's own crash, not
+    against chain-level ambiguity; see erebus_mcp/intent.py.
 
     `backend` ("mock" or "seam") and `network` are stamped onto every tool result,
     success or failure, so a model cannot mistake a mock run for a live one, or one
@@ -109,6 +117,17 @@ def register_tools(
                 error={"code": e.code.value, "message": e.message, "retryable": e.retryable},
             )
         return _envelope(True, result=result)
+
+    async def _write_call(tool: str, params: dict[str, Any], coro: Any) -> dict[str, Any]:
+        """Wraps a chain-writing seam call with durable caller intent (plan.md task 1):
+        persist before the call, resolve once it has returned to this process. `_call`
+        already returning — `ok` true or a caught `ErebusError` — is itself proof this
+        process did not crash; only a killed process leaves the record on disk."""
+        operation_id = intent_store.begin(tool, params)
+        try:
+            return await _call(coro)
+        finally:
+            intent_store.resolve(operation_id)
 
     def _error(code: SettlementErrorCode, message: str) -> dict[str, Any]:
         return _envelope(
@@ -201,7 +220,9 @@ def register_tools(
         of silence and do not abort or retry while it runs; the operation is not
         stuck below five minutes, and abandoning it does not cancel the
         transaction it may already have submitted."""
-        outcome = await _call(client.open_channel(counterparty))
+        outcome = await _write_call(
+            "open_channel", {"counterparty": counterparty}, client.open_channel(counterparty)
+        )
         if outcome["ok"]:
             outcome["result"] = {"channel_handle": outcome["result"]}
         return outcome
@@ -238,7 +259,17 @@ def register_tools(
             if failure is not None:
                 return failure
         terms = OfferTerms(amount=parsed_amount, token=token, deadline=deadline, memo_hash=memo)
-        outcome = await _call(client.propose_offer(channel_handle, terms))
+        outcome = await _write_call(
+            "propose_offer",
+            {
+                "channel_handle": channel_handle,
+                "amount": parsed_amount,
+                "token": token,
+                "deadline": deadline,
+                "memo_hash": memo,
+            },
+            client.propose_offer(channel_handle, terms),
+        )
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
         return outcome
@@ -276,7 +307,18 @@ def register_tools(
             if failure is not None:
                 return failure
         terms = OfferTerms(amount=parsed_amount, token=token, deadline=deadline, memo_hash=memo)
-        outcome = await _call(client.counter_offer(channel_handle, reply_to, terms))
+        outcome = await _write_call(
+            "counter_offer",
+            {
+                "channel_handle": channel_handle,
+                "reply_to": reply_to,
+                "amount": parsed_amount,
+                "token": token,
+                "deadline": deadline,
+                "memo_hash": memo,
+            },
+            client.counter_offer(channel_handle, reply_to, terms),
+        )
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
         return outcome
@@ -360,7 +402,11 @@ def register_tools(
             denial = spend_guard.check(target.terms.token, target.terms.amount)
             if denial is not None:
                 return _error(SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial)
-        outcome = await _call(client.accept_and_settle(channel_handle, offer_id))
+        outcome = await _write_call(
+            "accept_and_settle",
+            {"channel_handle": channel_handle, "offer_id": offer_id},
+            client.accept_and_settle(channel_handle, offer_id),
+        )
         if outcome["ok"]:
             if target is not None:
                 spend_guard.record(target.terms.token, target.terms.amount)
