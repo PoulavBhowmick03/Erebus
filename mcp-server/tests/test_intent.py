@@ -6,7 +6,9 @@ import json
 import re
 from pathlib import Path
 
-from erebus_mcp.intent import IntentStore, new_operation_id
+import pytest
+
+from erebus_mcp.intent import IntentConflict, IntentStore, new_operation_id
 
 _ID_PATTERN = re.compile(r"^op_[0-9a-f]{64}$")
 
@@ -40,6 +42,27 @@ def test_begin_with_identical_params_reuses_the_same_id(tmp_path: Path) -> None:
     first = store.begin("open_channel", {"counterparty": "0xseller"})
     second = store.begin("open_channel", {"counterparty": "0xseller"})
     assert first == second
+
+
+def test_begin_preserves_a_valid_caller_supplied_id(tmp_path: Path) -> None:
+    operation_id = "op_" + "ab" * 32
+    store = IntentStore(tmp_path)
+
+    assert (
+        store.begin("open_channel", {"counterparty": "0xseller"}, operation_id)
+        == operation_id
+    )
+
+
+def test_caller_id_cannot_be_rebound_or_used_as_a_path(tmp_path: Path) -> None:
+    operation_id = "op_" + "ab" * 32
+    store = IntentStore(tmp_path)
+    store.begin("open_channel", {"counterparty": "0xseller"}, operation_id)
+
+    with pytest.raises(IntentConflict):
+        store.begin("open_channel", {"counterparty": "0xother"}, operation_id)
+    with pytest.raises(IntentConflict):
+        store.begin("open_channel", {"counterparty": "0xseller"}, "../../escape")
 
 
 def test_begin_with_different_params_mints_a_new_id(tmp_path: Path) -> None:

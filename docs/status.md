@@ -31,8 +31,8 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
 | Version | `0.1.0` across every package |
-| Tests | 349 Rust (plus 2 intentionally ignored live-prover tests), 125 Python, 43 TypeScript |
-| In flight | Operator alpha (`v0.2.0`), plan.md. Poulav tasks 2, 4, 5, and 6 are complete in the 2026-08-23 working tree: complete request binding and result replay, durable prepared/receipt/local-result facts, a read-only pre-write reconciliation gate, and both exact-resubmission and proven-dead rebuild recovery. Task 8 is also complete in the working tree. Recovery is still not reachable from the CLI, Python, or MCP until the protocol-4 seam lands (task 10), fault injection is not yet exhaustive, and none of the recovery paths has been exercised against a live chain (task 11) |
+| Tests | 349 Rust (plus 2 intentionally ignored live-prover tests), 147 Python, 43 TypeScript |
+| In flight | Operator alpha (`v0.2.0`), `plan.md`. Protocol 4 now carries caller-persisted operation IDs through MCP, Python, CLI, and Rust; recovery is exposed to MCP and used by the reference agent. Local exact-resubmission and expired-proof rebuild tests pass. The live Sepolia canary remains open: on 2026-08-26 the configured prover returned opaque `-32603 Internal error` twice before signing, and reconciliation proved `no_effect`. Full reservation semantics and chain-acceptance-time accounting for spending caps, journal scheduling, and the packaged live canary remain open. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
   arm64 built and canary-verified. Intel macOS unsupported. Published at the `v0.1.0` tag |
@@ -136,19 +136,21 @@ only metadata and the path. The capsule does not enter the model transcript.
 
 ---
 
-## The next three things
+## The next work
 
 1. ~~Grant the Sepolia allowance, then do one full run on merged code.~~ Done 2026-08-19:
    `0x4191fe47…f341`, with change, a third-party disclosure, and observer output. It found
    and fixed a read-wedging bug on the way; see `docs/runs/2026-08-19-sepolia-run.md`.
 2. ~~Move `server.py` into the package with an entry point.~~ Done 2026-08-19. The
    `v0.1.0` tag publishes the wheels and the index.
-3. **Fill the spare wire bits with random padding.** It closes the only privacy leak that is
-   actually within reach — F38 is upstream, and the public funding leg has no fix.
-   Wire v3 is live as of 2026-08-22 (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`). The
-   linkage measurement now scores M1 `0.5000` against three live wire-v3 transactions, so
-   this item is about the remaining leaks, not about missing evidence.
-4. **Finish the Phase 7 product seam and fault matrix.** Rust now retains enough information
-   to reconcile and explicitly resume both recovery modes, but CLI, Python, MCP, and agents
-   cannot invoke that path yet. Kill tests at every write boundary and live-chain recovery
-   evidence also remain open.
+3. ~~Finish the protocol-4 product seam.~~ Done 2026-08-26: every chain write takes a
+   caller-supplied operation ID through MCP, Python, CLI, and Rust; channel state returns a
+   settlement list; protocol mismatches fail by name.
+4. **Finish spending reservation reconciliation.** Committed settlements rebuild
+   idempotently from Rust findings, including direct CLI writes. Submitted and ambiguous
+   reservations, identity-lock confirmation, and chain-acceptance-time daily attribution
+   still need the complete fail-closed implementation from `plan.md` task 4.
+5. **Run the packaged Sepolia recovery canary.** The 2026-08-26 attempt stopped safely:
+   the prover returned `-32603 Internal error` twice before signing; `reconcile` reported
+   `no_effect` and `safe_to_retry` under the original ID. Exact resubmission and
+   expired-proof rebuild remain proven locally, not on Sepolia or from installed wheels.

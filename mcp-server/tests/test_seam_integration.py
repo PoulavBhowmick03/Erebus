@@ -146,7 +146,11 @@ def test_a_failure_downstream_of_the_binary_arrives_as_structure(tmp_path):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(
-                    "open_channel", {"counterparty": "0x" + "b0" * 16}
+                    "open_channel",
+                    {
+                        "operation_id": "op_" + "ab" * 32,
+                        "counterparty": "0x" + "b0" * 16,
+                    },
                 )
                 body = _structured(result)
 

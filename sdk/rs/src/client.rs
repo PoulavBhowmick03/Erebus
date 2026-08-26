@@ -4143,6 +4143,7 @@ mod tests {
         let mut finding = Finding {
             operation_id: operation_id.clone(),
             operation: WriteOperation::OpenChannel,
+            request: operation.record().request.clone(),
             stage: OperationStage::Accepted,
             channel: None,
             transaction_hash: Some(Felt::from_hex_unchecked("0xbeef")),

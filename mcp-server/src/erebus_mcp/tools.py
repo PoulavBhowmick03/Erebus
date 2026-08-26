@@ -32,7 +32,7 @@ from erebus_mcp.interface import (
     SettlementErrorCode,
     ViewingKeyGrant,
 )
-from erebus_mcp.intent import IntentStore
+from erebus_mcp.intent import IntentConflict, IntentStore
 from erebus_mcp.spending import SpendGuard
 
 
@@ -70,6 +70,60 @@ def _save_grant(path_value: str, grant: ViewingKeyGrant) -> Path:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _grant_export_intent(
+    operation_id: str,
+    output_path: str,
+    request: dict[str, Any],
+) -> tuple[Path, dict[str, Any] | None]:
+    """Claim a grant export or return its completed public result."""
+    path = Path(output_path).expanduser()
+    journal = path.with_name(path.name + ".erebus-export.json")
+    expected = {"operation_id": operation_id, "request": request}
+    if journal.exists():
+        record = json.loads(journal.read_text(encoding="utf-8"))
+        if record.get("operation_id") != operation_id or record.get("request") != request:
+            raise ValueError("grant export operation is already bound to different parameters")
+        if record.get("state") == "completed":
+            if not path.exists():
+                raise ValueError("completed grant export is missing its grant file")
+            return journal, record["result"]
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            result = {
+                "channel_id": raw["channel_id"],
+                "deal_id": raw.get("deal_id"),
+                "grantee": raw["grantee"],
+                "expires_at": raw.get("expires_at"),
+                "grant_path": str(path),
+            }
+            _write_private_json(journal, {**expected, "state": "completed", "result": result})
+            return journal, result
+        return journal, None
+    _write_private_json(journal, {**expected, "state": "prepared"})
+    return journal, None
 
 
 def register_tools(
@@ -118,14 +172,21 @@ def register_tools(
             )
         return _envelope(True, result=result)
 
-    async def _write_call(tool: str, params: dict[str, Any], coro: Any) -> dict[str, Any]:
+    async def _write_call(
+        tool: str, params: dict[str, Any], operation_id: str, coro: Any
+    ) -> dict[str, Any]:
         """Wraps a chain-writing seam call with durable caller intent (plan.md task 1):
         persist before the call, resolve once it has returned to this process. `_call`
         already returning — `ok` true or a caught `ErebusError` — is itself proof this
         process did not crash; only a killed process leaves the record on disk."""
-        operation_id = intent_store.begin(tool, params)
         try:
-            return await _call(coro)
+            operation_id = intent_store.begin(tool, params, operation_id)
+        except IntentConflict as error:
+            return _error(SettlementErrorCode.INVALID_REQUEST, str(error))
+        try:
+            outcome = await _call(coro)
+            outcome["operation_id"] = operation_id
+            return outcome
         finally:
             intent_store.resolve(operation_id)
 
@@ -207,8 +268,35 @@ def register_tools(
             "Use get_note_balance before negotiating.",
         )
 
+    async def _reconcile_spending(
+        findings: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Rebuild local cap counters from Rust-authoritative committed settlements."""
+        if findings is None:
+            findings = await client.reconcile()
+        for finding in findings:
+            if finding.get("operation") != "accept_and_settle":
+                continue
+            if finding.get("outcome") != "effect":
+                continue
+            request = finding.get("request") or {}
+            if request.get("method") != "accept_and_settle":
+                continue
+            state = await client.read_channel_state(request["handle"])
+            target = next(
+                (offer for offer in state.offers if offer.offer_id == request["offer_id"]),
+                None,
+            )
+            if target is not None:
+                spend_guard.record(
+                    target.terms.token,
+                    target.terms.amount,
+                    finding["operation_id"],
+                )
+        return findings
+
     @server.tool()
-    async def open_channel(counterparty: str) -> dict[str, Any]:
+    async def open_channel(operation_id: str, counterparty: str) -> dict[str, Any]:
         """Establish a channel with a counterparty (their address). Returns a
         channel_handle to use in every other call for this relationship.
 
@@ -221,7 +309,10 @@ def register_tools(
         stuck below five minutes, and abandoning it does not cancel the
         transaction it may already have submitted."""
         outcome = await _write_call(
-            "open_channel", {"counterparty": counterparty}, client.open_channel(counterparty)
+            "open_channel",
+            {"counterparty": counterparty},
+            operation_id,
+            client.open_channel(operation_id, counterparty),
         )
         if outcome["ok"]:
             outcome["result"] = {"channel_handle": outcome["result"]}
@@ -229,7 +320,12 @@ def register_tools(
 
     @server.tool()
     async def propose_offer(
-        channel_handle: str, amount: int | str, token: str, deadline: int, memo_hash: int | str
+        operation_id: str,
+        channel_handle: str,
+        amount: int | str,
+        token: str,
+        deadline: int,
+        memo_hash: int | str,
     ) -> dict[str, Any]:
         """Write a new offer into the channel: amount as a decimal string in token base
         units (JSON numbers lose precision above 2**53, well under a real STRK amount),
@@ -268,7 +364,8 @@ def register_tools(
                 "deadline": deadline,
                 "memo_hash": memo,
             },
-            client.propose_offer(channel_handle, terms),
+            operation_id,
+            client.propose_offer(operation_id, channel_handle, terms),
         )
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -276,6 +373,7 @@ def register_tools(
 
     @server.tool()
     async def counter_offer(
+        operation_id: str,
         channel_handle: str,
         reply_to: str,
         amount: int | str,
@@ -317,7 +415,8 @@ def register_tools(
                 "deadline": deadline,
                 "memo_hash": memo,
             },
-            client.counter_offer(channel_handle, reply_to, terms),
+            operation_id,
+            client.counter_offer(operation_id, channel_handle, reply_to, terms),
         )
         if outcome["ok"]:
             outcome["result"] = {"offer_id": outcome["result"]}
@@ -363,12 +462,14 @@ def register_tools(
             state = outcome["result"]
             outcome["result"] = {
                 "offers": [_offer_to_json(o) for o in state.offers],
-                "settlement": _settlement_to_json(state.settlement) if state.settlement else None,
+                "settlements": [_settlement_to_json(item) for item in state.settlements],
             }
         return outcome
 
     @server.tool()
-    async def accept_and_settle(channel_handle: str, offer_id: str) -> dict[str, Any]:
+    async def accept_and_settle(
+        operation_id: str, channel_handle: str, offer_id: str
+    ) -> dict[str, Any]:
         """PAYER ONLY: accept an offer and pay it from this calling identity's private
         notes, atomically; any excess comes back as a change note in the payer's own
         channel. A supplier/payee must never call this; leave a final payee-authored offer
@@ -388,6 +489,18 @@ def register_tools(
                 "Counter at the agreed price and leave that offer for the payer to accept.",
             )
 
+        try:
+            await _reconcile_spending()
+        except ErebusError as error:
+            return _envelope(
+                False,
+                error={
+                    "code": error.code.value,
+                    "message": error.message,
+                    "retryable": error.retryable,
+                },
+            )
+
         state_outcome = await _call(client.read_channel_state(channel_handle))
         if not state_outcome["ok"]:
             return state_outcome
@@ -405,11 +518,14 @@ def register_tools(
         outcome = await _write_call(
             "accept_and_settle",
             {"channel_handle": channel_handle, "offer_id": offer_id},
-            client.accept_and_settle(channel_handle, offer_id),
+            operation_id,
+            client.accept_and_settle(operation_id, channel_handle, offer_id),
         )
         if outcome["ok"]:
             if target is not None:
-                spend_guard.record(target.terms.token, target.terms.amount)
+                spend_guard.record(
+                    target.terms.token, target.terms.amount, operation_id
+                )
             receipt = outcome["result"]
             outcome["result"] = {
                 "offer_id": receipt.offer_id,
@@ -420,6 +536,37 @@ def register_tools(
                 "change": _amount_str(receipt.change),
             }
         return outcome
+
+    @server.tool()
+    async def reconcile() -> dict[str, Any]:
+        """Read the Rust operation journal and classify every write against the chain.
+        This tool never submits, resumes, or changes local state."""
+        outcome = await _call(client.reconcile())
+        if outcome["ok"]:
+            try:
+                outcome["result"] = await _reconcile_spending(outcome["result"])
+            except ErebusError as error:
+                return _envelope(
+                    False,
+                    error={
+                        "code": error.code.value,
+                        "message": error.message,
+                        "retryable": error.retryable,
+                    },
+                )
+        return outcome
+
+    @server.tool()
+    async def resume_operation(operation_id: str) -> dict[str, Any]:
+        """Explicitly resume one operation after reconcile names its next action.
+        Reuse the original operation_id. Never mint a replacement for an uncertain write."""
+        return await _call(client.resume_operation(operation_id))
+
+    @server.tool()
+    async def rebuild_state() -> dict[str, Any]:
+        """Add missing local channel records reconstructed from chain data. Existing
+        records are retained and this operation never overwrites them."""
+        return await _call(client.rebuild_state())
 
     @server.tool()
     async def wait_for_offers(
@@ -455,9 +602,9 @@ def register_tools(
                     True,
                     result={
                         "offers": [_offer_to_json(o) for o in state.offers],
-                        "settlement": (
-                            _settlement_to_json(state.settlement) if state.settlement else None
-                        ),
+                        "settlements": [
+                            _settlement_to_json(item) for item in state.settlements
+                        ],
                         "timed_out": len(state.offers) < expected_count,
                     },
                 )
@@ -467,6 +614,7 @@ def register_tools(
 
     @server.tool()
     async def grant_viewing_key(
+        operation_id: str,
         channel_handle: str,
         deal_id: str,
         grantee: str,
@@ -475,7 +623,23 @@ def register_tools(
     ) -> dict[str, Any]:
         """Encrypt one wire-v3 deal grant to a registered recipient and save it to a new
         mode-0600 file. The secret capsule never enters the MCP result or transcript.
-        ``expires_at`` is a Unix timestamp chosen by the operator."""
+        ``expires_at`` is a Unix timestamp chosen by the operator. Reuse ``operation_id``
+        after interruption; the completed export is returned without replacing the file."""
+        request = {
+            "channel_handle": channel_handle,
+            "deal_id": deal_id,
+            "grantee": grantee,
+            "expires_at": expires_at,
+            "output_path": str(Path(output_path).expanduser()),
+        }
+        try:
+            export_journal, completed = _grant_export_intent(
+                operation_id, output_path, request
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            return _error(SettlementErrorCode.INVALID_REQUEST, f"could not claim grant export: {error}")
+        if completed is not None:
+            return _envelope(True, result=completed)
         outcome = await _call(
             client.grant_viewing_key(channel_handle, deal_id, grantee, expires_at)
         )
@@ -492,6 +656,15 @@ def register_tools(
                 "expires_at": grant.expires_at,
                 "grant_path": str(path),
             }
+            _write_private_json(
+                export_journal,
+                {
+                    "operation_id": operation_id,
+                    "request": request,
+                    "state": "completed",
+                    "result": outcome["result"],
+                },
+            )
         return outcome
 
     @server.tool()

@@ -93,7 +93,7 @@ Ownership: `/sdk/rs` and `/contracts` are Poulav's. `/agents`, `/mcp-server` are
 - **The seam is a subprocess**. `erebus-cli`, one JSON request on stdin and one envelope on
   stdout. Async stays in Rust. Key *paths* cross the request; key values do not. Protocol 3
   uses opaque random channel handles backed by locked, mode-`0600` Rust state files. The
-  Python binding speaks protocol 3 and refuses a mismatched CLI by its envelope tag; do
+  Python binding speaks protocol 4 and refuses a mismatched CLI by its envelope tag; do
   not add protocol logic there.
 - **This is not for x402/ERC-8004 reuse.** That was checked and it does not transfer as
   code: ERC-8004 is EVM-only, and while x402 has an official Python SDK, x402-on-Starknet

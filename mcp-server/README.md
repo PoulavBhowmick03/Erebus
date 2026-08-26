@@ -112,7 +112,7 @@ agent session with `scripts/agent.sh <payer-env> fund <amount>`.
 
 ### Deal disclosure
 
-`grant_viewing_key(channel_handle, deal_id, grantee, expires_at, output_path)` encrypts one
+`grant_viewing_key(operation_id, channel_handle, deal_id, grantee, expires_at, output_path)` encrypts one
 wire-v3 deal to the grantee's registered pool key. It creates `output_path` with mode `0600`
 and refuses to overwrite an existing file. Its tool result contains metadata and the path,
 not the encrypted capsule. Run `reveal(grant_path)` from the grantee's identity-bound server.

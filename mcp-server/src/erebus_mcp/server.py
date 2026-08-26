@@ -1,6 +1,6 @@
 """Erebus MCP server.
 
-Owned by Ishita. The production backend reaches the protocol-3 Rust client through the
+Owned by Ishita. The production backend reaches the protocol-4 Rust client through the
 Python binding. The mock backend supports deterministic tests.
 
 Run the installed entry point:

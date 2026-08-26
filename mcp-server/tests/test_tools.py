@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import stat
 import time
 from pathlib import Path
@@ -17,6 +18,26 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVER_PATH = REPO_ROOT / "mcp-server" / "src" / "server.py"
+
+
+@pytest.fixture(autouse=True)
+def protocol_4_operation_ids(monkeypatch: pytest.MonkeyPatch):
+    """Existing behavior tests all cross the protocol-4 caller-id boundary."""
+    original = ClientSession.call_tool
+
+    async def call_tool(self, name, arguments=None, **kwargs):  # type: ignore[no-untyped-def]
+        arguments = dict(arguments or {})
+        if name in {
+            "open_channel",
+            "propose_offer",
+            "counter_offer",
+            "accept_and_settle",
+            "grant_viewing_key",
+        }:
+            arguments.setdefault("operation_id", "op_" + secrets.token_hex(32))
+        return await original(self, name, arguments, **kwargs)
+
+    monkeypatch.setattr(ClientSession, "call_tool", call_tool)
 
 
 def _server_params(
@@ -33,6 +54,7 @@ def _server_params(
         "EREBUS_MOCK_LATENCY_SECONDS": "0",
         "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
         "EREBUS_SETTLEMENT_ROLE": role,
+        "UV_CACHE_DIR": "/private/tmp/erebus-uv-cache",
     }
     if extra_env:
         env.update(extra_env)
@@ -47,7 +69,10 @@ def _server_params(
 def _structured(result) -> dict:
     if result.structured_content is not None:
         return result.structured_content
-    return json.loads(result.content[0].text)
+    try:
+        return json.loads(result.content[0].text)
+    except json.JSONDecodeError as error:
+        raise AssertionError(repr(result.content[0].text)) from error
 
 
 def test_the_protocol_and_payment_planning_methods_are_exposed_with_descriptions(tmp_path):
@@ -72,7 +97,14 @@ def test_the_protocol_and_payment_planning_methods_are_exposed_with_descriptions
                     "grant_viewing_key",
                     "reveal",
                 }
-                assert names - {"wait_for_offers", "get_note_balance", "doctor"} == {
+                assert names - {
+                    "wait_for_offers",
+                    "get_note_balance",
+                    "doctor",
+                    "reconcile",
+                    "resume_operation",
+                    "rebuild_state",
+                } == {
                     "open_channel",
                     "propose_offer",
                     "counter_offer",
@@ -211,7 +243,7 @@ def test_two_mcp_servers_settle_with_the_buyer_as_payer(tmp_path):
                 state = _structured(
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
-                assert state["result"]["settlement"]["agreed_amount"] == "150"
+                assert state["result"]["settlements"][0]["agreed_amount"] == "150"
 
     asyncio.run(run())
 
@@ -276,7 +308,7 @@ def test_accept_and_settle_refuses_a_settlement_above_the_configured_per_deal_ca
                 state = _structured(
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
-                assert state["result"]["settlement"] is None
+                assert state["result"]["settlements"] == []
 
     asyncio.run(run())
 
@@ -426,7 +458,7 @@ def test_mcp_settle_change(tmp_path):
                 state = _structured(
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
-                assert state["result"]["settlement"]["agreed_amount"] == "3"
+                assert state["result"]["settlements"][0]["agreed_amount"] == "3"
 
     asyncio.run(run())
 
@@ -489,22 +521,29 @@ def test_deal_grant_uses_a_private_file_and_never_returns_the_capsule(tmp_path):
                     await seller.call_tool("read_channel_state", {"channel_handle": handle})
                 )
                 deal_id = state["result"]["offers"][0]["deal_id"]
+                export_id = "op_" + "cd" * 32
+                export_args = {
+                    "operation_id": export_id,
+                    "channel_handle": handle,
+                    "deal_id": deal_id,
+                    "grantee": "0xauditor",
+                    "expires_at": int(time.time()) + 600,
+                    "output_path": str(grant_path),
+                }
                 exported = _structured(
                     await seller.call_tool(
                         "grant_viewing_key",
-                        {
-                            "channel_handle": handle,
-                            "deal_id": deal_id,
-                            "grantee": "0xauditor",
-                            "expires_at": int(time.time()) + 600,
-                            "output_path": str(grant_path),
-                        },
+                        export_args,
                     )
                 )
                 assert exported["ok"] is True
                 assert "viewing_key" not in exported["result"]
                 assert "ciphertext" not in json.dumps(exported)
                 assert stat.S_IMODE(grant_path.stat().st_mode) == 0o600
+                replayed = _structured(
+                    await seller.call_tool("grant_viewing_key", export_args)
+                )
+                assert replayed["result"] == exported["result"]
 
         auditor_params = _server_params(store, role="payee", identity="0xauditor")
         async with stdio_client(auditor_params) as (read, write):

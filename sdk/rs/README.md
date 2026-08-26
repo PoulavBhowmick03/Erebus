@@ -4,7 +4,7 @@
 them against `compile_actions`, requests a proof, submits `apply_actions`, discovers notes
 by derived ids, and reconstructs scoped disclosures.
 
-## CLI protocol 3
+## CLI protocol 4
 
 `erebus-cli` reads one JSON request from stdin, writes one JSON envelope to stdout, and
 exits. Every stateful request carries this config:
@@ -132,5 +132,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 - Historical wire-v1 and wire-v2 channels remain readable. Wire v1 is read-only.
 - Wire-v3 repeat deals and recipient-bound per-deal disclosure are implemented. The client
   rejects the old whole-channel grant on v3.
-- The Python SDK and MCP server speak CLI protocol 3 and default newly opened channels to
+- The Python SDK and MCP server speak CLI protocol 4 and default newly opened channels to
   wire v3.

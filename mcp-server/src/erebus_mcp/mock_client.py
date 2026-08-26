@@ -178,7 +178,13 @@ class MockErebusClient:
 
     # --- ErebusClient --------------------------------------------------------------
 
-    async def open_channel(self, counterparty: AgentId) -> ChannelHandle:
+    async def open_channel(
+        self, operation_id: str, counterparty: AgentId | None = None
+    ) -> ChannelHandle:
+        # Direct mock callers predating seam protocol 4 pass only the counterparty. The MCP
+        # path always supplies both values; production idempotency lives in Rust.
+        if counterparty is None:
+            counterparty = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         handle = self._channel_handle(self._identity, counterparty)
@@ -195,7 +201,15 @@ class MockErebusClient:
         self._write_store(store)
         return handle
 
-    async def propose_offer(self, handle: ChannelHandle, terms: OfferTerms) -> OfferId:
+    async def propose_offer(
+        self,
+        operation_id: str,
+        handle: ChannelHandle | OfferTerms,
+        terms: OfferTerms | None = None,
+    ) -> OfferId:
+        if terms is None:
+            terms = handle  # type: ignore[assignment]
+            handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
@@ -220,7 +234,17 @@ class MockErebusClient:
         self._write_store(store)
         return offer_id
 
-    async def counter_offer(self, handle: ChannelHandle, reply_to: OfferId, terms: OfferTerms) -> OfferId:
+    async def counter_offer(
+        self,
+        operation_id: str,
+        handle: ChannelHandle,
+        reply_to: OfferId | OfferTerms,
+        terms: OfferTerms | None = None,
+    ) -> OfferId:
+        if terms is None:
+            terms = reply_to  # type: ignore[assignment]
+            reply_to = handle
+            handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
@@ -295,8 +319,12 @@ class MockErebusClient:
                     reply_to=offer.reply_to,
                 )
             )
-        settlement = self._settlement_from_dict(channel["settlement"]) if channel["settlement"] else None
-        return ChannelState(offers=offers, settlement=settlement)
+        settlements = (
+            [self._settlement_from_dict(channel["settlement"])]
+            if channel["settlement"]
+            else []
+        )
+        return ChannelState(offers=offers, settlements=settlements)
 
     async def note_balance(self) -> NoteBalance:
         self._maybe_raise_forced()
@@ -319,7 +347,12 @@ class MockErebusClient:
             repairs=[],
         )
 
-    async def accept_and_settle(self, handle: ChannelHandle, offer_id: OfferId) -> SettlementReceipt:
+    async def accept_and_settle(
+        self, operation_id: str, handle: ChannelHandle, offer_id: OfferId | None = None
+    ) -> SettlementReceipt:
+        if offer_id is None:
+            offer_id = handle
+            handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         store = self._read_store()
@@ -506,6 +539,20 @@ class MockErebusClient:
             offers=offers,
             settlement=settlement,
         )
+
+    async def reconcile(self) -> list[dict]:
+        """The mock has no durable Rust journal."""
+        return []
+
+    async def resume_operation(self, operation_id: str) -> dict:
+        raise ErebusError(
+            code=SettlementErrorCode.INVALID_REQUEST,
+            message=f"mock backend has no durable operation {operation_id}",
+            retryable=False,
+        )
+
+    async def rebuild_state(self) -> dict:
+        return {"scanned": 0, "rebuilt": 0, "retained": 0}
 
     @staticmethod
     def _settlement_from_dict(d: dict) -> DisclosedSettlement:

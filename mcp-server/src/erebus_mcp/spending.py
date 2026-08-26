@@ -71,7 +71,7 @@ class SpendGuard:
                 return _DAILY_MESSAGE
         return None
 
-    def record(self, token: str, amount: int) -> None:
+    def record(self, token: str, amount: int, operation_id: str | None = None) -> None:
         """Adds `amount` to today's cumulative spend for `token`. Call only after the
         settlement it guards has actually succeeded, so a refused or failed attempt never
         counts against the cap."""
@@ -81,27 +81,44 @@ class SpendGuard:
             if fcntl is not None:
                 fcntl.flock(lock_file, fcntl.LOCK_EX)
             try:
-                spent = self._read_spent()
+                data = self._read_state()
+                spent = data["spent"]
                 key = token.strip().lower()
+                if operation_id is not None:
+                    prior = data["operations"].get(operation_id)
+                    expected = {"token": key, "amount": str(amount)}
+                    if prior is not None:
+                        if prior != expected:
+                            raise ValueError(
+                                f"operation {operation_id} is already bound to a different spend"
+                            )
+                        return
+                    data["operations"][operation_id] = expected
                 spent[key] = spent.get(key, 0) + amount
-                self._write_spent(spent)
+                self._write_state(data)
             finally:
                 if fcntl is not None:
                     fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     def _read_spent(self) -> dict[str, int]:
+        return self._read_state()["spent"]
+
+    def _read_state(self) -> dict:
         if not self._state_path.exists():
-            return {}
+            return {"spent": {}, "operations": {}}
         raw = self._state_path.read_text().strip()
         if not raw:
-            return {}
+            return {"spent": {}, "operations": {}}
         data = json.loads(raw)
         if data.get("date") != _today():
             # Rolling UTC day: yesterday's counters don't apply to today's cap.
-            return {}
-        return {k: int(v) for k, v in data.get("spent", {}).items()}
+            return {"spent": {}, "operations": {}}
+        return {
+            "spent": {k: int(v) for k, v in data.get("spent", {}).items()},
+            "operations": dict(data.get("operations", {})),
+        }
 
-    def _write_spent(self, spent: dict[str, int]) -> None:
+    def _write_state(self, data: dict) -> None:
         # Atomic replace, matching the write pattern ARCHITECTURE.md documents for Rust
         # state: a torn write must never be visible to a concurrent reader.
         fd, tmp_name = tempfile.mkstemp(
@@ -110,7 +127,12 @@ class SpendGuard:
         try:
             with os.fdopen(fd, "w") as tmp:
                 json.dump(
-                    {"date": _today(), "spent": {k: str(v) for k, v in spent.items()}}, tmp
+                    {
+                        "date": _today(),
+                        "spent": {k: str(v) for k, v in data["spent"].items()},
+                        "operations": data["operations"],
+                    },
+                    tmp,
                 )
             os.replace(tmp_name, self._state_path)
         except BaseException:

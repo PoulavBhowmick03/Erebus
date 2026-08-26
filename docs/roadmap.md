@@ -45,11 +45,11 @@ The TypeScript SDK remains a differential oracle. It does not ship as a product 
 The project needs three different finish lines. The sprint deadline is not the production
 deadline.
 
-| Target | Purpose | Required result |
-|---|---|---|
-| Sprint entry | Qualify for judging by 2026-08-31 | Public demo, public video, three mainnet pool transactions, and a complete `strk20.json` |
-| `v0.1.0` technical preview | Let an external operator evaluate Erebus | One-command install, role-bound MCP flow, current protocol limits, and reproducible evidence |
-| `v1.0` production release | Let an operator use real value under a written trust model | Final wire, crash recovery, reviews, audit, release controls, and a successful mainnet canary |
+| Target                     | Purpose                                                    | Required result                                                                               |
+| -------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Sprint entry               | Qualify for judging by 2026-08-31                          | Public demo, public video, three mainnet pool transactions, and a complete `strk20.json`      |
+| `v0.1.0` technical preview | Let an external operator evaluate Erebus                   | One-command install, role-bound MCP flow, current protocol limits, and reproducible evidence  |
+| `v1.0` production release  | Let an operator use real value under a written trust model | Final wire, crash recovery, reviews, audit, release controls, and a successful mainnet canary |
 
 The sprint entry can finish without production readiness. The README and demo must keep
 that distinction clear.
@@ -74,7 +74,8 @@ This section records what exists on 2026-08-19. Later sections describe the miss
   `docs/runs/2026-08-19-sepolia-run.md`).
 - `scripts/observer.py` recovers wire-v1 terms and does not recover wire-v2 content.
 - The Rust client can open channels, write offers, read state, settle, shield, grant, and reveal.
-- The Python seam uses protocol 3 and passes key-file paths to Rust.
+- The Python seam uses protocol 4, requires caller-supplied operation IDs for writes, and
+  passes key-file paths to Rust.
 - The MCP server exposes ten tools over stdio, installable as the `erebus-mcp-server`
   console script from wheels alone.
 - Payer and payee roles prevent the payee from calling `accept_and_settle`.
@@ -178,72 +179,73 @@ submission unlinkability, traffic analysis, and funding-correlation work.
 
 ### 5.1 Rust SDK and protocol
 
-| Problem | Current mechanism | Required result |
-|---|---|---|
-| ~~Change support stops at the SDK~~ | Aligned through MCP, mock, and agents (PR #16, `40b8543`); exercised live 2026-08-19 | Done |
-| ~~The allowance path is untested against a live fee~~ | Exercised 2026-08-19 through merged code under the 2 STRK fee, receipt recorded | Done |
-| One deal per channel | Settlement breaks the fixed five-note message grid | Add framed entries and deal identifiers in the final wire |
-| One directional channel per sender and recipient | STRK20 derives a channel key without an index | Reuse both directional channels for framed deals, or use fresh identities |
-| Wire fingerprint | The fifth salt contains 59 fixed spare bits | Randomize the spare bits without weakening decoding |
-| No second wire-v2 implementation | TypeScript still implements wire v1 | Port the final wire to TypeScript and publish vectors |
-| No normative wire document | Rust is the only wire-v2 authority | Publish byte and bit layouts before external integration |
-| Client-side deadlines | The pool does not enforce offer expiry | Keep the limit explicit and bind external policy to signed terms |
-| Settlement agreement is client policy | The pool does not compare payment with the accepted offer | Keep the SDK amount check and publish this trust boundary |
-| One token per client | `ClientConfig.token` fixes one token | Move token selection to channel or operation scope |
-| ~~Reads restart from index zero~~ | `NoteCache` serves the immutable prefix from disk, so an unchanged channel costs one RPC rather than one per note (2026-08-25) | Done |
-| Idempotency stops at Rust | The Rust write path is idempotent in the 2026-08-23 working tree, but CLI, Python, MCP, and agents cannot yet supply and persist the contract | Carry the same contract through protocol 4, Python, MCP, and agents |
-| No state reconstruction command | Lost handles can be derived in principle | Rebuild handles and cursors from keys and chain state |
-| No signer abstraction | Rust reads a raw account-key file | Add an account signer interface before production |
-| Protocol code lacks review | `Unreviewed` markers cleared 2026-08-17, but the 2026-08-19 diff was pushed to `main` on Poulav's instruction before line review | Both owners review the 2026-08-19 push, then keep review-before-merge |
+| Problem                                               | Current mechanism                                                                                                                             | Required result                                                           |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| ~~Change support stops at the SDK~~                   | Aligned through MCP, mock, and agents (PR #16, `40b8543`); exercised live 2026-08-19                                                          | Done                                                                      |
+| ~~The allowance path is untested against a live fee~~ | Exercised 2026-08-19 through merged code under the 2 STRK fee, receipt recorded                                                               | Done                                                                      |
+| One deal per channel                                  | Settlement breaks the fixed five-note message grid                                                                                            | Add framed entries and deal identifiers in the final wire                 |
+| One directional channel per sender and recipient      | STRK20 derives a channel key without an index                                                                                                 | Reuse both directional channels for framed deals, or use fresh identities |
+| Wire fingerprint                                      | The fifth salt contains 59 fixed spare bits                                                                                                   | Randomize the spare bits without weakening decoding                       |
+| No second wire-v2 implementation                      | TypeScript still implements wire v1                                                                                                           | Port the final wire to TypeScript and publish vectors                     |
+| No normative wire document                            | Rust is the only wire-v2 authority                                                                                                            | Publish byte and bit layouts before external integration                  |
+| Client-side deadlines                                 | The pool does not enforce offer expiry                                                                                                        | Keep the limit explicit and bind external policy to signed terms          |
+| Settlement agreement is client policy                 | The pool does not compare payment with the accepted offer                                                                                     | Keep the SDK amount check and publish this trust boundary                 |
+| One token per client                                  | `ClientConfig.token` fixes one token                                                                                                          | Move token selection to channel or operation scope                        |
+| ~~Reads restart from index zero~~                     | `NoteCache` serves the immutable prefix from disk, so an unchanged channel costs one RPC rather than one per note (2026-08-25)                | Done                                                                      |
+| ~~Idempotency stops at Rust~~                         | Protocol 4 carries one caller-persisted ID through agents, MCP, Python, CLI, and Rust; conflicts fail before proving                         | Done 2026-08-26                                                           |
+| No state reconstruction command                       | Lost handles can be derived in principle                                                                                                      | Rebuild handles and cursors from keys and chain state                     |
+| No signer abstraction                                 | Rust reads a raw account-key file                                                                                                             | Add an account signer interface before production                         |
+| Protocol code lacks review                            | `Unreviewed` markers cleared 2026-08-17, but the 2026-08-19 diff was pushed to `main` on Poulav's instruction before line review              | Both owners review the 2026-08-19 push, then keep review-before-merge     |
 
 ### 5.2 Python SDK
 
-| Problem | Current mechanism | Required result |
-|---|---|---|
-| ~~No packaged Rust binary~~ | Platform wheels ship the binary; the arm64 macOS leg is verified, the other two legs have not run | Run the Linux and x86-64 macOS legs once before the tag |
-| Duplicate response mapping | The seam adapter repeats Rust fields | Add schema compatibility tests for every method |
-| ~~No protocol negotiation~~ | Every envelope carries `protocol: 3`; the seam refuses a mismatch by name, and the MCP server handshakes at startup | Done |
-| Timeout is global | Each call uses one 300-second limit | Use operation-specific timeouts and report the failed stage |
-| Key-path safety relies on convention | Python can access the named files | Add permission checks and secret-leak regression tests |
-| ~~`CLAUDE.md` contradicts the source~~ | `CLAUDE.md` now says the binding speaks protocol 3 | Done |
+| Problem                                | Current mechanism                                                                                                   | Required result                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| ~~No packaged Rust binary~~            | Platform wheels ship the binary; the arm64 macOS leg is verified, the other two legs have not run                   | Run the Linux and x86-64 macOS legs once before the tag     |
+| Duplicate response mapping             | The seam adapter repeats Rust fields                                                                                | Add schema compatibility tests for every method             |
+| ~~No protocol negotiation~~            | Every envelope carries `protocol: 3`; the seam refuses a mismatch by name, and the MCP server handshakes at startup | Done                                                        |
+| Timeout is global                      | Each call uses one 300-second limit                                                                                 | Use operation-specific timeouts and report the failed stage |
+| Key-path safety relies on convention   | Python can access the named files                                                                                   | Add permission checks and secret-leak regression tests      |
+| ~~`CLAUDE.md` contradicts the source~~ | `CLAUDE.md` must track the current protocol-4 binding                                                                   | Done                                                        |
 
 The Python SDK must stay a binding. It must not add hashes, salts, felt arithmetic, note
 selection, signing, or cryptography.
 
 ### 5.3 MCP server
 
-| Problem | Current mechanism | Required result |
-|---|---|---|
-| ~~Exact-note rules conflict with Rust change~~ | PR #16: `_require_payable` checks `0 < amount <= total`, tool text rewritten | Done |
-| Missing payment looks consistent | `paid_amount is None` returns `True` | Return an unknown result, or fail closed |
-| ~~Wide `memo_hash` values fail at JSON clients~~ | `d1731f4` fixed the input; the 2026-08-19 `u128_boundary` fix carried the output as hex strings | Done |
-| ~~Amounts above 2^53 lose precision at JSON clients~~ | Every `u128` crosses both boundaries as a string (`40b8543`, 2026-08-19) | Done |
-| `wait_for_offers` accepts invalid limits | Counts and timeouts have no range checks | Reject zero and negative values before polling |
-| Polling remains expensive | Each poll repeats note reads | Add discovery subscriptions after Q3 publishes a supported endpoint |
-| Concurrency behavior is unproven | `asyncio.to_thread` starts independent calls | Reproduce overlaps, serialize writes, and add concurrency tests |
-| Mock is the direct-start default | A local run can look like a real product | Show the backend in health output and require explicit production mode |
-| MCP dependency is too broad | Package requires `mcp[cli]>=1.2.0` | Pin the tested major range and test supported versions |
-| ~~No real-seam transport test~~ | `test_seam_integration.py` (2026-08-18) drives the real server and the real CLI | Done |
-| Viewing grants enter tool results | MCP hosts and transcripts can retain the secret | Add a secure export path and clear operator warnings |
-| ~~No health or readiness tool~~ | `doctor` is an MCP tool and runs at startup (2026-08-19), logged rather than fatal: an operator may start first and repair second | Done; refusal deliberately not adopted |
+| Problem                                               | Current mechanism                                                                                                                 | Required result                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| ~~Exact-note rules conflict with Rust change~~        | PR #16: `_require_payable` checks `0 < amount <= total`, tool text rewritten                                                      | Done                                                                   |
+| Missing payment looks consistent                      | `paid_amount is None` returns `True`                                                                                              | Return an unknown result, or fail closed                               |
+| ~~Wide `memo_hash` values fail at JSON clients~~      | `d1731f4` fixed the input; the 2026-08-19 `u128_boundary` fix carried the output as hex strings                                   | Done                                                                   |
+| ~~Amounts above 2^53 lose precision at JSON clients~~ | Every `u128` crosses both boundaries as a string (`40b8543`, 2026-08-19)                                                          | Done                                                                   |
+| `wait_for_offers` accepts invalid limits              | Counts and timeouts have no range checks                                                                                          | Reject zero and negative values before polling                         |
+| Polling remains expensive                             | Each poll repeats note reads                                                                                                      | Add discovery subscriptions after Q3 publishes a supported endpoint    |
+| Concurrency behavior is unproven                      | `asyncio.to_thread` starts independent calls                                                                                      | Reproduce overlaps, serialize writes, and add concurrency tests        |
+| Mock is the direct-start default                      | A local run can look like a real product                                                                                          | Show the backend in health output and require explicit production mode |
+| MCP dependency is too broad                           | Package requires `mcp[cli]>=1.2.0`                                                                                                | Pin the tested major range and test supported versions                 |
+| ~~No real-seam transport test~~                       | `test_seam_integration.py` (2026-08-18) drives the real server and the real CLI                                                   | Done                                                                   |
+| Viewing grants enter tool results                     | MCP hosts and transcripts can retain the secret                                                                                   | Add a secure export path and clear operator warnings                   |
+| ~~No health or readiness tool~~                       | `doctor` is an MCP tool and runs at startup (2026-08-19), logged rather than fatal: an operator may start first and repair second | Done; refusal deliberately not adopted                                 |
 
 ### 5.4 Reference agents and policy
 
-| Problem | Current mechanism | Required result |
-|---|---|---|
-| ~~Reference agents call the mock directly~~ | `5362ada`: same policies over real MCP transport | Done |
-| ~~Policy computes exact subset sums~~ | Aligned with change-note settlement in PR #16 | Done |
-| Seller policy uses a fixed strategy | One threshold and one counter path | Keep this simple, but expose policy inputs as configuration |
-| No crash behavior | The loop assumes every call returns once | Resume from channel state and operation journal |
-| No operator approval policy | The agent can spend within its static budget | Add per-token, per-deal, and daily limits |
-| No live regression | The recorded run is manual evidence | Add an opt-in canary that records receipts and disclosure output |
+| Problem                                     | Current mechanism                                | Required result                                                  |
+| ------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
+| ~~Reference agents call the mock directly~~ | `5362ada`: same policies over real MCP transport | Done                                                             |
+| ~~Policy computes exact subset sums~~       | Aligned with change-note settlement in PR #16    | Done                                                             |
+| Seller policy uses a fixed strategy         | One threshold and one counter path               | Keep this simple, but expose policy inputs as configuration      |
+| No crash behavior                           | The loop assumes every call returns once         | Resume from channel state and operation journal                  |
+| No operator approval policy                 | The agent can spend within its static budget     | Add per-token, per-deal, and daily limits                        |
+| No live regression                          | The recorded run is manual evidence              | Add an opt-in canary that records receipts and disclosure output |
 
 ### 5.5 Erebus skill
 
 The repository contains the generic `strk20-privacy-integration` skill **and** an Erebus
-operator skill at `skills/erebus/SKILL.md`, landed in #19, whose five unsafe-behavior evals
-pass. An earlier version of this section said no Erebus skill existed; that was stale.
-Phase 9.3 extends its eval set.
+operator skill at `skills/erebus/SKILL.md`, landed in #19. Its first five unsafe-behavior
+fixtures were recorded as passing. Ishita added four more in `5a4aabc` on 2026-08-25, for
+nine fixtures total; those four have definitions and grading criteria but no recorded run or
+CI evaluator yet.
 
 The generic skill also has upstream drift. Its freshness check found newer `get-starknet`
 packages, a removed sub-account package, and a new shadow-account package.
@@ -266,17 +268,17 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 
 ### 5.6 Operations and release engineering
 
-| Problem | Current mechanism | Required result |
-|---|---|---|
-| ~~No continuous integration~~ | Added 2026-08-17 in `.github/workflows/ci.yml`. Rust, Python, and gitleaks | Add TypeScript when the GitHub Packages dependency can be resolved in CI (F8) |
-| ~~Every package is `0.0.1`~~ | Bumped to `0.1.0` across all seven manifests 2026-08-20 | Push the tag |
-| No *published* install | `uvx erebus-mcp-server` works from wheels; verified by the canary from an empty environment | Push the `v0.1.0` tag, which publishes wheels and the index |
-| No compatibility manifest | Pool, prover, and SDK versions can drift | Pin the pool class, ABI, prover protocol, and oracle revision |
-| ~~No `doctor` command~~ | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`, bound through the Python seam the same day | Wire it into the MCP server and the operator skill |
-| No backup and restore process | Key and state loss can be permanent | Add encrypted backup, restore, and state-rebuild procedures |
-| No monitoring | Logs show local events only | Add stage timing, transaction status, retry count, and RPC health |
-| No secret-safe log policy | Viewing grants and paths can enter logs | Redact grants, keys, authorization headers, and RPC secrets |
-| ~~No release provenance~~ | `SHA256SUMS` and a CycloneDX SBOM over 224 components, generated from lockfiles alone, `--check` on every push | The tag publishes them |
+| Problem                       | Current mechanism                                                                                                      | Required result                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| ~~No continuous integration~~ | Added 2026-08-17 in `.github/workflows/ci.yml`. Rust, Python, and gitleaks                                             | Add TypeScript when the GitHub Packages dependency can be resolved in CI (F8) |
+| ~~Every package is `0.0.1`~~  | Bumped to `0.1.0` across all seven manifests 2026-08-20                                                                | Push the tag                                                                  |
+| No _published_ install        | `uvx erebus-mcp-server` works from wheels; verified by the canary from an empty environment                            | Push the `v0.1.0` tag, which publishes wheels and the index                   |
+| No compatibility manifest     | Pool, prover, and SDK versions can drift                                                                               | Pin the pool class, ABI, prover protocol, and oracle revision                 |
+| ~~No `doctor` command~~       | Built 2026-08-17 in `sdk/rs/src/doctor.rs`, exposed as `erebus-cli doctor`, bound through the Python seam the same day | Wire it into the MCP server and the operator skill                            |
+| No backup and restore process | Key and state loss can be permanent                                                                                    | Add encrypted backup, restore, and state-rebuild procedures                   |
+| No monitoring                 | Logs show local events only                                                                                            | Add stage timing, transaction status, retry count, and RPC health             |
+| No secret-safe log policy     | Viewing grants and paths can enter logs                                                                                | Redact grants, keys, authorization headers, and RPC secrets                   |
+| ~~No release provenance~~     | `SHA256SUMS` and a CycloneDX SBOM over 224 components, generated from lockfiles alone, `--check` on every push         | The tag publishes them                                                        |
 
 ### 5.7 Sprint delivery, and mainnet as deferred work
 
@@ -285,14 +287,14 @@ findings intact so the decision stays reversible.
 
 #### What the sprint entry can and cannot reach under D14
 
-| Requirement | Status under D14 |
-|---|---|
-| Public repository and licence | Met |
-| Public demo URL | Met, `https://erebus-private-agents.vercel.app` |
-| Registered in `registry.json` | Met, PR merged 2026-08-14 |
+| Requirement                     | Status under D14                                         |
+| ------------------------------- | -------------------------------------------------------- |
+| Public repository and licence   | Met                                                      |
+| Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
+| Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
 | Three mainnet pool transactions | **Not reachable.** The hub verifies each hash on mainnet |
-| Public three-minute video | Reachable. Sepolia evidence only |
-| Complete `strk20.json` | Partial. `transactions` stays empty |
+| Public three-minute video       | Reachable. Sepolia evidence only                         |
+| Complete `strk20.json`          | Partial. `transactions` stays empty                      |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
 mechanical rather than a judgement call. Sepolia evidence does not substitute. The entry is
@@ -340,34 +342,34 @@ approval, deposits, and gas. D8 sets about 30 STRK for a minimum run.
 These decisions change the plan. Record each answer in this table before the dependent work
 starts.
 
-| ID | Decision | Current position | Owner | Needed by |
-|---|---|---|---|---|
-| D1 | Anchor use case | One-off service purchase or bilateral RFQ | Both | Before product copy freezes |
-| D2 | First external operator | Not selected | Both | Before the clean-install test |
-| D3 | Repeat deals | **Yes, decided 2026-08-21.** The same pair must be able to deal more than once. Lands in the final wire (Phase 8), not in `v0.1.0`, which is already released | Both | Decided. Per-deal grant scope ships in the same release: see Phase 11 |
-| D4 | Technical-preview privacy claim | Confidential terms and shielded settlement | Both | Decided |
-| D5 | Long-term privacy goal | Relationship privacy | Both | Decided, research remains |
-| D6 | Disclosure audience | Auditors and arbitrators receive grants | Both | Decided |
-| D7 | Platform evidence | Platforms receive a receipt, not a grant | Both | Mechanism not selected; blocked on D1 and on Phase 12. Decide `memoHash` width with it |
-| D8 | Mainnet spend limit | About 30 STRK for the minimum sprint run | Poulav | Before funding |
-| D9 | External review target | Final wire only, or wire v2 plus final wire | Poulav | Before audit booking |
-| D10 | Skill distribution | Erebus repo only, upstream skill repo, or both | Ishita | Before `v0.1.0` |
-| D11 | Support model | Best effort, named maintainer, or funded maintenance | Both | Before `v1.0` |
-| D12 | Pool allowance mechanism | Standing approval, decided 2026-08-16 | Poulav | Decided, built |
-| D13 | Who provisions allowance and notes | Operator at install; not an agent tool | Both | Before the operator product |
-| D15 | AVNU as a swap dependency | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount | Both | Before Phase 10.3 builds |
-| D14 | Sprint network | Sepolia only, decided 2026-08-16 | Both | Decided. Reversing needs days of Pathfinder lead time |
+| ID  | Decision                           | Current position                                                                                                                                              | Owner  | Needed by                                                                              |
+| --- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| D1  | Anchor use case                    | One-off service purchase or bilateral RFQ                                                                                                                     | Both   | Before product copy freezes                                                            |
+| D2  | First external operator            | Not selected                                                                                                                                                  | Both   | Before the clean-install test                                                          |
+| D3  | Repeat deals                       | **Yes, decided 2026-08-21.** The same pair must be able to deal more than once. Lands in the final wire (Phase 8), not in `v0.1.0`, which is already released | Both   | Decided. Per-deal grant scope ships in the same release: see Phase 11                  |
+| D4  | Technical-preview privacy claim    | Confidential terms and shielded settlement                                                                                                                    | Both   | Decided                                                                                |
+| D5  | Long-term privacy goal             | Relationship privacy                                                                                                                                          | Both   | Decided, research remains                                                              |
+| D6  | Disclosure audience                | Auditors and arbitrators receive grants                                                                                                                       | Both   | Decided                                                                                |
+| D7  | Platform evidence                  | Platforms receive a receipt, not a grant                                                                                                                      | Both   | Mechanism not selected; blocked on D1 and on Phase 12. Decide `memoHash` width with it |
+| D8  | Mainnet spend limit                | About 30 STRK for the minimum sprint run                                                                                                                      | Poulav | Before funding                                                                         |
+| D9  | External review target             | Final wire only, or wire v2 plus final wire                                                                                                                   | Poulav | Before audit booking                                                                   |
+| D10 | Skill distribution                 | Erebus repo only, upstream skill repo, or both                                                                                                                | Ishita | Before `v0.1.0`                                                                        |
+| D11 | Support model                      | Best effort, named maintainer, or funded maintenance                                                                                                          | Both   | Before `v1.0`                                                                          |
+| D12 | Pool allowance mechanism           | Standing approval, decided 2026-08-16                                                                                                                         | Poulav | Decided, built                                                                         |
+| D13 | Who provisions allowance and notes | Operator at install; not an agent tool                                                                                                                        | Both   | Before the operator product                                                            |
+| D15 | AVNU as a swap dependency          | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount                                  | Both   | Before Phase 10.3 builds                                                               |
+| D14 | Sprint network                     | Sepolia only, decided 2026-08-16                                                                                                                              | Both   | Decided. Reversing needs days of Pathfinder lead time                                  |
 
 ### External questions
 
-| ID | Question | Why it matters | Owner |
-|---|---|---|---|
-| Q1 | Can `compile_actions` avoid receiving the full pool key? | This decides the long-term custody model | Poulav to StarkWare |
-| Q2 | Can an operator receive screening access for a self-hosted prover? | Self-hosted proving does not make deposits work alone | Poulav to StarkWare |
-| Q3 | What are the supported mainnet prover and discovery URLs? | Deferred by D14. Still blocks the mainnet canary and `v1.0` | Poulav to StarkWare |
-| Q4 | Which pool, prover, ABI, and SDK revisions form one supported set? | Version drift can cause silent note failures | Poulav to StarkWare |
-| Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below. Applies to Sepolia too | Poulav to StarkWare |
-| Q5 | Which relayer or paymaster path supports direct SDK operators? | Submission unlinkability depends on it | Both to StarkWare or AVNU |
+| ID  | Question                                                               | Why it matters                                                                            | Owner                     |
+| --- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------- |
+| Q1  | Can `compile_actions` avoid receiving the full pool key?               | This decides the long-term custody model                                                  | Poulav to StarkWare       |
+| Q2  | Can an operator receive screening access for a self-hosted prover?     | Self-hosted proving does not make deposits work alone                                     | Poulav to StarkWare       |
+| Q3  | What are the supported mainnet prover and discovery URLs?              | Deferred by D14. Still blocks the mainnet canary and `v1.0`                               | Poulav to StarkWare       |
+| Q4  | Which pool, prover, ABI, and SDK revisions form one supported set?     | Version drift can cause silent note failures                                              | Poulav to StarkWare       |
+| Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below. Applies to Sepolia too | Poulav to StarkWare       |
+| Q5  | Which relayer or paymaster path supports direct SDK operators?         | Submission unlinkability depends on it                                                    | Both to StarkWare or AVNU |
 
 Q4 has a partial answer as of 2026-08-16. Upstream's compatibility matrix documents the
 Privacy Pool at class hash
@@ -652,11 +654,11 @@ Work:
    `sdk/rs/src/notecache.rs`. Notes are `WriteOnce` and contiguous, so everything below the
    first empty slot is immutable and cacheable soundly rather than as a bet. The cache file is
    named by a hash over the same channel key and token a note id derives from, so a cache
-   written under one subchannel is not *found* under another. The empty slot that ends a walk
+   written under one subchannel is not _found_ under another. The empty slot that ends a walk
    is never cached: a zero means "nothing here yet", and caching absence would freeze a
    channel at the length it had when first read.
 8. Add discovery-provider support after Q3 defines a supported endpoint.
-9. Add multi-token client state. *Partly done 2026-08-25.* Funding checks now follow the
+9. Add multi-token client state. _Partly done 2026-08-25._ Funding checks now follow the
    asset an operation moves rather than `ClientConfig::token`: `prepared_checks` and
    `pool_allowance_for` take the token, and the three channel operations pass the channel's
    own. That closes a real mismatch — `accept_and_settle` checked one token's allowance and
@@ -722,7 +724,7 @@ This phase is Python only. Nothing here needs a Rust change, and none of it is b
 Rust track.
 
 **The governing principle, stated once so the rest follows from it.** `CLAUDE.md` constraint 6
-says the policy engine decides *what* to do and never touches key material. The agent-era
+says the policy engine decides _what_ to do and never touches key material. The agent-era
 extension: **a model may decide what to offer; it must never authorize value movement.** An
 LLM that proposes terms which a deterministic validator checks and executes gives you
 negotiation intelligence on a testable spend path. An LLM that calls `accept_and_settle`
@@ -739,7 +741,7 @@ agent can be argued out of.
 Limits belong at the **MCP layer**, where the agent cannot reason past them, cannot be
 prompt-injected past them, and cannot be talked out of them by a counterparty.
 
-Work:
+Work (done 2026-08-22 in #21):
 
 1. Add per-token, per-deal, and daily cumulative caps to `ServerConfig`, read from the
    environment alongside `EREBUS_SETTLEMENT_ROLE`.
@@ -752,10 +754,10 @@ Work:
 
 Exit:
 
-- A settlement above any configured cap is refused at the MCP layer with the agent's policy
-  unchanged.
-- Restarting the server does not reset daily spend.
-- A test drives an agent that tries to exceed a cap and fails closed.
+- [x] A settlement above any configured cap is refused at the MCP layer with the agent's
+      policy unchanged.
+- [x] Restarting the server does not reset daily spend.
+- [x] A test drives the MCP path past a configured cap and it fails closed.
 
 #### 9.2 Tool results are model input, not logs
 
@@ -767,10 +769,10 @@ way a human reviewer would.
   payment looks consistent".
 - **Mock is the direct-start default**, and §5.3 notes "a local run can look like a real
   product". A person notices; a model does not.
-- **Viewing grants enter tool results.** This risk exists *because* a model is in the loop: a
+- **Viewing grants enter tool results.** This risk exists _because_ a model is in the loop: a
   bearer secret in a tool result is a bearer secret in a transcript that leaves the machine.
 
-Work:
+Work (done 2026-08-23 in #22):
 
 1. Make consistency checks fail closed: return `unknown` rather than a truthy default whenever
    payment evidence is missing.
@@ -784,14 +786,16 @@ Work:
 
 Exit:
 
-- No tool returns a truthy value for a check it could not perform.
-- Every result names its backend and network.
-- A full negotiation transcript contains no viewing grant.
+- [x] No tool returns a truthy value for a check it could not perform.
+- [x] Every result names its backend and network.
+- [x] A full negotiation transcript contains no viewing grant.
 
 #### 9.3 Evals, including an adversarial counterparty
 
-`skills/erebus/evals/unsafe-behavior.md` exists and its nine evals pass. (§5.5 still says the
-Erebus skill does not exist; that is stale and is corrected in this phase.)
+`skills/erebus/evals/unsafe-behavior.md` now contains nine fixtures. The first five were
+previously recorded as passing. Ishita added fixtures 6-9 in `5a4aabc` on 2026-08-25, but the
+commit contains no evaluator, CI job, or recorded grading output, so it does not establish
+that all nine pass.
 
 Work (done):
 
@@ -809,13 +813,15 @@ Work (done):
 3. Added a limit-evasion eval (7): an agent told about a cap must not split a deal into
    pieces to get under it, and must not suggest timing offers across the daily-cap's UTC
    boundary either.
-4. Run the eval set in CI once it is stable enough not to flake.
+4. **Open:** run all nine against fresh sessions, retain the per-fixture grading evidence,
+   then add the set to CI once the evaluator is stable enough not to flake.
 
 Exit:
 
-- Every item in the roadmap's §5.5 skill task list has a failing-case eval.
-- An injected instruction in a counterparty offer changes no decision.
-- A false privacy claim fails, and the failure names the wording that was wrong.
+- [x] Every unsafe behavior named in this phase has a fixture with explicit failure criteria.
+- [ ] All nine fixtures have a recorded run against a fresh session.
+- [ ] An injected instruction in counterparty-supplied content changes no decision in that run.
+- [ ] A false privacy claim fails, and the recorded failure names the wording that was wrong.
 
 #### 9.4 One real framework integration
 
@@ -985,7 +991,7 @@ Work:
 **Second-order benefit, worth scoping deliberately.** AVNU's private mode is always
 `sponsored_private`: the paymaster relays `apply_action` and no user signature is required.
 The submitting account is therefore AVNU's, not the agent's. That is precisely the mitigation
-`privacy-model.md` leak 2 and F38 describe for the *sender* half of the relationship leak, and
+`privacy-model.md` leak 2 and F38 describe for the _sender_ half of the relationship leak, and
 which `roadmap.md §4` records as not implemented. Evaluate whether the same paymaster path can
 carry ordinary Erebus settlements, not only swaps — one integration may close two problems.
 It does not touch `recipient_addr`, so the receiver half of F38 stands.
@@ -1043,15 +1049,15 @@ planned wire-v3 Sepolia run before this phase has live evidence.
 Work:
 
 1. [x] Encrypt each grant to the intended recipient's public key. The channel layer already does
-   this for `channel_key` through `EncChannelInfo`; reuse that ECDH construction rather than
-   introducing a second one.
+       this for `channel_key` through `EncChannelInfo`; reuse that ECDH construction rather than
+       introducing a second one.
 2. [x] Derive per-deal subkeys so a grant opens one deal's index range and no other.
 3. [x] Define what expiry can and cannot stop, and state it in the grant format itself.
 4. [x] Keep grants issued before this phase readable, and have them report themselves as legacy.
 5. [x] Prevent normal MCP transcripts from storing a grant secret.
 6. [x] Separate disclosure generation, delivery, and independent verification.
 7. [x] Extend `docs/privacy-model.md` with what a disclosed record proves and what it only
-   asserts, per grant shape.
+       asserts, per grant shape.
 8. [x] State that revocation cannot erase data a recipient already learned.
 
 Exit:
@@ -1206,17 +1212,17 @@ deals before the framing test passes.
 
 ### Ownership
 
-| Area | Primary owner | Required reviewer |
-|---|---|---|
-| Rust SDK, wire, settlement, execution | Poulav | Poulav line review, then external reviewer |
-| Cairo probes and upstream compatibility | Poulav | Poulav |
-| Python SDK seam | Shared | Both |
-| MCP server and tools | Ishita | Poulav for protocol boundaries |
-| Reference agents and policy | Ishita | Poulav for payment direction |
-| Erebus skill and evaluations | Ishita | Poulav for privacy and custody wording |
-| Demo, video, and agent narrative | Ishita | Both |
-| Mainnet accounts and transactions | Poulav | Ishita makes sure that evidence is understandable |
-| Release gate and public claims | Shared | Both |
+| Area                                    | Primary owner | Required reviewer                                 |
+| --------------------------------------- | ------------- | ------------------------------------------------- |
+| Rust SDK, wire, settlement, execution   | Poulav        | Poulav line review, then external reviewer        |
+| Cairo probes and upstream compatibility | Poulav        | Poulav                                            |
+| Python SDK seam                         | Shared        | Both                                              |
+| MCP server and tools                    | Ishita        | Poulav for protocol boundaries                    |
+| Reference agents and policy             | Ishita        | Poulav for payment direction                      |
+| Erebus skill and evaluations            | Ishita        | Poulav for privacy and custody wording            |
+| Demo, video, and agent narrative        | Ishita        | Both                                              |
+| Mainnet accounts and transactions       | Poulav        | Ishita makes sure that evidence is understandable |
+| Release gate and public claims          | Shared        | Both                                              |
 
 ### Working rhythm through 2026-08-31
 
@@ -1294,7 +1300,10 @@ transactions. See §5.7.
       switched to the mock, which is the check that they test what they claim.
       Still manual, because they need a funded identity: everything that writes.
 - [x] MCP-client reference agents. Done 2026-08-17 by Ishita as `5362ada`.
-- [ ] Erebus operator skill and unsafe-behavior evaluations.
+- [ ] Erebus operator skill and unsafe-behavior evaluations. The skill exists and all nine
+      fixtures are authored; the first five were previously recorded as passing. Fixtures
+      6-9, added by Ishita in `5a4aabc`, still need recorded runs, and the full set has no CI
+      evaluator.
 - [ ] Both owners review the 2026-08-19 push (`749cdd4` sdk, `c8741ff` mcp-server,
       `bb4e636` scripts/docs). It landed on Poulav's instruction ahead of the usual
       review; Poulav owns the Rust lines, Ishita the mcp-server lines.
@@ -1379,7 +1388,7 @@ transactions. See §5.7.
       no installer can resolve a dependency chain from. `scripts/build-index.py` writes the
       PEP 503 index that fixes that, holding links rather than files so Pages stays small.
       Rehearsed against a local server: `uv pip install --extra-index-url <index>
-      erebus-mcp-server` resolved all three packages and the installed binary answered.
+    erebus-mcp-server` resolved all three packages and the installed binary answered.
       `--extra-index-url` and not `--index-url`, because PyPI still serves `mcp`.
       One trap handled and tested: deploying Pages replaces the whole site, so an index
       built from one tag would delete every earlier version's links and break pinned
@@ -1389,15 +1398,24 @@ transactions. See §5.7.
 **Agent-layer safety (Phase 9, Ishita).** These gate the capability surface: limits must
 exist before Phase 10 gives an agent more ways to spend.
 
-- [ ] MCP-layer spending limits: per-token, per-deal, daily, persisted across restarts
-      (Phase 9.1). Today the only limit is `budget` inside `BuyerPolicy`, so the component
-      being constrained is the component enforcing the constraint.
-- [ ] Tool results carry backend and network in the payload, and fail closed on missing
-      evidence (Phase 9.2). A model cannot tell mock from Sepolia by looking at the logs.
-- [ ] Viewing grants leave tool results for a secure export path (Phase 9.2). A grant in a
-      transcript is a bearer secret that has left the machine.
-- [ ] Adversarial-counterparty and limit-evasion evals (Phase 9.3). Counterparty offers are
-      untrusted text reaching a model that can spend.
+- [x] MCP-layer spending limits: per-token, per-deal, daily, persisted across restarts
+      (Phase 9.1, #21). The later Rust-authoritative reconciliation required by the operator
+      alpha remains separate work in `plan.md`.
+- [x] Tool results carry backend and network in the payload and fail closed on missing
+      evidence (Phase 9.2, #22).
+- [x] Viewing grants leave tool results through a mode-`0600` secure export path that refuses
+      overwrite (Phase 9.2, #22).
+- [x] Adversarial-counterparty and limit-evasion fixtures authored (Phase 9.3, `5a4aabc`).
+- [x] Durable caller intent and the coordinated protocol-4 seam. Write intent is persisted
+      before the MCP call; the same ID crosses Python and CLI into Rust. Ishita's PR #35
+      supplied the MCP caller-intent base; the coordinated boundary landed 2026-08-26.
+- [x] Idempotent grant export. Replaying the same export operation returns the existing
+      mode-`0600` file metadata without replacing the capsule or returning it to the model.
+- [ ] Complete Rust-authoritative spending reservations. Committed effects rebuild once
+      from Rust findings. Submitted/ambiguous reservations, identity-lock confirmation,
+      and chain-acceptance-time UTC attribution remain open.
+- [ ] Run and retain fresh-session grading evidence for all nine fixtures, then add stable CI
+      execution (remaining Phase 9.3 work).
 - [ ] One framework integration installed from published wheels (Phase 9.4). This attacks
       "no external operator completed a clean install" directly, which is the actual
       constraint on other products building on Erebus.
@@ -1432,8 +1450,8 @@ exist before Phase 10 gives an agent more ways to spend.
 - [x] Chain-state recovery: `rebuild_state` reconstructs channel records from the pool key
       and chain data by keyed discovery. New handles: the originals are random and local, so
       anything holding an old handle string will not resolve against a rebuilt record.
-- [ ] Agent loop resumes mid-settlement rather than assuming one return (Phase 9.5,
-      after the journal lands).
+- [x] Agent loop persists canonical intent before a write, reconciles after interruption,
+      resumes by the original ID, and stops on `wait` or `operator_attention` (Phase 9.5).
 - [x] Read cursor and note cache: an unchanged channel read costs one RPC rather than one
       per note, durable so it survives the CLI's process-per-call shape.
 - [ ] Discovery-provider support, blocked on Q3.
@@ -1444,7 +1462,7 @@ exist before Phase 10 gives an agent more ways to spend.
 - [x] Signer abstraction: `AccountSigner` behind `Client::with_signer`, with the account
       key read at signing time rather than threaded through a write.
 - [x] Backup, restore, key-loss and rotation behaviour defined in `custody-operations.md`.
-- [ ] Backup and restore *tooling*: no `erebus-cli backup`, no encrypted bundle, no restore
+- [ ] Backup and restore _tooling_: no `erebus-cli backup`, no encrypted bundle, no restore
       verification, no rehearsed key-loss drill.
 - [ ] Secret-safe monitoring.
 
@@ -1452,13 +1470,16 @@ exist before Phase 10 gives an agent more ways to spend.
 
 **Wire and threat model.**
 
-- [ ] Written relationship threat model.
-- [ ] Final framed wire with randomized spare bits.
+- [x] Written relationship threat model (`docs/threat-model.md`, 2026-08-21), with
+      `privacy-model.md` canonical when the two differ.
+- [x] Final framed wire: wire v3 uses authenticated deal IDs and derived masks for all three
+      spare bits, is the source default, and has live Sepolia evidence (#23).
 - [x] Repeat deals through the same directional channel pair. The wire carries deal ids;
       `ChannelState` reports `settlements: Vec<SettlementRecord>` rather than a channel-level
       boolean, one record per deal with agreed and paid amounts kept separate and a nullable
       consistency result (#24).
-- [ ] TypeScript final-wire oracle and normative vectors.
+- [x] TypeScript wire-v3 oracle and frozen normative vectors, checked byte-for-byte by Rust
+      (`sdk/ts/src/channel/wire-v3.ts`, `sdk/rs/tests/fixtures/ts-wire-v3.json`).
 - [ ] Submission unlinkability research.
 - [ ] Independent cryptographic and security review.
 

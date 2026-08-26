@@ -10,7 +10,7 @@ known-answer test here means that protocol logic crossed the binding boundary. S
 :class:`SeamConfig` contains paths to two key files. The Rust binary opens them. The Python
 heap never holds a pool private key.
 
-Protocol 3, 2026-08-21. Every method except ``version`` and ``generate_pool_key`` carries
+Protocol 4, 2026-08-26. Every method except ``version`` and ``generate_pool_key`` carries
 the same configuration because ``erebus-cli`` keeps no process state. Channel
 state lives in ``state_dir`` behind an opaque handle.
 """
@@ -31,7 +31,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 #: The request/response contract this binding speaks. The binary reports its own on every
 #: envelope; ``call`` refuses a mismatch by name instead of failing on a changed shape.
-PROTOCOL = 3
+PROTOCOL = 4
 
 
 class SeamUnavailable(RuntimeError):
@@ -115,7 +115,7 @@ class Seam:
         self._timeout = timeout
         self._config = config
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
         """Invokes ``method`` and returns its result.
 
         :raises ErebusError: the Rust side returned a structured failure.
@@ -196,18 +196,35 @@ class Seam:
 
     # --- The seven interface methods, plus administrative/read helpers --------------
 
-    def open_channel(self, counterparty: str) -> dict[str, Any]:
-        return self.call("open_channel", self._with_config({"counterparty": counterparty}))
+    def open_channel(self, operation_id: str, counterparty: str) -> dict[str, Any]:
+        return self.call(
+            "open_channel",
+            self._with_config({"operation_id": operation_id, "counterparty": counterparty}),
+        )
 
-    def propose_offer(self, handle: str, terms: dict[str, Any]) -> dict[str, Any]:
-        return self.call("propose_offer", self._with_config({"handle": handle, "terms": terms}))
+    def propose_offer(
+        self, operation_id: str, handle: str, terms: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self.call(
+            "propose_offer",
+            self._with_config(
+                {"operation_id": operation_id, "handle": handle, "terms": terms}
+            ),
+        )
 
     def counter_offer(
-        self, handle: str, reply_to: str, terms: dict[str, Any]
+        self, operation_id: str, handle: str, reply_to: str, terms: dict[str, Any]
     ) -> dict[str, Any]:
         return self.call(
             "counter_offer",
-            self._with_config({"handle": handle, "reply_to": reply_to, "terms": terms}),
+            self._with_config(
+                {
+                    "operation_id": operation_id,
+                    "handle": handle,
+                    "reply_to": reply_to,
+                    "terms": terms,
+                }
+            ),
         )
 
     def read_channel_state(self, handle: str) -> dict[str, Any]:
@@ -217,9 +234,14 @@ class Seam:
         """Returns note denominations from Rust without computing them in Python."""
         return self.call("balance", self._with_config({}))
 
-    def accept_and_settle(self, handle: str, offer_id: str) -> dict[str, Any]:
+    def accept_and_settle(
+        self, operation_id: str, handle: str, offer_id: str
+    ) -> dict[str, Any]:
         return self.call(
-            "accept_and_settle", self._with_config({"handle": handle, "offer_id": offer_id})
+            "accept_and_settle",
+            self._with_config(
+                {"operation_id": operation_id, "handle": handle, "offer_id": offer_id}
+            ),
         )
 
     def grant_viewing_key(
@@ -244,9 +266,11 @@ class Seam:
         """
         return self.call("reveal", self._with_config({"viewing_key": viewing_key}))
 
-    def shield(self, amount: str) -> dict[str, Any]:
+    def shield(self, operation_id: str, amount: str) -> dict[str, Any]:
         """Administrative funding helper. Outside the seven negotiation methods."""
-        return self.call("shield", self._with_config({"amount": amount}))
+        return self.call(
+            "shield", self._with_config({"operation_id": operation_id, "amount": amount})
+        )
 
     # --- Operator health and repair -------------------------------------------------
 
@@ -269,10 +293,26 @@ class Seam:
         """
         return self.call("allowance", self._with_config({}))
 
-    def approve(self, amount: str) -> dict[str, Any]:
+    def approve(self, operation_id: str, amount: str) -> dict[str, Any]:
         """Grants the pool an ERC-20 allowance. Submits a transaction and costs gas.
 
         `amount` is a decimal string for the same reason every other amount is: a u128 does
         not survive a JSON number.
         """
-        return self.call("approve", self._with_config({"amount": amount}))
+        return self.call(
+            "approve", self._with_config({"operation_id": operation_id, "amount": amount})
+        )
+
+    def reconcile(self) -> list[dict[str, Any]]:
+        """Classify every durable Rust operation without changing chain or local state."""
+        return self.call("reconcile", self._with_config({}))
+
+    def resume_operation(self, operation_id: str) -> dict[str, Any]:
+        """Explicitly resume or finish one reconciled operation."""
+        return self.call(
+            "resume_operation", self._with_config({"operation_id": operation_id})
+        )
+
+    def rebuild_state(self) -> dict[str, Any]:
+        """Add missing channel records reconstructed from chain data."""
+        return self.call("rebuild_state", self._with_config({}))

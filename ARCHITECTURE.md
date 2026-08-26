@@ -272,26 +272,27 @@ three, and it needs both owners (see CLAUDE.md, "The interface contract is froze
 
 type ChannelHandle = string;
 type OfferId = string;
+type OperationId = `op_${string}`; // exactly 64 lowercase hex characters after op_
 
 interface ErebusClient {
   // Establish a pool channel with a counterparty.
   // The current wire does not make negotiation payloads confidential; see §7.
   // The sender hashes its pool key into channel_key. The recipient recovers that key from
   // EncChannelInfo using ephemeral-static ECDH.
-  openChannel(counterparty: AgentId): Promise<ChannelHandle>;
+  openChannel(operationId: OperationId, counterparty: AgentId): Promise<ChannelHandle>;
 
   // Write a structured offer into the channel.
-  proposeOffer(handle: ChannelHandle, terms: OfferTerms): Promise<OfferId>;
+  proposeOffer(operationId: OperationId, handle: ChannelHandle, terms: OfferTerms): Promise<OfferId>;
 
   // Write a counter-offer referencing a prior offer.
-  counterOffer(handle: ChannelHandle, replyTo: OfferId, terms: OfferTerms): Promise<OfferId>;
+  counterOffer(operationId: OperationId, handle: ChannelHandle, replyTo: OfferId, terms: OfferTerms): Promise<OfferId>;
 
   // Read all offer state visible to this party.
   readChannelState(handle: ChannelHandle): Promise<ChannelState>;
 
   // Payer action: the caller accepts an offer and spends its own private notes to the
   // offer author, atomically. A payee confirms agreement by authoring the final offer.
-  acceptAndSettle(handle: ChannelHandle, offerId: OfferId): Promise<SettlementReceipt>;
+  acceptAndSettle(operationId: OperationId, handle: ChannelHandle, offerId: OfferId): Promise<SettlementReceipt>;
 
   // Encrypt one deal capability to a registered recipient until an explicit Unix time.
   grantViewingKey(
@@ -340,6 +341,22 @@ interface SettlementReceipt {
   provedAt: number;
   selectedInput?: string;    // value of the notes spent; absent for shielding
   change?: string;           // value returned to the payer; "0" when the notes were exact
+}
+
+interface SettlementRecord {
+  dealId: string;
+  acceptance: OfferId;
+  acceptedOffer?: OfferId;
+  agreedAmount: string;
+  paidAmount?: string;
+  consistency?: boolean;
+}
+
+interface ChannelState {
+  channelId: ChannelHandle;
+  participants: AgentId[];
+  offers: Offer[];
+  settlements: SettlementRecord[];
 }
 
 interface ViewingKeyGrant {
@@ -402,7 +419,14 @@ There is also no observable `accepted`-but-not-`settled` state. Acceptance and p
 one `ActionSet`, one proof, and one `apply_actions` transition, so the public state moves
 directly to `settled`.
 
-The Rust CLI and Python seam use protocol 3. TypeScript independently implements the wire-v3
+The Rust CLI and Python seam use protocol 4. Every chain write requires the same
+caller-persisted `OperationId` at the MCP, Python, CLI, and Rust boundaries. Protocol 4
+removes the channel-level `settled` boolean and returns `settlements` in oldest-first order.
+`reconcile` is read-only; `resume_operation(operation_id)` is the sole explicit recovery
+action. Success envelopes are `{ok:true,protocol:4,result}` and errors are
+`{ok:false,protocol:4,error:{code,message,retryable}}`.
+
+TypeScript independently implements the wire-v3
 codec and known-answer vectors. Wire v3 rejects the legacy whole-channel viewing grant and
 uses recipient-bound per-deal capabilities instead.
 

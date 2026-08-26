@@ -40,15 +40,18 @@ enum Request {
     },
     OpenChannel {
         config: ConfigParams,
+        operation_id: String,
         counterparty: String,
     },
     ProposeOffer {
         config: ConfigParams,
+        operation_id: String,
         handle: String,
         terms: TermsParams,
     },
     CounterOffer {
         config: ConfigParams,
+        operation_id: String,
         handle: String,
         reply_to: String,
         terms: TermsParams,
@@ -75,6 +78,7 @@ enum Request {
     },
     AcceptAndSettle {
         config: ConfigParams,
+        operation_id: String,
         handle: String,
         offer_id: String,
     },
@@ -91,6 +95,7 @@ enum Request {
     },
     Approve {
         config: ConfigParams,
+        operation_id: String,
         amount: String,
     },
     Allowance {
@@ -103,6 +108,7 @@ enum Request {
     /// Administrative funding helper required before a buyer can settle.
     Shield {
         config: ConfigParams,
+        operation_id: String,
         amount: String,
     },
     /// Unspent note denominations for payment pricing.
@@ -179,7 +185,7 @@ impl TermsParams {
 /// so a consumer can fail with a named mismatch instead of a shape error deep inside its
 /// own decoding — a stale server against a newer binary surfaced exactly that way on
 /// 2026-08-19. Bump on any change to a request or result shape, not only breaking ones.
-const PROTOCOL: u8 = 3;
+const PROTOCOL: u8 = 4;
 
 #[derive(Debug, Serialize)]
 struct Response {
@@ -257,25 +263,11 @@ impl CliError {
     }
 }
 
-/// Mints an operation id for one CLI invocation.
-///
-/// A real caller persists its id *before* calling, so that a crash mid-write leaves
-/// something to reconcile against. A fresh id per process cannot do that: it is a bridge
-/// that keeps the protocol-3 request shape unchanged while the Rust write path grows the
-/// operation contract underneath it. plan.md task 10 replaces this with a caller-supplied
-/// id, and Ishita's task 1 supplies the durable intent above the binding.
-fn bridge_operation_id() -> OperationId {
-    use rand::RngCore as _;
-
-    let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let mut value = String::with_capacity(67);
-    value.push_str("op_");
-    for byte in bytes {
-        use core::fmt::Write as _;
-        write!(&mut value, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    OperationId::parse(value).expect("a 64-hex-digit id is well formed by construction")
+fn operation_id(value: String) -> Result<OperationId, CliError> {
+    OperationId::parse(&value).map_err(|_| CliError::BadValue {
+        field: "operation_id",
+        value,
+    })
 }
 
 async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
@@ -295,23 +287,25 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::OpenChannel {
             config,
+            operation_id: id,
             counterparty,
         } => {
             let client = config.build()?;
             let handle = client
-                .open_channel(&bridge_operation_id(), felt("counterparty", &counterparty)?)
+                .open_channel(&operation_id(id)?, felt("counterparty", &counterparty)?)
                 .await?;
             serialize(serde_json::json!({ "channel_handle": handle }))
         }
         Request::ProposeOffer {
             config,
+            operation_id: id,
             handle,
             terms,
         } => {
             let client = config.build()?;
             let offer_id = client
                 .propose_offer(
-                    &bridge_operation_id(),
+                    &operation_id(id)?,
                     ChannelHandle::parse(handle)?,
                     terms.parse()?,
                 )
@@ -320,6 +314,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::CounterOffer {
             config,
+            operation_id: id,
             handle,
             reply_to,
             terms,
@@ -327,7 +322,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let client = config.build()?;
             let offer_id = client
                 .counter_offer(
-                    &bridge_operation_id(),
+                    &operation_id(id)?,
                     ChannelHandle::parse(handle)?,
                     offer_id(reply_to),
                     terms.parse()?,
@@ -340,18 +335,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let state = client
                 .read_channel_state(ChannelHandle::parse(handle)?)
                 .await?;
-            // Protocol 3 answered "did anything settle here?" with a boolean. Task 9 replaced
-            // that with per-deal records, but plan.md decision 6 requires the CLI, sdk/py and
-            // the MCP server to move to protocol 4 together, so the boolean is retained here
-            // as a derived compatibility field. Task 10 removes it with the coordinated
-            // change; nothing downstream reads it today.
-            let settled = state.is_settled();
-            let mut value = serde_json::to_value(state)
-                .map_err(|error| CliError::BadResponse(error.to_string()))?;
-            if let Some(object) = value.as_object_mut() {
-                object.insert("settled".to_owned(), serde_json::Value::Bool(settled));
-            }
-            Ok(value)
+            serialize(state)
         }
         Request::Reconcile { config } => {
             let client = config.build()?;
@@ -363,17 +347,15 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
         }
         Request::ResumeOperation {
             config,
-            operation_id,
+            operation_id: id,
         } => {
             let client = config.build()?;
-            let id = OperationId::parse(&operation_id).map_err(|_| CliError::BadValue {
-                field: "operation_id",
-                value: operation_id.clone(),
-            })?;
+            let id = operation_id(id)?;
             serialize(client.resume_operation(&id).await?)
         }
         Request::AcceptAndSettle {
             config,
+            operation_id: operation,
             handle,
             offer_id: id,
         } => {
@@ -381,7 +363,7 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             serialize(
                 client
                     .accept_and_settle(
-                        &bridge_operation_id(),
+                        &operation_id(operation)?,
                         ChannelHandle::parse(handle)?,
                         offer_id(id),
                     )
@@ -415,11 +397,15 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
             let client = config.build()?;
             serialize(client.reveal(*viewing_key).await?)
         }
-        Request::Approve { config, amount } => {
+        Request::Approve {
+            config,
+            operation_id: id,
+            amount,
+        } => {
             let client = config.build()?;
             serialize(
                 client
-                    .approve_pool(&bridge_operation_id(), u128_value("amount", &amount)?)
+                    .approve_pool(&operation_id(id)?, u128_value("amount", &amount)?)
                     .await?,
             )
         }
@@ -439,11 +425,15 @@ async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
                 "repairs": report.repairs(),
             }))
         }
-        Request::Shield { config, amount } => {
+        Request::Shield {
+            config,
+            operation_id: id,
+            amount,
+        } => {
             let client = config.build()?;
             serialize(
                 client
-                    .shield(&bridge_operation_id(), u128_value("amount", &amount)?)
+                    .shield(&operation_id(id)?, u128_value("amount", &amount)?)
                     .await?,
             )
         }

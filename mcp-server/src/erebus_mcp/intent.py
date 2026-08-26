@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import tempfile
 from contextlib import suppress
@@ -33,6 +34,11 @@ except ImportError:  # Windows: no advisory locking. Single-process use only the
     fcntl = None  # type: ignore[assignment]
 
 _ID_BYTES = 32  # secrets.token_hex(32) -> 64 lowercase hex characters.
+_ID_PATTERN = re.compile(r"^op_[0-9a-f]{64}$")
+
+
+class IntentConflict(ValueError):
+    """An operation id or canonical request was already bound differently."""
 
 
 def new_operation_id() -> str:
@@ -67,7 +73,9 @@ class IntentStore:
         self._dir = state_dir / "pending_operations"
         self._lock_path = state_dir / "pending_operations.lock"
 
-    def begin(self, tool: str, params: dict[str, Any]) -> str:
+    def begin(
+        self, tool: str, params: dict[str, Any], operation_id: str | None = None
+    ) -> str:
         """Returns an operation id for this exact ``(tool, params)`` pair.
 
         Reuses a still-pending id for an identical request rather than minting a new one,
@@ -78,11 +86,23 @@ class IntentStore:
         """
         self._dir.mkdir(parents=True, exist_ok=True)
         target = _canonical(tool, params)
+        if operation_id is not None and _ID_PATTERN.fullmatch(operation_id) is None:
+            raise IntentConflict(
+                "operation ID must be `op_` followed by 64 lowercase hexadecimal characters"
+            )
         with self._locked():
             for record in self._read_all():
                 if _canonical(record.tool, record.params) == target:
+                    if operation_id is not None and record.operation_id != operation_id:
+                        raise IntentConflict(
+                            "the same request is already bound to a different operation id"
+                        )
                     return record.operation_id
-            operation_id = new_operation_id()
+                if operation_id is not None and record.operation_id == operation_id:
+                    raise IntentConflict(
+                        f"operation {operation_id} is already bound to different parameters"
+                    )
+            operation_id = operation_id or new_operation_id()
             self._write(IntentRecord(operation_id, tool, params))
             return operation_id
 

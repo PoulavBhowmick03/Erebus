@@ -23,6 +23,7 @@ from erebus._seam import ErebusError, Seam, SeamConfig, SeamUnavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "sdk" / "rs" / "target" / "debug" / "erebus-cli"
+OPERATION_ID = "op_" + "ab" * 32
 
 pytestmark = pytest.mark.skipif(
     not CLI.exists(),
@@ -70,7 +71,7 @@ def test_version_round_trips(seam: Seam) -> None:
     result = seam.version()
 
     assert result["name"] == "erebus-sdk"
-    assert result["protocol"] == 3
+    assert result["protocol"] == 4
     assert result["default_wire_version"] == "v3"
 
 
@@ -179,10 +180,11 @@ def test_approve_sends_amount_and_returns_a_receipt(
         )
 
     monkeypatch.setattr(subprocess, "run", answer)
-    result = seam.approve("5000000000000000000")
+    result = seam.approve(OPERATION_ID, "5000000000000000000")
 
     assert sent["method"] == "approve"
     assert isinstance(sent["params"], dict)
+    assert sent["params"]["operation_id"] == OPERATION_ID  # type: ignore[index]
     assert sent["params"]["amount"] == "5000000000000000000"  # type: ignore[index]
     assert set(result) == {"tx_hash", "approved"}
 
@@ -235,7 +237,7 @@ def test_a_missing_key_file_raises_a_structured_error(config: SeamConfig) -> Non
     broken = dataclasses.replace(config, pool_key_file="/definitely/not/here")
 
     with pytest.raises(ErebusError) as caught:
-        Seam(config=broken, binary=CLI).open_channel("0xb0b")
+        Seam(config=broken, binary=CLI).open_channel(OPERATION_ID, "0xb0b")
 
     assert caught.value.code == "IDENTITY_UNAVAILABLE"
     assert caught.value.retryable is False
@@ -243,7 +245,7 @@ def test_a_missing_key_file_raises_a_structured_error(config: SeamConfig) -> Non
 
 def test_a_malformed_argument_raises_rather_than_returning_garbage(seam: Seam) -> None:
     with pytest.raises(ErebusError) as caught:
-        seam.open_channel("not-a-felt")
+        seam.open_channel(OPERATION_ID, "not-a-felt")
 
     assert caught.value.code == "INVALID_REQUEST"
 
@@ -268,7 +270,7 @@ def test_a_config_free_seam_refuses_calls_that_need_one() -> None:
     bare.version()
 
     with pytest.raises(SeamUnavailable):
-        bare.open_channel("0xb0b")
+        bare.open_channel(OPERATION_ID, "0xb0b")
 
 
 # --- Broken install is a different failure than a protocol error ----------------
@@ -305,7 +307,7 @@ def test_neither_key_is_passed_through_python(seam: Seam, key_files: tuple[Path,
     subprocess.run = capture  # type: ignore[assignment]
     try:
         with pytest.raises(ErebusError):
-            seam.open_channel("not-a-felt")
+            seam.open_channel(OPERATION_ID, "not-a-felt")
     finally:
         subprocess.run = original  # type: ignore[assignment]
 

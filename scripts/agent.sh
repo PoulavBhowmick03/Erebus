@@ -49,6 +49,17 @@ call() {
     rm -f "$out"
 }
 
+write_call() {
+    local method="$1" params="$2" operation_id state_dir intent_file bound
+    operation_id="${EREBUS_OPERATION_ID:-$(python3 -c 'import secrets; print("op_" + secrets.token_hex(32))')}"
+    state_dir=$(grep '^EREBUS_STATE_DIR=' "$ENV_FILE" | cut -d= -f2-)
+    intent_file="$state_dir/caller-intents.jsonl"
+    mkdir -p "$state_dir"; chmod 700 "$state_dir"
+    bound=$(python3 -c 'import json,sys; value=json.loads(sys.argv[1]); value["operation_id"]=sys.argv[2]; print(json.dumps(value,separators=(",",":"),sort_keys=True))' "$params" "$operation_id")
+    python3 -c 'import json,os,sys; path=sys.argv[1]; row={"operation_id":sys.argv[2],"method":sys.argv[3],"params":json.loads(sys.argv[4])}; fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600); os.write(fd,(json.dumps(row,separators=(",",":"),sort_keys=True)+"\n").encode()); os.fsync(fd); os.close(fd)' "$intent_file" "$operation_id" "$method" "$bound"
+    call "$method" "$bound"
+}
+
 # Use a 24-hour deadline for negotiations that take minutes. The client returns a distinct
 # error for an expired offer.
 deadline() { python3 -c 'import time;print(int(time.time())+86400)'; }
@@ -69,25 +80,25 @@ whoami)
     grep '^AGENT_ADDRESS=' "$ENV_FILE" | cut -d= -f2
     ;;
 open)
-    out=$(call open_channel "{\"counterparty\":\"${1:?counterparty address}\"}")
+    out=$(write_call open_channel "{\"counterparty\":\"${1:?counterparty address}\"}")
     field channel_handle <<<"$out"
     ;;
 offer)
     handle="${1:?handle}"; amount="${2:?amount in wei}"; memo="${3:-0x1234}"
     token=$(grep '^TOKEN_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
-    out=$(call propose_offer "$(printf '{"handle":"%s","terms":{"amount":"%s","token":"%s","deadline":%s,"memo_hash":"%s"}}' \
+    out=$(write_call propose_offer "$(printf '{"handle":"%s","terms":{"amount":"%s","token":"%s","deadline":%s,"memo_hash":"%s"}}' \
         "$handle" "$amount" "$token" "$(deadline)" "$memo")")
     field offer_id <<<"$out"
     ;;
 counter)
     handle="${1:?handle}"; reply=$(offer_ref "${2:?offer_id being countered}" "${1}"); amount="${3:?amount in wei}"; memo="${4:-0x5678}"
     token=$(grep '^TOKEN_ADDRESS=' "$ENV_FILE" | cut -d= -f2)
-    out=$(call counter_offer "$(printf '{"handle":"%s","reply_to":"%s","terms":{"amount":"%s","token":"%s","deadline":%s,"memo_hash":"%s"}}' \
+    out=$(write_call counter_offer "$(printf '{"handle":"%s","reply_to":"%s","terms":{"amount":"%s","token":"%s","deadline":%s,"memo_hash":"%s"}}' \
         "$handle" "$reply" "$amount" "$token" "$(deadline)" "$memo")")
     field offer_id <<<"$out"
     ;;
 accept)
-    out=$(call accept_and_settle "{\"handle\":\"${1:?handle}\",\"offer_id\":\"$(offer_ref "${2:?offer_id}" "${1}")\"}")
+    out=$(write_call accept_and_settle "{\"handle\":\"${1:?handle}\",\"offer_id\":\"$(offer_ref "${2:?offer_id}" "${1}")\"}")
     field tx_hash <<<"$out"
     ;;
 status)
@@ -114,6 +125,12 @@ wait)
 balance)
     out=$(call balance '{}')
     python3 "$REPO/scripts/balance.py" <<<"$out"
+    ;;
+reconcile)
+    call reconcile '{}'
+    ;;
+resume)
+    call resume_operation "{\"operation_id\":\"${1:?operation id}\"}"
     ;;
 fund)
     # The documented two-transaction deposit (runbook §2): the ERC-20 approve must be on
@@ -164,7 +181,7 @@ sys.exit("no sncast account matches " + sys.argv[1] + "; set SNCAST_ACCOUNT")
     echo "approve tx $tx" >&2
 
     RPC="$rpc" bash "$REPO/scripts/wait-for-depth.sh" "$tx" >&2
-    out=$(call shield "$(printf '{"amount":"%s"}' "$amount")")
+    out=$(write_call shield "$(printf '{"amount":"%s"}' "$amount")")
     shield_tx=$(field tx_hash <<<"$out")
     echo "shield tx $shield_tx; waiting until its note is spendable" >&2
     RPC="$rpc" bash "$REPO/scripts/wait-for-depth.sh" "$shield_tx" >&2

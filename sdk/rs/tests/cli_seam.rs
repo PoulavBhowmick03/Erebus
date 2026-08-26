@@ -48,12 +48,12 @@ fn temporary_path(name: &str) -> PathBuf {
 }
 
 #[test]
-fn version_reports_protocol_three_and_wire_v3() {
+fn version_reports_protocol_four_and_wire_v3() {
     let (response, ok) = run(r#"{"method":"version"}"#);
     assert!(ok);
     assert_eq!(response["ok"], true);
-    assert_eq!(response["protocol"], 3);
-    assert_eq!(response["result"]["protocol"], 3);
+    assert_eq!(response["protocol"], 4);
+    assert_eq!(response["result"]["protocol"], 4);
     assert_eq!(response["result"]["default_wire_version"], "v3");
     assert!(response["error"].is_null());
 }
@@ -257,6 +257,7 @@ fn offer_with_memo(name: &str, memo_hash: &str) -> (serde_json::Value, bool) {
         "method": "propose_offer",
         "params": {
             "config": config(name, "/definitely/not/a/pool-key", "/definitely/not/an/account-key"),
+            "operation_id": format!("op_{}", "ab".repeat(32)),
             "handle": "ch_0000000000000000000000000000000000000000000000000000000000000001",
             "terms": {
                 "amount": "1000",
@@ -386,6 +387,7 @@ fn wire_v1_cannot_be_selected_for_a_new_channel() {
         "method": "open_channel",
         "params": {
             "config": config("wire-v1", "/missing/pool", "/missing/account"),
+            "operation_id": format!("op_{}", "ab".repeat(32)),
             "counterparty": "0xb0b"
         }
     });
@@ -508,13 +510,13 @@ fn a_malformed_operation_id_names_the_field() {
 #[test]
 fn the_protocol_tag_is_present_on_failures_as_well_as_successes() {
     let (success, _) = run(r#"{"method":"version"}"#);
-    assert_eq!(success["protocol"], 3);
+    assert_eq!(success["protocol"], 4);
 
     let (unknown_method, _) = run(r#"{"method":"no_such_method"}"#);
-    assert_eq!(unknown_method["protocol"], 3);
+    assert_eq!(unknown_method["protocol"], 4);
     assert_eq!(unknown_method["ok"], false);
 
     let (malformed, _) = run("{not json");
-    assert_eq!(malformed["protocol"], 3);
+    assert_eq!(malformed["protocol"], 4);
     assert_eq!(malformed["ok"], false);
 }

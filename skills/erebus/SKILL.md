@@ -32,6 +32,11 @@ These are load-bearing. Breaking any one of them is a safety failure, not a styl
    separately.** Negotiation terms and settlement amounts are private (message privacy).
    That a channel was opened, with whom, and roughly how often, is not (F38, F31). Never
    collapse these into one "it's private" statement. See "Privacy wording" below.
+5. **Persist one operation ID before every write.** It is `op_` plus 64 lowercase hex
+   characters. Reuse it only for the exact same tool and arguments. After interruption,
+   call `reconcile`; call `resume_operation` only for that recorded ID. If reconciliation
+   says `wait` or `operator_attention`, stop and report it. Never mint a replacement ID for
+   an uncertain write.
 
 ## Modes
 
@@ -77,10 +82,10 @@ Before naming or accepting a price, establish the shape of the deal:
    health can change in between. `doctor` is read-only and always safe to call again.
    `ready: false` means a write will fail now — read each unhealthy check's `repair` field
    and act on it before attempting the write, not after it fails.
-2. **Payer negotiation:** `open_channel(counterparty)` → `propose_offer` or wait for the
+2. **Payer negotiation:** `open_channel(operation_id, counterparty)` → `propose_offer` or wait for the
    payee's offer via `wait_for_offers`/`read_channel_state` → when an offer is acceptable
-   (`amount <= total` per Plan mode), `accept_and_settle(handle, offer_id)`.
-3. **Payee negotiation:** `open_channel(counterparty)` → read the payer's offer →
+   (`amount <= total` per Plan mode), `accept_and_settle(operation_id, handle, offer_id)`.
+3. **Payee negotiation:** `open_channel(operation_id, counterparty)` → read the payer's offer →
    `counter_offer` at the reserve (or accept the payer's price by countering at that same
    amount) → wait. Never call `accept_and_settle`.
 4. **Structured failures, by what to do about them** (`SettlementErrorCode`, grouped in
@@ -103,7 +108,7 @@ Before naming or accepting a price, establish the shape of the deal:
      operator-configured cap, not a protocol failure. Do not retry at a smaller amount to
      route around it — a daily cumulative cap catches that. Stop and tell the operator.
    Every error carries `retryable: bool` — trust it over guessing from the code name.
-5. **Disclosure.** `grant_viewing_key(channel_handle, deal_id, grantee, expires_at,
+5. **Disclosure.** `grant_viewing_key(operation_id, channel_handle, deal_id, grantee, expires_at,
    output_path)` encrypts one wire-v3 deal to a registered recipient and writes the capsule
    to `output_path` on this machine, mode 0600, refusing to overwrite an existing file — the
    tool result only confirms the write, never the capsule itself. Whoever holds the file and
@@ -114,7 +119,12 @@ Before naming or accepting a price, establish the shape of the deal:
    ask to receive. `reveal(grant_path)` opens the file itself; it needs no prior local state
    and works from the grant alone, on any machine whose configured pool key matches the
    recipient the capsule was encrypted to.
-6. **Evidence capture.** After a real (non-mock) settlement, record `tx_hash`, every
+6. **Interrupted writes.** Call `reconcile` first. `none`, `safe_to_retry`,
+   `commit_local_state`, and `commit_journal` may be handed to
+   `resume_operation(operation_id)`. A `resubmitted` result means wait and reconcile again;
+   it is not permission to start a replacement. `wait`, `operator_attention`, or an
+   unreadable journal stops automation and requires the operator.
+7. **Evidence capture.** After a real (non-mock) settlement, record `tx_hash`, every
    `nullifier`, and — if the backend is Sepolia or mainnet — the Voyager link for that
    transaction on the matching network. Don't guess the URL format from memory; look up
    Voyager's current URL convention for the network in question rather than fabricating one

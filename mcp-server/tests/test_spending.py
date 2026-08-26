@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from erebus_mcp.config import SpendingLimits, TokenSpendingLimit
 from erebus_mcp.spending import SpendGuard
 
@@ -12,6 +14,26 @@ from erebus_mcp.spending import SpendGuard
 def _guard(tmp_path: Path, **caps: TokenSpendingLimit) -> SpendGuard:
     limits = SpendingLimits(by_token=caps)
     return SpendGuard(limits, tmp_path / "spending.json")
+
+
+def test_operation_reconciliation_counts_a_settlement_once(tmp_path: Path) -> None:
+    guard = _guard(tmp_path, **{"0xtoken": TokenSpendingLimit(daily=10)})
+    operation_id = "op_" + "ab" * 32
+
+    guard.record("0xtoken", 7, operation_id)
+    guard.record("0xtoken", 7, operation_id)
+
+    assert guard.check("0xtoken", 3) is None
+    assert guard.check("0xtoken", 4) is not None
+
+
+def test_operation_reconciliation_rejects_a_different_spend(tmp_path: Path) -> None:
+    guard = _guard(tmp_path)
+    operation_id = "op_" + "ab" * 32
+    guard.record("0xtoken", 7, operation_id)
+
+    with pytest.raises(ValueError):
+        guard.record("0xtoken", 8, operation_id)
 
 
 def test_no_configured_cap_never_refuses(tmp_path: Path) -> None:

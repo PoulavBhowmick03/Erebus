@@ -1,7 +1,7 @@
 """Python mirror of the frozen ``ErebusClient`` contract in ARCHITECTURE.md §4.
 
 This file transcribes the normative §4 block. It does not implement the protocol. ``sdk/py``
-carries the calls over the protocol-3 subprocess binding. Each ``ErebusClient`` has one
+carries the calls over the protocol-4 subprocess binding. Each ``ErebusClient`` has one
 identity, so methods do not accept a caller address.
 
 ``token`` is not a parameter anywhere. It travels inside ``OfferTerms``.
@@ -9,7 +9,7 @@ identity, so methods do not accept a caller address.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
 
@@ -17,6 +17,7 @@ ChannelHandle = str
 OfferId = str
 AgentId = str
 PublicKey = str
+OperationId = str
 
 
 class OfferStatus(str, Enum):
@@ -117,7 +118,12 @@ class ChannelState:
     """
 
     offers: list[Offer]
-    settlement: DisclosedSettlement | None = None
+    settlements: list[DisclosedSettlement] = field(default_factory=list)
+
+    @property
+    def settlement(self) -> DisclosedSettlement | None:
+        """Latest settlement for source compatibility; protocol 4 serializes the list."""
+        return self.settlements[-1] if self.settlements else None
 
 
 @dataclass(frozen=True)
@@ -199,16 +205,24 @@ class ErebusError(Exception):
 class ErebusClient(Protocol):
     """Mirrors ARCHITECTURE.md §4's normative TypeScript block, method for method."""
 
-    async def open_channel(self, counterparty: AgentId) -> ChannelHandle:
+    async def open_channel(
+        self, operation_id: OperationId, counterparty: AgentId
+    ) -> ChannelHandle:
         """Establish a private channel with a counterparty."""
         ...
 
-    async def propose_offer(self, handle: ChannelHandle, terms: OfferTerms) -> OfferId:
+    async def propose_offer(
+        self, operation_id: OperationId, handle: ChannelHandle, terms: OfferTerms
+    ) -> OfferId:
         """Write a structured offer into the channel."""
         ...
 
     async def counter_offer(
-        self, handle: ChannelHandle, reply_to: OfferId, terms: OfferTerms
+        self,
+        operation_id: OperationId,
+        handle: ChannelHandle,
+        reply_to: OfferId,
+        terms: OfferTerms,
     ) -> OfferId:
         """Write a counter-offer referencing a prior offer."""
         ...
@@ -226,7 +240,7 @@ class ErebusClient(Protocol):
         ...
 
     async def accept_and_settle(
-        self, handle: ChannelHandle, offer_id: OfferId
+        self, operation_id: OperationId, handle: ChannelHandle, offer_id: OfferId
     ) -> SettlementReceipt:
         """Accept an offer and pay it from this caller's notes, atomically."""
         ...
@@ -239,4 +253,16 @@ class ErebusClient(Protocol):
 
     async def reveal(self, viewing_key: ViewingKeyGrant) -> DisclosedRecord:
         """Reconstruct from chain data. No grantor-local handle state is needed."""
+        ...
+
+    async def reconcile(self) -> list[dict[str, Any]]:
+        """Classify durable operations without changing state."""
+        ...
+
+    async def resume_operation(self, operation_id: OperationId) -> dict[str, Any]:
+        """Explicitly resume one classified operation."""
+        ...
+
+    async def rebuild_state(self) -> dict[str, Any]:
+        """Add missing channel records reconstructed from chain data."""
         ...

@@ -6,7 +6,7 @@ runs against the operator's prover (``docs/custody-design.md``). ``prover_url`` 
 required for the mock backend so every configuration names its endpoint explicitly.
 
 ``mock`` is the default and needs an address and prover URL. ``seam`` drives the Rust client
-and needs the full protocol-3 configuration. Startup validation catches a missing
+and needs the full protocol-4 configuration. Startup validation catches a missing
 ``POOL_KEY_FILE`` before a tool call starts proving.
 """
 

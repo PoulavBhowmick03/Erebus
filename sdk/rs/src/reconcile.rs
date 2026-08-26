@@ -61,6 +61,8 @@ pub struct Finding {
     pub operation_id: OperationId,
     /// Which write it was.
     pub operation: WriteOperation,
+    /// Canonical replay request recorded before execution. It contains no key material.
+    pub request: Option<serde_json::Value>,
     /// Stage the journal last recorded.
     pub stage: OperationStage,
     /// Channel it belongs to, when it has one.
@@ -151,6 +153,7 @@ async fn classify(
     Ok(Finding {
         operation_id: record.operation_id.clone(),
         operation: record.operation,
+        request: record.request.clone(),
         stage: record.stage(),
         channel: record.channel.clone(),
         transaction_hash: attempt.transaction_hash,

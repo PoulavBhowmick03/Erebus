@@ -31,6 +31,7 @@ from erebus_mcp.interface import (
     DoctorReport,
     ErebusError,
     NoteBalance,
+    OperationId,
     Offer,
     OfferId,
     OfferStatus,
@@ -135,35 +136,47 @@ class SeamErebusClient:
     def __init__(self, seam: Seam) -> None:
         self._seam = seam
 
-    async def _run(self, fn: Any, *args: Any) -> dict[str, Any]:
+    async def _run(self, fn: Any, *args: Any) -> Any:
         try:
             return await asyncio.to_thread(fn, *args)
         except SeamError as exc:
             raise _translate(exc) from exc
 
-    async def open_channel(self, counterparty: AgentId) -> ChannelHandle:
-        result = await self._run(self._seam.open_channel, counterparty)
+    async def open_channel(
+        self, operation_id: OperationId, counterparty: AgentId
+    ) -> ChannelHandle:
+        result = await self._run(self._seam.open_channel, operation_id, counterparty)
         return result["channel_handle"]
 
-    async def propose_offer(self, handle: ChannelHandle, terms: OfferTerms) -> OfferId:
-        result = await self._run(self._seam.propose_offer, handle, _wire_terms(terms))
+    async def propose_offer(
+        self, operation_id: OperationId, handle: ChannelHandle, terms: OfferTerms
+    ) -> OfferId:
+        result = await self._run(
+            self._seam.propose_offer, operation_id, handle, _wire_terms(terms)
+        )
         return result["offer_id"]
 
     async def counter_offer(
-        self, handle: ChannelHandle, reply_to: OfferId, terms: OfferTerms
+        self,
+        operation_id: OperationId,
+        handle: ChannelHandle,
+        reply_to: OfferId,
+        terms: OfferTerms,
     ) -> OfferId:
         result = await self._run(
-            self._seam.counter_offer, handle, reply_to, _wire_terms(terms)
+            self._seam.counter_offer, operation_id, handle, reply_to, _wire_terms(terms)
         )
         return result["offer_id"]
 
     async def read_channel_state(self, handle: ChannelHandle) -> ChannelState:
         result = await self._run(self._seam.read_channel_state, handle)
-        # read_channel_state reports `settled` as a boolean. Only `reveal` reconstructs a
-        # settlement object. Participants see the result in the accepted offer status.
         return ChannelState(
             offers=[_offer(o) for o in result.get("offers", [])],
-            settlement=_settlement(result.get("settlement")),
+            settlements=[
+                settlement
+                for raw in result.get("settlements", [])
+                if (settlement := _settlement(raw)) is not None
+            ],
         )
 
     async def note_balance(self) -> NoteBalance:
@@ -187,9 +200,11 @@ class SeamErebusClient:
         )
 
     async def accept_and_settle(
-        self, handle: ChannelHandle, offer_id: OfferId
+        self, operation_id: OperationId, handle: ChannelHandle, offer_id: OfferId
     ) -> SettlementReceipt:
-        result = await self._run(self._seam.accept_and_settle, handle, offer_id)
+        result = await self._run(
+            self._seam.accept_and_settle, operation_id, handle, offer_id
+        )
         return _receipt(result)
 
     async def grant_viewing_key(
@@ -225,14 +240,23 @@ class SeamErebusClient:
             settlement=_settlement(result.get("settlement")),
         )
 
-    async def shield(self, amount: int) -> SettlementReceipt:
+    async def shield(self, operation_id: OperationId, amount: int) -> SettlementReceipt:
         """Administrative funding, outside the seven interface methods.
 
         An identity needs a shielded note before settlement. Its first action set also
         registers it with the pool.
         """
-        result = await self._run(self._seam.shield, str(amount))
+        result = await self._run(self._seam.shield, operation_id, str(amount))
         return _receipt(result)
+
+    async def reconcile(self) -> list[dict[str, Any]]:
+        return await self._run(self._seam.reconcile)
+
+    async def resume_operation(self, operation_id: OperationId) -> dict[str, Any]:
+        return await self._run(self._seam.resume_operation, operation_id)
+
+    async def rebuild_state(self) -> dict[str, Any]:
+        return await self._run(self._seam.rebuild_state)
 
 
 def _wire_terms(terms: OfferTerms) -> dict[str, Any]:

@@ -10,6 +10,9 @@ export type ChannelHandle = string;
 /** Opaque identifier for an offer. Format is an implementation detail. */
 export type OfferId = string;
 
+/** Caller-persisted id: `op_` followed by exactly 64 lowercase hex characters. */
+export type OperationId = `op_${string}`;
+
 /** Agent identity. Maps to a Starknet account address for the MVP. */
 export type AgentId = string;
 
@@ -76,7 +79,16 @@ export interface ChannelState {
   channelId: ChannelHandle;
   participants: AgentId[];
   offers: Offer[];
-  settled: boolean;
+  settlements: SettlementRecord[];
+}
+
+export interface SettlementRecord {
+  dealId: string;
+  acceptance: OfferId;
+  acceptedOffer?: OfferId;
+  agreedAmount: string;
+  paidAmount?: string;
+  consistency?: boolean;
 }
 
 /** Rust-owned encrypted capability capsule, carried without interpretation. */
@@ -148,13 +160,18 @@ export interface ErebusClient {
    * (channel, token). Channels are directional, so a channel that lets B pay A back
    * is a separate one.
    */
-  openChannel(counterparty: AgentId): Promise<ChannelHandle>;
+  openChannel(operationId: OperationId, counterparty: AgentId): Promise<ChannelHandle>;
 
   /** Write a structured offer into the channel. */
-  proposeOffer(handle: ChannelHandle, terms: OfferTerms): Promise<OfferId>;
+  proposeOffer(
+    operationId: OperationId,
+    handle: ChannelHandle,
+    terms: OfferTerms
+  ): Promise<OfferId>;
 
   /** Write a counter-offer referencing a prior offer. */
   counterOffer(
+    operationId: OperationId,
     handle: ChannelHandle,
     replyTo: OfferId,
     terms: OfferTerms
@@ -170,6 +187,7 @@ export interface ErebusClient {
    * Rejects with {@link SettlementError}.
    */
   acceptAndSettle(
+    operationId: OperationId,
     handle: ChannelHandle,
     offerId: OfferId
   ): Promise<SettlementReceipt>;

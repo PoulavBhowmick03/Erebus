@@ -25,6 +25,7 @@ from erebus_mcp.interface import (
 from erebus_mcp.seam_client import SeamErebusClient, _wire_terms
 
 CHANNEL = "ch_" + "a8" * 32
+OPERATION_ID = "op_" + "ab" * 32
 OFFER = {
     "offer_id": f"{CHANNEL}:us:0",
     "deal_id": "18446744073709551615",
@@ -107,14 +108,24 @@ def test_balance_amount_strings_map_to_note_denominations() -> None:
     assert balance.total == 250
 
 
-def test_read_channel_state_carries_no_settlement_object() -> None:
-    """The CLI reports `settled` as a boolean here and only reconstructs a settlement in
-    `reveal`. A participant still sees the outcome through the accepted offer's status, so
-    this is a real difference between the two calls rather than a dropped field."""
-    seam = StubSeam(read_channel_state={"channel_id": CHANNEL, "offers": [], "settled": True})
+def test_read_channel_state_carries_protocol_4_settlement_records() -> None:
+    seam = StubSeam(
+        read_channel_state={
+            "channel_id": CHANNEL,
+            "offers": [],
+            "settlements": [
+                {
+                    "acceptance": "offer-1",
+                    "agreed_amount": "7",
+                    "paid_amount": "7",
+                }
+            ],
+        }
+    )
     state = run(SeamErebusClient(seam).read_channel_state(CHANNEL))
 
-    assert state.settlement is None
+    assert len(state.settlements) == 1
+    assert state.settlements[0].agreed_amount == 7
 
 
 def test_accept_and_settle_parses_selected_input_and_change() -> None:
@@ -128,7 +139,11 @@ def test_accept_and_settle_parses_selected_input_and_change() -> None:
             "change": "2000000000000000000",
         }
     )
-    receipt = run(SeamErebusClient(seam).accept_and_settle(CHANNEL, f"{CHANNEL}:them:0"))
+    receipt = run(
+        SeamErebusClient(seam).accept_and_settle(
+            OPERATION_ID, CHANNEL, f"{CHANNEL}:them:0"
+        )
+    )
 
     assert receipt.selected_input == 5_000_000_000_000_000_000
     assert receipt.change == 2_000_000_000_000_000_000
@@ -143,7 +158,11 @@ def test_accept_and_settle_leaves_missing_change_fields_as_none() -> None:
             "proved_at": 13095252,
         }
     )
-    receipt = run(SeamErebusClient(seam).accept_and_settle(CHANNEL, f"{CHANNEL}:them:0"))
+    receipt = run(
+        SeamErebusClient(seam).accept_and_settle(
+            OPERATION_ID, CHANNEL, f"{CHANNEL}:them:0"
+        )
+    )
 
     assert receipt.selected_input is None
     assert receipt.change is None
@@ -270,7 +289,7 @@ def test_seam_errors_become_interface_errors() -> None:
     )
 
     with pytest.raises(ErebusError) as caught:
-        run(SeamErebusClient(seam).accept_and_settle(CHANNEL, "x"))
+        run(SeamErebusClient(seam).accept_and_settle(OPERATION_ID, CHANNEL, "x"))
 
     assert caught.value.code is SettlementErrorCode.ALREADY_SETTLED
     assert caught.value.retryable is False
@@ -285,7 +304,7 @@ def test_an_unknown_code_degrades_instead_of_crashing() -> None:
     )
 
     with pytest.raises(ErebusError) as caught:
-        run(SeamErebusClient(seam).open_channel("0xb0b"))
+        run(SeamErebusClient(seam).open_channel(OPERATION_ID, "0xb0b"))
 
     assert caught.value.code is SettlementErrorCode.PROOF_FAILED
     assert caught.value.retryable is True

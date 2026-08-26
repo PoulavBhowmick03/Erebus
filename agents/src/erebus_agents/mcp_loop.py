@@ -17,6 +17,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from erebus_agents.policy import BuyerPolicy, NegotiationAction, SellerPolicy
+from erebus_agents.intents import IntentStore
 
 logger = logging.getLogger("erebus_agents")
 
@@ -46,6 +47,7 @@ def server_params(
             "EREBUS_MOCK_LATENCY_SECONDS": latency_seconds,
             "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
             "EREBUS_SETTLEMENT_ROLE": role,
+            "UV_CACHE_DIR": "/private/tmp/erebus-uv-cache",
         },
     )
 
@@ -61,6 +63,50 @@ async def _call(session: ClientSession, tool: str, **kwargs: Any) -> dict[str, A
     if not outcome["ok"]:
         raise RuntimeError(f"{tool} failed: {outcome['error']}")
     return outcome["result"]
+
+
+async def _write_call(
+    session: ClientSession,
+    intents: IntentStore,
+    intent_key: str,
+    tool: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    record = intents.prepare(intent_key, tool, kwargs)
+    if record["state"] == "completed":
+        return record["result"]
+    arguments = {"operation_id": record["operation_id"], **record["arguments"]}
+    try:
+        result = await _call(session, tool, **arguments)
+    except RuntimeError as original:
+        # Classify before taking any recovery action. Pending and unknown operations are
+        # deliberately left for an operator; minting a replacement id here could pay twice.
+        findings = await _call(session, "reconcile")
+        finding = next(
+            (item for item in findings if item["operation_id"] == record["operation_id"]),
+            None,
+        )
+        if finding is None or finding["next_action"] in {"wait", "operator_attention"}:
+            raise original
+        await _call(session, "resume_operation", operation_id=record["operation_id"])
+        result = await _call(session, tool, **arguments)
+    intents.complete(intent_key, result)
+    return result
+
+
+def _intent_path(params: StdioServerParameters, identity: str) -> Path:
+    env = params.env or {}
+    configured = env.get("EREBUS_CALLER_INTENT_PATH")
+    if configured:
+        return Path(configured)
+    state_dir = env.get("EREBUS_STATE_DIR")
+    if state_dir:
+        return Path(state_dir) / "caller-intents.json"
+    mock_store = env.get("EREBUS_MOCK_STORE_PATH")
+    if mock_store:
+        safe_identity = identity.replace("/", "_")
+        return Path(mock_store).parent / f"caller-intents-{safe_identity}.json"
+    raise ValueError("set EREBUS_CALLER_INTENT_PATH or EREBUS_STATE_DIR for durable writes")
 
 
 def _decode_offer(raw: dict[str, Any], handle: str) -> Offer:
@@ -83,7 +129,9 @@ def _decode_offer(raw: dict[str, Any], handle: str) -> Offer:
 
 
 def _decode_state(raw: dict[str, Any], handle: str) -> ChannelState:
-    return ChannelState(offers=[_decode_offer(o, handle) for o in raw["offers"]])
+    return ChannelState(
+        offers=[_decode_offer(o, handle) for o in raw["offers"]], settlements=[]
+    )
 
 
 async def run_negotiation_over_mcp(
@@ -97,6 +145,8 @@ async def run_negotiation_over_mcp(
     token: str,
     max_rounds: int = 3,
 ) -> dict[str, Any]:
+    buyer_intents = IntentStore(_intent_path(buyer_params, buyer_address))
+    seller_intents = IntentStore(_intent_path(seller_params, seller_address))
     async with stdio_client(seller_params) as (seller_read, seller_write):
         async with ClientSession(seller_read, seller_write) as seller:
             await seller.initialize()
@@ -104,9 +154,15 @@ async def run_negotiation_over_mcp(
                 async with ClientSession(buyer_read, buyer_write) as buyer:
                     await buyer.initialize()
 
-                    opened = await _call(buyer, "open_channel", counterparty=seller_address)
+                    opened = await _write_call(
+                        buyer, buyer_intents, "open-channel", "open_channel",
+                        counterparty=seller_address,
+                    )
                     buyer_handle = opened["channel_handle"]
-                    opened = await _call(seller, "open_channel", counterparty=buyer_address)
+                    opened = await _write_call(
+                        seller, seller_intents, "open-channel", "open_channel",
+                        counterparty=buyer_address,
+                    )
                     seller_handle = opened["channel_handle"]
                     _log_event(
                         "channel_opened",
@@ -135,8 +191,8 @@ async def run_negotiation_over_mcp(
                             break
                         if buyer_decision.action == NegotiationAction.ACCEPT:
                             assert buyer_decision.reply_to is not None
-                            receipt = await _call(
-                                buyer,
+                            receipt = await _write_call(
+                                buyer, buyer_intents, f"round-{round_index}-settle",
                                 "accept_and_settle",
                                 channel_handle=buyer_handle,
                                 offer_id=buyer_decision.reply_to,
@@ -145,8 +201,8 @@ async def run_negotiation_over_mcp(
                             settled = True
                             break
                         if buyer_decision.action == NegotiationAction.PROPOSE:
-                            offer = await _call(
-                                buyer,
+                            offer = await _write_call(
+                                buyer, buyer_intents, f"round-{round_index}-propose",
                                 "propose_offer",
                                 channel_handle=buyer_handle,
                                 amount=str(buyer_decision.terms.amount),
@@ -156,8 +212,8 @@ async def run_negotiation_over_mcp(
                             )
                             _log_event("proposed", by="buyer", offer_id=offer["offer_id"])
                         elif buyer_decision.action == NegotiationAction.COUNTER:
-                            offer = await _call(
-                                buyer,
+                            offer = await _write_call(
+                                buyer, buyer_intents, f"round-{round_index}-counter",
                                 "counter_offer",
                                 channel_handle=buyer_handle,
                                 reply_to=buyer_decision.reply_to,
@@ -184,8 +240,8 @@ async def run_negotiation_over_mcp(
                         if seller_decision.action == NegotiationAction.ACCEPT:
                             raise RuntimeError("seller policy cannot accept: the accepting identity pays")
                         if seller_decision.action == NegotiationAction.COUNTER:
-                            offer = await _call(
-                                seller,
+                            offer = await _write_call(
+                                seller, seller_intents, f"round-{round_index}-counter",
                                 "counter_offer",
                                 channel_handle=seller_handle,
                                 reply_to=seller_decision.reply_to,
@@ -212,7 +268,7 @@ async def run_negotiation_over_mcp(
         buyer_handle=buyer_handle,
         seller_handle=seller_handle,
         offer_count=len(state["offers"]),
-        settled=state["settlement"] is not None,
+        settled=bool(state["settlements"]),
         disclosure="available_as_an_explicit_recipient_bound_operator_step",
     )
     return state
