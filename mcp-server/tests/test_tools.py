@@ -714,6 +714,42 @@ def test_every_result_names_its_backend_and_network(tmp_path):
     asyncio.run(run())
 
 
+def test_a_write_leaves_no_pending_intent_once_it_has_returned(tmp_path):
+    """Durable caller intent (plan.md, Ishita task 1): the record `IntentStore.begin`
+    persists before a chain-writing call must be gone once the call has returned to this
+    process, success or a caught error, because that return is proof the process did not
+    crash. A record surviving past the call would mean every ordinary write leaked one."""
+
+    async def run():
+        intents_dir = tmp_path / "intents"
+        params = _server_params(
+            tmp_path / "store.json", extra_env={"EREBUS_INTENT_STATE_DIR": str(intents_dir)}
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                opened = await session.call_tool("open_channel", {"counterparty": "0xseller"})
+                assert _structured(opened)["ok"] is True
+                handle = _structured(opened)["result"]["channel_handle"]
+
+                # A real channel with no matching offer: unlike an unknown handle, this
+                # reaches the seam's `accept_and_settle` itself, exercising the
+                # begin/resolve pair around a call that raises rather than one that
+                # never starts.
+                failed = await session.call_tool(
+                    "accept_and_settle",
+                    {"channel_handle": handle, "offer_id": "offer_doesnotexist"},
+                )
+                assert _structured(failed)["ok"] is False
+
+        pending_dir = intents_dir / "pending_operations"
+        leftover = list(pending_dir.glob("*.json")) if pending_dir.is_dir() else []
+        assert leftover == []
+
+    asyncio.run(run())
+
+
 def test_wait_for_offers_rejects_a_non_positive_expected_count(tmp_path):
     async def run():
         async with stdio_client(_server_params(tmp_path / "store.json")) as (read, write):

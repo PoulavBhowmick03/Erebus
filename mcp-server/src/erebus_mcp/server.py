@@ -31,6 +31,7 @@ import logging
 from mcp.server import MCPServer
 
 from erebus_mcp.config import ConfigError, ServerConfig
+from erebus_mcp.intent import IntentStore
 from erebus_mcp.mock_client import MockErebusClient
 from erebus_mcp.seam_client import SeamErebusClient
 from erebus_mcp.spending import SpendGuard
@@ -127,11 +128,17 @@ def build_server() -> MCPServer:
         )
 
     spend_guard = SpendGuard(config.spending_limits, config.spending_state_path)
+    # Persists an operation id and its canonical parameters before a write reaches the
+    # seam, so a crashed process leaves a record instead of silence (plan.md, Ishita
+    # task 1). Not yet consulted by Rust — see erebus_mcp/intent.py for the scope boundary.
+    intent_store = IntentStore(config.intent_state_dir)
     # Stamped onto every tool result (roadmap 9.2) so a transcript alone tells a model
     # whether it is talking to a real chain, and which one. "mock" has no chain_id to
     # report; there is nothing else it could truthfully say.
     network = config.seam.chain_id if config.seam is not None else "mock"
-    register_tools(server, client, config.settlement_role, spend_guard, config.backend, network)
+    register_tools(
+        server, client, config.settlement_role, spend_guard, intent_store, config.backend, network
+    )
     return server
 
 

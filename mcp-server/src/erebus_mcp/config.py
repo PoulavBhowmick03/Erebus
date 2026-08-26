@@ -95,6 +95,9 @@ class ServerConfig:
     #: Where daily cumulative spend is persisted, so a restart does not reset it. Defaults
     #: to a path scoped to this identity; see `_spending_state_path`.
     spending_state_path: Path = field(default_factory=lambda: Path("/tmp/erebus-spending-state.json"))
+    #: Base directory for durable caller-intent records (plan.md, Ishita task 1). Scoped
+    #: per identity for the same reason spending state is; see `_intent_state_dir`.
+    intent_state_dir: Path = field(default_factory=lambda: Path("/tmp/erebus-intent-state"))
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -140,6 +143,7 @@ class ServerConfig:
             startup_doctor=not _flag("EREBUS_SKIP_STARTUP_DOCTOR"),
             spending_limits=_spending_limits(),
             spending_state_path=_spending_state_path(address, seam),
+            intent_state_dir=_intent_state_dir(address, seam),
         )
 
 
@@ -261,6 +265,20 @@ def _spending_state_path(address: str, seam: SeamSettings | None) -> Path:
     if seam is not None:
         return seam.state_dir / "spending.json"
     return Path(f"/tmp/erebus-spending-state-{_slug(address)}.json")
+
+
+def _intent_state_dir(address: str, seam: SeamSettings | None) -> Path:
+    """Base directory for `IntentStore`, which appends its own `pending_operations`
+    subdirectory. Same identity-scoping rule as `_spending_state_path`: two identities
+    sharing a default directory would let one identity's crash record collide with
+    another's `IntentStore.begin()` scan.
+    """
+    configured = os.environ.get("EREBUS_INTENT_STATE_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    if seam is not None:
+        return seam.state_dir
+    return Path(f"/tmp/erebus-intent-state-{_slug(address)}")
 
 
 def _slug(value: str) -> str:

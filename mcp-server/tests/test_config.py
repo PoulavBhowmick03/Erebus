@@ -92,6 +92,25 @@ def test_spending_state_path_honors_explicit_override(
     assert ServerConfig.from_env().spending_state_path == override
 
 
+def test_intent_state_dir_defaults_are_scoped_per_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_ADDRESS", "0xbuyer")
+    buyer_dir = ServerConfig.from_env().intent_state_dir
+    monkeypatch.setenv("AGENT_ADDRESS", "0xseller")
+    seller_dir = ServerConfig.from_env().intent_state_dir
+
+    assert buyer_dir != seller_dir
+
+
+def test_intent_state_dir_honors_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    override = tmp_path / "intents"
+    monkeypatch.setenv("EREBUS_INTENT_STATE_DIR", str(override))
+    assert ServerConfig.from_env().intent_state_dir == override
+
+
 def test_startup_doctor_defaults_on() -> None:
     assert ServerConfig.from_env().startup_doctor is True
 
