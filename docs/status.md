@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-25.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-27.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -30,12 +30,11 @@ are confidential and demonstrated to be so. The relationship is not.
   disclosure, including `0x60eace8b…a7be` at 19 STRK to clear the u64 boundary F39/F40 named
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
-| Version | `0.1.0` across every package |
+| Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
 | Tests | 349 Rust (plus 2 intentionally ignored live-prover tests), 147 Python, 43 TypeScript |
 | In flight | Operator alpha (`v0.2.0`), `plan.md`. Protocol 4 now carries caller-persisted operation IDs through MCP, Python, CLI, and Rust; recovery is exposed to MCP and used by the reference agent. Local exact-resubmission and expired-proof rebuild tests pass. The live Sepolia canary remains open: on 2026-08-26 the configured prover returned opaque `-32603 Internal error` twice before signing, and reconciliation proved `no_effect`. Full reservation semantics and chain-acceptance-time accounting for spending caps, journal scheduling, and the packaged live canary remain open. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
-| Install | `erebus-mcp-server` entry point ships in the wheel; Linux x86-64 and macOS
-  arm64 built and canary-verified. Intel macOS unsupported. Published at the `v0.1.0` tag |
+| Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
 ## What Erebus does
 
@@ -80,27 +79,25 @@ Never describe this as private in an absolute sense.
 |---|---|---|
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
-| What to do next | [roadmap.md](./roadmap.md) | current |
-| How to reproduce a run | [runbook.md](./runbook.md) | mostly current, see below |
+| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-27 reconciliation |
+| How to reproduce a run | [runbook.md](./runbook.md) | current for Protocol 4, with historical receipt tables |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
-| Does this fit my use case | [usecases.md](./usecases.md) | **stale**, see below |
-| What is missing for production | [production-gaps.md](./production-gaps.md) | **stale**, see below |
+| Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-27 reconciliation |
+| What is missing for production | [production-gaps.md](./production-gaps.md) | current summary with a preserved historical baseline |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
 | The pitch | [poc.md](./poc.md) | current |
 | How to operate it as an agent | [skills/erebus/SKILL.md](../skills/erebus/SKILL.md) | current, all nine unsafe-behavior evals pass (`skills/erebus/evals/results-2026-08-26.md`) |
 
-### Known stale claims, not yet corrected
+### Historical documents and known limits
 
-These are wrong in the source documents and listed here so nobody quotes them:
+These documents preserve dated evidence and do not describe the current source:
 
-- **`usecases.md` fit-test row 6** says the repository "has not completed a live wire-v2
-  negotiation or an independent cryptographic review". Half wrong since 2026-08-07: the live
-  wire-v2 negotiation completed. The review half is still true.
-- **`production-gaps.md` §4** predates F38 and treats relationship exposure as an inference
-  from timing rather than an address written in the clear.
-- **`runbook.md`** carries an evidence boundary dated 2026-07-31 saying wire v2 "has not yet
-  completed this live run". It has.
+- **`tech.md`** describes the 2026-08-05 tree. Its banner names the obsolete areas.
+- **`poc.md`** preserves the original wire-v2 design record. Its banner points to the
+  current wire-v3 evidence.
+- **`docs/runs/`** records exact past configurations and protocol versions. Do not update a
+  past run to look like a current run.
 - **`scripts/observer.py`** classifies wire-v1 traffic as wire v2. The recovery results are
   unaffected — v1 content is recovered, v2 is not — but the version label it prints is not
   trustworthy.
@@ -146,11 +143,14 @@ only metadata and the path. The capsule does not enter the model transcript.
 3. ~~Finish the protocol-4 product seam.~~ Done 2026-08-26: every chain write takes a
    caller-supplied operation ID through MCP, Python, CLI, and Rust; channel state returns a
    settlement list; protocol mismatches fail by name.
-4. **Finish spending reservation reconciliation.** Committed settlements rebuild
+4. **Preserve recovery error names through MCP.** Rust emits Protocol 4 recovery and
+   funding codes that the MCP enum does not yet contain. The adapter currently converts
+   those unknown codes to `PROOF_FAILED`, which hides the required operator action.
+5. **Finish spending reservation reconciliation.** Committed settlements rebuild
    idempotently from Rust findings, including direct CLI writes. Submitted and ambiguous
    reservations, identity-lock confirmation, and chain-acceptance-time daily attribution
    still need the complete fail-closed implementation from `plan.md` task 4.
-5. **Run the packaged Sepolia recovery canary.** The 2026-08-26 attempt stopped safely:
+6. **Run the packaged Sepolia recovery canary.** The 2026-08-26 attempt stopped safely:
    the prover returned `-32603 Internal error` twice before signing; `reconcile` reported
    `no_effect` and `safe_to_retry` under the original ID. Exact resubmission and
    expired-proof rebuild remain proven locally, not on Sepolia or from installed wheels.

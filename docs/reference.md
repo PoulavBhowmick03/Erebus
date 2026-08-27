@@ -3,6 +3,9 @@
 Operator and integrator reference for Erebus. The [README](../README.md) covers what Erebus
 is and how to install it; this covers running it.
 
+This page describes current `main` and CLI Protocol 4. The published `v0.1.0` wheel speaks
+Protocol 2 and exposes ten tools. Build the current checkout until `v0.2.0` is published.
+
 - [Set up an identity](#set-up-an-identity)
 - [Configure](#configure)
 - [Check before you spend](#check-before-you-spend)
@@ -107,20 +110,23 @@ means the thing it would have verified is unverified.
 
 ## The MCP tool surface
 
-Ten tools. Amounts are decimal strings and `memo_hash` is a hex string — a JSON number
+Thirteen tools. Amounts are decimal strings and `memo_hash` is a hex string. A JSON number
 loses precision above 2^53, and 1 STRK is 1e18.
 
 | Tool | Signature | Notes |
 |---|---|---|
 | `doctor` | `()` | Read-only. Always safe to call |
 | `get_note_balance` | `()` | Payer must call before naming a price |
-| `open_channel` | `(counterparty)` | Returns `channel_handle`. Not private — see F38 |
-| `propose_offer` | `(channel_handle, amount, token, deadline, memo_hash)` | Payee asks; payer offers |
-| `counter_offer` | `(channel_handle, reply_to, amount, token, deadline, memo_hash)` | Does not withdraw the offer it replies to |
-| `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement |
+| `open_channel` | `(operation_id, counterparty)` | Returns `channel_handle`. Not private. See F38 |
+| `propose_offer` | `(operation_id, channel_handle, amount, token, deadline, memo_hash)` | The payee asks. The payer offers |
+| `counter_offer` | `(operation_id, channel_handle, reply_to, amount, token, deadline, memo_hash)` | Does not withdraw the offer it replies to |
+| `read_channel_state` | `(channel_handle)` | Every visible offer plus the settlement list |
 | `wait_for_offers` | `(channel_handle, expected_count, timeout_seconds=300)` | One tool call instead of a poll loop. A timeout is not an error |
-| `accept_and_settle` | `(channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Settles one deal; the channel pair can start another |
-| `grant_viewing_key` | `(channel_handle, deal_id, grantee, expires_at, output_path)` | Encrypts one deal to a registered recipient. Writes a new mode-`0600` file and returns no secret |
+| `accept_and_settle` | `(operation_id, channel_handle, offer_id)` | **Payer only.** Spends the caller's notes. Settles one deal. The channel pair can start another |
+| `reconcile` | `()` | Read-only. Classifies journaled operations and never submits |
+| `resume_operation` | `(operation_id)` | Explicitly resumes one safe operation or returns the required operator action |
+| `rebuild_state` | `()` | Rebuilds missing channel records from the pool key and chain data |
+| `grant_viewing_key` | `(operation_id, channel_handle, deal_id, grantee, expires_at, output_path)` | Encrypts one deal to a registered recipient. Writes a new mode-`0600` file and returns no secret |
 | `reveal` | `(grant_path)` | Reconstructs the selected deal. The configured pool key must match the recipient |
 
 Every result is an envelope: `{"ok": true, "backend", "network", "result": {...}}` or
@@ -133,6 +139,9 @@ and settling one deal does not close the pair. An offer has no `withdrawn` state
 accepted or it expires, so a short deadline is the only way to bound how long a stale price
 stays acceptable.
 
+Every write takes `operation_id`. Use `op_` plus 64 lowercase hexadecimal characters.
+Persist the ID and canonical intent before the MCP call. Reuse both after a restart.
+
 ## Errors and retries
 
 Branch on the group, not the individual code. Every error also carries `retryable` — trust
@@ -141,14 +150,20 @@ it over guessing from the name.
 | Group | Codes | What to do |
 |---|---|---|
 | The offer is wrong | `OFFER_EXPIRED`, `OFFER_UNKNOWN`, `ALREADY_SETTLED`, `NOT_YOUR_OFFER`, `AMOUNT_MISMATCH`, `INSUFFICIENT_NOTES`, `INDEX_CONFLICT` | Build a different offer. Retrying verbatim will not help |
+| Funding or identity policy | `INSUFFICIENT_ALLOWANCE`, `INSUFFICIENT_BALANCE` | Change the allowance or fund the account before a new attempt |
+| Durable operation state | `OPERATION_CONFLICT`, `RECONCILIATION_REQUIRED` | Keep the original ID. Inspect `reconcile` and follow its operator action |
 | Transient | `SCREENING_UNAVAILABLE`, `PROVER_UNAVAILABLE`, `PROOF_EXPIRED`, `SUBMIT_FAILED` | Retry with backoff. `PROOF_EXPIRED` needs a fresh proof, not a resend |
 | Terminal | `SCREENING_REJECTED` | Stop. Not transient |
 | Opaque | `PROOF_FAILED` | The prover refused and gave no reason. Report it as unexplained |
 | Before any protocol code ran | `INVALID_REQUEST`, `IDENTITY_UNAVAILABLE` | Fix the request or the key path. Never a chain-state problem |
 
-A write takes 1–4 minutes: simulate, prove, estimate, submit. The binary prints stage names
-to stderr as it goes. **Do not abort and retry a write that appears stuck** — abandoning it
-does not cancel a transaction it may already have submitted.
+The Rust CLI emits the Protocol 4 funding and recovery codes. The current MCP adapter maps
+these four unknown enum values to `PROOF_FAILED`. Until that seam defect is fixed, inspect
+the Rust journal and `reconcile` output before you classify such an MCP error.
+
+A write takes 1–4 minutes. The binary prints stage names to stderr. **Do not create a new ID
+for a write that appears stuck.** Call `reconcile`. Then use `resume_operation` with the
+original ID only when the result permits it.
 
 ## The CLI protocol
 
@@ -160,7 +175,7 @@ echo '{"method":"doctor","params":{"config":{...}}}' | erebus-cli
 ```
 
 ```json
-{"ok": true, "protocol": 2, "result": {"ready": true, "checks": [...]}}
+{"ok": true, "protocol": 4, "result": {"ready": true, "checks": [...]}}
 ```
 
 `protocol` is the contract version. A consumer should refuse a mismatch by name rather than
@@ -169,8 +184,9 @@ handshakes at startup.
 
 Methods: `version`, `generate_pool_key`, `doctor`, `balance`, `allowance`, `approve`,
 `shield`, `open_channel`, `propose_offer`, `counter_offer`, `read_channel_state`,
-`accept_and_settle`, `grant_viewing_key`, `reveal`. All except `version` and
-`generate_pool_key` take a `config` object.
+`accept_and_settle`, `reconcile`, `resume_operation`, `rebuild_state`,
+`grant_viewing_key`, and `reveal`. All except `version` and `generate_pool_key` take a
+`config` object. Every chain write also takes `operation_id`.
 
 From Python, `erebus-sdk` wraps this:
 
@@ -188,8 +204,8 @@ second place for a wrong preimage to hide silently.
 
 ```bash
 git clone https://github.com/PoulavBhowmick03/Erebus && cd Erebus
-cd sdk/rs && cargo test && cd ../..     # 216 tests
-uv sync --all-packages && uv run pytest # 70 tests
+cd sdk/rs && cargo test --all-targets && cd ../.. # 349 passed, 2 ignored
+uv sync --all-packages && uv run pytest          # 147 tests
 ```
 
 `uv sync` without `--all-packages` skips the workspace members' editable installs and the

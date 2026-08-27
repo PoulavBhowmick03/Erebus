@@ -154,8 +154,8 @@ Never say "Erebus is private" without qualification. Always split the claim in t
   `replyTo`), and the settlement amount and recipient.
 - **Not hidden:** that a channel was opened, and — as of F38 — the counterparty's address,
   written to public calldata at `open_channel` itself. Also not hidden: pool-interaction
-  timing and frequency, and (F31) a fixed fifth-salt shape that lets an observer count and
-  time Erebus traffic without reading it.
+  timing, frequency, action shape, and note count. Wire v3 removes F31's fixed spare-bit
+  classifier. It does not hide the communication graph or the five-note data frames.
 
 If asked "is this private," the honest answer names both halves, not just the first.
 

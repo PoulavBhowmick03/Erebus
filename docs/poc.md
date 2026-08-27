@@ -1,9 +1,9 @@
 # Erebus PoC
 
-> **Historical wire-v2 description.** Wire v3 is now the source default. It supports repeat
-> deals and removes the fixed fifth-salt classifier. It is verified offline but has no live
-> Sepolia receipt. Recipient-bound per-deal disclosure is implemented and verified offline.
-> See `docs/status.md` and `docs/wire-v3.md` for current behavior.
+> **Historical wire-v2 design record.** Wire v3 is now the source default. Live Sepolia
+> runs cover repeat deals and recipient-bound per-deal disclosure. The fixed v2 salt
+> classifier scores at chance against the recorded v3 transactions. Protocol 4 also adds
+> durable operation recovery. See `docs/status.md` and `docs/wire-v3.md` for current behavior.
 
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
@@ -86,26 +86,23 @@ runs inside the operator's own process, against the operator's own prover.
 
 ## Current status
 
-Working and tested offline:
+Current verified scope:
 
 |                                                                                           |                                           |
 | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Full pool flow: register, channel, subchannel, shield, private transfer                   | TypeScript, 37 tests                      |
-| Legacy negotiation encoding, four public notes                                            | TypeScript/Rust compatibility vectors     |
-| Wire v2, five authenticated encrypted notes                                               | Rust KATs, tamper/context/migration tests |
-| Rust client: domain hashes, `ClientAction` encoding, `INVOKE_TXN_V3` hashing, Stark ECDSA | 36 tests                                  |
-| Rust reproduces an SDK-built proof invocation signature byte for byte                     | pinned                                    |
-| Proving endpoint reachable, spec `0.10.3-rc.2`                                            | verified                                  |
+| Wire v3 framed repeat deals and scoped disclosure | Live Sepolia evidence from 2026-08-22 |
+| Protocol 4 operation IDs, journal, reconcile, and resume | Local fault matrix and seam tests |
+| Rust, Python, and TypeScript suites | 349 Rust, 147 Python, 43 TypeScript |
+| Unsafe-behavior evaluations | 9/9 fresh-session pass on 2026-08-26 |
+| Packaged recovery canary | Open. The configured prover returned `-32603 Internal error` before signing |
 
-The Rust client exists because there is no Rust write side. `discovery-core`
-covers reads. We need to build `ClientAction`s, serialises calldata, signing the invoke or calling the prover.
+The Rust client exists because the upstream Rust crate has no write side. `discovery-core`
+covers reads. Erebus builds `ClientAction` values, serializes calldata, calls the prover,
+signs transactions, submits them, and stores durable recovery records.
 
-Done live in the Rust path on Sepolia using wire v2: shield, two channel directions, offer,
-counter, atomic accept-and-settle, and independent viewing-grant reconstruction. The MCP
-server now drives that Rust path through the protocol-2 Python seam. A live external-agent
-negotiation exposed two orchestration constraints now enforced in the surface: the acceptor
-is the payer, and the payer can only name exact-payable note denominations. One corrected
-external-agent settlement run and independent cryptographic review remain.
+The MCP server drives this Rust path through Protocol 4. The acceptor is the payer.
+Settlement selects notes that cover the price and returns change. Every write requires a
+caller-persisted operation ID. Independent review and packaged live recovery evidence remain.
 
 ## Where this goes
 

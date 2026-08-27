@@ -88,8 +88,8 @@ Complete these tasks one at a time, with review and focused verification after e
    the binding includes the submitting account and selected wire version, and the journal
    compares the full canonical request before any RPC or proving work. An identical replay
    returns the recorded typed result instead of running the write again. The Rust library
-   never generates an id. The protocol-3 CLI still creates a per-call bridge id until task 10
-   makes caller-supplied, durable ids part of the public seam.*
+   never generates an id. Protocol 4 now carries the caller-supplied ID through every
+   public layer.*
 3. **Durable Rust journal.** Add the versioned operation record, explicit lifecycle states,
    mode-`0600` locked storage, atomic replacement, and directory sync where required.
    *Done 2026-08-23 — `b784f3f`, extended by the current working tree to schema v2 and an
@@ -139,7 +139,7 @@ Complete these tasks one at a time, with review and focused verification after e
    `AllowanceReport` and `NoteBalance` on their Rust types and remove manual response
    reshaping from `erebus_cli.rs`.
    *Done 2026-08-23. Both types now own their full-width decimal-string representation and
-   the CLI serializes them directly. `NoteBalance` preserves the protocol-3
+   the CLI serializes them directly. `NoteBalance` preserves the
    `{notes, total, pending}` shape, calculates `total` with checked arithmetic, and rejects
    inconsistent input. The wire shape did not change, so this did not bump the protocol.*
 9. **Repeat-deal state shape.** Replace the ambiguous channel-level `settled` flag and
@@ -154,24 +154,13 @@ Complete these tasks one at a time, with review and focused verification after e
    number. `consistency` stays nullable so "no payment note found" cannot read as "amounts
    disagree". `ChannelState::is_settled()` is a helper rather than a field so the summary
    cannot drift from the records. `StoredChannel::settled` survives unchanged as the local
-   terminal flag for wire v1 and v2, where one deal per channel really is the end. Per
-   decision 6 the CLI stays on protocol 3 and still emits a derived `settled` boolean;
-   task 10 removes it as part of the coordinated protocol-4 change.*
+   terminal flag for wire v1 and v2, where one deal per channel really is the end. Protocol
+   4 returns the settlement list and removes the derived compatibility field.*
 10. **Protocol-4 Rust seam.** Expose the operation and recovery shapes through the CLI only
     after the Rust behavior is complete. Add mismatch and response-shape tests.
-    *Partly done 2026-08-25. The recovery surface is exposed: `reconcile` and
-    `resume_operation` are CLI methods, and response-shape and dispatch tests cover them,
-    the protocol tag on failure envelopes, and a malformed operation id. That half is
-    additive, so it landed on protocol 3 without breaking anything.*
-    *The remaining half is blocked, and not on Rust. Making `operation_id` a required,
-    caller-supplied field is what earns protocol 4, and nothing above the seam supplies one
-    yet: `mcp-server` has no `operation_id`, so Ishita's task 1 (durable caller intent) has
-    to land first. Requiring it now would fail every MCP call. Decision 6 also puts the CLI,
-    `sdk/py` and the MCP server in one coordinated change, so bumping the CLI alone would
-    strand the binding at `PROTOCOL = 3`. Still to do when unblocked: require
-    `OperationId` on every write request, delete `bridge_operation_id`, remove the derived
-    `settled` compatibility field left by task 9, bump `PROTOCOL` to 4 with the binding, and
-    update `CLAUDE.md` per the scope boundary above.*
+    *Done 2026-08-26. Every chain write requires a caller-supplied `OperationId`. The same
+    ID crosses MCP, Python, CLI, and Rust. The CLI and Python binding use protocol 4 and
+    reject mismatches by name. Recovery methods and settlement lists cross the same seam.*
 11. **Fault-injection matrix.** Stop execution after each durable boundary: prepared, proven,
     signed/hash-persisted, submitted, and accepted-before-state-commit. At every point verify
     no duplicate chain effect, stable parameter binding, read-only startup, correct explicit
@@ -195,12 +184,15 @@ Complete these tasks one at a time, with review and focused verification after e
 
 1. **Durable caller intent.** Generate operation IDs above `sdk/py`, atomically persist and
    sync the ID plus canonical intent before the MCP call, and reuse that ID after a restart.
+   *Done 2026-08-26. The reference agent persists canonical intent before the MCP call.*
 2. **Protocol-4 Python binding.** Marshal the required operation ID and recovery results
    without adding derivation, hashing, entropy, or state-machine logic. Reject a mismatched
    CLI at startup.
+   *Done 2026-08-26. The binding remains mechanical and rejects a protocol mismatch.*
 3. **MCP result context.** Include backend and network in every tool result so an agent can
    distinguish mock evidence from Sepolia evidence. Tighten boundary checks such as
    `wait_for_offers` ranges and nullable settlement consistency.
+   *Done before Protocol 4 and retained in the coordinated change.*
 4. **Rust-authoritative cap reconciliation.** Keep cap configuration and initial reservations
    in Python, but derive outcomes from the Rust journal after restart:
    - accepted or committed settlements count exactly once;
@@ -212,40 +204,50 @@ Complete these tasks one at a time, with review and focused verification after e
    - a Python-only reservation is released only after confirming that no old process still
      holds the identity lock;
    - daily UTC accounting uses the Rust journal's chain-acceptance time.
+   *Partly done 2026-08-26. Committed effects rebuild once, including direct CLI writes.
+   Submitted and ambiguous reservations remain open. Identity-lock confirmation and
+   chain-acceptance-time accounting also remain open.*
 5. **Idempotent secure grant export.** Replaying the same operation must not overwrite a
    different file or leak the encrypted grant into the model transcript.
+   *Done 2026-08-26. A replay returns the existing file metadata and no capsule content.*
 6. **Agent recovery behavior.** Teach reference agents and the Erebus skill to persist IDs,
    inspect operation status, resume explicitly, and stop for operator action on ambiguity.
    Update stale skill text to the current deal-scoped grant and wire-v3 behavior.
+   *Done 2026-08-26. The loop resumes with the original ID and stops on ambiguous status.*
 7. **External framework example.** Add a clean-install OpenAI Agents SDK quickstart as
    companion evidence after the stable protocol-4 MCP surface exists. Do not make its
    third-party dependency health a release gate.
+   *Open and nonblocking.*
 
 ## Integration order
 
-1. Freeze the protocol-4 request, response, error, journal, and settlement-record schemas.
-2. Poulav implements and fault-tests the Rust behavior behind the existing seam.
-3. Ishita can work in parallel on MCP result metadata, boundary validation, and mock fixtures.
-4. Land the coordinated CLI, Python, and MCP protocol-4 change together.
-5. Restart all long-running MCP servers and run startup-mismatch tests.
-6. Add caller intent persistence, cap reconciliation, skill behavior, and agent resume.
-7. Run packaged recovery canaries and then the optional external-framework quickstart.
+1. ~~Freeze the Protocol 4 schemas.~~ Done.
+2. ~~Implement and fault-test Rust recovery.~~ Done.
+3. ~~Add MCP metadata, boundary validation, and mock fixtures.~~ Done.
+4. ~~Land the coordinated Protocol 4 change.~~ Done 2026-08-26.
+5. ~~Restart servers and run mismatch tests.~~ Done in the test suite.
+6. Finish cap reconciliation. Caller intent, skill behavior, and agent resume are complete.
+7. Run the packaged recovery canary. Then add the optional external-framework quickstart.
 
 ## Release gates
 
 `v0.2.0` is gated on Erebus-owned behavior:
 
-- Every chain write requires and validates a caller-supplied operation ID.
-- Same-ID/same-parameters is idempotent; same-ID/different-parameters conflicts.
-- The five-by-five fault-injection matrix passes.
-- Startup performs reconciliation without automatic submission.
-- Both valid-proof and expired-proof explicit resume paths pass.
-- Spending reservations rebuild deterministically from the Rust journal.
-- Protocol mismatch fails at startup, and the coordinated-upgrade runbook requires server
+- [x] Every chain write requires and validates a caller-supplied operation ID.
+- [x] Same-ID/same-parameters is idempotent. Same-ID/different-parameters conflicts.
+- [x] The five-by-five fault-injection matrix passes.
+- [x] Startup performs reconciliation without automatic submission.
+- [x] Both explicit resume paths pass locally: valid-proof resubmission and expired-proof rebuild.
+- [ ] Rust recovery and funding error names remain intact through the Python and MCP seams.
+  The current MCP enum maps unknown Protocol 4 codes to `PROOF_FAILED`.
+- [ ] Spending reservations rebuild deterministically from the Rust journal for committed,
+  submitted, ambiguous, and proven-dead outcomes.
+- [x] Protocol mismatch fails at startup, and the coordinated-upgrade runbook requires server
   restarts.
-- Wide integers remain strings through Rust, CLI, Python, MCP, and JavaScript boundaries.
-- Repeat-deal channel state reports a settlement list with unambiguous per-deal records.
-- A clean packaged install completes a low-value Sepolia recovery canary.
+- [x] Wide integers remain strings through Rust, CLI, Python, MCP, and JavaScript boundaries.
+- [x] Repeat-deal channel state reports a settlement list with unambiguous per-deal records.
+- [ ] A clean packaged install completes a low-value Sepolia recovery canary. The 2026-08-26
+  attempt stopped before signing because the configured prover returned `-32603 Internal error`.
 
 The OpenAI Agents SDK quickstart ships alongside this evidence when available, but does not
 block the release. Mainnet, an independent cryptographic review, and production custody

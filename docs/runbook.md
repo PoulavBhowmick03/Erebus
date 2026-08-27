@@ -1,5 +1,8 @@
 # Runbook: reproducing the on-chain demonstration
 
+This runbook uses current source and CLI Protocol 4. The published `v0.1.0` binary speaks
+Protocol 2. Build `erebus-cli` from this checkout before you run these commands.
+
 What this gets you: two registered identities on Sepolia, each holding a shielded note, a
 directional channel pair between them, negotiation state written into note salts and read
 back with every field intact, an atomic settlement, and an independently reconstructed
@@ -39,7 +42,7 @@ cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 ```
 
-Expected as of 2026-08-22: 238 passed and two intentionally ignored live-prover probes.
+Expected as of 2026-08-27: 349 passed and two intentionally ignored live-prover probes.
 The focused codec suite has 21 tests, including the independent TypeScript wire-v3 known
 answer, native deal-key isolation, round trips, tamper rejection, context binding,
 same-index retry safety, and historical reads.
@@ -212,15 +215,18 @@ The commands below show the first offer/read portion manually for debugging:
 B=$(grep '^AGENT_ADDRESS=' ~/.erebus-b/env | cut -d= -f2)
 
 # A opens a channel to B
-python3 "$REQ" "$REPO/.env" open_channel "{\"counterparty\":\"$B\"}" | "$CLI"
+OPEN_ID=op_$(openssl rand -hex 32)
+python3 "$REQ" "$REPO/.env" open_channel \
+  "{\"operation_id\":\"$OPEN_ID\",\"counterparty\":\"$B\"}" | "$CLI"
 # -> {"channel_handle":"ch_..."}
 
 H=ch_...   # paste the handle
 
 # A writes an offer into the salt lane
 DEADLINE=$(python3 -c "import time;print(int(time.time())+86400)")
+OFFER_ID=op_$(openssl rand -hex 32)
 python3 "$REQ" "$REPO/.env" propose_offer \
-  "{\"handle\":\"$H\",\"terms\":{\"amount\":\"500000000000000000\",\"token\":\"$STRK\",\"deadline\":$DEADLINE,\"memo_hash\":\"0x1234\"}}" | "$CLI"
+  "{\"operation_id\":\"$OFFER_ID\",\"handle\":\"$H\",\"terms\":{\"amount\":\"500000000000000000\",\"token\":\"$STRK\",\"deadline\":$DEADLINE,\"memo_hash\":\"0x1234\"}}" | "$CLI"
 
 # read it back off-chain
 python3 "$REQ" "$REPO/.env" read_channel_state "{\"handle\":\"$H\"}" | "$CLI" | python3 -m json.tool
@@ -262,12 +268,17 @@ denominations:
 scripts/agent.sh ~/.erebus-e/env balance
 ```
 
-Inside MCP, call `get_note_balance` with each candidate price. Only a result with
-`can_pay_exactly: true` may be proposed, countered, or accepted. The payer server enforces
-that rule even if the prompt omits it. A payee server structurally refuses settlement and
-must counter at the agreed price, leaving a payee-authored offer for the buyer to accept.
+Inside MCP, call `get_note_balance` before you name a price. Any positive amount less than
+or equal to `total` is payable. Settlement selects sufficient notes and returns change. The
+payer server also applies configured spending limits. A payee server refuses settlement.
+The payee must write the final counter for the buyer to accept.
 
-For prompts and the full two-agent sequence, use [agent-brief.md](./agent-brief.md).
+Every write needs an operation ID. Persist each ID with its canonical intent before the
+MCP call. After an interruption, call `reconcile`. Use `resume_operation` with the original
+ID only when the result permits it.
+
+For the full two-agent sequence, read [the reference-agent guide](../agents/README.md) and
+[the Erebus operator skill](../skills/erebus/SKILL.md).
 
 ---
 

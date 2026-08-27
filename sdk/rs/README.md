@@ -1,5 +1,8 @@
 # Erebus Rust SDK
 
+This page describes current `main` and CLI Protocol 4. The published `v0.1.0` binary speaks
+Protocol 2. Protocol 4 will ship with `v0.2.0` after the operator-alpha gates pass.
+
 `erebus-sdk` is the protocol implementation. It builds STRK20 client actions, preflights
 them against `compile_actions`, requests a proof, submits `apply_actions`, discovers notes
 by derived ids, and reconstructs scoped disclosures.
@@ -66,6 +69,9 @@ Methods:
 - `counter_offer`
 - `read_channel_state`
 - `accept_and_settle`
+- `reconcile`, read-only journal classification
+- `resume_operation`, explicit recovery under the original operation ID
+- `rebuild_state`, additive channel-state recovery from keys and chain data
 - `grant_viewing_key`
 - `reveal`
 - `shield`, administrative funding helper, outside the seven-method negotiation surface
@@ -125,12 +131,15 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 - Channel state records the last accepted write block. A dependent write waits until that
   block is visible at the `head - 10` proof anchor; settlement discovers candidate inputs at
   that same historical anchor, so it cannot select a fresh note the proof cannot observe.
-- Calls do not yet carry idempotency keys. A process/transport failure after chain inclusion
-  but before the response can orphan an `open_channel` handle or make a caller retry an
-  already-written offer as a second offer. Cursor recovery prevents index reuse; it does not
-  recover the lost application result.
+- Every chain write carries a caller-supplied operation ID. Rust binds the ID to the
+  canonical request before proving or submission. The journal stores signed transaction
+  bytes and the hash before submission. `reconcile` is read-only. `resume_operation`
+  performs an exact resubmission or a proven-dead rebuild under the original ID.
 - Historical wire-v1 and wire-v2 channels remain readable. Wire v1 is read-only.
 - Wire-v3 repeat deals and recipient-bound per-deal disclosure are implemented. The client
   rejects the old whole-channel grant on v3.
 - The Python SDK and MCP server speak CLI protocol 4 and default newly opened channels to
   wire v3.
+- Local fault tests cover every durable write boundary. The packaged Sepolia recovery
+  canary remains open because the configured prover returned `-32603 Internal error` before
+  signing on 2026-08-26.

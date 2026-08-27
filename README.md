@@ -31,7 +31,9 @@ with whom, is still public.
 [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
 source to quote for privacy claims.
 
-`v0.1.0` is released and installable — see [Install](#install).
+`v0.1.0` is released and installable. It speaks Protocol 2 and exposes ten MCP tools.
+Current `main` speaks Protocol 4 and exposes thirteen tools. Protocol 4 will ship in
+`v0.2.0` after the operator-alpha gates pass.
 [docs/status.md](./docs/status.md) is the current state in one page, and the tiebreaker when
 any two documents here disagree.
 
@@ -97,6 +99,10 @@ Agent B ─┘                                          │                     
 ---
 
 ## Install
+
+> **Release boundary:** The command below installs `v0.1.0`. Build the current source when
+> you need Protocol 4 operation IDs, reconciliation, resume, or state rebuild. Do not use
+> the Protocol 4 quickstart below with the published Protocol 2 binary.
 
 **Requirements.** Linux x86-64 or macOS arm64, Python 3.11+. Intel macOS is not built — its
 CI runner is no longer available, and a cross-build would ship a binary that was never
@@ -175,13 +181,18 @@ faucet flow, the three keys and who sees them, and every environment variable ar
 To try the tools without a chain, keys, or gas, set `EREBUS_BACKEND=mock` and skip all of
 that.
 
-## Quickstart
+## Current-source quickstart: Protocol 4
+
+Build and install the current checkout before you use this example. The public `v0.1.0`
+wheel does not support these operation-ID and recovery calls.
 
 Two servers, one per identity, one configured `payer` and one `payee`. The payer spends its
 own notes; the payee never calls `accept_and_settle`. `base_env` below is the identity's env
 file — the one `new-identity.sh` writes — loaded into the environment.
 
 ```python
+import secrets
+
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -202,7 +213,11 @@ async with stdio_client(params) as (read, write):
 
         # 3. Open the channel. NOT private: this writes the counterparty's
         #    address to public calldata (F38).
-        opened = await payer.call_tool("open_channel", {"counterparty": seller_address})
+        # Persist each ID with its canonical intent before the call. Reuse the same ID
+        # after a restart. This abbreviated example only shows ID generation.
+        open_id = "op_" + secrets.token_hex(32)
+        opened = await payer.call_tool(
+            "open_channel", {"operation_id": open_id, "counterparty": seller_address})
         handle = opened.structured_content["result"]["channel_handle"]
 
         # 4. Wait for the seller's ask. One tool call, not a poll loop.
@@ -214,13 +229,15 @@ async with stdio_client(params) as (read, write):
         #    are one proven state transition. Takes 1-4 minutes; do not abort it.
         receipt = await payer.call_tool(
             "accept_and_settle",
-            {"channel_handle": handle, "offer_id": offer["offer_id"]})
+            {"operation_id": "op_" + secrets.token_hex(32),
+             "channel_handle": handle, "offer_id": offer["offer_id"]})
 
         # Optional operator step: export this deal to a registered auditor. The MCP tool
         # writes the encrypted capsule to a new mode-0600 file and returns only its path.
         await payer.call_tool(
             "grant_viewing_key",
-            {"channel_handle": handle, "deal_id": offer["deal_id"],
+            {"operation_id": "op_" + secrets.token_hex(32),
+             "channel_handle": handle, "deal_id": offer["deal_id"],
              "grantee": auditor_address, "expires_at": grant_expiry,
              "output_path": "/secure/path/deal.grant.json"})
 ```
@@ -239,7 +256,7 @@ Configuration, the full tool surface, error handling, and the raw CLI protocol a
 
 | | |
 |---|---|
-| [Reference](./docs/reference.md) | Identity setup, configuration, the ten MCP tools, error handling, the CLI protocol |
+| [Reference](./docs/reference.md) | Identity setup, configuration, the thirteen MCP tools, recovery, and CLI protocol 4 |
 | [Runbook](./docs/runbook.md) | Reproduce the on-chain demonstration step by step |
 | [Architecture](./ARCHITECTURE.md) | Component boundaries, the interface contract, the data model |
 | [Privacy model](./docs/privacy-model.md) | What leaks and what does not. The only source for privacy claims |

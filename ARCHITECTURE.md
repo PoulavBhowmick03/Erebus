@@ -389,7 +389,11 @@ type SettlementErrorCode =
   | "NOT_YOUR_OFFER"
   | "AMOUNT_MISMATCH"        // acceptance and payment disagree: see friction F23
   | "INSUFFICIENT_NOTES"
+  | "INSUFFICIENT_ALLOWANCE"
+  | "INSUFFICIENT_BALANCE"
   | "INDEX_CONFLICT"         // contiguity or write-once; the subchannel state is not what we thought
+  | "OPERATION_CONFLICT"     // the same operation ID is bound to different parameters
+  | "RECONCILIATION_REQUIRED" // inspect the journal and never retry under a new ID
   // Retry may succeed.
   | "SCREENING_UNAVAILABLE"
   | "PROVER_UNAVAILABLE"
@@ -425,6 +429,10 @@ removes the channel-level `settled` boolean and returns `settlements` in oldest-
 `reconcile` is read-only; `resume_operation(operation_id)` is the sole explicit recovery
 action. Success envelopes are `{ok:true,protocol:4,result}` and errors are
 `{ok:false,protocol:4,error:{code,message,retryable}}`.
+
+The Rust CLI emits the four Protocol 4 codes added above. The Python MCP enum does not yet
+contain them. Its adapter currently converts an unknown code to `PROOF_FAILED`. This is a
+tracked seam defect because it hides the required operator action.
 
 TypeScript independently implements the wire-v3
 codec and known-answer vectors. Wire v3 rejects the legacy whole-channel viewing grant and
@@ -601,11 +609,11 @@ argument, not the impossibility one.
 
 ## 8. Open questions
 
-Answered 2026-07-25, evidence in [docs/friction.md](./docs/friction.md).
+Current answers as of 2026-08-27. Evidence is in [docs/friction.md](./docs/friction.md).
 
-- [x] **Which network?** **Sepolia.** Pool v2.0 live at `0x0254a6...0d91`, verified on-chain
-  (`get_version()` = `'2.0'`, `proof_validity_blocks` = 450, fee = 0). Mainnet has no
-  deployment, upstream's mainnet env file is entirely `TODO_` placeholders. (F4)
+- [x] **Which network?** **Sepolia.** Pool v2.0 is live at `0x0254a6...0d91`. The client
+  reads proof validity and the fee from the pool before each write. Mainnet has no published
+  deployment. Upstream's mainnet environment file contains placeholders. (F4)
 - [x] **Proof generation time?** **~29 s per transaction** (vendor figure, 12-core/46 GiB).
   Per *transaction*, so notes batch, but each negotiation round is its own proof. (F7)
 - [x] **Can subchannel writes carry arbitrary structured payloads?** **Not in a payload
@@ -613,8 +621,9 @@ Answered 2026-07-25, evidence in [docs/friction.md](./docs/friction.md).
   and `ClientAction` has no payload variant. But the note salt is client-chosen and
   round-trips verbatim, giving 119 usable bits per note, and notes are unbounded in count.
   So arbitrary payloads *are* carryable by fragmentation, at one permanently-burned
-  storage slot per 15 bytes. Wire v2 uses 5 notes per offer and authenticates encrypted
-  fragments; its live-chain confidentiality evidence remains open. See §7 and F30. (F1)
+  storage slot per 15 bytes. Wire v3 uses five notes per data frame and authenticates each
+  deal record. Live Sepolia evidence covers repeat deals and scoped disclosure. See §7,
+  F30, and `docs/runs/2026-08-22-sepolia-wire-v3-run.md`. (F1)
 - [ ] Does the paymaster path work for an agent with zero public balance end-to-end?
   STRK20 ships no paymaster; the demo wires third-party AVNU. Pool fee is 0, so this is
   ordinary tx gas. (F4)
@@ -646,9 +655,9 @@ Still open, and not on the original list:
 - [x] **No public Sepolia proving-service endpoint.** Without a proof, `apply_actions`
   reverts. **Resolved 2026-07-28: none exists, and StarkWare's own recommendation is to
   self-host prover + Pathfinder.** A setup cost, not an external dependency. (F5)
-- [ ] **The deployed pool is a newer build than the README's contracts table.** Its ABI
-  includes `ComputeAndInvoke`, which `PRIVACY-0.14.3-RC.0` lacks. Which prover/discovery
-  versions match it? (F4)
+- [ ] **The deployed pool is newer than the README contracts table.** Its ABI includes
+  `ComputeAndInvoke`, which `PRIVACY-0.14.3-RC.0` lacks. A complete compatibility manifest
+  for the pool, prover, interceptor, RPC, and discovery service remains open. (F4)
 - [ ] **Shielding requires a screening attestation**, and this is now the only hard
   external dependency left. The live pool has a non-zero screener key, so any action set
   with a deposit needs a screener signature fresh within 300 s. Self-hosting does *not*

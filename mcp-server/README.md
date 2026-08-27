@@ -1,5 +1,9 @@
 # MCP server
 
+This page describes current `main`, which speaks Protocol 4 and exposes thirteen tools.
+The published `v0.1.0` packages speak Protocol 2 and expose ten tools. Build the current
+checkout until `v0.2.0` is published.
+
 Owned by Ishita (CLAUDE.md, repo layout). Exposes the Erebus tools so an external agent
 framework can drive the whole loop without knowing Erebus exists, that is definition-of-done
 item 4.
@@ -52,6 +56,11 @@ and defaults to `v3`; existing channel records keep their persisted version. Eve
 setting is checked at startup, and the two key files are checked
 for existence, because discovering a missing key twenty seconds into a proof has already
 cost an agent a turn and some gas.
+
+`EREBUS_SPENDING_LIMITS` configures per-token, per-deal, and daily caps.
+`EREBUS_SPENDING_STATE_PATH` overrides the derived cap-ledger path.
+`EREBUS_INTENT_STATE_DIR` overrides the MCP intent-record directory. Reference agents use
+`EREBUS_CALLER_INTENT_PATH` or `EREBUS_STATE_DIR` for their own durable caller records.
 
 **One server per identity.** Two identities in one process would put both pool keys in the
 same heap, which is the arrangement `docs/ishita.md` rejected when it chose two servers over
@@ -118,17 +127,26 @@ and refuses to overwrite an existing file. Its tool result contains metadata and
 not the encrypted capsule. Run `reveal(grant_path)` from the grantee's identity-bound server.
 Expiry prevents a later open; it cannot erase data the recipient opened earlier.
 
+### Durable writes and recovery
+
+Every MCP write requires `operation_id` in Protocol 4. The ID format is `op_` plus 64
+lowercase hexadecimal characters. Persist the ID and canonical request before the call.
+
+`reconcile()` is read-only. It classifies all Rust journal entries and never submits a
+transaction. `resume_operation(operation_id)` is the only recovery tool that can submit.
+It uses the original ID and follows the Rust classification. `rebuild_state()` recreates
+missing channel records from keys and chain data without replacing existing records.
+
 ## Using it from outside this repository
 
 Three things have to reach the target machine, and only one of them is a packaging problem.
 
-**The Python package.** `erebus-mcp-server` and `erebus-sdk` are a `uv` workspace today.
-Publishing them, or installing from the git URL, is routine.
+**The Python package.** `v0.1.0` publishes `erebus-mcp-server` and `erebus-sdk` through the
+GitHub Pages package index. Those artifacts predate Protocol 4.
 
-**The `erebus-cli` binary.** The Python side runs a compiled Rust binary, so distribution
-means either `cargo install` on the target or platform wheels carrying the binary as package
-data, which is how ruff and maturin-built tools ship. The second is what makes
-`uvx erebus-mcp` work, and it needs CI cross-compiling for macOS arm64 and x86 plus Linux.
+**The `erebus-cli` binary.** The `erebus-cli` platform wheel carries the Rust binary for
+Linux x86-64 and macOS arm64. Intel macOS is unsupported. The Python packages resolve this
+wheel through the same package index.
 
 **A prover, an RPC and a funded identity.** This is the one that does not yield to
 packaging. `compile_actions` sends the pool private key as calldata to both the prover and

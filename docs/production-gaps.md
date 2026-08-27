@@ -1,15 +1,42 @@
-# What stands between the MVP and anyone running this
+# What stands between the operator alpha and production
+
+Updated 2026-08-27. Erebus is an operator-run Sepolia technical preview. It is not ready
+for real value.
+
+The current release path has two immediate gates:
+
+1. Finish fail-closed spending-reservation reconciliation from Rust journal facts.
+2. Complete a packaged Sepolia recovery canary through a working prover.
+
+The production path then needs these controls:
+
+- Operator-controlled Pathfinder, proving, and write-RPC infrastructure.
+- A confirmed mainnet pool deployment and compatible service versions.
+- Journal retention, encrypted backup and restore tooling, and a recovery drill.
+- Secret-safe monitoring and an operational response process.
+- A clean install and full run by an external operator.
+- Independent security and cryptographic review.
+- A bounded mainnet canary with current fee and proof-window evidence.
+
+Protocol 4 now provides caller-supplied operation IDs, a durable Rust journal, read-only
+reconciliation, and explicit resume. Local fault tests cover every write boundary. Wire v3
+supports repeat deals, change-note settlement, and recipient-bound per-deal disclosure.
+These results close several gaps in the original baseline below.
+
+The relationship remains public. Channel-open calldata contains the counterparty address.
+The chain also exposes the submitting account, timing, action shape, and note count. Erebus
+hides the terms, not the relationship.
+
+---
+
+## Historical baseline from 2026-08-01
 
 Written 2026-08-01, after the full loop ran on Sepolia and the MCP server reached the chain.
 Each item says what breaks, what the mechanism is, and whose problem it is. None of it is a
 plan; the sequencing is a product decision.
 
-> **§4 is stale as of 2026-08-18.** It treats relationship exposure as something an observer
-> infers from timing and message shape. F38 found it is not inferred at all: the
-> counterparty's address is written into public calldata at channel-open, upstream of our
-> encryption. The gap is real but larger and differently shaped than described below. See
-> [privacy-model.md](./privacy-model.md), and [status.md](./status.md) when documents
-> disagree.
+> The sections below preserve the original audit baseline. They do not describe the current
+> source. Use the current summary above and [status.md](./status.md) for present behavior.
 
 Ordered by what it blocks, not by effort.
 
