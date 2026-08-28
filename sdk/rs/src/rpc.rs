@@ -38,6 +38,24 @@ impl StarknetRpc {
             .ok_or_else(|| RpcError::Malformed(format!("block number was not a u64: {value}")))
     }
 
+    /// Unix timestamp assigned to an accepted block by Starknet.
+    pub async fn block_timestamp(&self, block_number: u64) -> Result<u64, RpcError> {
+        let value = self
+            .call(
+                "starknet_getBlockWithTxHashes",
+                json!({ "block_id": { "block_number": block_number } }),
+            )
+            .await?;
+        value
+            .get("timestamp")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                RpcError::Malformed(format!(
+                    "block {block_number} timestamp was missing or not a u64: {value}"
+                ))
+            })
+    }
+
     /// The chain id this endpoint serves.
     ///
     /// Worth reading rather than trusting configuration: pointing a Sepolia key file at a

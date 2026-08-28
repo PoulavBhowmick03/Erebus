@@ -35,13 +35,15 @@ pub enum ProverError {
     #[error("proving service transport error: {0}")]
     Transport(#[from] reqwest::Error),
     /// The service returned a JSON-RPC error.
-    #[error("proving service returned error {code}: {message}")]
+    #[error("proving service returned error {code}: {message}{}", .data.as_ref().and_then(public_diagnostic).map(|d| format!(": prover diagnostic {d}")).unwrap_or_default())]
     Rpc {
         /// JSON-RPC error code. `10000` is the screening interceptor's "transaction
         /// rejected". See friction.md F6.
         code: i64,
         /// Human-readable message.
         message: String,
+        /// Optional structured diagnostic returned by the prover.
+        data: Option<serde_json::Value>,
     },
     /// The response did not match the expected shape.
     #[error("proving service returned an unexpected response: {0}")]
@@ -237,6 +239,7 @@ impl ProvingService {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("<no message>")
                     .to_owned(),
+                data: error.get("data").cloned(),
             });
         }
 
@@ -272,6 +275,22 @@ fn truncate(text: &str, limit: usize) -> String {
     }
 }
 
+fn public_diagnostic(value: &serde_json::Value) -> Option<&'static str> {
+    let text = value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string());
+    // Prover diagnostics can contain the virtual invocation, including the pool private
+    // key. Emit only reviewed labels and retain the full value for local classification.
+    [
+        "INVALID_SIGNATURE",
+        "ENTRYPOINT_NOT_FOUND",
+        "INVALID_TRANSACTION_NONCE",
+    ]
+    .into_iter()
+    .find(|label| text.contains(label))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,10 +300,41 @@ mod tests {
         assert!(is_transient(&ProverError::Rpc {
             code: -32005,
             message: "busy".to_owned(),
+            data: None,
         }));
         assert!(!is_transient(&ProverError::Rpc {
             code: 10000,
             message: "screening rejected".to_owned(),
+            data: None,
         }));
+    }
+
+    #[test]
+    fn rpc_display_exposes_a_known_label_but_never_echoes_diagnostic_data() {
+        let error = ProverError::Rpc {
+            code: -32603,
+            message: "Internal error".to_owned(),
+            data: Some(serde_json::json!({
+                "trace": "pool-private-key=secret INVALID_SIGNATURE"
+            })),
+        };
+        let shown = error.to_string();
+        assert!(shown.contains("INVALID_SIGNATURE"));
+        assert!(!shown.contains("pool-private-key"));
+        assert!(!shown.contains("secret"));
+    }
+
+    #[test]
+    fn rpc_display_omits_unreviewed_diagnostic_data() {
+        let error = ProverError::Rpc {
+            code: -32603,
+            message: "Internal error".to_owned(),
+            data: Some(serde_json::json!({"calldata": ["secret"]})),
+        };
+        let shown = error.to_string();
+        assert_eq!(
+            shown,
+            "proving service returned error -32603: Internal error"
+        );
     }
 }

@@ -293,7 +293,10 @@ impl Client {
         &self,
         current_operation: &OperationId,
     ) -> Result<(), ClientError> {
-        for finding in self.reconcile().await? {
+        // The current operation already holds the identity lock. Use the internal scan;
+        // taking another exclusive snapshot here would deadlock against our own lease.
+        let records = self.journal.records()?;
+        for finding in self.reconcile_records(&records).await? {
             if finding.operation_id == *current_operation {
                 continue;
             }
@@ -898,10 +901,18 @@ impl Client {
     /// partial reconciliation that silently omitted the record it could not parse would
     /// report "nothing outstanding" for the one operation that needed a person.
     pub async fn reconcile(&self) -> Result<Vec<Finding>, ClientError> {
-        let records = self.journal.records()?;
+        let snapshot = self.journal.exclusive_snapshot()?;
+        let findings = self.reconcile_records(snapshot.records()).await?;
+        drop(snapshot);
+        Ok(findings)
+    }
+
+    async fn reconcile_records(
+        &self,
+        records: &[crate::journal::OperationRecord],
+    ) -> Result<Vec<Finding>, ClientError> {
         let mut findings =
-            reconcile::reconcile(self.executor.rpc(), self.config.account_address, &records)
-                .await?;
+            reconcile::reconcile(self.executor.rpc(), self.config.account_address, records).await?;
         for (record, finding) in records.iter().zip(&mut findings) {
             self.refine_local_finding(record, finding);
         }
@@ -4147,6 +4158,7 @@ mod tests {
             stage: OperationStage::Accepted,
             channel: None,
             transaction_hash: Some(Felt::from_hex_unchecked("0xbeef")),
+            accepted_at: Some(1_005),
             outcome: Outcome::Effect,
             next_action: NextAction::CommitLocalState,
             reason: String::new(),

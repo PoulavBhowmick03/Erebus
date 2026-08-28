@@ -12,7 +12,9 @@ use std::thread;
 use erebus_sdk::action_set::ActionSetBuilder;
 use erebus_sdk::actions::{ClientAction, OpenChannelInput};
 use erebus_sdk::calldata;
-use erebus_sdk::execution::{ExecutionConfig, Executor, OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS};
+use erebus_sdk::execution::{
+    build_proof_invocation, ExecutionConfig, Executor, OBSERVED_SEPOLIA_PROOF_VALIDITY_BLOCKS,
+};
 use erebus_sdk::journal::{OperationJournal, OperationStage};
 use erebus_sdk::operation::{OperationId, RequestBinding, WriteOperation};
 use erebus_sdk::prover::ProvingService;
@@ -110,6 +112,11 @@ async fn one_path_preflights_proves_submits_and_waits() {
             "block_number":21,
             "finality_status":"ACCEPTED_ON_L2",
             "execution_status":"SUCCEEDED"
+        }}),
+        json!({"jsonrpc":"2.0","id":1,"result":{
+            "block_number":21,
+            "timestamp":1_700_000_021,
+            "transactions":[]
         }}),
     ];
     let (rpc_url, rpc_requests, rpc_thread) = server(rpc_responses);
@@ -212,7 +219,7 @@ async fn one_path_preflights_proves_submits_and_waits() {
         Some(Felt::from_hex_unchecked(SUBMITTED_HASH))
     );
     assert!(record.attempt().transaction_stored);
-    assert!(record.attempt().accepted_at.is_some());
+    assert_eq!(record.attempt().accepted_at, Some(1_700_000_021));
 
     // The stored transaction is the exact wire request, so a resume can resubmit it
     // without recomputing anything that would change the hash.
@@ -242,6 +249,7 @@ async fn one_path_preflights_proves_submits_and_waits() {
             "starknet_estimateFee",
             "starknet_addInvokeTransaction",
             "starknet_getTransactionReceipt",
+            "starknet_getBlockWithTxHashes",
         ]
     );
 
@@ -266,6 +274,24 @@ async fn one_path_preflights_proves_submits_and_waits() {
     let prover_requests: Vec<Value> = prover_requests.try_iter().collect();
     assert_eq!(prover_requests.len(), 1);
     let proof_tx = &prover_requests[0]["params"]["transaction"];
+    let expected_proof_tx = serde_json::to_value(
+        build_proof_invocation(
+            pool,
+            Felt::from(0x534eu64),
+            account,
+            Felt::from(0xabc_u64),
+            Felt::from(0xdef_u64),
+            Felt::ZERO,
+            &actions,
+        )
+        .expect("expected proof invocation")
+        .to_wire(),
+    )
+    .expect("proof invocation serializes");
+    assert_eq!(
+        proof_tx["signature"], expected_proof_tx["signature"],
+        "the prover request must be signed by AccountSigner, not by its public address"
+    );
     assert_eq!(proof_tx["sender_address"], format!("{pool:#x}"));
     assert!(
         proof_tx["calldata"].as_array().expect("calldata").len() > 7,

@@ -92,9 +92,9 @@ Current verified scope:
 | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
 | Wire v3 framed repeat deals and scoped disclosure | Live Sepolia evidence from 2026-08-22 |
 | Protocol 4 operation IDs, journal, reconcile, and resume | Local fault matrix and seam tests |
-| Rust, Python, and TypeScript suites | 349 Rust, 147 Python, 43 TypeScript |
+| Rust, Python, and TypeScript suites | 351 Rust, 154 Python, 43 TypeScript |
 | Unsafe-behavior evaluations | 9/9 fresh-session pass on 2026-08-26 |
-| Packaged recovery canary | Open. The configured prover returned `-32603 Internal error` before signing |
+| Packaged recovery canary | Complete from clean local wheels on Sepolia: exact resubmission and expired-proof rebuild |
 
 The Rust client exists because the upstream Rust crate has no write side. `discovery-core`
 covers reads. Erebus builds `ClientAction` values, serializes calldata, calls the prover,
@@ -102,7 +102,7 @@ signs transactions, submits them, and stores durable recovery records.
 
 The MCP server drives this Rust path through Protocol 4. The acceptor is the payer.
 Settlement selects notes that cover the price and returns change. Every write requires a
-caller-persisted operation ID. Independent review and packaged live recovery evidence remain.
+caller-persisted operation ID. Independent review and a published Protocol 4 release remain.
 
 ## Where this goes
 

@@ -2,6 +2,7 @@
 """Build one erebus-cli request from an identity env file."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +35,8 @@ def main() -> None:
 
     params = json.loads(sys.argv[3]) if len(sys.argv) == 4 else {}
     params["config"] = {target: values[source] for target, source in required.items()}
+    if os.environ.get("EREBUS_RPC_URL_OVERRIDE"):
+        params["config"]["rpc_url"] = os.environ["EREBUS_RPC_URL_OVERRIDE"]
     params["config"]["wire_version"] = values.get("EREBUS_WIRE_VERSION", "v3")
     print(json.dumps({"method": sys.argv[2], "params": params}))
 

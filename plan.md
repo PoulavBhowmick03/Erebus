@@ -204,9 +204,11 @@ Complete these tasks one at a time, with review and focused verification after e
    - a Python-only reservation is released only after confirming that no old process still
      holds the identity lock;
    - daily UTC accounting uses the Rust journal's chain-acceptance time.
-   *Partly done 2026-08-26. Committed effects rebuild once, including direct CLI writes.
-   Submitted and ambiguous reservations remain open. Identity-lock confirmation and
-   chain-acceptance-time accounting also remain open.*
+   *Done 2026-08-27. Atomic reservations persist before Rust starts. Submitted, pending,
+   and ambiguous operations keep capacity. Proven-dead attempts release it. An exclusive
+   Rust journal snapshot permits safe release of Python-only reservations. Committed spend
+   uses the accepted Starknet block timestamp for its UTC day. Version-1 residual spend
+   migrates to a fail-closed legacy reservation.*
 5. **Idempotent secure grant export.** Replaying the same operation must not overwrite a
    different file or leak the encrypted grant into the model transcript.
    *Done 2026-08-26. A replay returns the existing file metadata and no capsule content.*
@@ -226,8 +228,9 @@ Complete these tasks one at a time, with review and focused verification after e
 3. ~~Add MCP metadata, boundary validation, and mock fixtures.~~ Done.
 4. ~~Land the coordinated Protocol 4 change.~~ Done 2026-08-26.
 5. ~~Restart servers and run mismatch tests.~~ Done in the test suite.
-6. Finish cap reconciliation. Caller intent, skill behavior, and agent resume are complete.
-7. Run the packaged recovery canary. Then add the optional external-framework quickstart.
+6. ~~Finish cap reconciliation.~~ Done 2026-08-27.
+7. ~~Run the packaged recovery canary.~~ Done 2026-08-27. Then add the optional
+   external-framework quickstart.
 
 ## Release gates
 
@@ -238,16 +241,17 @@ Complete these tasks one at a time, with review and focused verification after e
 - [x] The five-by-five fault-injection matrix passes.
 - [x] Startup performs reconciliation without automatic submission.
 - [x] Both explicit resume paths pass locally: valid-proof resubmission and expired-proof rebuild.
-- [ ] Rust recovery and funding error names remain intact through the Python and MCP seams.
-  The current MCP enum maps unknown Protocol 4 codes to `PROOF_FAILED`.
-- [ ] Spending reservations rebuild deterministically from the Rust journal for committed,
-  submitted, ambiguous, and proven-dead outcomes.
+- [x] Rust recovery and funding error names remain intact through the Python and MCP seams.
+- [x] Spending reservations rebuild deterministically from the Rust journal for committed,
+  submitted, ambiguous, and proven-dead outcomes. Chain block timestamps assign committed
+  spend to a UTC day.
 - [x] Protocol mismatch fails at startup, and the coordinated-upgrade runbook requires server
   restarts.
 - [x] Wide integers remain strings through Rust, CLI, Python, MCP, and JavaScript boundaries.
 - [x] Repeat-deal channel state reports a settlement list with unambiguous per-deal records.
-- [ ] A clean packaged install completes a low-value Sepolia recovery canary. The 2026-08-26
-  attempt stopped before signing because the configured prover returned `-32603 Internal error`.
+- [x] A clean packaged install completes a low-value Sepolia recovery canary. On 2026-08-27,
+  exact resubmission and expired-proof rebuild completed from locally built wheels. See
+  `docs/runs/2026-08-27-packaged-recovery-canary.md`.
 
 The OpenAI Agents SDK quickstart ships alongside this evidence when available, but does not
 block the release. Mainnet, an independent cryptographic review, and production custody

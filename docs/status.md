@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-27.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-28.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -26,13 +26,15 @@ are confidential and demonstrated to be so. The relationship is not.
   an independent third party — definition-of-done 1, 3 and 4 at v3
   (`docs/runs/2026-08-22-agents-mcp-wire-v3.md`). Plus: `0x14b38e9d…4cb3` (wire v2, 2026-08-07),
   `0x4191fe47…f341` (merged code with change + disclosure + observer, 2026-08-19), and
-  and five wire-v3 settlements on 2026-08-22 through one channel pair with deal-scoped
+  five wire-v3 settlements on 2026-08-22 through one channel pair with deal-scoped
   disclosure, including `0x60eace8b…a7be` at 19 STRK to clear the u64 boundary F39/F40 named
   and two at an identical 0.25 STRK price to demonstrate repeat deals
-  (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`) |
+  (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`). Protocol 4 packaged-source recovery also
+  completed on 2026-08-27: exact resubmission `0x53e10185…4f55` and expired-proof rebuild
+  `0x611b8250…987e` (`docs/runs/2026-08-27-packaged-recovery-canary.md`) |
 | Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
-| Tests | 349 Rust (plus 2 intentionally ignored live-prover tests), 147 Python, 43 TypeScript |
-| In flight | Operator alpha (`v0.2.0`), `plan.md`. Protocol 4 now carries caller-persisted operation IDs through MCP, Python, CLI, and Rust; recovery is exposed to MCP and used by the reference agent. Local exact-resubmission and expired-proof rebuild tests pass. The live Sepolia canary remains open: on 2026-08-26 the configured prover returned opaque `-32603 Internal error` twice before signing, and reconciliation proved `no_effect`. Full reservation semantics and chain-acceptance-time accounting for spending caps, journal scheduling, and the packaged live canary remain open. |
+| Tests | 351 Rust (plus 2 intentionally ignored live-prover tests), 154 Python, 43 TypeScript |
+| In flight | Package and publish the Protocol 4 `v0.2.0` operator alpha. Its Erebus-owned recovery, error-name, and spending-reservation gates now pass. The 2026-08-27 clean local wheel run completed exact resubmission and expired-proof rebuild on Sepolia. Rust journal facts now retain uncertain reservations and use chain block timestamps for committed daily spend. The optional external-framework quickstart, evaluation CI, and production controls remain open. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
@@ -79,10 +81,10 @@ Never describe this as private in an absolute sense.
 |---|---|---|
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
-| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-27 reconciliation |
+| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-28 reconciliation |
 | How to reproduce a run | [runbook.md](./runbook.md) | current for Protocol 4, with historical receipt tables |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
-| Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-27 reconciliation |
+| Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-28 reconciliation |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | current summary with a preserved historical baseline |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
@@ -143,14 +145,13 @@ only metadata and the path. The capsule does not enter the model transcript.
 3. ~~Finish the protocol-4 product seam.~~ Done 2026-08-26: every chain write takes a
    caller-supplied operation ID through MCP, Python, CLI, and Rust; channel state returns a
    settlement list; protocol mismatches fail by name.
-4. **Preserve recovery error names through MCP.** Rust emits Protocol 4 recovery and
-   funding codes that the MCP enum does not yet contain. The adapter currently converts
-   those unknown codes to `PROOF_FAILED`, which hides the required operator action.
-5. **Finish spending reservation reconciliation.** Committed settlements rebuild
-   idempotently from Rust findings, including direct CLI writes. Submitted and ambiguous
-   reservations, identity-lock confirmation, and chain-acceptance-time daily attribution
-   still need the complete fail-closed implementation from `plan.md` task 4.
-6. **Run the packaged Sepolia recovery canary.** The 2026-08-26 attempt stopped safely:
-   the prover returned `-32603 Internal error` twice before signing; `reconcile` reported
-   `no_effect` and `safe_to_retry` under the original ID. Exact resubmission and
-   expired-proof rebuild remain proven locally, not on Sepolia or from installed wheels.
+4. ~~Preserve recovery error names through MCP.~~ Done 2026-08-27. The seam preserves all
+   four Protocol 4 recovery and funding codes.
+5. ~~Finish spending reservation reconciliation.~~ Done 2026-08-27. Reservations are
+   atomic and fail closed. Rust reconciliation owns outcomes, and committed daily spend
+   uses Starknet block timestamps.
+6. ~~Run the packaged Sepolia recovery canary.~~ Done 2026-08-27 from a clean local wheel
+   install. Exact resubmission and expired-proof rebuild both completed. See
+   [the run record](./runs/2026-08-27-packaged-recovery-canary.md).
+7. **Publish Protocol 4 as `v0.2.0`.** Update source package versions, build the supported
+   wheel set, publish checksums and an SBOM, then run the installed-artifact canary.

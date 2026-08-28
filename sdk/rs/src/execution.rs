@@ -182,15 +182,16 @@ impl Executor {
             .rpc
             .nonce(self.config.pool_address, &proving_block)
             .await?;
-        let proof_invocation = build_proof_invocation(
+        let proof_invoke = proof_invoke(
             self.config.pool_address,
             self.config.chain_id,
             user_address,
             pool_private_key,
-            signer.address(),
             proof_nonce,
             actions,
         )?;
+        let proof_signature = signer.sign(&proof_invoke.transaction_hash()).await?;
+        let proof_invocation = proof_invoke.with_signature(proof_signature);
         stage("proving, the long stage: tens of seconds to minutes");
         let proof = self
             .prover
@@ -273,7 +274,8 @@ impl Executor {
         confirm_hash(operation, signed_hash, transaction_hash)?;
         let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
         operation.record_receipt(receipt.clone(), now())?;
-        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        let accepted_at = self.accepted_block_timestamp(&receipt).await?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(accepted_at))?;
         operation.advance(OperationStage::Accepted, now())?;
 
         Ok(ExecutionReceipt {
@@ -341,7 +343,8 @@ impl Executor {
         confirm_hash(operation, signed_hash, transaction_hash)?;
         let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
         operation.record_receipt(receipt.clone(), now())?;
-        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        let accepted_at = self.accepted_block_timestamp(&receipt).await?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(accepted_at))?;
         operation.advance(OperationStage::Accepted, now())?;
 
         Ok(CallReceipt {
@@ -395,9 +398,19 @@ impl Executor {
         }
         let receipt = self.wait_for_receipt(operation, transaction_hash).await?;
         operation.record_receipt(receipt.clone(), now())?;
-        operation.amend(now(), |attempt| attempt.accepted_at = Some(now()))?;
+        let accepted_at = self.accepted_block_timestamp(&receipt).await?;
+        operation.amend(now(), |attempt| attempt.accepted_at = Some(accepted_at))?;
         operation.advance(OperationStage::Accepted, now())?;
         Ok(receipt)
+    }
+
+    async fn accepted_block_timestamp(&self, receipt: &Receipt) -> Result<u64, ExecutionError> {
+        let block_number = receipt.block_number.ok_or_else(|| {
+            ExecutionError::Rpc(RpcError::Malformed(
+                "accepted receipt omitted its block number".to_owned(),
+            ))
+        })?;
+        Ok(self.rpc.block_timestamp(block_number).await?)
     }
 }
 
@@ -414,6 +427,26 @@ pub fn build_proof_invocation(
     nonce: Felt,
     actions: &ActionSet,
 ) -> Result<SignedInvokeV3, ExecutionError> {
+    let invoke = proof_invoke(
+        pool_address,
+        chain_id,
+        user_address,
+        pool_private_key,
+        nonce,
+        actions,
+    )?;
+    let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
+    Ok(invoke.with_signature(signature))
+}
+
+fn proof_invoke(
+    pool_address: Felt,
+    chain_id: Felt,
+    user_address: Felt,
+    pool_private_key: Felt,
+    nonce: Felt,
+    actions: &ActionSet,
+) -> Result<InvokeV3, ExecutionError> {
     let inner = calldata::compile_actions(user_address, pool_private_key, actions);
     let invoke = InvokeV3 {
         sender_address: pool_address,
@@ -429,8 +462,7 @@ pub fn build_proof_invocation(
         proof_facts: Vec::new(),
     };
     let invoke = PoolInvocation::new(invoke)?.into_inner();
-    let signature = signing::sign(&account_private_key, &invoke.transaction_hash())?;
-    Ok(invoke.with_signature(signature))
+    Ok(invoke)
 }
 
 fn submission_invoke(

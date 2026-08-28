@@ -88,6 +88,14 @@ fn receipt(execution_status: &str) -> Value {
     }})
 }
 
+fn block(timestamp: u64) -> Value {
+    json!({"jsonrpc":"2.0","id":1,"result":{
+        "block_number":12,
+        "timestamp":timestamp,
+        "transactions":[]
+    }})
+}
+
 fn not_found() -> Value {
     json!({"jsonrpc":"2.0","id":1,"error":{"code":29,"message":"Transaction hash not found"}})
 }
@@ -165,7 +173,10 @@ fn record_at(stage: OperationStage, edit: impl FnOnce(&mut Attempt)) -> Operatio
     record
 }
 
-async fn classify_one(record: OperationRecord, responses: Vec<Value>) -> (Outcome, NextAction) {
+async fn classify_one(
+    record: OperationRecord,
+    responses: Vec<Value>,
+) -> (Outcome, NextAction, Option<u64>) {
     let (url, thread) = server(responses);
     let rpc = StarknetRpc::new(url).expect("rpc");
     let findings = reconcile(&rpc, ACCOUNT, std::slice::from_ref(&record))
@@ -173,7 +184,11 @@ async fn classify_one(record: OperationRecord, responses: Vec<Value>) -> (Outcom
         .expect("reconcile");
     thread.join().expect("server");
     assert_eq!(findings.len(), 1);
-    (findings[0].outcome, findings[0].next_action)
+    (
+        findings[0].outcome,
+        findings[0].next_action,
+        findings[0].accepted_at,
+    )
 }
 
 #[tokio::test]
@@ -186,7 +201,7 @@ async fn an_unsigned_operation_needs_no_chain_read_at_all() {
         OperationStage::Prepared,
         OperationStage::Proven,
     ] {
-        let (outcome, action) =
+        let (outcome, action, _accepted_at) =
             classify_one(record_at(stage, |_| {}), vec![nonce_response("0x5")]).await;
         assert_eq!(outcome, Outcome::NoEffect, "{stage:?}");
         assert_eq!(action, NextAction::SafeToRetry, "{stage:?}");
@@ -195,13 +210,18 @@ async fn an_unsigned_operation_needs_no_chain_read_at_all() {
 
 #[tokio::test]
 async fn a_submitted_transaction_with_a_successful_receipt_has_an_effect() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, accepted_at) = classify_one(
         record_at(OperationStage::Submitted, |_| {}),
-        vec![nonce_response("0x5"), receipt("SUCCEEDED")],
+        vec![
+            nonce_response("0x5"),
+            receipt("SUCCEEDED"),
+            block(1_700_000_012),
+        ],
     )
     .await;
 
     assert_eq!(outcome, Outcome::Effect);
+    assert_eq!(accepted_at, Some(1_700_000_012));
     assert_eq!(
         action,
         NextAction::CommitLocalState,
@@ -211,7 +231,7 @@ async fn a_submitted_transaction_with_a_successful_receipt_has_an_effect() {
 
 #[tokio::test]
 async fn a_reverted_receipt_means_no_effect() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::Submitted, |_| {}),
         vec![nonce_response("0x5"), receipt("REVERTED")],
     )
@@ -225,7 +245,7 @@ async fn a_reverted_receipt_means_no_effect() {
 async fn a_missing_receipt_alone_does_not_prove_the_transaction_never_landed() {
     // The node has not seen it and the nonce it was signed against is still current, so it
     // can still be included. Answering "no effect" here is how a duplicate payment happens.
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::Submitted, |attempt| {
             attempt.account_nonce = Some(Felt::from(5u8));
         }),
@@ -241,7 +261,7 @@ async fn a_missing_receipt_alone_does_not_prove_the_transaction_never_landed() {
 async fn a_missing_receipt_past_the_signed_nonce_does_prove_it() {
     // The account has moved on. The transaction is bound to nonce 5 and the account is at 6,
     // so no one can ever include it.
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::Submitted, |attempt| {
             attempt.account_nonce = Some(Felt::from(5u8));
         }),
@@ -255,7 +275,7 @@ async fn a_missing_receipt_past_the_signed_nonce_does_prove_it() {
 
 #[tokio::test]
 async fn a_missing_receipt_with_no_recorded_nonce_is_unknown_not_absent() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::Submitted, |attempt| {
             attempt.account_nonce = None;
         }),
@@ -273,7 +293,7 @@ async fn a_missing_receipt_with_no_recorded_nonce_is_unknown_not_absent() {
 
 #[tokio::test]
 async fn a_signed_stage_without_a_hash_is_a_contradiction_and_escalates() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::Signed, |attempt| {
             attempt.transaction_hash = None;
         }),
@@ -287,19 +307,24 @@ async fn a_signed_stage_without_a_hash_is_a_contradiction_and_escalates() {
 
 #[tokio::test]
 async fn a_committed_operation_is_finished() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, accepted_at) = classify_one(
         record_at(OperationStage::Committed, |_| {}),
-        vec![nonce_response("0x5")],
+        vec![
+            nonce_response("0x5"),
+            receipt("SUCCEEDED"),
+            block(1_700_000_012),
+        ],
     )
     .await;
 
     assert_eq!(outcome, Outcome::Effect);
+    assert_eq!(accepted_at, Some(1_700_000_012));
     assert_eq!(action, NextAction::None);
 }
 
 #[tokio::test]
 async fn an_operation_parked_for_an_operator_stays_parked() {
-    let (outcome, action) = classify_one(
+    let (outcome, action, _accepted_at) = classify_one(
         record_at(OperationStage::NeedsAttention, |_| {}),
         vec![nonce_response("0x5")],
     )

@@ -11,6 +11,7 @@
 #   agent.sh <env> status    <handle>                      -> compact transcript
 #   agent.sh <env> wait      <handle> <count> [timeout_s]  -> blocks until N offers exist
 #   agent.sh <env> balance                                 -> spendable note denominations
+#   agent.sh <env> doctor                                  -> read-only readiness report
 #   agent.sh <env> fund      <amount>                      -> approve + shield one note
 #   agent.sh <env> whoami                                  -> this identity's address
 #
@@ -38,9 +39,16 @@ shift 2
 [ -e "$ENV_FILE" ] || { echo "no such env file: $ENV_FILE" >&2; exit 1; }
 
 call() {
-    local method="$1" params="${2:-{\}}" out
+    local method="$1" params="${2:-{\}}" out status
     out="$(mktemp)"
+    set +e
     python3 "$REQ" "$ENV_FILE" "$method" "$params" | "$CLI" > "$out"
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ] && [ ! -s "$out" ]; then
+        echo "erebus-cli exited with status $status and no response" >&2
+        rm -f "$out"; return "$status"
+    fi
     if ! python3 -c 'import sys,json;sys.exit(0 if json.load(sys.stdin).get("ok") else 1)' < "$out"; then
         python3 -c 'import sys,json; e=json.load(sys.stdin)["error"]; print(e["code"] + ": " + e["message"], file=sys.stderr)' < "$out"
         rm -f "$out"; return 1
@@ -125,6 +133,9 @@ wait)
 balance)
     out=$(call balance '{}')
     python3 "$REPO/scripts/balance.py" <<<"$out"
+    ;;
+doctor)
+    call doctor '{}'
     ;;
 reconcile)
     call reconcile '{}'

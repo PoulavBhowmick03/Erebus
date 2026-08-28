@@ -430,9 +430,8 @@ removes the channel-level `settled` boolean and returns `settlements` in oldest-
 action. Success envelopes are `{ok:true,protocol:4,result}` and errors are
 `{ok:false,protocol:4,error:{code,message,retryable}}`.
 
-The Rust CLI emits the four Protocol 4 codes added above. The Python MCP enum does not yet
-contain them. Its adapter currently converts an unknown code to `PROOF_FAILED`. This is a
-tracked seam defect because it hides the required operator action.
+The Rust CLI emits the four Protocol 4 codes added above. The Python and MCP seams preserve
+them, so an operator can distinguish funding faults from durable-state conflicts.
 
 TypeScript independently implements the wire-v3
 codec and known-answer vectors. Wire v3 rejects the legacy whole-channel viewing grant and
@@ -547,9 +546,9 @@ chunks. See friction.md F30.
 **Wire-v2 correction 2026-07-31:** new Rust channels encrypt and authenticate the canonical
 400-bit message before fragmentation. Five notes provide 595 payload bits: 528 for the
 50-byte ciphertext plus 128-bit tag, 8 for the version marker, and 59 canonical zero bits.
-Existing wire-v1 channels remain readable but are intentionally read-only. Wire v2 is green
-offline and still needs a fresh live run and independent review before the privacy target is
-claimed as production evidence.
+Existing wire-v1 channels remain readable but are intentionally read-only. Wire v2 ran live
+on 2026-08-07. Wire v3 repeat deals and scoped disclosure ran live on 2026-08-22.
+Independent review remains open.
 
 **How, concretely**, this is narrower than the sentence above implies, and the detail
 matters. A note has no payload field. Its only client-writable space is the salt, capped
@@ -609,7 +608,7 @@ argument, not the impossibility one.
 
 ## 8. Open questions
 
-Current answers as of 2026-08-27. Evidence is in [docs/friction.md](./docs/friction.md).
+Current answers as of 2026-08-28. Evidence is in [docs/friction.md](./docs/friction.md).
 
 - [x] **Which network?** **Sepolia.** Pool v2.0 is live at `0x0254a6...0d91`. The client
   reads proof validity and the fee from the pool before each write. Mainnet has no published

@@ -1,12 +1,17 @@
 # What stands between the operator alpha and production
 
-Updated 2026-08-27. Erebus is an operator-run Sepolia technical preview. It is not ready
+Updated 2026-08-28. Erebus is an operator-run Sepolia technical preview. It is not ready
 for real value.
 
-The current release path has two immediate gates:
+The Erebus-owned Protocol 4 release gates now pass. On 2026-08-27, a clean local wheel
+installation completed both recovery paths on Sepolia. Spending reservations also became
+fail-closed and Rust-authoritative.
 
-1. Finish fail-closed spending-reservation reconciliation from Rust journal facts.
-2. Complete a packaged Sepolia recovery canary through a working prover.
+The immediate release work is now:
+
+1. Change all source package versions to `0.2.0`.
+2. Publish the supported wheels, checksums, and SBOM.
+3. Run the installed-artifact canary against the published files.
 
 The production path then needs these controls:
 

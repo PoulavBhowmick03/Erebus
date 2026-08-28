@@ -42,7 +42,7 @@ cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 ```
 
-Expected as of 2026-08-27: 349 passed and two intentionally ignored live-prover probes.
+Expected as of 2026-08-28: 351 passed and two intentionally ignored live-prover probes.
 The focused codec suite has 21 tests, including the independent TypeScript wire-v3 known
 answer, native deal-key isolation, round trips, tamper rejection, context binding,
 same-index retry safety, and historical reads.
@@ -279,6 +279,55 @@ ID only when the result permits it.
 
 For the full two-agent sequence, read [the reference-agent guide](../agents/README.md) and
 [the Erebus operator skill](../skills/erebus/SKILL.md).
+
+---
+
+## 5. Recovery canary
+
+Run this canary only with a low-value Sepolia identity. It intentionally stops a process at
+the submission boundary. Do not use it on mainnet.
+
+Start the local fault proxy with a new capture path:
+
+```bash
+python3 scripts/hold-submit-proxy.py ~/.erebus-e/env /tmp/erebus-held-submit.json
+```
+
+In a second shell, route one write through the proxy. Keep the operation ID:
+
+```bash
+export EREBUS_RPC_URL_OVERRIDE=http://127.0.0.1:18765
+export EREBUS_OPERATION_ID=op_$(openssl rand -hex 32)
+scripts/agent.sh ~/.erebus-e/env accept <channel-handle> <offer-id>
+```
+
+After the capture file exists, stop only the `erebus-cli` process for that write. Then stop
+the proxy. Remove `EREBUS_RPC_URL_OVERRIDE` before recovery.
+
+Run read-only reconciliation first:
+
+```bash
+scripts/agent.sh ~/.erebus-e/env reconcile
+```
+
+If the result says `wait`, wait for the chain or nonce evidence and run `reconcile` again.
+If it permits resume, use the original operation ID:
+
+```bash
+scripts/agent.sh ~/.erebus-e/env resume "$EREBUS_OPERATION_ID"
+```
+
+For exact resubmission, the journal must keep one transaction hash. For an expired-proof
+rebuild, the journal must keep the old attempt and add one new attempt under the same
+operation ID. In both cases, run `reconcile` until the outcome is `effect`. Then run one
+final `resume` to apply any local commit action.
+
+The 2026-08-27 packaged-source run completed both paths. See
+[the evidence record](./runs/2026-08-27-packaged-recovery-canary.md).
+
+The request helper accepts `EREBUS_RPC_URL_OVERRIDE` only for this type of controlled RPC
+fault. It does not write the override into the identity env file. The capture contains a
+signed transaction. The proxy creates it with mode `0600`. Remove it after the audit.
 
 ---
 

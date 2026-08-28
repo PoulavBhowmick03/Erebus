@@ -4,8 +4,8 @@ The canonical statement of what Erebus hides and what it does not. Everything el
 repository that describes privacy should point here rather than restate it, because a claim
 maintained in five places drifts in five directions.
 
-Scope: live wire v2 on Sepolia plus the source-default framed wire-v3 integration path,
-which is verified offline but does not yet have a Sepolia receipt. Not a security review.
+Scope: live wire v2 and wire v3 on Sepolia. Wire v3 has repeat-deal and scoped-disclosure
+receipts from 2026-08-22. This is not a security review.
 
 ---
 

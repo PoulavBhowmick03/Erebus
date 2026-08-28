@@ -140,6 +140,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
   rejects the old whole-channel grant on v3.
 - The Python SDK and MCP server speak CLI protocol 4 and default newly opened channels to
   wire v3.
-- Local fault tests cover every durable write boundary. The packaged Sepolia recovery
-  canary remains open because the configured prover returned `-32603 Internal error` before
-  signing on 2026-08-26.
+- Local fault tests cover every durable write boundary. A clean local wheel installation
+  completed exact resubmission and expired-proof rebuild on Sepolia on 2026-08-27. See
+  `docs/runs/2026-08-27-packaged-recovery-canary.md`.

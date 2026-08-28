@@ -264,6 +264,11 @@ async fn a_valid_recorded_transaction_is_resubmitted_exactly_and_committed() {
             "finality_status":"ACCEPTED_ON_L2",
             "execution_status":"SUCCEEDED"
         }}),
+        json!({"jsonrpc":"2.0","id":1,"result":{
+            "block_number":101,
+            "timestamp":1_700_000_101,
+            "transactions":[]
+        }}),
     ];
     let (rpc_url, server) = server(responses);
     let client = Client::new(ClientConfig {
@@ -294,4 +299,5 @@ async fn a_valid_recorded_transaction_is_resubmitted_exactly_and_committed() {
         Some(json!({"tx_hash":"0xbeef","approved":"100"}))
     );
     assert!(lease.record().attempt().receipt.is_some());
+    assert_eq!(lease.record().attempt().accepted_at, Some(1_700_000_101));
 }

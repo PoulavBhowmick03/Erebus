@@ -2,14 +2,11 @@
 reaches the seam, so a crash mid-call leaves a record instead of silence (plan.md, Ishita
 task 1).
 
-Scope, stated precisely so this isn't mistaken for more than it is: this module answers
-"did this process attempt this call, and with which exact parameters" for a process-level
-crash. It does not talk to the chain and it is not yet consulted by Rust. Whether a write
-actually landed is what the Rust journal and `reconcile()` answer (plan.md, decisions 4-5),
-and reaching that from Python needs `operation_id` threaded through the seam, which needs
-protocol 4 (plan.md, Poulav task 10) — still blocked on this module existing above `sdk/py`.
-Until then, a record left on disk after a crash is evidence for an operator or a future
-recovery tool to reconcile by hand; nothing here resubmits or infers success.
+This module records whether the MCP process attempted a call and records its exact
+parameters. It does not classify the chain outcome. The Rust journal and `reconcile()` are
+authoritative for that outcome. Protocol 4 carries the same `operation_id` through Python
+and the CLI into Rust. A caller can then use `resume_operation` with the original ID.
+Nothing in this module submits a transaction or infers success.
 
 Decision 1 (plan.md): operation IDs are caller supplied, ``op_`` followed by 64 lowercase
 hex characters. Decision 3: the Python binding stays mechanical and never generates one —

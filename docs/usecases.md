@@ -3,7 +3,7 @@
 This document helps a team decide whether the current implementation fits a use case.
 It separates implemented behavior, future use cases, and cases outside the present protocol.
 
-> **Updated 2026-08-27.** This document describes wire v3, repeat deals, scoped disclosure,
+> **Updated 2026-08-28.** This document describes wire v3, repeat deals, scoped disclosure,
 > change-note settlement, and Protocol 4 recovery. [`status.md`](./status.md) remains the
 > tiebreaker when documents disagree.
 
@@ -38,8 +38,8 @@ for the upstream TypeScript privacy SDK (`sdk/rs/src/client.rs:538-573`,
 | MCP backend | `mock` by default, `seam` by explicit configuration | An agent demonstration does not prove that Rust, the prover, RPC, or Starknet ran (`mcp-server/src/erebus_mcp/config.py:10-13`, `mcp-server/src/erebus_mcp/config.py:72-113`). |
 | Settlement | Multiple deals per channel pair, with payer-owned change | Each settlement record separates agreed and paid amounts. |
 | Disclosure | Recipient-bound, time-limited, and scoped to one deal | The recipient needs its registered pool key. Expiry cannot revoke facts already opened. |
-| Recovery | Protocol 4 journal and explicit resume | Local fault tests pass. The packaged live recovery canary remains open. |
-| Production | Not ready | Trusted endpoints, monitoring, cap reconciliation, mainnet evidence, and independent review remain open. |
+| Recovery | Protocol 4 journal and explicit resume | Local fault tests and the packaged-source Sepolia recovery canary pass. |
+| Production | Not ready | Trusted endpoints, monitoring, mainnet evidence, and independent review remain open. |
 
 ## The current fit test
 
@@ -152,8 +152,8 @@ not fit a verifier who must learn only the final result.
 
 These cases match the bilateral payment direction, repeat-deal framing, change-note
 settlement, and per-deal disclosure. The remaining blockers are operational. The operator
-alpha still needs complete cap reconciliation, monitoring, backup tooling, and live recovery
-evidence before recurring real-value use.
+alpha still needs monitoring, backup tooling, independent review, and mainnet evidence
+before recurring real-value use.
 
 ### Sealed-bid auctions
 
@@ -305,8 +305,8 @@ client must use a subprocess.
 
 | Priority | Missing work | Use cases unlocked |
 |---:|---|---|
-| 1 | Finish spending-reservation reconciliation and the packaged Sepolia recovery canary. | A defensible `v0.2.0` operator alpha. |
-| 2 | Add a clean-install framework example from published wheels. | External agent-framework integrations. |
+| 1 | Publish the current Protocol 4 wheel set as `v0.2.0` and rerun the installed-artifact canary. | A reproducible operator-alpha release. |
+| 2 | Add a clean-install framework example from the published wheels. | External agent-framework integrations. |
 | 3 | Add journal retention, backup/restore tooling, and secret-safe monitoring. | Long-running operator deployments. |
 | 4 | Bind participants, terms, policy, and settlement in an authenticated or ZK receipt. | Outcome-only verification and platform integrations. |
 | 5 | Reduce the number of on-chain interactive rounds. | Lower-value and higher-frequency commerce. |
@@ -332,8 +332,8 @@ Do not say these things:
 - "The viewing grant proves both parties and their policy." The grant reveals the recorded
   deal. It does not prove an off-chain policy or delivery.
 - "This is a Rust rewrite of the Starknet privacy SDK." It is a selective client.
-- "This is production-ready." Mainnet evidence, complete cap reconciliation, monitoring,
-  operator drills, and independent review remain open.
+- "This is production-ready." Mainnet evidence, monitoring, operator drills, and
+  independent review remain open.
 - "Self-hosting the prover removes every trust assumption." The write RPC and pool auditor
   remain in the confidentiality model.
 

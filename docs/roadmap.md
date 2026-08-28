@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source audit: 2026-08-27, against `main` at `741a497`.
+Last source reconciliation: 2026-08-28, against the working tree based on `3370443`.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -62,7 +62,7 @@ around it: mainnet work is recorded, deferred, and kept ready to execute if D14 
 
 ## 3. Current evidence
 
-This section records what exists on 2026-08-27. Later sections describe the missing work.
+This section records what exists on 2026-08-28. Later sections describe the missing work.
 
 ### Committed and working
 
@@ -93,7 +93,7 @@ This section records what exists on 2026-08-27. Later sections describe the miss
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- The merged tree passes 349 Rust tests, 147 Python tests, and 43 TypeScript tests.
+- The current working tree passes 351 Rust tests, 154 Python tests, and 43 TypeScript tests.
   Two live-prover Rust tests are intentionally ignored.
 - Clippy and rustdoc pass with warnings denied.
 - CI runs all of the above on every push and pull request, plus a gitleaks history scan.
@@ -244,7 +244,7 @@ selection, signing, or cryptography.
 | ~~Policy computes exact subset sums~~       | Aligned with change-note settlement in PR #16    | Done                                                             |
 | Seller policy uses a fixed strategy         | One threshold and one counter path               | Keep this simple, but expose policy inputs as configuration      |
 | ~~No crash behavior~~                       | The loop persists intent, reconciles, reuses the original ID, and stops on ambiguity | Done                                           |
-| ~~No operator approval policy~~             | MCP enforces per-token, per-deal, and daily limits below the agent | Finish Rust-authoritative reservation reconciliation           |
+| ~~No operator approval policy~~             | MCP enforces per-token, per-deal, and daily limits below the agent | Done, including Rust-authoritative reservation reconciliation |
 | No live regression                          | The recorded run is manual evidence              | Add an opt-in canary that records receipts and disclosure output |
 
 ### 5.5 Erebus skill
@@ -1370,8 +1370,7 @@ transactions. See §5.7.
 exist before Phase 10 gives an agent more ways to spend.
 
 - [x] MCP-layer spending limits: per-token, per-deal, daily, persisted across restarts
-      (Phase 9.1, #21). The later Rust-authoritative reconciliation required by the operator
-      alpha remains separate work in `plan.md`.
+      (Phase 9.1, #21). Rust-authoritative reconciliation completed on 2026-08-27.
 - [x] Tool results carry backend and network in the payload and fail closed on missing
       evidence (Phase 9.2, #22).
 - [x] Viewing grants leave tool results through a mode-`0600` secure export path that refuses
@@ -1382,9 +1381,10 @@ exist before Phase 10 gives an agent more ways to spend.
       supplied the MCP caller-intent base; the coordinated boundary landed 2026-08-26.
 - [x] Idempotent grant export. Replaying the same export operation returns the existing
       mode-`0600` file metadata without replacing the capsule or returning it to the model.
-- [ ] Complete Rust-authoritative spending reservations. Committed effects rebuild once
-      from Rust findings. Submitted/ambiguous reservations, identity-lock confirmation,
-      and chain-acceptance-time UTC attribution remain open.
+- [x] Complete Rust-authoritative spending reservations. Done 2026-08-27. Atomic
+      reservations persist before Rust starts. Uncertain operations keep capacity.
+      Proven-dead attempts release it. An exclusive journal snapshot permits safe release
+      of Python-only entries. Accepted block timestamps assign committed spend to a UTC day.
 - [ ] Add stable CI execution for the unsafe-behavior evaluations. All nine fresh-session
       runs passed on 2026-08-26 and the result is retained in the repository.
 - [ ] One framework integration installed from published wheels (Phase 9.4). This attacks
@@ -1423,12 +1423,12 @@ exist before Phase 10 gives an agent more ways to spend.
       anything holding an old handle string will not resolve against a rebuilt record.
 - [x] Agent loop persists canonical intent before a write, reconciles after interruption,
       resumes by the original ID, and stops on `wait` or `operator_attention` (Phase 9.5).
-- [ ] Preserve Protocol 4 error names through the MCP seam. Rust can emit
+- [x] Preserve Protocol 4 error names through the MCP seam. Done 2026-08-27 for
       `OPERATION_CONFLICT`, `RECONCILIATION_REQUIRED`, `INSUFFICIENT_ALLOWANCE`, and
-      `INSUFFICIENT_BALANCE`. The current MCP enum maps unknown Rust codes to
-      `PROOF_FAILED`, which hides the operator action.
-- [ ] Complete the packaged Sepolia recovery canary. The 2026-08-26 attempt stopped before
-      signing because the configured prover returned `-32603 Internal error` twice.
+      `INSUFFICIENT_BALANCE`.
+- [x] Complete the packaged Sepolia recovery canary. Done 2026-08-27 from clean local
+      wheels. Exact resubmission and expired-proof rebuild both completed. See
+      `docs/runs/2026-08-27-packaged-recovery-canary.md`.
 - [x] Read cursor and note cache: an unchanged channel read costs one RPC rather than one
       per note, durable so it survives the CLI's process-per-call shape.
 - [ ] Discovery-provider support, blocked on Q3.

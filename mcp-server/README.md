@@ -137,6 +137,17 @@ transaction. `resume_operation(operation_id)` is the only recovery tool that can
 It uses the original ID and follows the Rust classification. `rebuild_state()` recreates
 missing channel records from keys and chain data without replacing existing records.
 
+Settlement capacity is reserved under a file lock before Rust starts. A pending, submitted,
+or ambiguous operation keeps that reservation. A proven-dead operation releases it. A
+committed operation uses its accepted Starknet block timestamp for daily UTC accounting.
+The server holds one per-identity settlement lock while it reconciles and changes this
+ledger.
+
+The version-1 cap ledger stored only aggregate spend. During migration, unattributed spend
+becomes `legacy_reserved`. This amount remains reserved across restarts. Audit the old
+ledger and Rust journal before you remove it manually. There is no automatic release for
+this legacy amount.
+
 ## Using it from outside this repository
 
 Three things have to reach the target machine, and only one of them is a packaging problem.

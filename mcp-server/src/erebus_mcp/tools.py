@@ -141,16 +141,16 @@ def register_tools(
     the agent (roadmap 9.1). An unconfigured guard (no `EREBUS_SPENDING_LIMITS`) never
     refuses anything, so passing one is always safe.
 
-    `intent_store` persists an operation id and its canonical parameters before each
-    chain-writing call, so a process killed mid-call leaves a record instead of silence
-    (plan.md, Ishita task 1). It is not yet threaded into the seam call itself — that
-    needs protocol 4 — so today it only protects against this process's own crash, not
-    against chain-level ambiguity; see erebus_mcp/intent.py.
+    `intent_store` persists the caller's canonical parameters before each chain-writing
+    call. The same operation id is threaded through Protocol 4 into Rust's authoritative
+    operation journal.
 
     `backend` ("mock" or "seam") and `network` are stamped onto every tool result,
     success or failure, so a model cannot mistake a mock run for a live one, or one
     network for another, from the transcript alone (roadmap 9.2).
     """
+
+    spending_flow_lock = asyncio.Lock()
 
     def _envelope(
         ok: bool, *, result: Any = None, error: dict[str, Any] | None = None
@@ -271,13 +271,19 @@ def register_tools(
     async def _reconcile_spending(
         findings: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Rebuild local cap counters from Rust-authoritative committed settlements."""
+        """Project one exclusive Rust journal snapshot into the cap ledger."""
         if findings is None:
             findings = await client.reconcile()
+        journalled_operation_ids = {
+            finding["operation_id"] for finding in findings if "operation_id" in finding
+        }
         for finding in findings:
             if finding.get("operation") != "accept_and_settle":
                 continue
-            if finding.get("outcome") != "effect":
+            operation_id = finding["operation_id"]
+            outcome = finding.get("outcome")
+            if outcome in {"no_effect", "reverted"}:
+                spend_guard.release(operation_id)
                 continue
             request = finding.get("request") or {}
             if request.get("method") != "accept_and_settle":
@@ -287,13 +293,36 @@ def register_tools(
                 (offer for offer in state.offers if offer.offer_id == request["offer_id"]),
                 None,
             )
-            if target is not None:
-                spend_guard.record(
-                    target.terms.token,
-                    target.terms.amount,
-                    finding["operation_id"],
+            if target is None:
+                raise ErebusError(
+                    code=SettlementErrorCode.RECONCILIATION_REQUIRED,
+                    message=(
+                        f"cannot reconstruct settlement terms for {operation_id}; "
+                        "keep existing spending capacity reserved and restore channel state"
+                    ),
+                    retryable=False,
                 )
+            spend_guard.observe(
+                target.terms.token,
+                target.terms.amount,
+                operation_id,
+                outcome=outcome or "unknown",
+                accepted_at=finding.get("accepted_at"),
+            )
+        # Rust reconciliation held the identity writer lock for the whole snapshot. A
+        # reservation absent from it therefore died before Rust claimed the operation.
+        spend_guard.release_unjournalled(journalled_operation_ids)
         return findings
+
+    async def _finding_offer(finding: dict[str, Any]):
+        request = finding.get("request") or {}
+        if request.get("method") != "accept_and_settle":
+            return None
+        state = await client.read_channel_state(request["handle"])
+        return next(
+            (offer for offer in state.offers if offer.offer_id == request["offer_id"]),
+            None,
+        )
 
     @server.tool()
     async def open_channel(operation_id: str, counterparty: str) -> dict[str, Any]:
@@ -466,8 +495,7 @@ def register_tools(
             }
         return outcome
 
-    @server.tool()
-    async def accept_and_settle(
+    async def _accept_and_settle(
         operation_id: str, channel_handle: str, offer_id: str
     ) -> dict[str, Any]:
         """PAYER ONLY: accept an offer and pay it from this calling identity's private
@@ -512,7 +540,9 @@ def register_tools(
             failure = await _require_payable(target.terms.amount)
             if failure is not None:
                 return failure
-            denial = spend_guard.check(target.terms.token, target.terms.amount)
+            denial = spend_guard.reserve(
+                target.terms.token, target.terms.amount, operation_id
+            )
             if denial is not None:
                 return _error(SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial)
         outcome = await _write_call(
@@ -521,11 +551,31 @@ def register_tools(
             operation_id,
             client.accept_and_settle(operation_id, channel_handle, offer_id),
         )
-        if outcome["ok"]:
-            if target is not None:
-                spend_guard.record(
-                    target.terms.token, target.terms.amount, operation_id
+        if backend == "mock":
+            if outcome["ok"] and target is not None:
+                spend_guard.observe(
+                    target.terms.token,
+                    target.terms.amount,
+                    operation_id,
+                    outcome="effect",
+                    accepted_at=int(time.time()),
                 )
+            elif not outcome["ok"]:
+                spend_guard.release(operation_id)
+        else:
+            try:
+                await _reconcile_spending()
+            except ErebusError as error:
+                if outcome["ok"]:
+                    return _envelope(
+                        False,
+                        error={
+                            "code": SettlementErrorCode.RECONCILIATION_REQUIRED.value,
+                            "message": error.message,
+                            "retryable": error.retryable,
+                        },
+                    )
+        if outcome["ok"]:
             receipt = outcome["result"]
             outcome["result"] = {
                 "offer_id": receipt.offer_id,
@@ -538,13 +588,66 @@ def register_tools(
         return outcome
 
     @server.tool()
+    async def accept_and_settle(
+        operation_id: str, channel_handle: str, offer_id: str
+    ) -> dict[str, Any]:
+        """PAYER ONLY: reserve policy capacity, accept, and privately settle.
+
+        The caller pays from private notes. Excess value returns as a change note. A
+        supplier must leave its final offer for the payer to accept. This write can take
+        four minutes. If it is interrupted, reuse the operation ID with `reconcile` and
+        `resume_operation`.
+        """
+        async with spending_flow_lock:
+            return await _accept_and_settle(operation_id, channel_handle, offer_id)
+
+    @server.tool()
     async def reconcile() -> dict[str, Any]:
         """Read the Rust operation journal and classify every write against the chain.
         This tool never submits, resumes, or changes local state."""
-        outcome = await _call(client.reconcile())
-        if outcome["ok"]:
+        async with spending_flow_lock:
+            outcome = await _call(client.reconcile())
+            if outcome["ok"]:
+                try:
+                    outcome["result"] = await _reconcile_spending(outcome["result"])
+                except ErebusError as error:
+                    return _envelope(
+                        False,
+                        error={
+                            "code": error.code.value,
+                            "message": error.message,
+                            "retryable": error.retryable,
+                        },
+                    )
+            return outcome
+
+    @server.tool()
+    async def resume_operation(operation_id: str) -> dict[str, Any]:
+        """Explicitly resume one operation after reconcile names its next action.
+        Reuse the original operation_id. Never mint a replacement for an uncertain write."""
+        async with spending_flow_lock:
+            if backend == "mock":
+                return await _call(client.resume_operation(operation_id))
             try:
-                outcome["result"] = await _reconcile_spending(outcome["result"])
+                findings = await _reconcile_spending()
+                finding = next(
+                    (
+                        item
+                        for item in findings
+                        if item.get("operation_id") == operation_id
+                    ),
+                    None,
+                )
+                if finding is not None and finding.get("operation") == "accept_and_settle":
+                    target = await _finding_offer(finding)
+                    if target is not None:
+                        denial = spend_guard.reserve(
+                            target.terms.token, target.terms.amount, operation_id
+                        )
+                        if denial is not None:
+                            return _error(
+                                SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial
+                            )
             except ErebusError as error:
                 return _envelope(
                     False,
@@ -554,13 +657,21 @@ def register_tools(
                         "retryable": error.retryable,
                     },
                 )
-        return outcome
 
-    @server.tool()
-    async def resume_operation(operation_id: str) -> dict[str, Any]:
-        """Explicitly resume one operation after reconcile names its next action.
-        Reuse the original operation_id. Never mint a replacement for an uncertain write."""
-        return await _call(client.resume_operation(operation_id))
+            outcome = await _call(client.resume_operation(operation_id))
+            try:
+                await _reconcile_spending()
+            except ErebusError as error:
+                if outcome["ok"]:
+                    return _envelope(
+                        False,
+                        error={
+                            "code": SettlementErrorCode.RECONCILIATION_REQUIRED.value,
+                            "message": error.message,
+                            "retryable": error.retryable,
+                        },
+                    )
+            return outcome
 
     @server.tool()
     async def rebuild_state() -> dict[str, Any]:

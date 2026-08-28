@@ -22,7 +22,7 @@ from erebus_mcp.interface import (
     SettlementErrorCode,
     ViewingKeyGrant,
 )
-from erebus_mcp.seam_client import SeamErebusClient, _wire_terms
+from erebus_mcp.seam_client import SeamErebusClient, _translate, _wire_terms
 
 CHANNEL = "ch_" + "a8" * 32
 OPERATION_ID = "op_" + "ab" * 32
@@ -63,6 +63,20 @@ class StubSeam:
 
 def run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "OPERATION_CONFLICT",
+        "RECONCILIATION_REQUIRED",
+        "INSUFFICIENT_ALLOWANCE",
+        "INSUFFICIENT_BALANCE",
+    ],
+)
+def test_protocol_4_error_codes_survive_the_python_adapter(code: str) -> None:
+    translated = _translate(SeamError(code, "detail", False))
+    assert translated.code is SettlementErrorCode(code)
 
 
 def test_offers_map_onto_the_interface_dataclasses() -> None:

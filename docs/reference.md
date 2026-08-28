@@ -157,9 +157,8 @@ it over guessing from the name.
 | Opaque | `PROOF_FAILED` | The prover refused and gave no reason. Report it as unexplained |
 | Before any protocol code ran | `INVALID_REQUEST`, `IDENTITY_UNAVAILABLE` | Fix the request or the key path. Never a chain-state problem |
 
-The Rust CLI emits the Protocol 4 funding and recovery codes. The current MCP adapter maps
-these four unknown enum values to `PROOF_FAILED`. Until that seam defect is fixed, inspect
-the Rust journal and `reconcile` output before you classify such an MCP error.
+The Rust CLI, Python binding, and MCP adapter preserve the Protocol 4 funding and recovery
+codes. Use `reconcile` before you classify an interrupted or uncertain write.
 
 A write takes 1–4 minutes. The binary prints stage names to stderr. **Do not create a new ID
 for a write that appears stuck.** Call `reconcile`. Then use `resume_operation` with the
@@ -204,8 +203,8 @@ second place for a wrong preimage to hide silently.
 
 ```bash
 git clone https://github.com/PoulavBhowmick03/Erebus && cd Erebus
-cd sdk/rs && cargo test --all-targets && cd ../.. # 349 passed, 2 ignored
-uv sync --all-packages && uv run pytest          # 147 tests
+cd sdk/rs && cargo test --all-targets && cd ../.. # 351 passed, 2 ignored
+uv sync --all-packages && uv run pytest          # 154 tests
 ```
 
 `uv sync` without `--all-packages` skips the workspace members' editable installs and the

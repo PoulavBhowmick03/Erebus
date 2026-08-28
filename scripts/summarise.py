@@ -18,7 +18,7 @@ def main() -> int:
 
     for offer in result.get("offers", []):
         who = "me" if offer["proposer"] == me else "them"
-        amount = offer["terms"]["amount"] / 1e18
+        amount = int(offer["terms"]["amount"]) / 1e18
         # Offer ids are channel-scoped, so the channel half is noise once you know the channel.
         short = offer["offer_id"].split(":", 1)[1]
         reply = offer["reply_to"].split(":", 1)[1] if offer.get("reply_to") else "-"

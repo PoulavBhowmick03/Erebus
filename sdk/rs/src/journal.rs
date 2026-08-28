@@ -26,7 +26,7 @@ use crate::rpc::Receipt;
 use crate::state::ChannelHandle;
 
 /// Journal record schema version. A record written by a newer SDK fails closed.
-pub const JOURNAL_VERSION: u32 = 2;
+pub const JOURNAL_VERSION: u32 = 3;
 
 /// Oldest schema this SDK can classify. Version 1 has no replayable request or completion
 /// plan, so it remains readable but cannot be rebuilt automatically.
@@ -156,7 +156,9 @@ pub struct Attempt {
     /// Accepted or reverted receipt, persisted before the matching terminal stage.
     #[serde(default)]
     pub receipt: Option<Receipt>,
-    /// Unix seconds at which the chain accepted the transaction.
+    /// Unix seconds from the accepted Starknet block. Versions before 3 wrote the local
+    /// wall clock here, so reconciliation ignores their value and derives it from the
+    /// receipt's block number.
     pub accepted_at: Option<u64>,
 }
 
@@ -557,6 +559,19 @@ impl OperationJournal {
         Ok(records)
     }
 
+    /// Takes an identity-wide read snapshot while excluding every write operation.
+    ///
+    /// A successful snapshot proves that no older process still holds the identity write
+    /// lock. Keep the returned value alive while chain reconciliation uses its records.
+    pub fn exclusive_snapshot(&self) -> Result<JournalSnapshot, JournalError> {
+        let identity_lock = self.identity_lock()?;
+        let records = self.records()?;
+        Ok(JournalSnapshot {
+            records,
+            _identity_lock: identity_lock,
+        })
+    }
+
     fn read(&self, path: &Path) -> Result<Option<OperationRecord>, JournalError> {
         let file = match File::open(path) {
             Ok(file) => file,
@@ -624,6 +639,19 @@ impl OperationJournal {
 
     fn record_path(&self, operation_id: &OperationId) -> PathBuf {
         self.root.join(format!("{}.json", operation_id.as_str()))
+    }
+}
+
+/// Immutable journal records protected by the identity-wide write lock.
+pub struct JournalSnapshot {
+    records: Vec<OperationRecord>,
+    _identity_lock: File,
+}
+
+impl JournalSnapshot {
+    /// Records captured while no identity writer can run.
+    pub fn records(&self) -> &[OperationRecord] {
+        &self.records
     }
 }
 

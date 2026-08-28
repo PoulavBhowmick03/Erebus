@@ -69,6 +69,9 @@ pub struct Finding {
     pub channel: Option<ChannelHandle>,
     /// Hash of the latest attempt's transaction, when one was signed.
     pub transaction_hash: Option<Felt>,
+    /// Unix timestamp of the accepted Starknet block. Present only when an effect and its
+    /// acceptance block can be established from authoritative chain data.
+    pub accepted_at: Option<u64>,
     /// What the chain says.
     pub outcome: Outcome,
     /// What may be done about it.
@@ -110,23 +113,26 @@ async fn classify(
     live_nonce: Felt,
 ) -> Result<Finding, RpcError> {
     let attempt = record.attempt();
-    let (outcome, next_action, reason) = match record.stage() {
+    let (outcome, next_action, reason, observed_block) = match record.stage() {
         // Nothing was signed, so nothing can be on the chain. This is the only case that is
         // safe purely from the journal, with no chain read at all.
         OperationStage::Claimed | OperationStage::Prepared | OperationStage::Proven => (
             Outcome::NoEffect,
             NextAction::SafeToRetry,
             "no transaction was ever signed, so nothing reached the chain".to_owned(),
+            None,
         ),
         OperationStage::Reverted => (
             Outcome::Reverted,
             NextAction::SafeToRetry,
             "the transaction was included and reverted, so no effect exists".to_owned(),
+            None,
         ),
         OperationStage::Committed => (
             Outcome::Effect,
             NextAction::None,
             "settled: the chain accepted it and local state records it".to_owned(),
+            None,
         ),
         // Signed and Submitted are the same question. Signed means the process died with a
         // transaction on disk and no evidence it was ever handed to the node — which is not
@@ -142,12 +148,23 @@ async fn classify(
             "the chain accepted this but local state was never committed; the channel \
              cursor may be behind the chain"
                 .to_owned(),
+            attempt
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.block_number),
         ),
         OperationStage::NeedsAttention => (
             Outcome::Unknown,
             NextAction::OperatorAttention,
             "a previous run could not classify this attempt".to_owned(),
+            None,
         ),
+    };
+
+    let accepted_at = if outcome == Outcome::Effect {
+        acceptance_timestamp(rpc, record, observed_block).await?
+    } else {
+        None
     };
 
     Ok(Finding {
@@ -157,10 +174,44 @@ async fn classify(
         stage: record.stage(),
         channel: record.channel.clone(),
         transaction_hash: attempt.transaction_hash,
+        accepted_at,
         outcome,
         next_action,
         reason,
     })
+}
+
+async fn acceptance_timestamp(
+    rpc: &StarknetRpc,
+    record: &OperationRecord,
+    observed_block: Option<u64>,
+) -> Result<Option<u64>, RpcError> {
+    let attempt = record.attempt();
+    if record.version >= 3 {
+        if let Some(timestamp) = attempt.accepted_at {
+            return Ok(Some(timestamp));
+        }
+    }
+
+    let block_number = if observed_block.is_some() {
+        observed_block
+    } else if let Some(receipt) = attempt.receipt.as_ref().filter(|r| r.is_accepted()) {
+        receipt.block_number
+    } else if let Some(transaction_hash) = attempt.transaction_hash {
+        match rpc.transaction_receipt(transaction_hash).await {
+            Ok(receipt) if receipt.is_accepted() => receipt.block_number,
+            Ok(_) => None,
+            Err(error) if error.is_transaction_not_found() => None,
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+
+    match block_number {
+        Some(number) => rpc.block_timestamp(number).await.map(Some),
+        None => Ok(None),
+    }
 }
 
 /// Decides a signed-or-submitted attempt from the receipt, falling back to the nonce.
@@ -168,7 +219,7 @@ async fn resolve_on_chain(
     rpc: &StarknetRpc,
     attempt: &Attempt,
     live_nonce: Felt,
-) -> Result<(Outcome, NextAction, String), RpcError> {
+) -> Result<(Outcome, NextAction, String, Option<u64>), RpcError> {
     let Some(transaction_hash) = attempt.transaction_hash else {
         // The stage claims a transaction exists and the record does not name it. That is a
         // contradiction, not an absence, and the safe reading is that something may be out
@@ -177,6 +228,7 @@ async fn resolve_on_chain(
             Outcome::Unknown,
             NextAction::OperatorAttention,
             "the record reached a signed stage without recording a transaction hash".to_owned(),
+            None,
         ));
     };
 
@@ -186,6 +238,7 @@ async fn resolve_on_chain(
                 Outcome::Effect,
                 NextAction::CommitLocalState,
                 format!("the durable receipt says transaction {transaction_hash:#x} was accepted"),
+                receipt.block_number,
             ));
         }
         if receipt.is_reverted() {
@@ -193,6 +246,7 @@ async fn resolve_on_chain(
                 Outcome::Reverted,
                 NextAction::SafeToRetry,
                 format!("the durable receipt says transaction {transaction_hash:#x} reverted"),
+                None,
             ));
         }
     }
@@ -204,11 +258,13 @@ async fn resolve_on_chain(
             format!(
                 "transaction {transaction_hash:#x} was accepted; local state does not record it"
             ),
+            receipt.block_number,
         )),
         Ok(receipt) if receipt.is_reverted() => Ok((
             Outcome::Reverted,
             NextAction::SafeToRetry,
             format!("transaction {transaction_hash:#x} reverted, so no effect exists"),
+            None,
         )),
         // Known to the node but neither accepted nor reverted yet.
         Ok(_) => Ok((
@@ -217,9 +273,12 @@ async fn resolve_on_chain(
             format!(
                 "transaction {transaction_hash:#x} is known to the node but has no outcome yet"
             ),
+            None,
         )),
         Err(error) if error.is_transaction_not_found() => {
-            Ok(absent_from_chain(attempt, transaction_hash, live_nonce))
+            let (outcome, action, reason) =
+                absent_from_chain(attempt, transaction_hash, live_nonce);
+            Ok((outcome, action, reason, None))
         }
         Err(error) => Err(error),
     }

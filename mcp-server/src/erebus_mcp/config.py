@@ -101,7 +101,7 @@ class ServerConfig:
 
     @classmethod
     def from_env(cls) -> ServerConfig:
-        # `open_channel(counterparty)` supplies the counterparty for each call (§4). Do not
+        # `open_channel(operation_id, counterparty)` supplies the counterparty for each call (§4). Do not
         # bind the server to one counterparty in configuration.
         address = _require("AGENT_ADDRESS")
         prover_url = _require("PROVING_SERVICE_URL")

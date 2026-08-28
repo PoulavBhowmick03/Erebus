@@ -50,7 +50,10 @@ def main() -> None:
             upstream_request = urllib.request.Request(
                 upstream,
                 data=body,
-                headers={"content-type": "application/json"},
+                headers={
+                    "content-type": "application/json",
+                    "user-agent": "erebus-sdk-recovery-canary/1.0",
+                },
                 method="POST",
             )
             with urllib.request.urlopen(upstream_request, timeout=180) as response:
