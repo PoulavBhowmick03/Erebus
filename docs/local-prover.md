@@ -54,35 +54,132 @@ get your own. A valid `proof_facts[0]` is the ASCII felt `PROOF0` (`0x50524f4f46
 
 ---
 
-## Configuration
+## Setup
 
 The upstream image is `ghcr.io/starkware-libs/starknet-privacy/transaction-prover`, published
-`linux/amd64` only; the run below used a locally built `arm64` variant of tag
-`PRIVACY-0.14.3-RC.2`. Record your build steps here when you rebuild it.
+`linux/amd64` only; the runs below used a locally built `arm64` variant of tag
+`PRIVACY-0.14.3-RC.2`. On x86_64 use the pinned digest in `ops/juno/compose.yaml`.
+
+### 1. Get an RPC endpoint that can read Starknet mainnet
+
+Alchemy versions by URL segment, and the spread is wide: `v0_7`→0.7.1, `v0_8`→0.8.1,
+`v0_9`→0.9.0, `v0_10`→0.10.3-rc.0. **Use `v0_10`.**
+
+Your Alchemy *app* must have Starknet Mainnet enabled. A perfectly valid key on an
+Ethereum-only app returns HTTP 403:
 
 ```
-RUST_LOG=info
-RPC_URL=https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/YOUR_KEY
-CHAIN_ID=SN_MAIN
-MAX_CONCURRENT_REQUESTS=1
-RAYON_NUM_THREADS=6
+STARKNET_MAINNET is not enabled for this app.
+Visit this page to enable the network: https://dashboard.alchemy.com/apps/<app-id>/networks
 ```
 
-Bind the container to loopback only. The invocation it receives carries the pool private key
-in plaintext calldata (`prover.rs` module docs, friction.md F14).
+Re-entering the key, rewriting the env file, and recreating the container cannot fix that;
+it is a dashboard toggle. If the app's network list does not offer Starknet, create a new app
+and select Starknet Mainnet at creation. You will know it worked because the app id in the
+error changes, or the error stops.
 
-### Health check
+Verify the endpoint **with a state read**, not with `starknet_specVersion` — see
+[Verify](#3-verify) for why.
+
+### 2. Write the env file and start the container
+
+Keep the key out of shell history and out of the repository. `~/.erebus/prover.env` is
+outside the working tree, so it cannot be committed by accident.
 
 ```sh
-curl -sS -X POST http://127.0.0.1:3000/ \
-  -H 'Content-Type: application/json' \
+mkdir -p ~/.erebus
+printf 'Alchemy key: '; read -rs ALCHEMY_KEY; echo
+printf '%s\n' \
+  'RUST_LOG=info' \
+  "RPC_URL=https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/$ALCHEMY_KEY" \
+  'CHAIN_ID=SN_MAIN' \
+  'MAX_CONCURRENT_REQUESTS=1' \
+  'RAYON_NUM_THREADS=6' \
+  > ~/.erebus/prover.env
+chmod 600 ~/.erebus/prover.env
+unset ALCHEMY_KEY
+```
+
+**`read -rs -p "prompt"` is a bash-ism.** In zsh it fails with `read: -p: no coprocess`,
+leaving `ALCHEMY_KEY` unset and writing a URL that ends in a bare `/v0_10/`. The `printf`
+prompt above works in both shells. Prefer the `printf '%s\n'` form over a heredoc: a URL
+pasted from a chat client can arrive as a Markdown link, `[url](url)`, and a heredoc will
+happily write that.
+
+Check the key actually landed. A byte count will not tell you — a complete file with an empty
+key is still 152 bytes:
+
+```sh
+grep -c 'v0_10/.\+' ~/.erebus/prover.env    # must print 1
+```
+
+Then start it. Container environment is immutable, so changing `RPC_URL` later means
+recreating, never editing:
+
+```sh
+docker rm -f strk20-prover 2>/dev/null
+docker run -d --name strk20-prover \
+  -p 127.0.0.1:3000:3000 \
+  --env-file ~/.erebus/prover.env \
+  strk20-prover:privacy-0.14.3-rc.2-arm64
+```
+
+Keep `-p 127.0.0.1:` — binding `0.0.0.0` would publish an endpoint that receives the pool
+private key in plaintext calldata (`prover.rs` module docs, friction.md F14).
+
+If `docker run` reports `Conflict. The container name "/strk20-prover" is already in use`, a
+stopped container still holds the name; `docker rm -f strk20-prover` clears it.
+
+### 3. Verify
+
+Allow a few seconds for precomputation, then check the prover answers:
+
+```sh
+curl -sS -X POST http://127.0.0.1:3000/ -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"starknet_specVersion","params":[]}'
 # {"jsonrpc":"2.0","id":1,"result":"0.10.3-rc.2"}
 ```
 
+**That check alone is not sufficient.** `starknet_specVersion` is answered by the prover
+itself and can return `200` while its RPC is completely dead, so it passes with an
+unauthenticated or network-disabled endpoint. Always follow it with a state read:
+
+```sh
+curl -sS -X POST "$(docker exec strk20-prover printenv RPC_URL)" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"starknet_getClassHashAt",
+       "params":["latest","0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a"]}'
+# {"jsonrpc":"2.0","id":1,"result":"0x67dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d"}
+```
+
+That is the mainnet pool's class hash. It cannot come back from a broken endpoint.
+
+Confirm the container took the URL you meant:
+
+```sh
+docker logs strk20-prover | head -3   # "rpc_node_url: <unset> -> ..." names the host
+```
+
 `starknet_chainId` is not implemented; the prover exposes only `starknet_specVersion` and
-`starknet_proveTransaction`. Empty params to the latter return `-32602`, which is how you
-distinguish "the service rejected the request shape" from "the request executed and failed".
+`starknet_proveTransaction`. Empty params to the latter return `-32602`, which distinguishes
+"the service rejected the request shape" from "the request executed and failed".
+
+### Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| `read: -p: no coprocess` | zsh. Use the `printf` prompt form above |
+| `RPC_URL` ends in `/v0_10/` | The `read` failed, so the key was empty |
+| RPC returns `401 Must be authenticated!` | No key in the URL |
+| RPC returns `403 … is not enabled for this app` | The Alchemy app lacks Starknet Mainnet |
+| `specVersion` passes but proofs fail | Classic false green; run the state read |
+| `Conflict … name is already in use` | A stopped container holds the name; `docker rm -f` |
+| Container exits `137` mid-proof | OOM. See [Memory](#memory-proof-generation-was-oom-killed-at-19-gib) |
+| Logs look frozen mid-proof | You are reading a dead container. Check `docker ps -a` |
+
+A shared `demo` key exists in place of a real one and does read mainnet state, which is
+useful for confirming the plumbing. It is rate-limited and shared, so do not prove against
+it: being throttled partway through wastes the entire run.
 
 ---
 
