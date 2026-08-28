@@ -290,7 +290,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "erebus-sdk", editable = "sdk/py" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=2.0.0,<3.0.0" },
 ]
 
 [package.metadata.requires-dev]
