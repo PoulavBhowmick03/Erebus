@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+ops/juno/juno.env
 *.pem
 *.key
 seed*.txt

@@ -1,0 +1,52 @@
+name: erebus-mainnet-infra
+
+services:
+  juno:
+    image: nethermind/juno@sha256:64bf30176339afe3c5b51c49b8ea7d835f9d1a510cac83d206907a3acfeda6fc
+    platform: linux/amd64
+    restart: unless-stopped
+    command:
+      - --http
+      - --http-host=0.0.0.0
+      - --http-port=6060
+      - --db-path=/var/lib/juno
+      - --prune-mode=128
+      - --eth-node=${ETHEREUM_WS_URL:?set ETHEREUM_WS_URL in juno.env}
+    ports:
+      - 127.0.0.1:${JUNO_HTTP_PORT:-6060}:6060
+    volumes:
+      - ${JUNO_DATA_DIR:-/srv/erebus/juno_mainnet_pruned}:/var/lib/juno
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  transaction-prover:
+    image: ghcr.io/starkware-libs/starknet-privacy/transaction-prover@sha256:a2f71d7139069fa566c4f44bdd66b79cac992c0cbc20ddf0af3a3558c6cabd64
+    platform: linux/amd64
+    profiles: [prover]
+    restart: unless-stopped
+    depends_on:
+      - juno
+    environment:
+      RPC_URL: http://juno:6060/v0_10
+      CHAIN_ID: SN_MAIN
+      MAX_CONCURRENT_REQUESTS: "1"
+      RUST_LOG: info
+    ports:
+      - 127.0.0.1:${PROVER_HTTP_PORT:-3000}:3000
+    volumes:
+      - prover-data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 50m
+        max-file: "5"
+
+volumes:
+  prover-data:
