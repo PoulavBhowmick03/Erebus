@@ -1,8 +1,8 @@
-//! Live probe against the Sepolia proving service.
+//! Live probe against a proving service.
 //!
-//! **`#[ignore]` on purpose.** These hit StarkWare's shared dev endpoint, which was shared
-//! with us privately and asked to be used sparingly. They are not part of `cargo test`, do
-//! not belong in CI, and should be run intentionally:
+//! **`#[ignore]` on purpose.** These hit a real prover. StarkWare's shared dev endpoint was
+//! shared with us privately and asked to be used sparingly. They are not part of
+//! `cargo test`, do not belong in CI, and should be run intentionally:
 //!
 //! ```sh
 //! PROVING_SERVICE_URL=... cargo test --test prover_live -- --ignored --nocapture
@@ -10,21 +10,54 @@
 //!
 //! The URL lives in the repo's gitignored `.env` and must never be committed.
 //!
+//! Network defaults to Sepolia. Point the probe at another network by overriding both
+//! values together; a chain id that disagrees with the pool address produces a signature
+//! rejection rather than the state error the probe is looking for:
+//!
+//! ```sh
+//! PROVING_SERVICE_URL=http://127.0.0.1:3000 \
+//! EREBUS_PROBE_CHAIN_ID=0x534e5f4d41494e \
+//! EREBUS_PROBE_POOL=0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a \
+//!   cargo test --test prover_live -- --ignored --nocapture
+//! ```
+//!
 //! What these are for is the error *shape*. A proof needs a registered identity and funded
 //! notes, neither of which exists yet. These tests check whether the service reaches state
-//! validation instead of rejecting the invocation encoding.
+//! validation instead of rejecting the invocation encoding. Nothing here is broadcast:
+//! `starknet_proveTransaction` is a read-only call to the prover.
 
 use erebus_sdk::prover::{BlockId, ProvingService};
 use erebus_sdk::signing::sign;
 use erebus_sdk::tx::{DataAvailabilityMode, InvokeV3, ResourceBounds};
 use starknet_types_core::felt::Felt;
 
-const POOL: &str = "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91";
+/// Privacy pool v2.0 on Sepolia, the probe default.
+const SEPOLIA_POOL: &str = "0x254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91";
+/// Short-string felt for "SN_SEPOLIA".
+const SEPOLIA_CHAIN_ID: &str = "0x534e5f5345504f4c4941";
 
 fn endpoint() -> Option<String> {
     std::env::var("PROVING_SERVICE_URL")
         .ok()
         .filter(|s| !s.is_empty())
+}
+
+fn env_felt(key: &str, default: &str) -> Felt {
+    let raw = std::env::var(key)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default.to_owned());
+    Felt::from_hex(&raw).unwrap_or_else(|e| panic!("{key}={raw} is not a hex felt: {e}"))
+}
+
+/// The pool the probe addresses. Override with `EREBUS_PROBE_POOL`.
+fn pool_address() -> Felt {
+    env_felt("EREBUS_PROBE_POOL", SEPOLIA_POOL)
+}
+
+/// The chain the probe signs for. Override with `EREBUS_PROBE_CHAIN_ID`.
+fn chain_id() -> Felt {
+    env_felt("EREBUS_PROBE_CHAIN_ID", SEPOLIA_CHAIN_ID)
 }
 
 #[tokio::test]
@@ -53,7 +86,9 @@ async fn prove_transaction_error_shape() {
         return;
     };
 
-    let pool = Felt::from_hex(POOL).expect("pool address");
+    let pool = pool_address();
+    let chain_id = chain_id();
+    println!("probing pool {pool:#x} on chain {chain_id:#x}");
     let signing_key =
         Felt::from_hex("0x1111111111111111111111111111111111111111111111111111111111")
             .expect("throwaway key");
@@ -73,7 +108,7 @@ async fn prove_transaction_error_shape() {
     let invoke = InvokeV3 {
         sender_address: pool,
         calldata,
-        chain_id: Felt::from_hex("0x534e5f5345504f4c4941").expect("SN_SEPOLIA"),
+        chain_id,
         nonce: Felt::ZERO,
         account_deployment_data: vec![],
         nonce_da_mode: DataAvailabilityMode::L1,
@@ -104,3 +139,4 @@ async fn prove_transaction_error_shape() {
         }
     }
 }
+
