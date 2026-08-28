@@ -139,4 +139,3 @@ async fn prove_transaction_error_shape() {
         }
     }
 }
-
