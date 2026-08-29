@@ -92,7 +92,7 @@ Current verified scope:
 | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
 | Wire v3 framed repeat deals and scoped disclosure | Live Sepolia evidence from 2026-08-22 |
 | Protocol 4 operation IDs, journal, reconcile, and resume | Local fault matrix and seam tests |
-| Rust, Python, and TypeScript suites | 351 Rust, 154 Python, 43 TypeScript |
+| Rust, Python, and TypeScript suites | 351 Rust passed plus 7 ignored live tests, 154 Python, 43 TypeScript |
 | Unsafe-behavior evaluations | 9/9 fresh-session pass on 2026-08-26 |
 | Packaged recovery canary | Complete from clean local wheels on Sepolia: exact resubmission and expired-proof rebuild |
 

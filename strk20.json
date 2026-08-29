@@ -1,5 +1,8 @@
 {
-  "transactions": [],
+  "transactions": [
+    "0x06597adb6581bb1910d30b31139fe871665db4cc61fefef8120b89773528e54c",
+    "0x0572260b651525ea39ef717721bcc9fefc89a2087894654efb38111e09267189"
+  ],
   "contracts": [],
   "demo_video": "",
   "demo_url": "https://erebus-private-agents.vercel.app"

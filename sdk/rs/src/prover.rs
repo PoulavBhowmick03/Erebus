@@ -21,8 +21,12 @@ use serde_json::json;
 
 use crate::tx::SignedInvokeV3;
 
-/// Default timeout. A proof takes ~29 s (friction.md F7), plus queue time.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+/// Default timeout for one proof request.
+///
+/// Server-class runs can finish much sooner, but a memory-constrained one-thread prover can
+/// exceed three minutes while remaining healthy. Keep the client alive long enough for that
+/// supported local configuration instead of abandoning a proof the server will still finish.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Default retry budget for transient failures.
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 /// Base backoff, doubled per attempt.

@@ -1,7 +1,7 @@
 # Running the transaction prover locally
 
-A local prover is enough to **generate proofs and read error reasons**. It is not enough to
-transact on mainnet: see [Limits](#limits).
+A local prover plus a proof-fact-compatible RPC is enough to register on mainnet. It is not
+enough to fund notes without the screening path: see [Limits](#limits).
 
 Verified on 2026-08-28 against the mainnet pool `0x040337b1…812a`.
 
@@ -94,7 +94,7 @@ printf '%s\n' \
   "RPC_URL=https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/$ALCHEMY_KEY" \
   'CHAIN_ID=SN_MAIN' \
   'MAX_CONCURRENT_REQUESTS=1' \
-  'RAYON_NUM_THREADS=6' \
+  'RAYON_NUM_THREADS=2' \
   > ~/.erebus/prover.env
 chmod 600 ~/.erebus/prover.env
 unset ALCHEMY_KEY
@@ -183,7 +183,7 @@ it: being throttled partway through wastes the entire run.
 
 ---
 
-## Memory: proof generation was OOM-killed at 19 GiB
+## Memory: six threads were OOM-killed in a 20 GiB VM
 
 A registration proof reached the STWO stage and died:
 
@@ -193,8 +193,14 @@ VM: 19 GiB total, 16 used, 3 available, swap 0
 last log: prove_cairo: Witness trace cells: [10161776, 165038688, 146595200]
 ```
 
-Reaching `Generate the cairo proof` and then dying is the signature. Budget more than 20 GiB,
-or add swap. `ops/juno/README.md` specifies a 32 GiB host for the remote stack.
+Reaching `Generate the cairo proof` and then dying is the signature. On the recorded ARM64
+machine, reducing `RAYON_NUM_THREADS` from 6 to 2 completed the registration proof in the
+same 20 GiB VM. Treat this only as a local recovery setting; proving resource use is
+machine-dependent. `ops/juno/README.md` specifies a 32 GiB host for the remote stack.
+
+A larger deposit proof still OOM-killed the two-thread process. One thread survived, but
+exceeded the SDK's former 180-second HTTP timeout while continuing to prove. The source
+default is now 600 seconds so a healthy low-memory prover is not abandoned mid-request.
 
 **Check you are reading the live container.** A killed prover is often replaced by a restart
 policy, and `docker logs` against the dead id shows a stale tail that looks like a hang:
@@ -207,11 +213,17 @@ docker ps -a --format '{{.ID}}  {{.Status}}'
 
 ## Limits
 
-A local prover does not make mainnet reachable.
+A local prover and Alchemy v0.10 completed the standalone mainnet registration recorded in
+`docs/runs/2026-08-28-mainnet-registration.md`. They do not make every mainnet flow reachable.
 
 - **Deposit screening is protocol-enforced.** `apply_actions` requires an attestation signed
-  by the screener key stored in the pool contract (`privacy.cairo:791-793`). Self-hosting
-  does not produce one, so notes cannot be funded. Roadmap Q2, unanswered.
+  by the screener key stored in the pool contract (`privacy.cairo:791-793`). A live read on
+  2026-08-28 returned the non-zero mainnet screener key `0x501cc4…fdb2`. Self-hosting the
+  prover does not produce its signature, so notes cannot be funded.
+- **The published proof interceptor is a relay, not the screening authority.** Upstream's
+  service needs `SCREENING_URL`, `SCREENING_PARTNER_NAME`, and
+  `SCREENING_PARTNER_SECRET`. Its `/screen` upstream returns the STARK signature. Running
+  the interceptor without those values is a no-op and still cannot satisfy the pool.
 - **`compile_actions` sends the pool private key to Erebus's RPC.** Self-hosting the prover
   moves one endpoint inside the trust boundary, not both. Roadmap Q1.
 - **Registration is the exception.** `SetViewingKey` moves no tokens, so it takes the branch
@@ -221,3 +233,25 @@ A local prover does not make mainnet reachable.
 
 See [runbook.md](./runbook.md) for the Sepolia path and [ops/juno/README.md](../ops/juno/README.md)
 for the operator-hosted stack.
+
+The local screened-prover stack is prepared in
+[`ops/screened-prover`](../ops/screened-prover/README.md). It pins the matching RC.2
+interceptor, connects it through `BLOCKING_CHECK_URL`, and sets both layers to fail closed.
+Run `scripts/write-screening-env.sh` only after the screening operator issues the proxy URL,
+partner name, and partner secret.
+
+## Write protected mainnet identity configurations
+
+Keep one env and one state directory per account. The helper reads `RPC_URL` from the
+protected prover env and writes a mode-`0600` identity env without printing the credential:
+
+```sh
+scripts/write-mainnet-identity-env.sh \
+  "$ACCOUNT_ADDRESS" "$ACCOUNT_KEY_FILE" "$POOL_KEY_FILE" \
+  "$STATE_DIR" "$IDENTITY_ENV"
+
+scripts/agent.sh "$IDENTITY_ENV" doctor
+```
+
+The helper refuses relative key/state/env paths and refuses to overwrite an existing env.
+The resulting env contains the RPC credential, so do not copy it into the repository.

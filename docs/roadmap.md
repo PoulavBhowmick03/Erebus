@@ -54,11 +54,9 @@ deadline.
 The sprint entry can finish without production readiness. The README and demo must keep
 that distinction clear.
 
-**D14 changes what the sprint entry can reach.** The owners decided on 2026-08-16 to stay on
-Sepolia. The hub requires at least three mainnet hashes and scores a working mainnet product
-at 30%, so an entry without them is incomplete against the published rules regardless of how
-good the Sepolia evidence is. The rest of this document plans for that decision rather than
-around it: mainnet work is recorded, deferred, and kept ready to execute if D14 reverses.
+**D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. The first
+standalone registrations succeeded; one more pool transaction and the actual Erebus workflow
+remain before the hub's three-hash requirement can be met.
 
 ## 3. Current evidence
 
@@ -88,13 +86,20 @@ This section records what exists on 2026-08-28. Later sections describe the miss
 - `wait_for_offers` reduces agent tool calls, but it still polls the chain.
 - The public demo runs at `https://erebus-private-agents.vercel.app`.
 - The repository is public and uses Apache-2.0.
+- Account A completed a standalone mainnet registration on 2026-08-28:
+  `0x6597adb6581bb1910d30b31139fe871665db4cc61fefef8120b89773528e54c`, accepted in block
+  `14004848`. See `docs/runs/2026-08-28-mainnet-registration.md`.
+- Account B completed a standalone mainnet registration on 2026-08-29:
+  `0x572260b651525ea39ef717721bcc9fefc89a2087894654efb38111e09267189`, accepted in block
+  `14031230`. See `docs/runs/2026-08-29-mainnet-preflight.md`.
 - The Rust client grants and reads the pool's STRK allowance, and `agent.sh fund` sizes its
   approval as deposit plus the live fee.
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
 - The current working tree passes 351 Rust tests, 154 Python tests, and 43 TypeScript tests.
-  Two live-prover Rust tests are intentionally ignored.
+  Seven live Rust tests are intentionally ignored: two shared-prover probes, three guarded
+  mainnet registration canaries, one account-rotation canary, and one screening probe.
 - Clippy and rustdoc pass with warnings denied.
 - CI runs all of the above on every push and pull request, plus a gitleaks history scan.
   TypeScript is not in it; see §5.6.
@@ -127,7 +132,8 @@ been exercised live. The short record, with pointers:
 
 ### Not proven
 
-- Erebus has no mainnet transaction.
+- Mainnet has only two standalone registrations. No mainnet shield, channel, negotiation,
+  settlement, recovery, or disclosure has completed.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
 - The sprint video does not exist.
 - No external operator completed a clean install.
@@ -286,27 +292,26 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 | No secret-safe log policy     | Viewing grants and paths can enter logs                                                                                | Redact grants, keys, authorization headers, and RPC secrets                   |
 | ~~No release provenance~~     | `SHA256SUMS` and a CycloneDX SBOM over 224 components, generated from lockfiles alone, `--check` on every push         | The tag publishes them                                                        |
 
-### 5.7 Sprint delivery, and mainnet as deferred work
+### 5.7 Sprint delivery, and the bounded mainnet canary
 
-D14 puts the sprint on Sepolia. This section states what that costs, then keeps the mainnet
-findings intact so the decision stays reversible.
+D14 was reversed on 2026-08-28 for a bounded mainnet canary. This section records the live
+progress without treating registration as a complete Erebus run.
 
-#### What the sprint entry can and cannot reach under D14
+#### What the sprint entry can and cannot reach now
 
-| Requirement                     | Status under D14                                         |
+| Requirement                     | Current status                                           |
 | ------------------------------- | -------------------------------------------------------- |
 | Public repository and licence   | Met                                                      |
 | Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
 | Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
-| Three mainnet pool transactions | **Not reachable.** The hub verifies each hash on mainnet |
-| Public three-minute video       | Reachable. Sepolia evidence only                         |
-| Complete `strk20.json`          | Partial. `transactions` stays empty                      |
+| Three mainnet pool transactions | **2 of 3.** A and B registrations accepted by 2026-08-29 |
+| Public three-minute video       | Reachable; must distinguish registration from full flow |
+| Complete `strk20.json`          | Partial. Two verified mainnet hashes exist; video is empty |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
-mechanical rather than a judgement call. Sepolia evidence does not substitute. The entry is
-therefore incomplete by construction, and the remaining work is to make the Sepolia evidence
-as strong as it can be and to say plainly in the video and README which network it ran on. An
-entry that overstates its network is worse than one that is honestly partial.
+mechanical rather than a judgement call. Two registration hashes do not demonstrate Erebus's
+negotiation or settlement workflow. The entry remains incomplete until one more qualifying
+transactions exist and the evidence labels exactly what each one did.
 
 #### Sepolia is not free either
 
@@ -324,21 +329,25 @@ exercised by a Sepolia run, at 2 STRK instead of 6.
 
 The mainnet pool is
 `0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`, charging 6 STRK per
-`apply_actions`. The configured mainnet account has no contract and no balance.
+`apply_actions`. Account A is deployed, registered, and held `184.691083159243495520 STRK`
+after registration. Its exact 6 STRK allowance was consumed by that call.
 
-A 2026-08-16 search found no published mainnet proving service anywhere: not in the upstream
-README, not in `strk20-by-example.org`, not in either Starknet launch post. The endpoints
-Erebus holds are `alpha-sepolia` hosts and cannot serve mainnet, so Q3 may have no answer.
+A published hosted mainnet prover has still not been found. The working 2026-08-28 path is a
+local ARM64 build of `PRIVACY-0.14.3-RC.2` backed by Alchemy's Starknet mainnet v0.10 RPC.
+Alchemy preserved `PROOF1` facts through estimation and submission; Cartridge did not.
 
-The alternative is self-hosting. Upstream publishes the prover as a container in its
+Upstream publishes the prover as a container in its
 compatibility matrix, `ghcr.io/starkware-libs/starknet-privacy/transaction-prover:PRIVACY-0.14.3-RC.2`,
 with the discovery service and proof interceptor at the same tag. The cost is the footnote
 under that table: the prover needs a Pathfinder node at `PATHFINDER_STORAGE_STATE_TRIES=10000`.
-A mainnet Pathfinder sync takes days of wall clock and hundreds of gigabytes of disk. That lead
-time is why D14 exists, and it is also why reversing D14 late is not possible: the sync has to
-start days before the first mainnet transaction, not on the day it is wanted.
+A self-hosted Juno or Pathfinder still provides the stronger RPC trust boundary but requires
+substantial storage. The registration canary instead put Alchemy inside the trust boundary:
+`compile_actions` disclosed Account A's pool key to that endpoint.
 
-Self-hosting does not remove deposit screening. See Q2.
+Self-hosting does not remove deposit screening. A live read on 2026-08-28 returned non-zero
+mainnet screener key `0x501cc4…fdb2`. Upstream's proof interceptor only relays the signature
+returned by an elliptic-proxy `/screen` endpoint and requires operator-issued partner
+credentials. See Q2.
 
 Budget if D14 reverses: three calls need at least 18 STRK in pool fees, plus deployment,
 approval, deposits, and gas. D8 sets about 30 STRK for a minimum run.
@@ -364,15 +373,15 @@ starts.
 | D12 | Pool allowance mechanism           | Standing approval, decided 2026-08-16                                                                                                                         | Poulav | Decided, built                                                                         |
 | D13 | Who provisions allowance and notes | Operator at install; not an agent tool                                                                                                                        | Both   | Before the operator product                                                            |
 | D15 | AVNU as a swap dependency          | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount                                  | Both   | Before Phase 10.3 builds                                                               |
-| D14 | Sprint network                     | Sepolia only, decided 2026-08-16                                                                                                                              | Both   | Decided. Reversing needs days of Pathfinder lead time                                  |
+| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A and B registrations succeeded; screening still blocks shielding and the full workflow                     | Both   | In progress                                                                            |
 
 ### External questions
 
 | ID  | Question                                                               | Why it matters                                                                            | Owner                     |
 | --- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------- |
 | Q1  | Can `compile_actions` avoid receiving the full pool key?               | This decides the long-term custody model                                                  | Poulav to StarkWare       |
-| Q2  | Can an operator receive screening access for a self-hosted prover?     | Self-hosted proving does not make deposits work alone                                     | Poulav to StarkWare       |
-| Q3  | What are the supported mainnet prover and discovery URLs?              | Deferred by D14. Still blocks the mainnet canary and `v1.0`                               | Poulav to StarkWare       |
+| Q2  | Can an operator receive screening access for a self-hosted prover?     | Local fail-closed prover/interceptor stack prepared in `ops/screened-prover`. It still needs the operator-issued `SCREENING_URL`, partner name, and partner secret | Poulav to StarkWare       |
+| Q3  | What are the supported mainnet prover and discovery URLs?              | Partial: local RC.2 prover + Alchemy v0.10 works for registration. Hosted prover and discovery remain unanswered | Poulav to StarkWare       |
 | Q4  | Which pool, prover, ABI, and SDK revisions form one supported set?     | Version drift can cause silent note failures                                              | Poulav to StarkWare       |
 | Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below. Applies to Sepolia too | Poulav to StarkWare       |
 | Q5  | Which relayer or paymaster path supports direct SDK operators?         | Submission unlinkability depends on it                                                    | Both to StarkWare or AVNU |
@@ -447,23 +456,23 @@ Work:
 6. Point `scripts/observer.py` at the new settlement with no key and record what it recovers.
 7. Run a viewing-key disclosure against the same deal and record the reconstruction.
 8. Rewrite the demo video script. The previous one at `docs/demo-video-script.md` was deleted
-   on 2026-08-16 and it described a mainnet section that will not exist.
+   on 2026-08-16. The replacement must distinguish the standalone mainnet registration from
+   the Sepolia full-workflow evidence.
 9. Record the three-minute walkthrough. State the network out loud and on screen. Show
-   `doctor` failing on a missing allowance and then passing: under D14 the mainnet 30% is
-   forfeit, so integration depth and operator quality are what is left to demonstrate, and a
-   bare `Contract error` turned into a repair instruction is the clearest evidence of both.
+   `doctor` failing on a missing allowance and then passing, and label registration as one
+   mainnet primitive rather than a completed mainnet product flow.
 10. Upload the video and put its URL in `strk20.json`.
 11. Put the Sepolia transaction hashes in the demo evidence section, labelled as Sepolia.
-12. Say in the README and on the demo page that no mainnet transaction exists.
+12. Say in the README and on the demo page that two standalone mainnet registrations exist
+    and the full mainnet workflow does not.
 
 Exit:
 
 - One negotiation and settlement recorded end to end on current `main`.
 - `demo_video` and `demo_url` are public without login.
-- `transactions` stays empty, because the hub verifies mainnet only. That gap is stated
-  rather than papered over.
-- The public demo labels its simulated flow, its Sepolia evidence, and its absent mainnet
-  evidence as three separate things.
+- `transactions` contains the verified registration hash and no unsupported claim about it.
+- The public demo labels its simulated flow, its Sepolia full-flow evidence, and its partial
+  mainnet evidence as three separate things.
 
 ### Phase 2: Align Rust, Python, MCP, and agents
 
@@ -604,8 +613,9 @@ Work:
 
 1. Freeze the interface and release candidate.
 2. Run the full local gate from a clean checkout.
-3. Run one low-value canary through the release artifacts. Sepolia while D14 holds. A
-   `v0.1.0` released without a mainnet canary must say so in its release notes.
+3. Run one low-value canary through the release artifacts. The standalone mainnet
+   registration used current source, not the published `v0.1.0` artifacts, so the release
+   boundary must remain explicit.
 4. Make sure that the demo, README, roadmap, and manifest use the same evidence.
 5. Publish install steps, current limits, recovery limits, and trust assumptions.
 6. Tag `v0.1.0` and publish signed release artifacts.
@@ -1184,10 +1194,11 @@ Exit:
 
 ```text
 Sepolia allowance -> live settlement run -> observer and disclosure evidence
-                     -> video -> sprint entry            (the D14 path)
+                     -> video -> sprint entry
 
-Pathfinder mainnet sync -> prover container -> mainnet access -> mainnet transactions
-  (deferred by D14; days of lead time, so reversing D14 late is not possible)
+Alchemy v0.10 -> local prover -> mainnet registration -> remaining bounded canary writes
+                                     |
+                                     +-> screening path still required before shielding
 
 Change-note review -> shared interface decision -> MCP and agent alignment
                      -> cross-layer settlement test
@@ -1266,7 +1277,8 @@ board decides what to do next and §7 decides what done means.
       u128-boundary read wedge. `docs/runs/2026-08-19-sepolia-run.md`.
 - [ ] Rewrite the demo video script, deleted 2026-08-16.
 - [ ] Public three-minute video that names its network.
-- [ ] `strk20.json` with the video URL, and an explicit note that `transactions` is empty.
+- [ ] `strk20.json` with the video URL and the verified registration hash, labelled as a
+      standalone mainnet action rather than a full product flow.
 - [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
       No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop
@@ -1285,8 +1297,8 @@ board decides what to do next and §7 decides what done means.
       back. That was the last `u128` crossing the MCP boundary as a JSON number, so the
       whole class of silent rounding above 2^53 is now closed.
 
-Deferred by D14, not cancelled: mainnet proving path, funded mainnet account, three mainnet
-transactions. See §5.7.
+Mainnet canary in progress: proving path, funded Account A, and the first registration are
+complete. Two qualifying pool transactions and a full Erebus workflow remain. See §5.7.
 
 ### P1: Technical-preview release
 

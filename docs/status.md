@@ -10,8 +10,8 @@ privacy claim changed twice. That is why this page exists.
 
 ## In one line
 
-Erebus negotiates and settles privately between two agents on Starknet Sepolia. The terms
-are confidential and demonstrated to be so. The relationship is not.
+Erebus negotiates and settles privately between two agents on Starknet Sepolia. Its first
+standalone mainnet registrations succeeded for A and B; a full mainnet Erebus flow has not.
 
 ---
 
@@ -19,7 +19,7 @@ are confidential and demonstrated to be so. The relationship is not.
 
 | | |
 |---|---|
-| Network | Sepolia only. Never run on mainnet |
+| Network | Full workflow: Sepolia. Mainnet: A and B registered in blocks `14004848` and `14031230`; no shield, channel, negotiation, or settlement yet |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -31,10 +31,14 @@ are confidential and demonstrated to be so. The relationship is not.
   and two at an identical 0.25 STRK price to demonstrate repeat deals
   (`docs/runs/2026-08-22-sepolia-wire-v3-run.md`). Protocol 4 packaged-source recovery also
   completed on 2026-08-27: exact resubmission `0x53e10185…4f55` and expired-proof rebuild
-  `0x611b8250…987e` (`docs/runs/2026-08-27-packaged-recovery-canary.md`) |
+  `0x611b8250…987e` (`docs/runs/2026-08-27-packaged-recovery-canary.md`). Mainnet registration
+  `0x6597adb6…e54c` succeeded on 2026-08-28 through a local RC.2 prover and Alchemy v0.10
+  (`docs/runs/2026-08-28-mainnet-registration.md`). B registration `0x572260b6…7189`
+  succeeded on 2026-08-29, followed by a proof-only shield probe that confirmed the local
+  prover returns no required screening signature (`docs/runs/2026-08-29-mainnet-preflight.md`) |
 | Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
-| Tests | 351 Rust (plus 2 intentionally ignored live-prover tests), 154 Python, 43 TypeScript |
-| In flight | Package and publish the Protocol 4 `v0.2.0` operator alpha. Its Erebus-owned recovery, error-name, and spending-reservation gates now pass. The 2026-08-27 clean local wheel run completed exact resubmission and expired-proof rebuild on Sepolia. Rust journal facts now retain uncertain reservations and use chain block timestamps for committed daily spend. The optional external-framework quickstart, evaluation CI, and production controls remain open. |
+| Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 154 Python, 43 TypeScript |
+| In flight | Mainnet Accounts A and B are deployed and registered with protected runtime configurations. Account A's signer was rotated after a local diagnostic exposure; the replacement signer is live and the old signer is invalid. Canonical-pool shielding still needs StarkWare screening access: the live screener key is non-zero, and the published interceptor needs operator-issued `/screen` partner credentials. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
@@ -55,8 +59,8 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Run on mainnet.** No published mainnet prover exists, and self-hosting needs a synced
-  Pathfinder node.
+- **Run the full workflow on mainnet.** Two standalone registrations are proven. Shielding,
+  channel operations, negotiation, settlement, recovery, and disclosure are not.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.
 - **Escrow, or deferred delivery.** Settlement is atomic, so there is no "agree now, deliver

@@ -6,9 +6,9 @@
 performed on the wire, the settlement path, or the disclosure design. Do not put value you
 care about through it.
 
-**Testnet only. No mainnet canary has been run.** Every piece of live evidence for this
-release comes from Starknet Sepolia. Erebus has never executed on mainnet, so no release
-before that happens can claim a mainnet-verified install.
+**No release has completed a full mainnet canary.** Current source completed two standalone
+mainnet registrations by 2026-08-29, but shielding, channels, negotiation, settlement,
+recovery, and disclosure remain Sepolia-only. This is not a mainnet-verified install.
 
 **Relationship privacy is not complete.** Erebus hides the terms, not the relationship.
 Negotiation content and settlement amounts are confidential, and that is demonstrated: an

@@ -1,12 +1,13 @@
 //! Proof-only mainnet registration canary.
 //!
-//! This ignored test builds and proves one `SetViewingKey` action for an undeployed STRK20
+//! This ignored test builds and proves one `SetViewingKey` action for an unregistered STRK20
 //! identity. It never constructs or submits `apply_actions`, so a successful run cannot
 //! change mainnet state. Key values are read from protected files and never printed.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use erebus_sdk::action_set::ActionSetBuilder;
 use erebus_sdk::actions::{ClientAction, SetViewingKeyInput};
@@ -14,6 +15,7 @@ use erebus_sdk::calldata;
 use erebus_sdk::execution::build_proof_invocation;
 use erebus_sdk::prover::{BlockId, ProvingService};
 use erebus_sdk::rpc::StarknetRpc;
+use erebus_sdk::signing;
 use erebus_sdk::tx::{DataAvailabilityMode, InvokeV3, ResourceBound, ResourceBounds};
 use rand::{rngs::OsRng, RngCore};
 use starknet_crypto::Signature;
@@ -284,4 +286,134 @@ async fn estimate_prepared_registration_without_submission() {
     println!(
         "registration estimate succeeded without submission: max_fee_fri={max_fee} bounds={bounds:?}"
     );
+}
+
+#[tokio::test]
+#[ignore = "submits one explicitly approved mainnet registration"]
+async fn submit_prepared_registration_once() {
+    let rpc_url = required_env("EREBUS_MAINNET_RPC_URL").expect("RPC URL is required");
+    let account_address =
+        required_env("EREBUS_ACCOUNT_ADDRESS").expect("account address is required");
+    assert_eq!(
+        required_env("EREBUS_MAINNET_SUBMIT").as_deref(),
+        Some(account_address.as_str()),
+        "set EREBUS_MAINNET_SUBMIT to the exact configured account address to authorize this write"
+    );
+    let account_key_file =
+        required_env("EREBUS_ACCOUNT_KEY_FILE").expect("account key file is required");
+    let pool_key_file = required_env("EREBUS_POOL_KEY_FILE").expect("pool key file is required");
+    let directory = PathBuf::from(
+        std::env::var_os("EREBUS_PREPARED_DIR").expect("prepared directory is required"),
+    );
+
+    let account = felt("account address", &account_address);
+    let account_key = read_key("account key", &PathBuf::from(account_key_file));
+    let pool_key = read_key("pool key", &PathBuf::from(pool_key_file));
+    let pool = felt("mainnet pool", MAINNET_POOL);
+    let proof = std::fs::read_to_string(directory.join("registration.proof"))
+        .expect("prepared proof is readable");
+    let proof_facts = read_felt_list(&directory.join("registration.proof-facts"), ',');
+    let apply_calldata = read_felt_list(&directory.join("registration.calldata"), '\n');
+
+    let rpc = StarknetRpc::new(rpc_url).expect("RPC client builds");
+    assert_eq!(
+        rpc.call_contract(pool, "get_public_key", &[account], &BlockId::Latest)
+            .await
+            .expect("registration read"),
+        vec![Felt::ZERO],
+        "account is already registered; refusing a second submission"
+    );
+    let nonce = rpc
+        .nonce(account, &BlockId::Latest)
+        .await
+        .expect("account nonce");
+    let account_calldata = calldata::single_call(pool, "apply_actions", &apply_calldata);
+    let base = InvokeV3 {
+        sender_address: account,
+        calldata: account_calldata.clone(),
+        chain_id: felt("SN_MAIN", SN_MAIN),
+        nonce,
+        account_deployment_data: Vec::new(),
+        nonce_da_mode: DataAvailabilityMode::L1,
+        fee_da_mode: DataAvailabilityMode::L1,
+        resource_bounds: ResourceBounds::default(),
+        tip: 0,
+        paymaster_data: Vec::new(),
+        proof_facts: proof_facts.clone(),
+    };
+    let bounds = rpc
+        .estimate_bounds(
+            &base
+                .with_signature(Signature {
+                    r: Felt::ZERO,
+                    s: Felt::ZERO,
+                })
+                .with_proof(proof.trim().to_owned()),
+            &BlockId::Latest,
+        )
+        .await
+        .expect("proof-aware fee estimate");
+    let invoke = InvokeV3 {
+        sender_address: account,
+        calldata: account_calldata,
+        chain_id: felt("SN_MAIN", SN_MAIN),
+        nonce,
+        account_deployment_data: Vec::new(),
+        nonce_da_mode: DataAvailabilityMode::L1,
+        fee_da_mode: DataAvailabilityMode::L1,
+        resource_bounds: bounds,
+        tip: 0,
+        paymaster_data: Vec::new(),
+        proof_facts,
+    };
+    let expected_hash = invoke.transaction_hash();
+    let signature = signing::sign(&account_key, &expected_hash).expect("account signing succeeds");
+    let transaction = invoke
+        .with_signature(signature)
+        .with_proof(proof.trim().to_owned());
+    let persisted = serde_json::to_vec_pretty(&serde_json::json!({
+        "expected_transaction_hash": format!("{expected_hash:#x}"),
+        "transaction": transaction.to_wire(),
+    }))
+    .expect("submission payload serializes");
+    write_private(&directory.join("registration.submission.json"), &persisted);
+
+    let submitted_hash = rpc
+        .add_invoke_transaction(&transaction)
+        .await
+        .expect("mainnet registration submission");
+    assert_eq!(
+        submitted_hash, expected_hash,
+        "RPC returned a different hash"
+    );
+
+    let started = Instant::now();
+    let receipt = loop {
+        match rpc.transaction_receipt(submitted_hash).await {
+            Ok(receipt) if receipt.is_accepted() => break receipt,
+            Ok(receipt) if receipt.is_reverted() => {
+                panic!("registration reverted: {:?}", receipt.revert_reason)
+            }
+            Ok(_) => {}
+            Err(error) if error.is_transaction_not_found() => {}
+            Err(error) => panic!("receipt read failed: {error}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(300),
+            "receipt timeout; inspect registration.submission.json before retrying"
+        );
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    };
+    write_private(
+        &directory.join("registration.receipt.json"),
+        &serde_json::to_vec_pretty(&receipt).expect("receipt serializes"),
+    );
+    assert_eq!(
+        rpc.call_contract(pool, "get_public_key", &[account], &BlockId::Latest)
+            .await
+            .expect("registered key read"),
+        vec![signing::public_key(&pool_key)],
+        "registered pool public key does not match the protected key file"
+    );
+    println!("mainnet registration accepted: {submitted_hash:#x}");
 }

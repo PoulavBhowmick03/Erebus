@@ -1,0 +1,58 @@
+name: erebus-screened-prover
+
+services:
+  proof-interceptor:
+    image: ghcr.io/starkware-libs/starknet-privacy/proof-interceptor@sha256:985f11fb532e009fb6df442ac4dfa1033677c39fb4b9032c8d6df7590b478f1c
+    restart: unless-stopped
+    env_file:
+      - ${SCREENING_ENV_FILE:?set SCREENING_ENV_FILE to the protected screening env}
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      SCREENING_BLOCK_NON_POOL_TX: "true"
+      SCREENING_FAIL_OPEN: "false"
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  transaction-prover:
+    image: ${PROVER_IMAGE:-strk20-prover:privacy-0.14.3-rc.2-arm64}
+    restart: unless-stopped
+    depends_on:
+      proof-interceptor:
+        condition: service_healthy
+    env_file:
+      - ${PROVER_ENV_FILE:?set PROVER_ENV_FILE to the protected prover env}
+    environment:
+      BLOCKING_CHECK_URL: http://proof-interceptor:8080/
+      BLOCKING_CHECK_TIMEOUT_MILLIS: "10000"
+      BLOCKING_CHECK_FAIL_OPEN: "false"
+    ports:
+      - 127.0.0.1:${PROVER_HTTP_PORT:-3000}:3000
+    volumes:
+      - prover-data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: 50m
+        max-file: "5"
+
+volumes:
+  prover-data:

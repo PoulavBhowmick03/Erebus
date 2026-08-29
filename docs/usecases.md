@@ -152,8 +152,9 @@ not fit a verifier who must learn only the final result.
 
 These cases match the bilateral payment direction, repeat-deal framing, change-note
 settlement, and per-deal disclosure. The remaining blockers are operational. The operator
-alpha still needs monitoring, backup tooling, independent review, and mainnet evidence
-before recurring real-value use.
+alpha still needs monitoring, backup tooling, independent review, and full-workflow mainnet
+evidence before recurring real-value use. A standalone mainnet registration does not close
+that gap.
 
 ### Sealed-bid auctions
 
