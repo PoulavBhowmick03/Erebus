@@ -4,9 +4,10 @@ This replaces the real `sdk/py` to `sdk/rs` binding in deterministic tests and p
 rehearsals. Callers see the dataclasses and error shape from `interface.py`.
 
 The mock stores shared pool state in a JSON file. Two clients read and write the same
-channels. Each call reads, changes, and atomically replaces the file. The real CLI uses a
-similar directory with locking and cryptography. Mock callers run sequentially, so the mock
-does not lock concurrent writers.
+channels, each as its own MCP server subprocess, so a Python-level lock in one process
+cannot serialize the other. Each write takes an OS-level exclusive lock on a companion file
+for the duration of its read-modify-write, matching the real CLI's per-identity advisory
+locking (ARCHITECTURE §3) closely enough to make the mock's ordering trustworthy.
 
 The mock cannot produce ``AMOUNT_MISMATCH`` from a normal call. The frozen
 ``acceptAndSettle(handle, offerId)`` takes no separate payment argument, so there is no
@@ -18,6 +19,8 @@ test error transport because the interface cannot express mismatched input.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
 import hashlib
 import json
 import secrets
@@ -120,6 +123,26 @@ class MockErebusClient:
         tmp.write_text(json.dumps(store))
         tmp.replace(self._store_path)
 
+    @contextlib.contextmanager
+    def _locked_store(self):
+        """Serializes one read-modify-write cycle against every other caller of any
+        identity pointed at the same store file, in this process or another.
+
+        Two concurrent proof-bearing calls (e.g. both parties' servers writing the same
+        channel) would otherwise both read the pre-write state, and whichever writes last
+        silently discards the other's change -- including reusing its `next_seq`, which
+        collides two offers onto one `offer_id`. An `flock` on a companion file, held only
+        around the read-modify-write, closes that window without serializing the simulated
+        proof latency around it.
+        """
+        lock_path = self._store_path.with_suffix(self._store_path.suffix + ".lock")
+        with open(lock_path, "a+") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
     @staticmethod
     def _channel_handle(a: AgentId, b: AgentId) -> ChannelHandle:
         # Real handles belong to one local state store. The two directions must not converge
@@ -188,17 +211,18 @@ class MockErebusClient:
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
         handle = self._channel_handle(self._identity, counterparty)
-        store = self._read_store()
-        pair = self._pair_id(self._identity, counterparty)
-        if pair not in store["channels"]:
-            store["channels"][pair] = {
-                "participants": sorted([self._identity, counterparty]),
-                "offers": [],
-                "settlement": None,
-                "next_seq": {},
-            }
-        store.setdefault("handles", {})[handle] = {"pair": pair, "owner": self._identity}
-        self._write_store(store)
+        with self._locked_store():
+            store = self._read_store()
+            pair = self._pair_id(self._identity, counterparty)
+            if pair not in store["channels"]:
+                store["channels"][pair] = {
+                    "participants": sorted([self._identity, counterparty]),
+                    "offers": [],
+                    "settlement": None,
+                    "next_seq": {},
+                }
+            store.setdefault("handles", {})[handle] = {"pair": pair, "owner": self._identity}
+            self._write_store(store)
         return handle
 
     async def propose_offer(
@@ -212,26 +236,27 @@ class MockErebusClient:
             handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
-        store = self._read_store()
-        channel = self._get_channel(store, handle, require_owner=False)
-        seq = channel["next_seq"].get(self._identity, 0)
-        # OfferId uses (author, seq), not a bare index. Under friction F22, a bare index
-        # collides across the two directions, because each side numbers its own subchannel
-        # from zero.
-        offer_id = f"{self._identity}:{seq}"
-        deal_id = int.from_bytes(hashlib.sha256(offer_id.encode()).digest()[:8], "big") or 1
-        channel["next_seq"][self._identity] = seq + 1
-        offer = Offer(
-            offer_id=offer_id,
-            deal_id=deal_id,
-            channel_id=handle,
-            proposer=self._identity,
-            terms=terms,
-            status=OfferStatus.PROPOSED,
-            created_at=int(time.time()),
-        )
-        channel["offers"].append(self._offer_to_dict(offer))
-        self._write_store(store)
+        with self._locked_store():
+            store = self._read_store()
+            channel = self._get_channel(store, handle, require_owner=False)
+            seq = channel["next_seq"].get(self._identity, 0)
+            # OfferId uses (author, seq), not a bare index. Under friction F22, a bare index
+            # collides across the two directions, because each side numbers its own
+            # subchannel from zero.
+            offer_id = f"{self._identity}:{seq}"
+            deal_id = int.from_bytes(hashlib.sha256(offer_id.encode()).digest()[:8], "big") or 1
+            channel["next_seq"][self._identity] = seq + 1
+            offer = Offer(
+                offer_id=offer_id,
+                deal_id=deal_id,
+                channel_id=handle,
+                proposer=self._identity,
+                terms=terms,
+                status=OfferStatus.PROPOSED,
+                created_at=int(time.time()),
+            )
+            channel["offers"].append(self._offer_to_dict(offer))
+            self._write_store(store)
         return offer_id
 
     async def counter_offer(
@@ -247,56 +272,57 @@ class MockErebusClient:
             handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
-        store = self._read_store()
-        channel = self._get_channel(store, handle)
-        offers = [self._offer_from_dict(d) for d in channel["offers"]]
-        target = next((o for o in offers if o.offer_id == reply_to), None)
-        if target is None:
-            raise ErebusError(
-                code=SettlementErrorCode.OFFER_UNKNOWN, message=f"no offer {reply_to!r}", retryable=False
-            )
-        # A reply crosses directions (F22), so a client cannot counter its own offer.
-        if target.proposer == self._identity:
-            raise ErebusError(
-                code=SettlementErrorCode.NOT_YOUR_OFFER,
-                message="cannot counter your own offer",
-                retryable=False,
-            )
-        now = int(time.time())
-        target_status = self._effective_status(target, now)
-        if target_status == OfferStatus.EXPIRED:
-            raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=reply_to, retryable=False)
-        if target_status not in (OfferStatus.PROPOSED, OfferStatus.COUNTERED):
-            raise ErebusError(
-                code=SettlementErrorCode.INDEX_CONFLICT,
-                message=f"offer {reply_to!r} is not open (status={target_status.value})",
-                retryable=False,
-            )
+        with self._locked_store():
+            store = self._read_store()
+            channel = self._get_channel(store, handle)
+            offers = [self._offer_from_dict(d) for d in channel["offers"]]
+            target = next((o for o in offers if o.offer_id == reply_to), None)
+            if target is None:
+                raise ErebusError(
+                    code=SettlementErrorCode.OFFER_UNKNOWN, message=f"no offer {reply_to!r}", retryable=False
+                )
+            # A reply crosses directions (F22), so a client cannot counter its own offer.
+            if target.proposer == self._identity:
+                raise ErebusError(
+                    code=SettlementErrorCode.NOT_YOUR_OFFER,
+                    message="cannot counter your own offer",
+                    retryable=False,
+                )
+            now = int(time.time())
+            target_status = self._effective_status(target, now)
+            if target_status == OfferStatus.EXPIRED:
+                raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=reply_to, retryable=False)
+            if target_status not in (OfferStatus.PROPOSED, OfferStatus.COUNTERED):
+                raise ErebusError(
+                    code=SettlementErrorCode.INDEX_CONFLICT,
+                    message=f"offer {reply_to!r} is not open (status={target_status.value})",
+                    retryable=False,
+                )
 
-        seq = channel["next_seq"].get(self._identity, 0)
-        offer_id = f"{self._identity}:{seq}"
-        channel["next_seq"][self._identity] = seq + 1
-        new_offer = Offer(
-            offer_id=offer_id,
-            deal_id=target.deal_id,
-            channel_id=handle,
-            proposer=self._identity,
-            terms=terms,
-            status=OfferStatus.PROPOSED,
-            created_at=now,
-            reply_to=reply_to,
-        )
-        # Countering proposes; it does not revoke (ARCHITECTURE §4). The replied-to offer
-        # moves to `countered` for observability, but stays acceptable.
-        updated_offers = []
-        for d in channel["offers"]:
-            if d["offer_id"] == reply_to:
-                d = dict(d)
-                d["status"] = OfferStatus.COUNTERED.value
-            updated_offers.append(d)
-        updated_offers.append(self._offer_to_dict(new_offer))
-        channel["offers"] = updated_offers
-        self._write_store(store)
+            seq = channel["next_seq"].get(self._identity, 0)
+            offer_id = f"{self._identity}:{seq}"
+            channel["next_seq"][self._identity] = seq + 1
+            new_offer = Offer(
+                offer_id=offer_id,
+                deal_id=target.deal_id,
+                channel_id=handle,
+                proposer=self._identity,
+                terms=terms,
+                status=OfferStatus.PROPOSED,
+                created_at=now,
+                reply_to=reply_to,
+            )
+            # Countering proposes; it does not revoke (ARCHITECTURE §4). The replied-to
+            # offer moves to `countered` for observability, but stays acceptable.
+            updated_offers = []
+            for d in channel["offers"]:
+                if d["offer_id"] == reply_to:
+                    d = dict(d)
+                    d["status"] = OfferStatus.COUNTERED.value
+                updated_offers.append(d)
+            updated_offers.append(self._offer_to_dict(new_offer))
+            channel["offers"] = updated_offers
+            self._write_store(store)
         return offer_id
 
     async def read_channel_state(self, handle: ChannelHandle) -> ChannelState:
@@ -355,82 +381,83 @@ class MockErebusClient:
             handle = operation_id
         self._maybe_raise_forced()
         await asyncio.sleep(self._latency_seconds)
-        store = self._read_store()
-        channel = self._get_channel(store, handle)
-        offers = [self._offer_from_dict(d) for d in channel["offers"]]
-        target = next((o for o in offers if o.offer_id == offer_id), None)
-        if target is None:
-            raise ErebusError(
-                code=SettlementErrorCode.OFFER_UNKNOWN, message=f"no offer {offer_id!r}", retryable=False
-            )
-        if target.proposer == self._identity:
-            raise ErebusError(
-                code=SettlementErrorCode.NOT_YOUR_OFFER,
-                message="cannot accept your own offer",
-                retryable=False,
-            )
-        now = int(time.time())
-        target_status = self._effective_status(target, now)
-        if target_status == OfferStatus.EXPIRED:
-            raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=offer_id, retryable=False)
-        if target_status not in (OfferStatus.PROPOSED, OfferStatus.COUNTERED):
-            raise ErebusError(
-                code=SettlementErrorCode.ALREADY_SETTLED,
-                message=offer_id,
-                retryable=False,
-            )
+        with self._locked_store():
+            store = self._read_store()
+            channel = self._get_channel(store, handle)
+            offers = [self._offer_from_dict(d) for d in channel["offers"]]
+            target = next((o for o in offers if o.offer_id == offer_id), None)
+            if target is None:
+                raise ErebusError(
+                    code=SettlementErrorCode.OFFER_UNKNOWN, message=f"no offer {offer_id!r}", retryable=False
+                )
+            if target.proposer == self._identity:
+                raise ErebusError(
+                    code=SettlementErrorCode.NOT_YOUR_OFFER,
+                    message="cannot accept your own offer",
+                    retryable=False,
+                )
+            now = int(time.time())
+            target_status = self._effective_status(target, now)
+            if target_status == OfferStatus.EXPIRED:
+                raise ErebusError(code=SettlementErrorCode.OFFER_EXPIRED, message=offer_id, retryable=False)
+            if target_status not in (OfferStatus.PROPOSED, OfferStatus.COUNTERED):
+                raise ErebusError(
+                    code=SettlementErrorCode.ALREADY_SETTLED,
+                    message=offer_id,
+                    retryable=False,
+                )
 
-        selected = _select_notes(self._spendable_notes, target.terms.amount)
-        if selected is None:
-            held = sorted(self._spendable_notes, reverse=True)
-            rendered = ", ".join(str(amount) for amount in held) or "none"
-            raise ErebusError(
-                code=SettlementErrorCode.INSUFFICIENT_NOTES,
-                message=(
-                    f"total spendable value {sum(held)} is below {target.terms.amount}; "
-                    f"holding {len(held)} note(s) ({rendered})"
-                ),
-                retryable=False,
+            selected = _select_notes(self._spendable_notes, target.terms.amount)
+            if selected is None:
+                held = sorted(self._spendable_notes, reverse=True)
+                rendered = ", ".join(str(amount) for amount in held) or "none"
+                raise ErebusError(
+                    code=SettlementErrorCode.INSUFFICIENT_NOTES,
+                    message=(
+                        f"total spendable value {sum(held)} is below {target.terms.amount}; "
+                        f"holding {len(held)} note(s) ({rendered})"
+                    ),
+                    retryable=False,
+                )
+            indices, change = selected
+
+            # The acceptor is the payer. Consuming its notes here is the piece the original
+            # mock omitted, which let a seller-side settlement look valid even though the
+            # real Rust client would spend the seller's funds.
+            for index in sorted(indices, reverse=True):
+                del self._spendable_notes[index]
+            if change > 0:
+                self._spendable_notes.append(change)
+
+            # Acceptance and payment share one action set and proof (ARCHITECTURE §4).
+            # There is no accepted-but-unsettled state.
+            receipt = SettlementReceipt(
+                offer_id=offer_id,
+                tx_hash="0x" + secrets.token_hex(32),
+                nullifiers=["0x" + secrets.token_hex(32)],
+                proved_at=now,
+                selected_input=target.terms.amount + change,
+                change=change,
             )
-        indices, change = selected
-
-        # The acceptor is the payer. Consuming its notes here is the piece the original mock
-        # omitted, which let a seller-side settlement look valid even though the real Rust
-        # client would spend the seller's funds.
-        for index in sorted(indices, reverse=True):
-            del self._spendable_notes[index]
-        if change > 0:
-            self._spendable_notes.append(change)
-
-        # Acceptance and payment share one action set and proof (ARCHITECTURE §4). There is
-        # no accepted-but-unsettled state.
-        receipt = SettlementReceipt(
-            offer_id=offer_id,
-            tx_hash="0x" + secrets.token_hex(32),
-            nullifiers=["0x" + secrets.token_hex(32)],
-            proved_at=now,
-            selected_input=target.terms.amount + change,
-            change=change,
-        )
-        channel["offers"] = [
-            {**offer, "status": OfferStatus.SETTLED.value}
-            if offer["offer_id"] == offer_id
-            else offer
-            for offer in channel["offers"]
-        ]
-        channel["settlement"] = {
-            "acceptance": offer_id,
-            "accepted_offer": target.reply_to,
-            "agreed_amount": target.terms.amount,
-            "paid_amount": target.terms.amount,  # only source of truth; see module docstring
-            "receipt": {
-                "offer_id": receipt.offer_id,
-                "tx_hash": receipt.tx_hash,
-                "nullifiers": receipt.nullifiers,
-                "proved_at": receipt.proved_at,
-            },
-        }
-        self._write_store(store)
+            channel["offers"] = [
+                {**offer, "status": OfferStatus.SETTLED.value}
+                if offer["offer_id"] == offer_id
+                else offer
+                for offer in channel["offers"]
+            ]
+            channel["settlement"] = {
+                "acceptance": offer_id,
+                "accepted_offer": target.reply_to,
+                "agreed_amount": target.terms.amount,
+                "paid_amount": target.terms.amount,  # only source of truth; see module docstring
+                "receipt": {
+                    "offer_id": receipt.offer_id,
+                    "tx_hash": receipt.tx_hash,
+                    "nullifiers": receipt.nullifiers,
+                    "proved_at": receipt.proved_at,
+                },
+            }
+            self._write_store(store)
         return receipt
 
     async def grant_viewing_key(
