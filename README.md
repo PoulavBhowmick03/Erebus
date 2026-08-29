@@ -248,6 +248,11 @@ A runnable two-sided version is in
 [`agents/src/erebus_agents/mcp_loop.py`](./agents/src/erebus_agents/mcp_loop.py); the
 deterministic mock rehearsal is `uv run python agents/src/erebus_agents/demo.py`.
 
+For driving the same loop from a mainstream agent framework instead of `erebus_agents`, see
+[`agents/examples/openai-agents-quickstart/`](./agents/examples/openai-agents-quickstart/):
+two GPT-backed agents negotiating and settling entirely through the OpenAI Agents SDK's own
+MCP tool-calling loop, installed from published wheels rather than this checkout.
+
 A worked example against Sepolia, with real transaction hashes, timings and the failures
 along the way, is in [docs/runs/](./docs/runs/).
 
