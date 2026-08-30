@@ -1,6 +1,7 @@
 # Erebus product roadmap
 
-Last source reconciliation: 2026-08-28, against the working tree based on `3370443`.
+Last source reconciliation: 2026-08-30, against source commit `0bf51f1` plus the evidence
+updates recorded below.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
 server, reference agents, skill, operations, security, documentation, and sprint delivery.
@@ -54,9 +55,9 @@ deadline.
 The sprint entry can finish without production readiness. The README and demo must keep
 that distinction clear.
 
-**D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. The first
-standalone registrations succeeded; one more pool transaction and the actual Erebus workflow
-remain before the hub's three-hash requirement can be met.
+**D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. Two
+registrations and two directional channel opens have now succeeded. The hub's three-hash
+requirement is met, but the actual mainnet settlement workflow remains blocked on screening.
 
 ## 3. Current evidence
 
@@ -92,12 +93,19 @@ This section records what exists on 2026-08-28. Later sections describe the miss
 - Account B completed a standalone mainnet registration on 2026-08-29:
   `0x572260b651525ea39ef717721bcc9fefc89a2087894654efb38111e09267189`, accepted in block
   `14031230`. See `docs/runs/2026-08-29-mainnet-preflight.md`.
+- Account A opened a mainnet channel to B on 2026-08-30:
+  `0x395563b33df0d121ef9a7aa720da7cbbc378f7c0ed9849d2e034a1a08ada09a`, accepted in block
+  `14100846`.
+- Account B opened the reverse mainnet channel to A on 2026-08-30:
+  `0x467295d1d167607cf321cb6076f1ccd1b08f36d4c7575cd8e9dd242c4c01964`, accepted in block
+  `14101246`. See `docs/runs/2026-08-30-mainnet-channels.md` for both channel receipts and
+  their recovery evidence.
 - The Rust client grants and reads the pool's STRK allowance, and `agent.sh fund` sizes its
   approval as deposit plus the live fee.
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- The current working tree passes 351 Rust tests, 154 Python tests, and 43 TypeScript tests.
+- The current working tree passes 351 Rust tests, 156 Python tests, and 43 TypeScript tests.
   Seven live Rust tests are intentionally ignored: two shared-prover probes, three guarded
   mainnet registration canaries, one account-rotation canary, and one screening probe.
 - Clippy and rustdoc pass with warnings denied.
@@ -132,7 +140,7 @@ been exercised live. The short record, with pointers:
 
 ### Not proven
 
-- Mainnet has only two standalone registrations. No mainnet shield, channel, negotiation,
+- Mainnet has two registrations and two directional channel opens. No mainnet shield, offer,
   settlement, recovery, or disclosure has completed.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
 - The sprint video does not exist.
@@ -304,14 +312,14 @@ progress without treating registration as a complete Erebus run.
 | Public repository and licence   | Met                                                      |
 | Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
 | Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
-| Three mainnet pool transactions | **2 of 3.** A and B registrations accepted by 2026-08-29 |
-| Public three-minute video       | Reachable; must distinguish registration from full flow |
-| Complete `strk20.json`          | Partial. Two verified mainnet hashes exist; video is empty |
+| Three mainnet pool transactions | **Met: 4 verified.** Two registrations and two channel opens |
+| Public three-minute video       | Script ready; recording, upload, and public-link check remain |
+| Complete `strk20.json`          | Four verified mainnet hashes present; video URL remains empty |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
-mechanical rather than a judgement call. Two registration hashes do not demonstrate Erebus's
-negotiation or settlement workflow. The entry remains incomplete until one more qualifying
-transactions exist and the evidence labels exactly what each one did.
+mechanical rather than a judgement call. Four hashes meet that check, but registrations and
+empty channel setup do not demonstrate Erebus's negotiation or settlement workflow. The
+entry remains incomplete until the public video is uploaded and its URL is in the manifest.
 
 #### Sepolia is not free either
 
@@ -373,7 +381,7 @@ starts.
 | D12 | Pool allowance mechanism           | Standing approval, decided 2026-08-16                                                                                                                         | Poulav | Decided, built                                                                         |
 | D13 | Who provisions allowance and notes | Operator at install; not an agent tool                                                                                                                        | Both   | Before the operator product                                                            |
 | D15 | AVNU as a swap dependency          | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount                                  | Both   | Before Phase 10.3 builds                                                               |
-| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A and B registrations succeeded; screening still blocks shielding and the full workflow                     | Both   | In progress                                                                            |
+| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A and B registrations and both directional channel opens succeeded; screening still blocks shielding and the full workflow | Both | In progress |
 
 ### External questions
 
@@ -455,16 +463,16 @@ Work:
    paid amount plus `change`. That arithmetic has only ever been checked in tests.
 6. Point `scripts/observer.py` at the new settlement with no key and record what it recovers.
 7. Run a viewing-key disclosure against the same deal and record the reconstruction.
-8. Rewrite the demo video script. The previous one at `docs/demo-video-script.md` was deleted
-   on 2026-08-16. The replacement must distinguish the standalone mainnet registration from
-   the Sepolia full-workflow evidence.
+8. Rewrite the demo video script. **Done 2026-08-30.** `docs/demo-video-script.md`
+   distinguishes the four mainnet setup transactions from the Sepolia full-workflow evidence.
 9. Record the three-minute walkthrough. State the network out loud and on screen. Show
    `doctor` failing on a missing allowance and then passing, and label registration as one
    mainnet primitive rather than a completed mainnet product flow.
 10. Upload the video and put its URL in `strk20.json`.
 11. Put the Sepolia transaction hashes in the demo evidence section, labelled as Sepolia.
-12. Say in the README and on the demo page that two standalone mainnet registrations exist
-    and the full mainnet workflow does not.
+12. Say in the README and on the demo page that two registrations and two directional
+    channel opens exist on mainnet, while the full mainnet workflow does not. **Done
+    2026-08-30.**
 
 Exit:
 
@@ -1196,7 +1204,7 @@ Exit:
 Sepolia allowance -> live settlement run -> observer and disclosure evidence
                      -> video -> sprint entry
 
-Alchemy v0.10 -> local prover -> mainnet registration -> remaining bounded canary writes
+Alchemy v0.10 -> local prover -> mainnet registration -> directional channel setup
                                      |
                                      +-> screening path still required before shielding
 
@@ -1275,10 +1283,11 @@ board decides what to do next and §7 decides what done means.
       disclosure reconstructed by an uninvolved identity, and observer output showing
       content not recovered / traffic classified. It also found and fixed the
       u128-boundary read wedge. `docs/runs/2026-08-19-sepolia-run.md`.
-- [ ] Rewrite the demo video script, deleted 2026-08-16.
+- [x] Rewrite the demo video script. Restored 2026-08-30 with timed mainnet and Sepolia
+      evidence segments.
 - [ ] Public three-minute video that names its network.
-- [ ] `strk20.json` with the video URL and the verified registration hash, labelled as a
-      standalone mainnet action rather than a full product flow.
+- [ ] Complete `strk20.json`. Four verified mainnet hashes are present and labelled as
+      registrations and channel setup in public evidence. The uploaded video URL remains.
 - [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
       No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop
@@ -1297,8 +1306,9 @@ board decides what to do next and §7 decides what done means.
       back. That was the last `u128` crossing the MCP boundary as a JSON number, so the
       whole class of silent rounding above 2^53 is now closed.
 
-Mainnet canary in progress: proving path, funded Account A, and the first registration are
-complete. Two qualifying pool transactions and a full Erebus workflow remain. See §5.7.
+Mainnet canary in progress: the proving path, both registrations, and both directional
+channel opens are complete. The three-hash sprint requirement is met. Screening still blocks
+shielding and therefore the full mainnet workflow. See §5.7.
 
 ### P1: Technical-preview release
 

@@ -42,6 +42,7 @@ services:
       BLOCKING_CHECK_URL: http://proof-interceptor:8080/
       BLOCKING_CHECK_TIMEOUT_MILLIS: "10000"
       BLOCKING_CHECK_FAIL_OPEN: "false"
+      RAYON_NUM_THREADS: "${RAYON_NUM_THREADS:-4}"
     ports:
       - 127.0.0.1:${PROVER_HTTP_PORT:-3000}:3000
     volumes:

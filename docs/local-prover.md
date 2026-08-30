@@ -183,7 +183,7 @@ it: being throttled partway through wastes the entire run.
 
 ---
 
-## Memory: six threads were OOM-killed in a 20 GiB VM
+## Memory: proof size can exhaust a 20 GiB VM
 
 A registration proof reached the STWO stage and died:
 
@@ -201,6 +201,13 @@ machine-dependent. `ops/juno/README.md` specifies a 32 GiB host for the remote s
 A larger deposit proof still OOM-killed the two-thread process. One thread survived, but
 exceeded the SDK's former 180-second HTTP timeout while continuing to prove. The source
 default is now 600 seconds so a healthy low-memory prover is not abandoned mid-request.
+
+On 2026-08-30, the reverse mainnet channel proof also exhausted the 20 GiB VM because the
+local env misspelled `RAYON_NUM_THREADS` and Rayon used the available CPUs. Reconciliation
+proved that no transaction had been signed. Adding 8 GiB of VM swap, setting
+`RAYON_NUM_THREADS=4`, and resuming the same durable operation ID completed the proof. The
+swap activation is not persistent across a Colima VM restart; check `swapon --show` before a
+deadline run.
 
 **Check you are reading the live container.** A killed prover is often replaced by a restart
 policy, and `docker logs` against the dead id shows a stale tail that looks like a hang:

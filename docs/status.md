@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-28.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-30.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -10,8 +10,9 @@ privacy claim changed twice. That is why this page exists.
 
 ## In one line
 
-Erebus negotiates and settles privately between two agents on Starknet Sepolia. Its first
-standalone mainnet registrations succeeded for A and B; a full mainnet Erebus flow has not.
+Erebus negotiates and settles privately between two agents on Starknet Sepolia. On mainnet,
+A and B are registered and have opened channels in both directions; a shielded settlement
+has not completed.
 
 ---
 
@@ -19,7 +20,7 @@ standalone mainnet registrations succeeded for A and B; a full mainnet Erebus fl
 
 | | |
 |---|---|
-| Network | Full workflow: Sepolia. Mainnet: A and B registered in blocks `14004848` and `14031230`; no shield, channel, negotiation, or settlement yet |
+| Network | Full workflow: Sepolia. Mainnet: A and B registered, then opened directional channels in blocks `14100846` and `14101246`; no shield, offer, settlement, or disclosure yet |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -35,10 +36,12 @@ standalone mainnet registrations succeeded for A and B; a full mainnet Erebus fl
   `0x6597adb6…e54c` succeeded on 2026-08-28 through a local RC.2 prover and Alchemy v0.10
   (`docs/runs/2026-08-28-mainnet-registration.md`). B registration `0x572260b6…7189`
   succeeded on 2026-08-29, followed by a proof-only shield probe that confirmed the local
-  prover returns no required screening signature (`docs/runs/2026-08-29-mainnet-preflight.md`) |
+  prover returns no required screening signature (`docs/runs/2026-08-29-mainnet-preflight.md`).
+  Mainnet channel opens `0x395563b3…a09a` and `0x467295d1…1964` succeeded on 2026-08-30;
+  both reconciled cleanly after proving depth (`docs/runs/2026-08-30-mainnet-channels.md`) |
 | Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
-| Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 154 Python, 43 TypeScript |
-| In flight | Mainnet Accounts A and B are deployed and registered with protected runtime configurations. Account A's signer was rotated after a local diagnostic exposure; the replacement signer is live and the old signer is invalid. Canonical-pool shielding still needs StarkWare screening access: the live screener key is non-zero, and the published interceptor needs operator-issued `/screen` partner credentials. |
+| Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 156 Python, 43 TypeScript |
+| In flight | Mainnet Accounts A and B are deployed, registered, and connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access: the live screener key is non-zero, and the published interceptor needs operator-issued `/screen` partner credentials. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
@@ -59,8 +62,8 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Run the full workflow on mainnet.** Two standalone registrations are proven. Shielding,
-  channel operations, negotiation, settlement, recovery, and disclosure are not.
+- **Run the full workflow on mainnet.** Two registrations and two channel opens are proven.
+  Shielding, offers, settlement, recovery, and disclosure are not.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.
 - **Escrow, or deferred delivery.** Settlement is atomic, so there is no "agree now, deliver

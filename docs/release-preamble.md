@@ -6,9 +6,10 @@
 performed on the wire, the settlement path, or the disclosure design. Do not put value you
 care about through it.
 
-**No release has completed a full mainnet canary.** Current source completed two standalone
-mainnet registrations by 2026-08-29, but shielding, channels, negotiation, settlement,
-recovery, and disclosure remain Sepolia-only. This is not a mainnet-verified install.
+**No release has completed a full mainnet canary.** Current source completed two mainnet
+registrations and two directional channel opens by 2026-08-30, but shielding, offers,
+settlement, recovery, and disclosure remain Sepolia-only. This is not a mainnet-verified
+install.
 
 **Relationship privacy is not complete.** Erebus hides the terms, not the relationship.
 Negotiation content and settlement amounts are confidential, and that is demonstrated: an

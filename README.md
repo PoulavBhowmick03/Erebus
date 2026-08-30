@@ -18,10 +18,10 @@ with a grant scoped to one deal and one named recipient.
 ## Status
 
 **Unaudited and experimental.** The full loop — two agents negotiating, settling atomically,
-and disclosing to a third party — runs on Starknet Sepolia at wire v3. Current source
-completed two standalone mainnet registrations on 2026-08-28 and 2026-08-29, but no mainnet
-shield, channel, negotiation, or settlement. See the
-[latest mainnet preflight](./docs/runs/2026-08-29-mainnet-preflight.md).
+and disclosing to a third party — runs on Starknet Sepolia at wire v3. Current source has
+four successful canonical-pool transactions on mainnet: two registrations and two
+directional channel opens. It has not completed a mainnet shield, offer, settlement, or
+disclosure. See the [mainnet channel run](./docs/runs/2026-08-30-mainnet-channels.md).
 It has had no external security review. Do not put value you care about through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
