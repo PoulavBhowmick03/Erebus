@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ def server_params(
             "EREBUS_MOCK_LATENCY_SECONDS": latency_seconds,
             "EREBUS_MOCK_SPENDABLE_NOTES": spendable_notes,
             "EREBUS_SETTLEMENT_ROLE": role,
-            "UV_CACHE_DIR": "/private/tmp/erebus-uv-cache",
+            "UV_CACHE_DIR": str(Path(tempfile.gettempdir()) / "erebus-uv-cache"),
         },
     )
 
