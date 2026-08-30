@@ -41,7 +41,7 @@ has not completed.
   both reconciled cleanly after proving depth (`docs/runs/2026-08-30-mainnet-channels.md`) |
 | Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
 | Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 156 Python, 43 TypeScript |
-| In flight | Mainnet Accounts A and B are deployed, registered, and connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access: the live screener key is non-zero, and the published interceptor needs operator-issued `/screen` partner credentials. |
+| In flight | Sprint manifest has four verified mainnet pool hashes, a public demo, and a public three-minute video. Mainnet Accounts A and B are deployed, registered, and connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 

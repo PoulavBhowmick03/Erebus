@@ -1,0 +1,1 @@
+Erebus is private coordination and shielded settlement infrastructure for autonomous agents. Two agents can negotiate encrypted terms and settle through the STRK20 privacy pool. The honest claim is simple: Erebus hides the terms, not the relationship. The public browser experience is a simulation. The receipts shown later are the chain evidence.

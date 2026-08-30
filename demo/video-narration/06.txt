@@ -1,0 +1,1 @@
+The remaining mainnet blocker is deposit screening. Our prover and fail-closed interceptor are ready, but the canonical pool requires operator-issued screening access before shielding. Until that arrives, we do not claim mainnet offers or settlement. The public demo, repository, four mainnet receipts, and reproducible Sepolia evidence are available at these links.

@@ -143,7 +143,8 @@ been exercised live. The short record, with pointers:
 - Mainnet has two registrations and two directional channel opens. No mainnet shield, offer,
   settlement, recovery, or disclosure has completed.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
-- The sprint video does not exist.
+- The 180-second sprint video is public and labels mainnet setup separately from the complete
+  Sepolia workflow.
 - No external operator completed a clean install.
 - No automated test reaches Starknet. The seam integration test drives the real MCP
   server and the real CLI, but stops at `doctor` against dead endpoints.
@@ -313,13 +314,14 @@ progress without treating registration as a complete Erebus run.
 | Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
 | Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
 | Three mainnet pool transactions | **Met: 4 verified.** Two registrations and two channel opens |
-| Public three-minute video       | Script ready; recording, upload, and public-link check remain |
-| Complete `strk20.json`          | Four verified mainnet hashes present; video URL remains empty |
+| Public three-minute video       | Met; 180-second public MP4 labels mainnet and Sepolia evidence |
+| Complete `strk20.json`          | Met; four verified hashes, public demo URL, and public video URL |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
 mechanical rather than a judgement call. Four hashes meet that check, but registrations and
 empty channel setup do not demonstrate Erebus's negotiation or settlement workflow. The
-entry remains incomplete until the public video is uploaded and its URL is in the manifest.
+The mechanical submission fields are complete. The hub still needs its scheduled refresh to
+read the new commit and independently mark them complete.
 
 #### Sepolia is not free either
 
@@ -1285,9 +1287,10 @@ board decides what to do next and §7 decides what done means.
       u128-boundary read wedge. `docs/runs/2026-08-19-sepolia-run.md`.
 - [x] Rewrite the demo video script. Restored 2026-08-30 with timed mainnet and Sepolia
       evidence segments.
-- [ ] Public three-minute video that names its network.
-- [ ] Complete `strk20.json`. Four verified mainnet hashes are present and labelled as
-      registrations and channel setup in public evidence. The uploaded video URL remains.
+- [x] Public three-minute video that names each network. Published 2026-08-30 at
+      `https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4`.
+- [x] Complete `strk20.json`. Four verified mainnet hashes, the public demo, and the public
+      video are present.
 - [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
       No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop

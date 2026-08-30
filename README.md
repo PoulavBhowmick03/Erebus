@@ -6,7 +6,9 @@ Erebus is experimental coordination and shielded-settlement infrastructure for A
 
 [Open the public demo](https://erebus-private-agents.vercel.app). It runs the reference-agent
 flow in the browser and links to the available on-chain evidence. The browser run is a
-simulation and does not ask for a wallet.
+simulation and does not ask for a wallet. The
+[three-minute evidence video](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
+labels mainnet setup separately from the complete Sepolia workflow.
 
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
 exchange structured offers over it, and settle atomically through the shielded pool.

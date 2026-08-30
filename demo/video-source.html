@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Erebus sprint video</title>
+  <style>
+    :root { color-scheme: dark; --ink:#f3f0e8; --muted:#aaa69c; --line:#34332f; --gold:#d5ae62; --green:#76c893; }
+    * { box-sizing: border-box; }
+    body { margin:0; width:1280px; height:720px; overflow:hidden; color:var(--ink); background:#0a0a09; font-family:Inter,ui-sans-serif,system-ui,sans-serif; }
+    main { width:100%; height:100%; padding:58px 70px 48px; display:flex; flex-direction:column; justify-content:space-between;
+      background:radial-gradient(circle at 84% 12%,rgba(213,174,98,.12),transparent 32%),linear-gradient(145deg,#11110f,#080808 64%); }
+    header,footer { display:flex; justify-content:space-between; align-items:center; font-size:14px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+    .network { color:var(--gold); border:1px solid #6f5d38; padding:8px 12px; border-radius:999px; }
+    .body { max-width:1140px; }
+    .kicker { color:var(--gold); font:600 15px/1.3 ui-monospace,SFMono-Regular,monospace; letter-spacing:.16em; text-transform:uppercase; margin:0 0 20px; }
+    h1 { font-family:Georgia,serif; font-weight:400; font-size:67px; line-height:1.02; margin:0 0 22px; letter-spacing:-.035em; }
+    h2 { font-family:Georgia,serif; font-weight:400; font-size:48px; line-height:1.08; margin:0 0 24px; letter-spacing:-.025em; }
+    p { color:#d2cec4; font-size:24px; line-height:1.45; margin:0; max-width:960px; }
+    .accent { color:var(--gold); }
+    .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:15px; margin-top:28px; }
+    .card { border:1px solid var(--line); background:rgba(255,255,255,.025); padding:18px 20px; border-radius:8px; min-height:92px; }
+    .card strong { display:block; color:var(--ink); font-size:19px; margin-bottom:8px; }
+    .card span { color:var(--muted); font:15px/1.35 ui-monospace,SFMono-Regular,monospace; overflow-wrap:anywhere; }
+    .ok { color:var(--green)!important; }
+    .flow { display:grid; grid-template-columns:repeat(5,1fr); align-items:center; gap:12px; margin-top:38px; }
+    .node { border:1px solid #4b4942; background:#141411; min-height:112px; padding:25px 13px; text-align:center; border-radius:8px; font-size:21px; display:flex; align-items:center; justify-content:center; }
+    .arrow { color:var(--gold); font-size:30px; text-align:center; }
+    .flow { grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr; }
+    .split { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin-top:30px; }
+    .split .card { min-height:210px; }
+    .split ul { color:#d2cec4; font-size:20px; line-height:1.55; padding-left:22px; }
+    .links { font:18px/1.8 ui-monospace,SFMono-Regular,monospace; color:#d2cec4; }
+    footer b { color:var(--ink); font-weight:500; }
+  </style>
+</head>
+<body>
+<main>
+  <header><span>EREBUS / PRIVATE SPRINT</span><span class="network" id="network"></span></header>
+  <section class="body" id="body"></section>
+  <footer><b>Negotiate in darkness, settle in silence.</b><span id="count"></span></footer>
+</main>
+<script>
+const slides = [
+  {network:"MAINNET + SEPOLIA", kicker:"Private coordination for autonomous agents", html:`<h1>Erebus hides the <span class="accent">terms</span>,<br>not the relationship.</h1><p>Encrypted negotiation records and atomic shielded settlement, exposed through role-bound MCP tools.</p><div class="card" style="margin-top:32px;max-width:760px"><strong>Public browser demo</strong><span>Simulation. Chain evidence is shown separately and labelled by network.</span></div>`},
+  {network:"SYSTEM ARCHITECTURE", kicker:"One request path", html:`<h2>Agent intent becomes one proven pool transition</h2><div class="flow"><div class="node">Buyer / Seller agent</div><div class="arrow">→</div><div class="node">Role-bound MCP</div><div class="arrow">→</div><div class="node">Rust SDK</div><div class="arrow">→</div><div class="node">Prover + RPC</div><div class="arrow">→</div><div class="node">STRK20 pool</div></div><p style="margin-top:30px">Rust owns keys, durable state, proving, signing, submission, and reconciliation.</p>`},
+  {network:"STARKNET MAINNET", kicker:"Four verified canonical-pool calls", html:`<h2>Mainnet setup is live</h2><div class="grid"><div class="card"><strong>Register Account A · block 14004848</strong><span>0x06597adb…e54c · </span><span class="ok">SUCCEEDED / L1</span></div><div class="card"><strong>Register Account B · block 14031230</strong><span>0x0572260b…7189 · </span><span class="ok">SUCCEEDED / L1</span></div><div class="card"><strong>Channel A → B · block 14100846</strong><span>0x0395563b…a09a · </span><span class="ok">SUCCEEDED / L2</span></div><div class="card"><strong>Channel B → A · block 14101246</strong><span>0x0467295d…1964 · </span><span class="ok">SUCCEEDED / L2</span></div></div><p style="margin-top:24px">These are registrations and empty channel setup. They are not a mainnet settlement.</p>`},
+  {network:"STARKNET SEPOLIA", kicker:"Complete agent workflow", html:`<h2>Negotiate → settle → disclose</h2><div class="grid"><div class="card"><strong>Role-bound agents over MCP</strong><span>BuyerPolicy and SellerPolicy decide from budgets and reserves.</span></div><div class="card"><strong>Atomic shielded settlement</strong><span>0xc897e94b…92cb · wire v3 · change preserved</span></div><div class="card"><strong>Recovery exercised</strong><span>Exact resubmission and expired-proof rebuild from packaged source.</span></div><div class="card"><strong>Scoped disclosure</strong><span>One registered recipient reconstructs one deal without spending authority.</span></div></div>`},
+  {network:"PRIVACY BOUNDARY", kicker:"Public observer vs authorized recipient", html:`<h2>What each observer learns</h2><div class="split"><div class="card"><strong>Public chain reader</strong><ul><li>Accounts, timing, action shape, note count</li><li>Counterparty at channel open</li><li>No wire-v3 offer terms</li></ul></div><div class="card"><strong>Authorized grant recipient</strong><ul><li>One selected deal record</li><li>Agreement and payment consistency</li><li>No spending authority</li></ul></div></div>`},
+  {network:"CURRENT LIMIT", kicker:"Honest submission", html:`<h2>Mainnet shielding still needs operator screening access.</h2><p>Until those credentials arrive, Erebus does not claim a mainnet offer or settlement.</p><div class="links" style="margin-top:32px">erebus-private-agents.vercel.app<br>github.com/PoulavBhowmick03/Erebus</div>`}
+];
+const index=Math.max(0,Math.min(slides.length-1,Number(new URLSearchParams(location.search).get("slide")||1)-1));
+document.getElementById("network").textContent=slides[index].network;
+document.getElementById("body").innerHTML=`<p class="kicker">${slides[index].kicker}</p>${slides[index].html}`;
+document.getElementById("count").textContent=`0${index+1} / 0${slides.length}`;
+</script>
+</body>
+</html>
