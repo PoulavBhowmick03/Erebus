@@ -21,9 +21,11 @@ with a grant scoped to one deal and one named recipient.
 
 **Unaudited and experimental.** The full loop — two agents negotiating, settling atomically,
 and disclosing to a third party — runs on Starknet Sepolia at wire v3. Current source has
-four successful canonical-pool transactions on mainnet: two registrations and two
-directional channel opens. It has not completed a mainnet shield, offer, settlement, or
-disclosure. See the [mainnet channel run](./docs/runs/2026-08-30-mainnet-channels.md).
+five successful canonical-pool calls on mainnet: three registrations and two directional
+channel opens. The sprint manifest lists the three registrations because each receipt emits
+the canonical-pool event that the hub checks. It has not completed a mainnet shield, offer,
+settlement, or disclosure. See the [Account C registration](./docs/runs/2026-08-30-mainnet-account-c-registration.md)
+and [mainnet channel run](./docs/runs/2026-08-30-mainnet-channels.md).
 It has had no external security review. Do not put value you care about through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts

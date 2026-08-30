@@ -140,7 +140,7 @@ been exercised live. The short record, with pointers:
 
 ### Not proven
 
-- Mainnet has two registrations and two directional channel opens. No mainnet shield, offer,
+- Mainnet has three registrations and two directional channel opens. No mainnet shield, offer,
   settlement, recovery, or disclosure has completed.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
 - The 180-second sprint video is public and labels mainnet setup separately from the complete
@@ -313,15 +313,16 @@ progress without treating registration as a complete Erebus run.
 | Public repository and licence   | Met                                                      |
 | Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
 | Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
-| Three mainnet pool transactions | **Met: 4 verified.** Two registrations and two channel opens |
+| Three mainnet pool transactions | **Met: 3 verified registrations.** Each receipt emits a canonical-pool event |
 | Public three-minute video       | Met; 180-second public MP4 labels mainnet and Sepolia evidence |
-| Complete `strk20.json`          | Met; four verified hashes, public demo URL, and public video URL |
+| Complete `strk20.json`          | Met; three hub-qualifying registration hashes, public demo URL, and public video URL |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
-mechanical rather than a judgement call. Four hashes meet that check, but registrations and
-empty channel setup do not demonstrate Erebus's negotiation or settlement workflow. The
-The mechanical submission fields are complete. The hub still needs its scheduled refresh to
-read the new commit and independently mark them complete.
+mechanical rather than a judgement call. The hub counts a hash only when its receipt emits
+an event from the canonical pool. Channel setup calls the pool but emits no pool event, so
+the manifest lists the three registrations. Registrations and empty channel setup do not
+demonstrate Erebus's negotiation or settlement workflow. The hub still needs its scheduled
+refresh to read the new commit and independently mark the fields complete.
 
 #### Sepolia is not free either
 
@@ -383,7 +384,7 @@ starts.
 | D12 | Pool allowance mechanism           | Standing approval, decided 2026-08-16                                                                                                                         | Poulav | Decided, built                                                                         |
 | D13 | Who provisions allowance and notes | Operator at install; not an agent tool                                                                                                                        | Both   | Before the operator product                                                            |
 | D15 | AVNU as a swap dependency          | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount                                  | Both   | Before Phase 10.3 builds                                                               |
-| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A and B registrations and both directional channel opens succeeded; screening still blocks shielding and the full workflow | Both | In progress |
+| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A, B, and C registrations and both A/B directional channel opens succeeded; screening still blocks shielding and the full workflow | Both | In progress |
 
 ### External questions
 
@@ -466,15 +467,16 @@ Work:
 6. Point `scripts/observer.py` at the new settlement with no key and record what it recovers.
 7. Run a viewing-key disclosure against the same deal and record the reconstruction.
 8. Rewrite the demo video script. **Done 2026-08-30.** `docs/demo-video-script.md`
-   distinguishes the four mainnet setup transactions from the Sepolia full-workflow evidence.
+   distinguishes the recorded four-transaction mainnet snapshot from the Sepolia
+   full-workflow evidence. A third registration was added after recording.
 9. Record the three-minute walkthrough. State the network out loud and on screen. Show
    `doctor` failing on a missing allowance and then passing, and label registration as one
    mainnet primitive rather than a completed mainnet product flow.
 10. Upload the video and put its URL in `strk20.json`.
 11. Put the Sepolia transaction hashes in the demo evidence section, labelled as Sepolia.
-12. Say in the README and on the demo page that two registrations and two directional
+12. Say in the README and on the demo page that three registrations and two directional
     channel opens exist on mainnet, while the full mainnet workflow does not. **Done
-    2026-08-30.**
+    2026-08-31.**
 
 Exit:
 

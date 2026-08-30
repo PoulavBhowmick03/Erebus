@@ -2,8 +2,7 @@
   "transactions": [
     "0x06597adb6581bb1910d30b31139fe871665db4cc61fefef8120b89773528e54c",
     "0x0572260b651525ea39ef717721bcc9fefc89a2087894654efb38111e09267189",
-    "0x0395563b33df0d121ef9a7aa720da7cbbc378f7c0ed9849d2e034a1a08ada09a",
-    "0x0467295d1d167607cf321cb6076f1ccd1b08f36d4c7575cd8e9dd242c4c01964"
+    "0x0159748de29d9dbe7016c9eb37459cbd7dd72290c3bc22412a034fb1c4c38a99"
   ],
   "contracts": [],
   "demo_video": "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4",

@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-30.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-08-31.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -11,8 +11,8 @@ privacy claim changed twice. That is why this page exists.
 ## In one line
 
 Erebus negotiates and settles privately between two agents on Starknet Sepolia. On mainnet,
-A and B are registered and have opened channels in both directions; a shielded settlement
-has not completed.
+A, B, and C are registered, and A and B have opened channels in both directions; a shielded
+settlement has not completed.
 
 ---
 
@@ -20,7 +20,7 @@ has not completed.
 
 | | |
 |---|---|
-| Network | Full workflow: Sepolia. Mainnet: A and B registered, then opened directional channels in blocks `14100846` and `14101246`; no shield, offer, settlement, or disclosure yet |
+| Network | Full workflow: Sepolia. Mainnet: A, B, and C registered; A and B opened directional channels in blocks `14100846` and `14101246`; no shield, offer, settlement, or disclosure yet |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -38,10 +38,13 @@ has not completed.
   succeeded on 2026-08-29, followed by a proof-only shield probe that confirmed the local
   prover returns no required screening signature (`docs/runs/2026-08-29-mainnet-preflight.md`).
   Mainnet channel opens `0x395563b3…a09a` and `0x467295d1…1964` succeeded on 2026-08-30;
-  both reconciled cleanly after proving depth (`docs/runs/2026-08-30-mainnet-channels.md`) |
+  both reconciled cleanly after proving depth (`docs/runs/2026-08-30-mainnet-channels.md`).
+  C registration `0x159748de…8a99` then succeeded in block `14111797`, emitted the
+  canonical-pool event, and became the third hub-qualifying manifest hash
+  (`docs/runs/2026-08-30-mainnet-account-c-registration.md`) |
 | Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
 | Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 156 Python, 43 TypeScript |
-| In flight | Sprint manifest has four verified mainnet pool hashes, a public demo, and a public three-minute video. Mainnet Accounts A and B are deployed, registered, and connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access. |
+| In flight | Sprint manifest has three hub-qualifying mainnet registration hashes, a public demo, and a public three-minute video. Mainnet Accounts A, B, and C are deployed and registered. A and B are connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access. |
 | CI | green on every push: Rust, Python, secret scan, dependency hashes |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
@@ -62,7 +65,7 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Run the full workflow on mainnet.** Two registrations and two channel opens are proven.
+- **Run the full workflow on mainnet.** Three registrations and two channel opens are proven.
   Shielding, offers, settlement, recovery, and disclosure are not.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.

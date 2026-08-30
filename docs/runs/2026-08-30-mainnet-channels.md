@@ -42,9 +42,11 @@ ready. Account A retained a 19 STRK pool allowance. Account B retained 6 STRK.
 
 ## Evidence boundary
 
-These are real mainnet channel-opening transactions and bring the sprint manifest to four
-successful canonical-pool transactions: two registrations and two channel opens. Opening a
-channel publicly exposes the counterparty relationship. Mainnet shielding remains blocked
-on operator-issued screening access, so mainnet offers, settlement, and disclosure have not
+These are real mainnet channel-opening transactions. They call the canonical pool, but their
+receipts do not emit an event from the pool address. The sprint hub therefore does not count
+them toward its mechanical three-transaction requirement. The manifest uses three
+registration receipts instead; each emits the required pool event. Opening a channel
+publicly exposes the counterparty relationship. Mainnet shielding remains blocked on
+operator-issued screening access, so mainnet offers, settlement, and disclosure have not
 been demonstrated. The complete agent negotiation, shielded settlement, observer test,
 recovery, and selective-disclosure evidence remains on Sepolia.

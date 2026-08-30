@@ -25,8 +25,10 @@ Show the architecture diagram. Do not open a terminal containing credentials.
 one channel in each direction. These four transactions succeeded. Channel setup makes the
 relationship public, and it is not a completed settlement.”
 
-Show the four mainnet Voyager receipts from `strk20.json`. Show `SUCCEEDED`, block number,
-and the canonical pool address for at least one channel transaction.
+The published video records that four-transaction snapshot. After recording, Account C also
+registered successfully. `strk20.json` now lists the three registration receipts because
+they emit the pool events that the sprint hub counts. The two channel receipts remain in the
+mainnet run record.
 
 ## 1:35–2:20 — Complete Sepolia workflow
 
