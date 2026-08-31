@@ -96,10 +96,10 @@ Never describe this as private in an absolute sense.
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
 | What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-31 reconciliation |
-| How to reproduce a run | [runbook.md](./runbook.md) | current for Protocol 4, with historical receipt tables |
+| How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 reference; the clean-machine mainnet end-to-end rewrite is a September 7 gate |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
 | Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-31 reconciliation |
-| What is missing for production | [production-gaps.md](./production-gaps.md) | current summary with a preserved historical baseline |
+| What is missing for production | [production-gaps.md](./production-gaps.md) | current gaps only; completed history lives in dated run records |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
 | The pitch | [poc.md](./poc.md) | current |
@@ -151,22 +151,17 @@ only metadata and the path. The capsule does not enter the model transcript.
 
 ## The next work
 
-1. ~~Grant the Sepolia allowance, then do one full run on merged code.~~ Done 2026-08-19:
-   `0x4191fe47…f341`, with change, a third-party disclosure, and observer output. It found
-   and fixed a read-wedging bug on the way; see `docs/runs/2026-08-19-sepolia-run.md`.
-2. ~~Move `server.py` into the package with an entry point.~~ Done 2026-08-19. The
-   `v0.1.0` tag publishes the wheels and the index.
-3. ~~Finish the protocol-4 product seam.~~ Done 2026-08-26: every chain write takes a
-   caller-supplied operation ID through MCP, Python, CLI, and Rust; channel state returns a
-   settlement list; protocol mismatches fail by name.
-4. ~~Preserve recovery error names through MCP.~~ Done 2026-08-27. The seam preserves all
-   four Protocol 4 recovery and funding codes.
-5. ~~Finish spending reservation reconciliation.~~ Done 2026-08-27. Reservations are
-   atomic and fail closed. Rust reconciliation owns outcomes, and committed daily spend
-   uses Starknet block timestamps.
-6. ~~Run the packaged Sepolia recovery canary.~~ Done 2026-08-27 from a clean local wheel
-   install. Exact resubmission and expired-proof rebuild both completed. See
-   [the run record](./runs/2026-08-27-packaged-recovery-canary.md).
-7. **Prepare Protocol 4 as `v0.2.0`, but do not publish it yet.** The Starkscan-backed
-   packaged workflow passed on mainnet on 2026-08-31. Finish the evidence and release review
-   in [v0.2-release-plan.md](./v0.2-release-plan.md) before creating the tag.
+The sprint deadline is now September 7. The active work is deliberately narrow:
+
+1. Independently verify and integrate, or explicitly exclude, the committed second mainnet
+   canary.
+2. Rewrite `runbook.md` as a tested end-to-end operator guide.
+3. Complete an external clean install from release-candidate artifacts.
+4. Review hosted-prover recovery, transaction idempotency, and secret boundaries.
+5. Replace the pre-canary video with the complete mainnet workflow.
+6. Evaluate the announced StarkWare tooling without destabilizing the known-good path.
+7. Run the final gates, public-link checks, and sprint-hub refresh.
+8. Request explicit owner approval before publishing `v0.2.0`.
+
+[`roadmap.md`](./roadmap.md) defines acceptance checks and sequencing.
+[`v0.2-release-plan.md`](./v0.2-release-plan.md) contains only the remaining release work.

@@ -129,9 +129,9 @@ them.
 
 - Style opinions, formatting nits, or "consider adding more tests" without a specific
   failure that test would catch.
-- Findings about planned work already tracked in `docs/roadmap.md` §7 Phase 7+ (crash
-  recovery, wire padding, repeat deals, external audit). Assume I know. The exception is if
-  you think one is *more urgent* than the roadmap treats it — say that and why.
+- Findings that only repeat a gap already listed in `docs/roadmap.md` or
+  `docs/production-gaps.md`. The exception is a concrete new failure sequence, evidence that
+  the priority is wrong, or proof that a recorded mitigation does not work.
 - Speculation presented as fact. If you infer something without running it, label it as an
   inference and name the check that would settle it.
 

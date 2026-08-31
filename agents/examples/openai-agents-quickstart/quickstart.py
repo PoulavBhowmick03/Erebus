@@ -16,7 +16,7 @@
 # name = "erebus"
 # url = "https://poulavbhowmick03.github.io/Erebus/simple"
 # ///
-"""OpenAI Agents SDK quickstart (roadmap 9.4 / plan.md task 7).
+"""OpenAI Agents SDK quickstart for the optional framework integration.
 
 Two GPT-backed agents negotiate and settle over Erebus's MCP server, driven entirely
 through the OpenAI Agents SDK's own MCP tool-calling loop rather than the deterministic
@@ -30,7 +30,7 @@ installed `erebus-mcp-server` console script, the same one a `pip install
 erebus-mcp-server` gives an outsider; it does not import anything from `agents/` or
 `mcp-server/` in this repository.
 
-Governing principle (CLAUDE.md constraint 6, extended in roadmap Phase 9): a model may
+Governing principle (CLAUDE.md constraint 6): a model may
 decide what to offer, but it must never be the thing that authorizes value movement. The
 model here is free to negotiate — propose, counter, walk — but the role guard
 (`accept_and_settle` refuses a payee) and any configured spending caps are enforced inside
