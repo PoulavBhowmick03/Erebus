@@ -146,6 +146,11 @@ jobs:
           node-version: "22"
           cache: pnpm
 
+      - name: Build the pinned upstream oracle package
+        run: |
+          npm ci --prefix upstream/starknet-privacy/sdk
+          npm run --prefix upstream/starknet-privacy/sdk build
+
       - name: Install
         run: pnpm install --frozen-lockfile
 
