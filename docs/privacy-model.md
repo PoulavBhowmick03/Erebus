@@ -4,8 +4,9 @@ The canonical statement of what Erebus hides and what it does not. Everything el
 repository that describes privacy should point here rather than restate it, because a claim
 maintained in five places drifts in five directions.
 
-Scope: live wire v2 and wire v3 on Sepolia. Wire v3 has repeat-deal and scoped-disclosure
-receipts from 2026-08-22. This is not a security review.
+Scope: live wire v2 and wire v3 on Sepolia, plus the bounded wire-v3 mainnet canary from
+2026-08-31. Wire v3 has repeat-deal and scoped-disclosure evidence. This is not a security
+review.
 
 ---
 
@@ -100,8 +101,9 @@ Verified in `sdk/rs/tests/wire_v2_fingerprint.rs`. Tracked as friction F31.
 **Wire-v3 status:** implemented and enabled for new source-built channels. It carries a
 64-bit deal ID and masks all three spare bits with a separately derived HKDF keystream. Rust and TypeScript
 agree on normative vectors, and the historical classifier scores 0.5000 against the
-codec-derived v3 fixture and 10,000 synthetic negatives. This proves a codec property, not
-a live-system property; no Sepolia wire-v3 receipt exists yet.
+codec-derived v3 fixture and 10,000 synthetic negatives. Live Sepolia wire-v3 receipts and
+the 2026-08-31 mainnet settlement provide system evidence that the old classifier does not
+recover the framed transcript. This is not a general anonymity claim.
 
 ### 2. Submission linkability
 

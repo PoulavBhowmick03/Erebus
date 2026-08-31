@@ -46,11 +46,12 @@ TRANSACTIONS = (
     "shield",
     "channel_a_to_b",
     "channel_b_to_a",
+    "proposal",
+    "counter",
     "settlement",
-    "disclosure_grant",
 )
 CHECKS = (
-    "screening_metric_incremented",
+    "screening_signature_present",
     "payment_change_conserved",
     "observer_terms_hidden",
     "recovery_verified",

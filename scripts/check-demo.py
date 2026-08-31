@@ -12,7 +12,7 @@ from pathlib import Path
 REQUIRED_COPY = (
     "This browser simulation",
     "It does not submit a transaction or use a wallet.",
-    "No mainnet settlement is claimed.",
+    "A screened shield, MCP negotiation, and atomic 0.8 STRK settlement",
     "Wire v3 encrypts offer terms",
     "It does not hide transaction timing",
     "Readable for one deal",

@@ -8,7 +8,7 @@ Erebus is experimental coordination and shielded-settlement infrastructure for A
 flow in the browser and links to the available on-chain evidence. The browser run is a
 simulation and does not ask for a wallet. The
 [three-minute evidence video](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
-labels mainnet setup separately from the complete Sepolia workflow.
+records the sprint state before the later full mainnet canary.
 
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
 exchange structured offers over it, and settle atomically through the shielded pool.
@@ -20,18 +20,16 @@ with a grant scoped to one deal and one named recipient.
 ## Status
 
 **Unaudited and experimental.** The full loop — two agents negotiating, settling atomically,
-and disclosing to a third party — runs on Starknet Sepolia at wire v3. Current source has
-five successful canonical-pool calls on mainnet: three registrations and two directional
-channel opens. The sprint manifest lists the three registrations because each receipt emits
-the canonical-pool event that the hub checks. It has not completed a mainnet shield, offer,
-settlement, or disclosure. See the [Account C registration](./docs/runs/2026-08-30-mainnet-account-c-registration.md)
-and [mainnet channel run](./docs/runs/2026-08-30-mainnet-channels.md).
+and disclosing to a third party — runs on Starknet Sepolia at wire v3. One bounded mainnet
+canary also completed a Starkscan-screened 1 STRK shield, MCP proposal and counter, atomic
+0.8 STRK settlement with 0.2 STRK change, reconciliation, observer test, and scoped
+disclosure. See the [mainnet run](./docs/runs/2026-08-31-mainnet-starkscan-workflow.md).
 It has had no external security review. Do not put value you care about through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
 are confidential, and that is demonstrated rather than asserted: an observer with no key
 recovers nothing from a settlement. New source-built channels default to wire v3, which
-removes v2's fixed salt-shape classifier: against live Sepolia wire-v3 transactions that
+removes v2's fixed salt-shape classifier: against live wire-v3 transactions that
 classifier scores 0.5000 balanced accuracy, which is chance. That a channel was opened, and
 with whom, is still public.
 [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
@@ -257,8 +255,8 @@ For driving the same loop from a mainstream agent framework instead of `erebus_a
 two GPT-backed agents negotiating and settling entirely through the OpenAI Agents SDK's own
 MCP tool-calling loop, installed from published wheels rather than this checkout.
 
-A worked example against Sepolia, with real transaction hashes, timings and the failures
-along the way, is in [docs/runs/](./docs/runs/).
+Worked examples against mainnet and Sepolia, with real transaction hashes, timings, and
+failure and recovery evidence, are in [docs/runs/](./docs/runs/).
 
 Configuration, the full tool surface, error handling, and the raw CLI protocol are in the
 [reference](./docs/reference.md).
@@ -274,7 +272,7 @@ Configuration, the full tool surface, error handling, and the raw CLI protocol a
 | [Status](./docs/status.md) | Current state in one page; the tiebreaker between documents |
 | [Friction log](./docs/friction.md) | Where the stack fought us, and how we worked around it |
 | [Agent skill](./skills/erebus/) | Operating Erebus from an agent, with unsafe-behavior evals |
-| [Run evidence](./docs/runs/) | Real Sepolia runs with transaction hashes and timings |
+| [Run evidence](./docs/runs/) | Real mainnet and Sepolia runs with transaction hashes and timings |
 
 ## Repo layout
 

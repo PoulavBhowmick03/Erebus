@@ -6,11 +6,12 @@
 performed on the wire, the settlement path, or the disclosure design. Do not put value you
 care about through it.
 
-**Mainnet readiness is a release gate, not a forecast.** Current source completed three
-mainnet registrations and two directional channel opens by 2026-08-30. Shielding, offers,
-settlement, recovery, and disclosure remain Sepolia-only. The `v0.2.0` tag is blocked until
-a packaged full mainnet canary is recorded and this paragraph is updated to link that
-evidence. Until then, this is not a mainnet-verified install.
+**Mainnet readiness is a release gate, not a forecast.** The `v0.2.0` source completed one
+bounded Starkscan-backed mainnet canary: screened shield, MCP negotiation, atomic settlement,
+reconciliation, observer test, and scoped disclosure. The secret-free evidence is in
+[`docs/runs/v0.2-mainnet-canary.json`](docs/runs/v0.2-mainnet-canary.json) and the
+[dated run record](docs/runs/2026-08-31-mainnet-starkscan-workflow.md). One canary does not
+prove capacity, uptime, independent review, or safe use with material value.
 
 **Relationship privacy is not complete.** Erebus hides the terms, not the relationship.
 Negotiation content and settlement amounts are confidential, and that is demonstrated: an

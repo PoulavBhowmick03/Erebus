@@ -19,26 +19,25 @@ Starknet state through an RPC and produces the proof used by the STRK20 pool.”
 
 Show the architecture diagram. Do not open a terminal containing credentials.
 
-## 0:55–1:35 — Mainnet evidence
+## 0:55–1:35 — Recorded mainnet evidence
 
 “On Starknet mainnet, both identities registered with the canonical pool. They then opened
 one channel in each direction. These four transactions succeeded. Channel setup makes the
 relationship public, and it is not a completed settlement.”
 
-The published video records that four-transaction snapshot. After recording, Account C also
-registered successfully. `strk20.json` now lists the three registration receipts because
-they emit the pool events that the sprint hub counts. The two channel receipts remain in the
-mainnet run record.
+The published video records that four-transaction snapshot. It was recorded before the
+later full mainnet canary. Account C subsequently registered, and the screened workflow
+described below completed on 2026-08-31.
 
-## 1:35–2:20 — Complete Sepolia workflow
+## 1:35–2:20 — Complete mainnet workflow
 
-“The complete workflow currently runs on Starknet Sepolia. Two role-bound agents negotiate
-through MCP, settle from shielded notes, return change, and reconstruct the result for an
-authorized recipient. Durable operation IDs and reconciliation prevent blind retries.”
+“The complete bounded workflow now runs on Starknet mainnet. Starkscan returned a screened
+proof for a 1 STRK shield. Two role-bound agents negotiated through MCP, settled 0.8 STRK,
+returned 0.2 STRK change, and reconstructed the result for an authorized recipient. Durable
+operation IDs and reconciliation prevented a blind retry when the terminal closed.”
 
-Show the recorded MCP settlement and disclosure evidence in
-`docs/runs/2026-08-22-agents-mcp-wire-v3.md` and the packaged recovery evidence in
-`docs/runs/2026-08-27-packaged-recovery-canary.md`.
+Show `docs/runs/2026-08-31-mainnet-starkscan-workflow.md`, including the four mainnet
+receipts, conservation check, reconciliation result, observer result, and disclosure result.
 
 ## 2:20–2:45 — Observer and disclosure
 

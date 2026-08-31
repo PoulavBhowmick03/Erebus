@@ -75,8 +75,9 @@ cd sdk/rs && cargo test && cargo clippy --all-targets -- -D warnings \
   && RUSTDOCFLAGS='-D warnings' cargo doc --no-deps && cargo fmt --check
 cd ../.. && uv sync --all-packages && uv run pytest
 ```
-Expected as of 2026-08-29: 351 Rust passed, seven live Rust tests ignored, and 154
-Python tests passed. If the counts differ from `docs/status.md`, report a finding.
+Expected as of 2026-08-31: 288 Rust passed, seven live Rust tests ignored, 191 Python tests
+passed, and two opt-in Python canaries skipped. If the counts differ from `docs/status.md`,
+report a finding.
 
 ### 2. Does the published release actually work?
 Install `erebus-mcp-server` from the public index

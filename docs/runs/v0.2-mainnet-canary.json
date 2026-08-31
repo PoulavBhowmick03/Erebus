@@ -1,0 +1,25 @@
+{
+  "release": "0.2.0",
+  "package_version": "0.2.0",
+  "status": "passed",
+  "network": "SN_MAIN",
+  "source_commit": "00554201451e4a7659d4fda02694e34509ad4018",
+  "prover_version": "Starkscan async relay; upstream version undisclosed",
+  "rpc_spec_version": "0.10.3-rc.0",
+  "completed_at": "2026-08-31T10:23:25Z",
+  "transactions": {
+    "shield": {"transaction_hash": "0x1a30c0b6e8db645df67795f2356cb6a251b9680d0b61cea54d28d04edd70d1"},
+    "channel_a_to_b": {"transaction_hash": "0x395563b33df0d121ef9a7aa720da7cbbc378f7c0ed9849d2e034a1a08ada09a"},
+    "channel_b_to_a": {"transaction_hash": "0x467295d1d167607cf321cb6076f1ccd1b08f36d4c7575cd8e9dd242c4c01964"},
+    "proposal": {"transaction_hash": "0x5a287657f829a82ecc83a0543674f1397aa75bdade8365b28f72e3925d759b5"},
+    "counter": {"transaction_hash": "0x4126a3ee0971728d7181296fe4d128f12fc6a828a172b7bd12d8f5128364923"},
+    "settlement": {"transaction_hash": "0x72adebfcffdfd45bba66d2152c7e11b50107aa0fe2b4c9f1ea851da16ab6c6d"}
+  },
+  "checks": {
+    "screening_signature_present": true,
+    "payment_change_conserved": true,
+    "observer_terms_hidden": true,
+    "recovery_verified": true,
+    "disclosure_verified": true
+  }
+}

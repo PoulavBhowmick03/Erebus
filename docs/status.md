@@ -48,8 +48,8 @@ change; the relationship and traffic metadata remain public.
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
 | Tests | 288 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` release candidate. The Starkscan-backed packaged mainnet canary passed. Publication remains blocked until the evidence record, full repository checks, and release review pass; no tag or package has been published |
-| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The latest pushed workflow run is green; the new Starkscan transport is not pushed yet |
+| In flight | `v0.2.0` release candidate. The Starkscan-backed packaged mainnet canary, evidence review, and local repository gates passed. Publication remains held by owner decision; no tag or package has been published |
+| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The Starkscan transport must remain green on `main` before release |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
 ## What Erebus does
@@ -95,10 +95,10 @@ Never describe this as private in an absolute sense.
 |---|---|---|
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
-| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-28 reconciliation |
+| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-31 reconciliation |
 | How to reproduce a run | [runbook.md](./runbook.md) | current for Protocol 4, with historical receipt tables |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
-| Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-28 reconciliation |
+| Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-31 reconciliation |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | current summary with a preserved historical baseline |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |

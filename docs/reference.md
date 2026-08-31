@@ -41,7 +41,7 @@ printed address by hand, then `activate`. Both are documented in the script's he
 
 > **Registration is irreversible and writes the identity's pool private key encrypted to
 > the pool's auditor on-chain.** From that moment the auditor can decrypt everything that
-> identity ever does. Use testnet keys only.
+> identity ever does. Use a dedicated low-value identity for any mainnet canary.
 
 **Three keys, and conflating them is the usual mistake:**
 
@@ -64,7 +64,7 @@ whatever is missing.
 | Variable | Meaning |
 |---|---|
 | `AGENT_ADDRESS` | This identity's Starknet account address |
-| `PROVING_SERVICE_URL` | Your prover. It receives the pool private key, so it must be one you control |
+| `PROVING_SERVICE_URL` | A trusted prover. It receives the pool private key. Erebus supports local JSON-RPC and the Starkscan asynchronous mainnet relay |
 | `EREBUS_SETTLEMENT_ROLE` | `payer`, `payee`, or `both`. A payee server structurally refuses `accept_and_settle` |
 
 **Backend selection:** `EREBUS_BACKEND` is `mock` (default — no chain, no keys, no gas) or
@@ -78,6 +78,12 @@ whatever is missing.
 | `TOKEN_ADDRESS` | The ERC-20 being settled |
 | `POOL_KEY_FILE`, `ACCOUNT_KEY_FILE` | Paths, mode `0600`. Never read by Python |
 | `EREBUS_STATE_DIR` | Channel state, mode `0700` |
+
+When `PROVING_SERVICE_URL=https://api.starkscan.co/v1/SN_MAIN/prove`, set
+`STARKSCAN_API_KEY` in a protected, ignored environment file. The relay must report `prove`
+scope. It replaces the local transaction-prover and screening interceptor, but it becomes
+part of the pool-key trust boundary. Proof job and one-time result records are persisted
+under `EREBUS_STATE_DIR/prover-jobs` for safe recovery.
 
 **Optional:** `EREBUS_CLI` (explicit binary path; defaults to the packaged one),
 `EREBUS_SKIP_STARTUP_DOCTOR=1` (skip the boot-time inspection when starting offline), and

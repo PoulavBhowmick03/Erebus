@@ -3,7 +3,8 @@
 > **Historical wire-v2 design record.** Wire v3 is now the source default. Live Sepolia
 > runs cover repeat deals and recipient-bound per-deal disclosure. The fixed v2 salt
 > classifier scores at chance against the recorded v3 transactions. Protocol 4 also adds
-> durable operation recovery. See `docs/status.md` and `docs/wire-v3.md` for current behavior.
+> durable operation recovery. A bounded mainnet wire-v3 workflow completed on 2026-08-31.
+> See `docs/status.md` and `docs/wire-v3.md` for current behavior.
 
 Two AI agents that need to transact have no private way to do it. They can negotiate over an API and settle with a public transfer, which puts their prices, counterparties and volumes on-chain for anyone to look at. Or they settle off-chain and give up atomicity, so one side can agree and not pay.
 
@@ -90,9 +91,9 @@ Current verified scope:
 
 |                                                                                           |                                           |
 | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Wire v3 framed repeat deals and scoped disclosure | Live Sepolia evidence from 2026-08-22 |
+| Wire v3 framed repeat deals and scoped disclosure | Live Sepolia evidence from 2026-08-22 and bounded mainnet evidence from 2026-08-31 |
 | Protocol 4 operation IDs, journal, reconcile, and resume | Local fault matrix and seam tests |
-| Rust, Python, and TypeScript suites | 351 Rust passed plus 7 ignored live tests, 154 Python, 43 TypeScript |
+| Rust, Python, and TypeScript suites | 288 Rust passed plus 7 ignored live tests, 191 Python passed plus 2 skipped, 43 TypeScript |
 | Unsafe-behavior evaluations | 9/9 fresh-session pass on 2026-08-26 |
 | Packaged recovery canary | Complete from clean local wheels on Sepolia: exact resubmission and expired-proof rebuild |
 
@@ -111,5 +112,5 @@ viewing-key reveal, driven end to end through an MCP server so any agent framewo
 
 The salt lane is a general data-carrying mechanism the privacy stack already had and nobody
 had used. Erebus demonstrated both halves: a note can say something rather than only be
-worth something, and public salts must carry ciphertext rather than plaintext. Wire v2 now
-does that in Rust and has completed the full flow against the Sepolia pool.
+worth something, and public salts must carry ciphertext rather than plaintext. Wire v3 now
+does that in Rust and has completed bounded flows against the Sepolia and mainnet pools.

@@ -1,6 +1,6 @@
 # Erebus product roadmap
 
-Last source reconciliation: 2026-08-30, against source commit `0bf51f1` plus the evidence
+Last source reconciliation: 2026-08-31, against source commit `0055420` plus the evidence
 updates recorded below.
 
 This document is the shared plan for Poulav and Ishita. It covers the protocol, SDKs, MCP
@@ -56,13 +56,13 @@ The sprint entry can finish without production readiness. The README and demo mu
 that distinction clear.
 
 **D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. Three
-registrations and two directional channel opens have now succeeded. The hub reports the
-sprint entry as finished, but the actual mainnet settlement workflow remains blocked on
-screening. `v0.2.0` publication now waits for that full packaged mainnet workflow.
+registrations and two directional channel opens succeeded first. On 2026-08-31, Starkscan
+proving access unblocked a screened shield and the complete bounded MCP settlement workflow.
+The hub reports the sprint entry as finished. `v0.2.0` remains unpublished by owner decision.
 
 ## 3. Current evidence
 
-This section records what exists on 2026-08-28. Later sections describe the missing work.
+This section records what exists on 2026-08-31. Later sections describe the missing work.
 
 ### Committed and working
 
@@ -101,12 +101,16 @@ This section records what exists on 2026-08-28. Later sections describe the miss
   `0x467295d1d167607cf321cb6076f1ccd1b08f36d4c7575cd8e9dd242c4c01964`, accepted in block
   `14101246`. See `docs/runs/2026-08-30-mainnet-channels.md` for both channel receipts and
   their recovery evidence.
+- A complete bounded mainnet workflow passed on 2026-08-31 using the Starkscan hosted
+  prover: screened 1 STRK shield, MCP proposal and counter, atomic 0.8 STRK settlement with
+  0.2 STRK change, reconciliation, observer check, and recipient-bound disclosure. See
+  `docs/runs/2026-08-31-mainnet-starkscan-workflow.md`.
 - The Rust client grants and reads the pool's STRK allowance, and `agent.sh fund` sizes its
   approval as deposit plus the live fee.
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- The 2026-08-31 release-candidate tree passes 287 Rust tests (plus seven ignored live
+- The 2026-08-31 release-candidate tree passes 288 Rust tests (plus seven ignored live
   probes), 191 Python tests (plus two opt-in Sepolia canaries), and 43 TypeScript tests.
   Seven live Rust tests are intentionally ignored: two shared-prover probes, three guarded
   mainnet registration canaries, one account-rotation canary, and one screening probe.
@@ -142,11 +146,12 @@ been exercised live. The short record, with pointers:
 
 ### Not proven
 
-- Mainnet has three registrations and two directional channel opens. No mainnet shield, offer,
-  settlement, recovery, or disclosure has completed.
+- One bounded mainnet shield, MCP negotiation, atomic settlement, recovery check, observer
+  check, and disclosure completed. This does not prove audit, capacity, uptime, or safe use
+  with material value.
 - The public demo is a browser simulation. It does not use a wallet or submit a transaction.
-- The 180-second sprint video is public and labels mainnet setup separately from the complete
-  Sepolia workflow.
+- The 180-second sprint video is public and accurately records the earlier mainnet setup plus
+  complete Sepolia workflow. It predates the later full mainnet canary.
 - No external operator completed a clean install.
 - No automated test reaches Starknet. The seam integration test drives the real MCP
   server and the real CLI, but stops at `doctor` against dead endpoints.
@@ -305,10 +310,10 @@ receipt, the evaluation must fail. It must also fail for payee settlement or fal
 | No secret-safe log policy     | Viewing grants and paths can enter logs                                                                                | Redact grants, keys, authorization headers, and RPC secrets                   |
 | ~~No release provenance~~     | `SHA256SUMS` and a CycloneDX SBOM over 224 components, generated from lockfiles alone, `--check` on every push         | The tag publishes them                                                        |
 
-### 5.7 Sprint delivery, and the bounded mainnet canary
+### 5.7 Sprint delivery and the bounded mainnet canary
 
 D14 was reversed on 2026-08-28 for a bounded mainnet canary. This section records the live
-progress without treating registration as a complete Erebus run.
+result without treating one successful workflow as production readiness.
 
 #### What the sprint entry can and cannot reach now
 
@@ -317,16 +322,15 @@ progress without treating registration as a complete Erebus run.
 | Public repository and licence   | Met                                                      |
 | Public demo URL                 | Met, `https://erebus-private-agents.vercel.app`          |
 | Registered in `registry.json`   | Met, PR merged 2026-08-14                                |
-| Three mainnet pool transactions | **Met: 3 verified registrations.** Each receipt emits a canonical-pool event |
+| Three mainnet pool transactions | **Met: 7 verified pool transactions in `strk20.json`, including the shield and settlement** |
 | Public three-minute video       | Met; 180-second public MP4 labels mainnet and Sepolia evidence |
-| Complete `strk20.json`          | Met; three hub-qualifying registration hashes, public demo URL, and public video URL |
+| Complete `strk20.json`          | Met; seven mainnet hashes, public demo URL, and public video URL |
 
 Thirty percent of the score is a working mainnet product, and the transaction check is
-mechanical rather than a judgement call. The hub counts a hash only when its receipt emits
-an event from the canonical pool. Channel setup calls the pool but emits no pool event, so
-the manifest lists the three registrations. Registrations and empty channel setup do not
-demonstrate Erebus's negotiation or settlement workflow. The hub independently read commit
-`306c2f2`, verified all three registrations, and reports the sprint entry as finished.
+mechanical rather than a judgement call. The hub independently read commit `306c2f2`,
+verified the first three registrations, and reported the sprint entry as finished. The
+manifest now also records the screened shield, buyer proposal, seller counter, and atomic
+settlement from the later bounded mainnet workflow.
 
 #### Sepolia is not free either
 
@@ -347,9 +351,11 @@ The mainnet pool is
 `apply_actions`. Account A is deployed, registered, and held `184.691083159243495520 STRK`
 after registration. Its exact 6 STRK allowance was consumed by that call.
 
-A published hosted mainnet prover has still not been found. The working 2026-08-28 path is a
-local ARM64 build of `PRIVACY-0.14.3-RC.2` backed by Alchemy's Starknet mainnet v0.10 RPC.
-Alchemy preserved `PROOF1` facts through estimation and submission; Cartridge did not.
+The working 2026-08-28 fallback is a local ARM64 build of `PRIVACY-0.14.3-RC.2` backed by
+Alchemy's Starknet mainnet v0.10 RPC. Alchemy preserved `PROOF1` facts through estimation
+and submission; Cartridge did not. On 2026-08-31, Starkscan granted hosted asynchronous
+proving access at `https://api.starkscan.co/v1/SN_MAIN/prove`; that relay produced the
+screened deposit proof used by the successful mainnet shield.
 
 Upstream publishes the prover as a container in its
 compatibility matrix, `ghcr.io/starkware-libs/starknet-privacy/transaction-prover:PRIVACY-0.14.3-RC.2`,
@@ -360,9 +366,8 @@ substantial storage. The registration canary instead put Alchemy inside the trus
 `compile_actions` disclosed Account A's pool key to that endpoint.
 
 Self-hosting does not remove deposit screening. A live read on 2026-08-28 returned non-zero
-mainnet screener key `0x501cc4…fdb2`. Upstream's proof interceptor only relays the signature
-returned by an elliptic-proxy `/screen` endpoint and requires operator-issued partner
-credentials. See Q2.
+mainnet screener key `0x501cc4…fdb2`. Starkscan's hosted relay supplied the required screening
+signature for the 2026-08-31 shield. See Q2.
 
 Budget if D14 reverses: three calls need at least 18 STRK in pool fees, plus deployment,
 approval, deposits, and gas. D8 sets about 30 STRK for a minimum run.
@@ -1214,9 +1219,8 @@ Exit:
 Sepolia allowance -> live settlement run -> observer and disclosure evidence
                      -> video -> sprint entry
 
-Alchemy v0.10 -> local prover -> mainnet registration -> directional channel setup
-                                     |
-                                     +-> screening path still required before shielding
+Starkscan proving access -> screened mainnet shield -> MCP negotiation -> atomic settlement
+                                                       -> recovery, observer, and disclosure
 
 Change-note review -> shared interface decision -> MCP and agent alignment
                      -> cross-layer settlement test
@@ -1297,8 +1301,9 @@ board decides what to do next and §7 decides what done means.
       evidence segments.
 - [x] Public three-minute video that names each network. Published 2026-08-30 at
       `https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4`.
-- [x] Complete `strk20.json`. Three hub-qualifying mainnet registration hashes, the public
-      demo, and the public video are present. The hub reports the entry as finished.
+- [x] Complete `strk20.json`. Seven mainnet hashes, including the screened shield and atomic
+      settlement, plus the public demo and video are present. The hub reports the entry as
+      finished.
 - [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
       No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop
@@ -1317,9 +1322,9 @@ board decides what to do next and §7 decides what done means.
       back. That was the last `u128` crossing the MCP boundary as a JSON number, so the
       whole class of silent rounding above 2^53 is now closed.
 
-Mainnet canary in progress: the proving path, both registrations, and both directional
-channel opens are complete. The three-hash sprint requirement is met. Screening still blocks
-shielding and therefore the full mainnet workflow. See §5.7.
+The bounded mainnet canary completed on 2026-08-31: Starkscan-screened shield, MCP proposal
+and counter, atomic settlement with change, reconciliation, observer check, and scoped
+disclosure. See §5.7 and `docs/runs/2026-08-31-mainnet-starkscan-workflow.md`.
 
 ### P1: Technical-preview release
 
@@ -1466,7 +1471,8 @@ exist before Phase 10 gives an agent more ways to spend.
       `docs/runs/2026-08-27-packaged-recovery-canary.md`.
 - [x] Read cursor and note cache: an unchanged channel read costs one RPC rather than one
       per note, durable so it survives the CLI's process-per-call shape.
-- [ ] Discovery-provider support, blocked on Q3.
+- [x] Discovery and proving can use separate endpoints. The Starkscan hosted prover handles
+      proofs while the configured Starknet RPC handles discovery and submission.
 - [x] Multi-token correctness: funding checks read the allowance and balance of the token
       an operation actually moves, not the configured one.
 - [ ] Multi-token surface: choose a token per operation at the CLI. Protocol 4 removed the
@@ -1559,7 +1565,7 @@ Add one only after D1 changes and the owners accept its security and maintenance
 - [ ] An integrator outside the two owners has run the full loop from published artifacts.
 - [ ] Platforms can inspect a settlement result without receiving a viewing grant.
 - [ ] Every privacy claim has an observer test and a written evidence boundary.
-- [ ] One packaged mainnet canary covers payment change, recovery, disclosure, and receipts.
+- [x] One packaged mainnet canary covers payment change, recovery, disclosure, and receipts.
 - [ ] Release artifacts are reproducible and contain no secret material.
 - [ ] A named maintainer owns security reports and release support.
 

@@ -3,8 +3,8 @@
 Who can observe Erebus, what each one sees, what we claim against that, and how the claim
 gets measured rather than asserted.
 
-Scope: the live wire-v2 path on Sepolia and the source-default wire-v3 path verified offline,
-as of 2026-08-21. This is a threat model, not a security review.
+Scope: live wire v2 and wire v3 on Sepolia, plus the bounded wire-v3 mainnet canary from
+2026-08-31. This is a threat model, not a security review.
 [privacy-model.md](./privacy-model.md) stays canonical for what leaks;
 this document adds the observers, the anonymity sets, and the metric.
 

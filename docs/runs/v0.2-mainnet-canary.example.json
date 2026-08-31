@@ -11,11 +11,12 @@
     "shield": {"transaction_hash": "replace-with-transaction-hash"},
     "channel_a_to_b": {"transaction_hash": "replace-with-transaction-hash"},
     "channel_b_to_a": {"transaction_hash": "replace-with-transaction-hash"},
-    "settlement": {"transaction_hash": "replace-with-transaction-hash"},
-    "disclosure_grant": {"transaction_hash": "replace-with-transaction-hash"}
+    "proposal": {"transaction_hash": "replace-with-transaction-hash"},
+    "counter": {"transaction_hash": "replace-with-transaction-hash"},
+    "settlement": {"transaction_hash": "replace-with-transaction-hash"}
   },
   "checks": {
-    "screening_metric_incremented": true,
+    "screening_signature_present": true,
     "payment_change_conserved": true,
     "observer_terms_hidden": true,
     "recovery_verified": true,

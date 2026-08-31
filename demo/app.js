@@ -58,7 +58,7 @@ runButton.addEventListener("click", async () => {
     paidAmount.textContent = formatAmount(buyerBudget);
     revealCard.hidden = false;
     terminalState.textContent = "SETTLED";
-    runNote.textContent = "Simulation complete. The evidence section links to the existing Sepolia run.";
+    runNote.textContent = "Simulation complete. The evidence section links to the verified mainnet and Sepolia runs.";
   }
 
   runButton.disabled = false;

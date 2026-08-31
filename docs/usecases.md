@@ -3,7 +3,7 @@
 This document helps a team decide whether the current implementation fits a use case.
 It separates implemented behavior, future use cases, and cases outside the present protocol.
 
-> **Updated 2026-08-28.** This document describes wire v3, repeat deals, scoped disclosure,
+> **Updated 2026-08-31.** This document describes wire v3, repeat deals, scoped disclosure,
 > change-note settlement, and Protocol 4 recovery. [`status.md`](./status.md) remains the
 > tiebreaker when documents disagree.
 
@@ -33,13 +33,13 @@ for the upstream TypeScript privacy SDK (`sdk/rs/src/client.rs:538-573`,
 | Area | Current state | Meaning for a use case |
 |---|---|---|
 | Rust protocol path | Implemented with offline known-answer and integration tests | The implementation supports technical evaluation and controlled demonstrations (`sdk/rs/tests/cairo_conformance.rs:1-13`, `sdk/rs/tests/execution_pipeline.rs:1-5`). |
-| Wire v3 | Encrypted, authenticated, and exercised live on Sepolia | Repeat deals and per-deal disclosure work. Independent cryptographic review remains open. |
+| Wire v3 | Encrypted, authenticated, and exercised live on Sepolia and mainnet | Repeat deals and per-deal disclosure work. Independent cryptographic review remains open. |
 | Relationship privacy | Partial | The counterparty address is public at channel-open. Timing, sender, action shape, and note count also remain public. |
 | MCP backend | `mock` by default, `seam` by explicit configuration | An agent demonstration does not prove that Rust, the prover, RPC, or Starknet ran (`mcp-server/src/erebus_mcp/config.py:10-13`, `mcp-server/src/erebus_mcp/config.py:72-113`). |
 | Settlement | Multiple deals per channel pair, with payer-owned change | Each settlement record separates agreed and paid amounts. |
 | Disclosure | Recipient-bound, time-limited, and scoped to one deal | The recipient needs its registered pool key. Expiry cannot revoke facts already opened. |
 | Recovery | Protocol 4 journal and explicit resume | Local fault tests and the packaged-source Sepolia recovery canary pass. |
-| Production | Not ready | Trusted endpoints, monitoring, mainnet evidence, and independent review remain open. |
+| Production | Not ready | One bounded mainnet canary passed. Monitoring, backup tooling, external operation, and independent review remain open. |
 
 ## The current fit test
 
@@ -54,7 +54,7 @@ A current use case fits only when all these conditions are true:
 7. The workflow tolerates a proof and a chain wait for each negotiation write.
 8. Recipient-bound disclosure of one complete deal is acceptable when disclosure is required.
 9. Public relationship, transaction timing, sender, action shape, and note count are acceptable.
-10. The operator accepts the current Sepolia-only and unaudited boundary.
+10. The operator accepts the current unaudited, bounded-canary boundary.
 
 The client verifies registration before it opens a channel. Settlement selects notes that
 cover the offer and returns the excess as a payer-owned change note.
@@ -152,9 +152,9 @@ not fit a verifier who must learn only the final result.
 
 These cases match the bilateral payment direction, repeat-deal framing, change-note
 settlement, and per-deal disclosure. The remaining blockers are operational. The operator
-alpha still needs monitoring, backup tooling, independent review, and full-workflow mainnet
-evidence before recurring real-value use. Mainnet registrations and empty channel setup do
-not close that gap.
+alpha still needs monitoring, backup tooling, independent review, and repeated external
+operation before recurring real-value use. One bounded mainnet workflow does not close that
+gap.
 
 ### Sealed-bid auctions
 
