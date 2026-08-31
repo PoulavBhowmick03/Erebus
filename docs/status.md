@@ -42,10 +42,11 @@ settlement has not completed.
   C registration `0x159748de…8a99` then succeeded in block `14111797`, emitted the
   canonical-pool event, and became the third hub-qualifying manifest hash
   (`docs/runs/2026-08-30-mainnet-account-c-registration.md`) |
-| Version | Source manifests still say `0.1.0`, but `main` speaks Protocol 4. The published `v0.1.0` artifacts speak Protocol 2. Protocol 4 ships with `v0.2.0` after its release gates pass |
-| Tests | 351 Rust passed (plus 7 intentionally ignored live tests), 156 Python, 43 TypeScript |
-| In flight | Sprint manifest has three hub-qualifying mainnet registration hashes, a public demo, and a public three-minute video. Mainnet Accounts A, B, and C are deployed and registered. A and B are connected by one channel in each direction. Canonical-pool shielding still needs StarkWare screening access. |
-| CI | green on every push: Rust, Python, secret scan, dependency hashes |
+| Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
+| Tests | 287 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
+| Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
+| In flight | `v0.2.0` release candidate. Mainnet Accounts A, B, and C are deployed and registered. A and B are connected by one channel in each direction. Publication is blocked until operator screening access enables a packaged full mainnet shield, MCP negotiation, settlement, recovery, and disclosure canary. |
+| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. These unpushed workflow changes still need a green GitHub run |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
 ## What Erebus does
@@ -99,7 +100,7 @@ Never describe this as private in an absolute sense.
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
 | The pitch | [poc.md](./poc.md) | current |
-| How to operate it as an agent | [skills/erebus/SKILL.md](../skills/erebus/SKILL.md) | current, all nine unsafe-behavior evals pass (`skills/erebus/evals/results-2026-08-26.md`) |
+| How to operate it as an agent | [skills/erebus/SKILL.md](../skills/erebus/SKILL.md) | current static nine-rule contract passes; the retained behavioral 9/9 result is optional regression evidence, not a release dependency (`skills/erebus/evals/results-2026-08-26.md`) |
 
 ### Historical documents and known limits
 
@@ -163,5 +164,6 @@ only metadata and the path. The capsule does not enter the model transcript.
 6. ~~Run the packaged Sepolia recovery canary.~~ Done 2026-08-27 from a clean local wheel
    install. Exact resubmission and expired-proof rebuild both completed. See
    [the run record](./runs/2026-08-27-packaged-recovery-canary.md).
-7. **Publish Protocol 4 as `v0.2.0`.** Update source package versions, build the supported
-   wheel set, publish checksums and an SBOM, then run the installed-artifact canary.
+7. **Prepare Protocol 4 as `v0.2.0`, but do not publish it yet.** Complete the repo-only
+   release work in [v0.2-release-plan.md](./v0.2-release-plan.md). The tag remains blocked
+   until screening credentials arrive and the packaged full workflow passes on mainnet.

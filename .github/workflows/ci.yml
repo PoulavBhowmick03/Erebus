@@ -115,6 +115,49 @@ jobs:
         # release is the wrong moment to discover one, so this runs on every push.
         run: python3 scripts/sbom.py --check
 
+      - name: Operator-skill safety contract
+        run: python3 scripts/check-skill-safety.py
+
+      - name: Public-demo contract
+        run: python3 scripts/check-demo.py
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the pinned upstream oracle
+        uses: actions/checkout@v4
+        with:
+          repository: starkware-libs/starknet-privacy
+          ref: 3dfe66fe2b59d7b95709ec719547fa88b8ef63f9
+          path: upstream/starknet-privacy
+
+      - name: Restore the sibling path used by the workspace lockfile
+        run: ln -s "$GITHUB_WORKSPACE/upstream/starknet-privacy" "$GITHUB_WORKSPACE/../starknet-privacy"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --filter @erebus/sdk typecheck
+
+      - name: Build
+        run: pnpm --filter @erebus/sdk build
+
+      - name: Test
+        run: pnpm --filter @erebus/sdk test
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
@@ -129,10 +172,6 @@ jobs:
 
 # Not covered, and deliberately not faked with a job that would report green anyway:
 #
-# - `sdk/ts`. It builds against a sibling checkout of `starkware-libs/starknet-privacy`
-#   published to GitHub Packages rather than npmjs (friction F8), so it cannot be built from
-#   a bare checkout. The TypeScript oracle is run by hand during a differential pass. A job
-#   gated on a token that may not exist would look like coverage without being coverage.
 # - Cairo probes. They run inside an upstream checkout under `#[cfg(test)]` and have no
 #   standalone harness here (contracts/README.md).
 # - Anything needing the prover or a funded account. Live probes stay `#[ignore]`d.

@@ -1,0 +1,39 @@
+[extend]
+useDefault = true
+
+# These allowlists require both the exact fixture/source path and a narrow public-data
+# shape. They do not exempt a whole directory or disable the generic API-key rule.
+[[allowlists]]
+description = "Public Starknet STRK contract address in the protected env writer"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)scripts/write-mainnet-identity-env\.sh$''']
+regexes = ['''TOKEN_ADDRESS=0x[0-9a-f]+''']
+
+[[allowlists]]
+description = "Public token constant passed to the policy test"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)agents/tests/test_policy\.py$''']
+regexes = ['''token=TOKEN''']
+
+[[allowlists]]
+description = "Deterministic public ECDSA conformance key"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)sdk/rs/tests/fixtures/starknetjs-ecdsa\.json$''']
+regexes = ['''"private_key"\s*:\s*"0x[0-9a-f]+"''']
+
+[[allowlists]]
+description = "Deterministic Cairo storage and encryption reference values"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)sdk/rs/tests/fixtures/cairo-reference-data\.json$''']
+regexes = ['''"(?:encPrivateKeyEphemeralAddress|encPrivateKeyEncKeyAddress|subchannelTokensSaltAddress|subchannelTokensEncTokenAddress|channelKey|encTokenHash|encPrivateKeyHash|encChannelKeyHash|encSubchannelToken|encChannelKey|encPrivateKeyValue)"\s*:\s*"0x[0-9a-f]+"''']
+
+[[allowlists]]
+description = "Public legacy STRK address in the Cairo probe"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)contracts/probes/p0_2_subchannel_payload\.cairo$''']
+regexes = ['''token:\s*0x[0-9a-f]+''']

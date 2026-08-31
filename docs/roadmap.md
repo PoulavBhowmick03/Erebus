@@ -55,9 +55,10 @@ deadline.
 The sprint entry can finish without production readiness. The README and demo must keep
 that distinction clear.
 
-**D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. Two
-registrations and two directional channel opens have now succeeded. The hub's three-hash
-requirement is met, but the actual mainnet settlement workflow remains blocked on screening.
+**D14 changed on 2026-08-28.** The owners approved a bounded mainnet canary. Three
+registrations and two directional channel opens have now succeeded. The hub reports the
+sprint entry as finished, but the actual mainnet settlement workflow remains blocked on
+screening. `v0.2.0` publication now waits for that full packaged mainnet workflow.
 
 ## 3. Current evidence
 
@@ -105,7 +106,8 @@ This section records what exists on 2026-08-28. Later sections describe the miss
 - `erebus-cli doctor` inspects files, endpoints, pool, registration, allowance, and gas
   balance read-only, and reports a repair instruction per fault.
 - Settlement receipts report selected input value and change.
-- The current working tree passes 351 Rust tests, 156 Python tests, and 43 TypeScript tests.
+- The 2026-08-31 release-candidate tree passes 287 Rust tests (plus seven ignored live
+  probes), 191 Python tests (plus two opt-in Sepolia canaries), and 43 TypeScript tests.
   Seven live Rust tests are intentionally ignored: two shared-prover probes, three guarded
   mainnet registration canaries, one account-rotation canary, and one screening probe.
 - Clippy and rustdoc pass with warnings denied.
@@ -153,7 +155,8 @@ been exercised live. The short record, with pointers:
 - No Protocol 4 release artifact is published. The public `v0.1.0` artifacts speak Protocol 2.
 - The `v0.1.0` release publishes the wheel chain, checksums, SBOM, and static package index.
 - The Erebus operator skill exists. Nine fresh-session unsafe-behavior evaluations passed
-  on 2026-08-26. The evaluator is not yet in CI.
+  on 2026-08-26. A deterministic nine-rule contract now runs in CI; later semantic reruns
+  are optional regression evidence.
 
 ## 4. Privacy and trust boundary
 
@@ -266,7 +269,8 @@ selection, signing, or cryptography.
 
 The repository contains the generic `strk20-privacy-integration` skill and the Erebus
 operator skill at `skills/erebus/SKILL.md`. Nine fresh-session unsafe-behavior evaluations
-passed on 2026-08-26. The evaluator is not yet in CI.
+passed on 2026-08-26. A deterministic nine-rule contract now runs in CI; later semantic
+reruns are optional regression evidence.
 
 The generic skill also has upstream drift. Its freshness check found newer `get-starknet`
 packages, a removed sub-account package, and a new shadow-account package.
@@ -321,8 +325,8 @@ Thirty percent of the score is a working mainnet product, and the transaction ch
 mechanical rather than a judgement call. The hub counts a hash only when its receipt emits
 an event from the canonical pool. Channel setup calls the pool but emits no pool event, so
 the manifest lists the three registrations. Registrations and empty channel setup do not
-demonstrate Erebus's negotiation or settlement workflow. The hub still needs its scheduled
-refresh to read the new commit and independently mark the fields complete.
+demonstrate Erebus's negotiation or settlement workflow. The hub independently read commit
+`306c2f2`, verified all three registrations, and reports the sprint entry as finished.
 
 #### Sepolia is not free either
 
@@ -822,7 +826,9 @@ Exit:
 
 `skills/erebus/evals/unsafe-behavior.md` contains nine fixtures. Nine independent fresh
 sessions passed on 2026-08-26. The retained result is
-`skills/erebus/evals/results-2026-08-26.md`. The evaluator is not yet in CI.
+`skills/erebus/evals/results-2026-08-26.md`. CI now enforces a deterministic nine-rule
+structural contract. A fresh-session semantic rerun against the final skill text remains
+useful after material skill changes, but it is not a release dependency.
 
 Work (done):
 
@@ -1291,8 +1297,8 @@ board decides what to do next and §7 decides what done means.
       evidence segments.
 - [x] Public three-minute video that names each network. Published 2026-08-30 at
       `https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4`.
-- [x] Complete `strk20.json`. Four verified mainnet hashes, the public demo, and the public
-      video are present.
+- [x] Complete `strk20.json`. Three hub-qualifying mainnet registration hashes, the public
+      demo, and the public video are present. The hub reports the entry as finished.
 - [x] Clear the last `Unreviewed` marker at `sdk/rs/src/channel.rs:516`. Cleared 2026-08-17.
       No `Unreviewed` marker remains anywhere in `sdk/rs/src`.
 - [x] Record the change-making interface decision with Ishita. Decided 2026-08-17: drop
@@ -1332,7 +1338,8 @@ shielding and therefore the full mainnet workflow. See §5.7.
 - [x] MCP-client reference agents. Done 2026-08-17 by Ishita as `5362ada`.
 - [x] Erebus operator skill and unsafe-behavior evaluations. All nine fresh-session runs
       passed on 2026-08-26. The retained result is
-      `skills/erebus/evals/results-2026-08-26.md`. CI automation remains P1 work.
+      `skills/erebus/evals/results-2026-08-26.md`. A deterministic nine-rule contract now
+      runs in CI; fresh-session semantic reruns are optional regression evidence.
 - [ ] Both owners review the 2026-08-19 push (`749cdd4` sdk, `c8741ff` mcp-server,
       `bb4e636` scripts/docs). It landed on Poulav's instruction ahead of the usual
       review; Poulav owns the Rust lines, Ishita the mcp-server lines.
@@ -1366,7 +1373,9 @@ shielding and therefore the full mainnet workflow. See §5.7.
       The Python job asserts the binary exists before pytest, because `sdk/py` tests skip
       themselves when it is absent: verified that a missing binary skips all 12 and still
       exits 0, so a lost artifact would have produced a green run that tested nothing.
-      `sdk/ts` and the Cairo probes are excluded on purpose, reasons in the workflow file.
+      Cairo probes remain excluded for the reason in the workflow file. The TypeScript
+      oracle is now covered by CI against upstream commit
+      `3dfe66fe2b59d7b95709ec719547fa88b8ef63f9`.
 - [x] Clean-machine install and canary. Done 2026-08-18 in `.github/workflows/canary.yml`.
       Installs the wheels into an empty environment on Linux and macOS, on Python 3.11 and
       3.13, verifies checksums first, and drives a real MCP tool call through them. Needs no
@@ -1412,11 +1421,10 @@ exist before Phase 10 gives an agent more ways to spend.
       reservations persist before Rust starts. Uncertain operations keep capacity.
       Proven-dead attempts release it. An exclusive journal snapshot permits safe release
       of Python-only entries. Accepted block timestamps assign committed spend to a UTC day.
-- [ ] Add stable CI execution for the unsafe-behavior evaluations. All nine fresh-session
-      runs passed on 2026-08-26 and the result is retained in the repository.
-- [ ] One framework integration installed from published wheels (Phase 9.4). This attacks
-      "no external operator completed a clean install" directly, which is the actual
-      constraint on other products building on Erebus.
+- [x] Add a stable CI safety contract for all nine unsafe behaviors. It fails if a required
+      boundary or eval rubric disappears. Fresh-session semantic runs remain optional.
+- [ ] Optional: one framework integration installed from published wheels (Phase 9.4).
+      This is ecosystem evidence, not a `v0.2.0` or runtime dependency.
 
 ### P2: Operator alpha
 
@@ -1547,7 +1555,7 @@ Add one only after D1 changes and the owners accept its security and maintenance
 - [x] Disclosure grants are recipient-bound and scoped to one deal.
 - [ ] Spending limits are enforced below the agent and survive a restart.
 - [x] The eval set covers every unsafe behavior in section 5.5, including an adversarial
-      counterparty. CI automation remains open.
+      counterparty. A deterministic nine-rule regression contract runs in CI.
 - [ ] An integrator outside the two owners has run the full loop from published artifacts.
 - [ ] Platforms can inspect a settlement result without receiving a viewing grant.
 - [ ] Every privacy claim has an observer test and a written evidence boundary.

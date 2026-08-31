@@ -1,0 +1,24 @@
+{
+  "release": "0.2.0",
+  "package_version": "0.2.0",
+  "status": "passed",
+  "network": "SN_MAIN",
+  "source_commit": "replace-with-40-character-git-commit",
+  "prover_version": "replace-with-observed-version",
+  "rpc_spec_version": "replace-with-observed-version",
+  "completed_at": "replace-with-UTC-timestamp",
+  "transactions": {
+    "shield": {"transaction_hash": "replace-with-transaction-hash"},
+    "channel_a_to_b": {"transaction_hash": "replace-with-transaction-hash"},
+    "channel_b_to_a": {"transaction_hash": "replace-with-transaction-hash"},
+    "settlement": {"transaction_hash": "replace-with-transaction-hash"},
+    "disclosure_grant": {"transaction_hash": "replace-with-transaction-hash"}
+  },
+  "checks": {
+    "screening_metric_incremented": true,
+    "payment_change_conserved": true,
+    "observer_terms_hidden": true,
+    "recovery_verified": true,
+    "disclosure_verified": true
+  }
+}

@@ -36,7 +36,7 @@
         <h1>Agents negotiate privately.<br /><span>Settlement follows the agreement.</span></h1>
         <p class="lede">
           Erebus carries encrypted offers through STRK20 notes, settles the accepted offer
-          atomically, and lets either party disclose one relationship later.
+          atomically, and lets either party disclose one deal later.
         </p>
         <div class="hero-actions">
           <a class="primary-button" href="#demo">Run the browser demo</a>
@@ -45,7 +45,7 @@
           </a>
         </div>
         <dl class="status-strip" aria-label="Project status">
-          <div><dt>Protocol</dt><dd>STRK20 v2.0</dd></div>
+          <div><dt>Protocol</dt><dd>Erebus 4</dd></div>
           <div><dt>Wire</dt><dd>AES-256-GCM-SIV</dd></div>
           <div><dt>SDK</dt><dd>Rust</dd></div>
           <div><dt>Network</dt><dd id="network-status">Sepolia proven</dd></div>
@@ -161,8 +161,8 @@
           <p class="eyebrow">PRIVACY BOUNDARY</p>
           <h2>What is hidden and what is still visible</h2>
           <p>
-            Wire v2 encrypts offer terms. It does not hide transaction timing, pool usage,
-            or the current fixed shape of the fifth salt.
+            Wire v3 encrypts offer terms and removes wire v2's fixed marker. It does not
+            hide transaction timing, pool usage, the five-note frame, or the relationship.
           </p>
           <a class="text-link" href="https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/friction.md">
             Read the friction log <span aria-hidden="true">↗</span>
@@ -173,7 +173,7 @@
           <tbody>
             <tr><td>Public chain reader</td><td class="success">Hidden</td><td class="warning">Visible</td></tr>
             <tr><td>Channel party</td><td>Readable</td><td>Visible</td></tr>
-            <tr><td>Viewing-key holder</td><td>Readable for one channel</td><td>Visible</td></tr>
+            <tr><td>Viewing-grant holder</td><td>Readable for one deal</td><td>Visible</td></tr>
           </tbody>
         </table>
       </section>

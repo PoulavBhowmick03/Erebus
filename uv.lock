@@ -232,7 +232,7 @@ wheels = [
 
 [[package]]
 name = "erebus"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -247,7 +247,7 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "erebus-agents"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "agents" }
 dependencies = [
     { name = "erebus-mcp-server" },
@@ -270,12 +270,12 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "erebus-cli"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packaging/erebus-cli" }
 
 [[package]]
 name = "erebus-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "mcp-server" }
 dependencies = [
     { name = "erebus-sdk" },
@@ -298,7 +298,7 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "erebus-sdk"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "sdk/py" }
 dependencies = [
     { name = "erebus-cli" },

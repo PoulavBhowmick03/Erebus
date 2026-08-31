@@ -1,0 +1,146 @@
+name: Published package canary
+
+# Unlike canary.yml, this installs through the public PEP 503 index after publication.
+# It catches a stale Pages index, broken release URLs, and dependency resolution failures
+# that cannot be found by installing artifacts from the producing workflow run.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version to verify"
+        required: true
+        default: "0.2.0"
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        python: ["3.11", "3.13"]
+    env:
+      VERSION: ${{ github.event.release.tag_name && format('{0}', github.event.release.tag_name) || inputs.version }}
+      INDEX_URL: https://poulavbhowmick03.github.io/Erebus/simple
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Resolve release version
+        shell: bash
+        run: echo "VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+
+      - name: Verify the published release checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir dist
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --dir dist
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c SHA256SUMS
+          else
+            shasum -a 256 -c SHA256SUMS
+          fi
+
+      - name: Install from the public package index
+        shell: bash
+        run: |
+          uv venv /tmp/erebus-published
+          for attempt in 1 2 3 4 5; do
+            if uv pip install --python /tmp/erebus-published/bin/python \
+              --index "$INDEX_URL" \
+              "erebus-mcp-server==${VERSION}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              echo "::error::published index did not resolve v${VERSION}"
+              exit 1
+            fi
+            sleep 15
+          done
+
+      - name: Verify package versions and Protocol 4
+        shell: bash
+        run: |
+          export PATH="/tmp/erebus-published/bin:$PATH"
+          python=/tmp/erebus-published/bin/python
+          "$python" - <<'PY'
+          import importlib.metadata
+          import json
+          import os
+          import subprocess
+
+          expected = os.environ["VERSION"]
+          for package in ("erebus-cli", "erebus-sdk", "erebus-mcp-server"):
+              actual = importlib.metadata.version(package)
+              assert actual == expected, (package, actual, expected)
+          response = subprocess.run(
+              ["erebus-cli"],
+              input='{"method":"version"}',
+              text=True,
+              capture_output=True,
+              check=True,
+          )
+          body = json.loads(response.stdout)
+          assert body["ok"] is True, body
+          assert body["result"]["version"] == expected, body
+          assert body["result"]["protocol"] == 4, body
+          print(body["result"])
+          PY
+
+      - name: Verify the exact thirteen-tool MCP surface
+        shell: bash
+        run: |
+          export PATH="/tmp/erebus-published/bin:$PATH"
+          /tmp/erebus-published/bin/python - <<'PY'
+          import asyncio
+          import os
+          from mcp import ClientSession
+          from mcp.client.stdio import StdioServerParameters, stdio_client
+
+          expected = {
+              "open_channel", "propose_offer", "counter_offer",
+              "get_note_balance", "doctor", "read_channel_state",
+              "accept_and_settle", "reconcile", "resume_operation",
+              "rebuild_state", "wait_for_offers", "grant_viewing_key", "reveal",
+          }
+          params = StdioServerParameters(
+              command="/tmp/erebus-published/bin/erebus-mcp-server",
+              args=[],
+              env={
+                  **os.environ,
+                  "EREBUS_BACKEND": "mock",
+                  "EREBUS_MOCK_STORE_PATH": "/tmp/erebus-published-store.json",
+                  "EREBUS_MOCK_LATENCY_SECONDS": "0",
+                  "AGENT_ADDRESS": "0xa11ce",
+                  "PROVING_SERVICE_URL": "http://unused.invalid",
+                  "EREBUS_SETTLEMENT_ROLE": "payer",
+              },
+          )
+
+          async def main():
+              async with stdio_client(params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      await session.initialize()
+                      actual = {tool.name for tool in (await session.list_tools()).tools}
+                      assert actual == expected, (sorted(actual), sorted(expected))
+                      result = await session.call_tool("doctor", {})
+                      assert not result.isError, result
+                      print("tools:", sorted(actual))
+
+          asyncio.run(main())
+          PY

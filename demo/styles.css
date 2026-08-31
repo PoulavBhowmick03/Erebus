@@ -25,6 +25,11 @@ body {
 
 a { color: inherit; }
 
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 3px solid var(--orange);
+  outline-offset: 4px;
+}
+
 button, input { font: inherit; }
 
 .site-header {
@@ -241,6 +246,7 @@ footer { color: #66675f; display: flex; font-family: "DM Mono", monospace; font-
 @media (max-width: 850px) {
   nav a:not(.source-link) { display: none; }
   .hero { padding-top: 75px; }
+  .hero-actions { align-items: flex-start; flex-direction: column; }
   .status-strip { grid-template-columns: repeat(2, 1fr); margin-top: 65px; }
   .status-strip div:nth-child(2) { border-right: 0; }
   .status-strip div:first-child, .status-strip div:nth-child(3) { padding-left: 0; }

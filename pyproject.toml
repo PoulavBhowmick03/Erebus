@@ -1,6 +1,6 @@
 [project]
 name = "erebus"
-version = "0.1.0"
+version = "0.2.0"
 description = "Private coordination and settlement infrastructure for AI agents on Starknet"
 requires-python = ">=3.11"
 dependencies = []
@@ -12,4 +12,4 @@ dev = ["pytest>=8.0"]
 members = ["sdk/py", "mcp-server", "agents", "packaging/erebus-cli"]
 
 [tool.pytest.ini_options]
-testpaths = ["sdk/py/tests", "mcp-server/tests", "agents/tests"]
+testpaths = ["sdk/py/tests", "mcp-server/tests", "agents/tests", "scripts/tests"]

@@ -23,8 +23,27 @@ permissions:
   contents: read
 
 jobs:
+  gate:
+    name: Release readiness gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate versions, tag, release text, and mainnet evidence
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            python3 scripts/check-release-readiness.py \
+              --version "$version" \
+              --tag "$GITHUB_REF_NAME" \
+              --require-mainnet
+          else
+            python3 scripts/check-release-readiness.py
+          fi
+
   wheel:
     name: ${{ matrix.target }}
+    needs: gate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -126,6 +145,7 @@ jobs:
 
   pure:
     name: Pure-Python wheels
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -182,10 +202,12 @@ jobs:
         run: |
           missing=0
           for tag in manylinux macosx_11_0_arm64; do
-            ls dist/ | grep -q "$tag" || { echo "::error::no erebus-cli wheel for $tag"; missing=1; }
+            compgen -G "dist/*${tag}*.whl" >/dev/null \
+              || { echo "::error::no erebus-cli wheel for $tag"; missing=1; }
           done
           for pkg in erebus_sdk erebus_mcp_server; do
-            ls dist/ | grep -q "^${pkg}-" || { echo "::error::no wheel for $pkg"; missing=1; }
+            compgen -G "dist/${pkg}-*.whl" >/dev/null \
+              || { echo "::error::no wheel for $pkg"; missing=1; }
           done
           exit $missing
 
@@ -197,7 +219,8 @@ jobs:
       - name: Checksum
         run: |
           cd dist
-          sha256sum *.whl erebus-cli-* sbom.json | tee SHA256SUMS
+          artifacts=(./*.whl ./erebus-cli-* ./sbom.json)
+          sha256sum -- "${artifacts[@]}" | tee SHA256SUMS
           echo "--- release artifacts ---"
           ls -1
 
@@ -230,7 +253,7 @@ jobs:
 
       - name: Create the release
         # The preamble carries the statements every pre-1.0 release must make: unaudited,
-        # no mainnet canary, relationship privacy incomplete, and which platforms are
+        # evidence-bounded mainnet status, relationship privacy incomplete, and platforms
         # supported. It is prepended to the generated notes rather than written per
         # release, because a required statement that has to be remembered each time is one
         # that eventually gets forgotten. Two steps rather than combining --notes-file with
@@ -238,13 +261,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          test -s docs/release-preamble.md || {
-            echo "::error::docs/release-preamble.md is missing or empty"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/check-release-readiness.py \
+            --version "$version" \
+            --tag "$GITHUB_REF_NAME" \
+            --require-mainnet
 
           gh release create "${{ github.ref_name }}" dist/* \
             --repo "${{ github.repository }}" \
             --title "${{ github.ref_name }}" \
             --generate-notes \
+            --draft \
             --verify-tag
 
           gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
@@ -253,11 +280,10 @@ jobs:
           gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" \
             --notes-file /tmp/release-notes.md
 
-          # Fail the release if the notes lost the required statements, rather than
-          # publishing a release that quietly claims less than it should.
+          # Keep the draft blocked if the notes lost a required statement.
           body=$(gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" \
                  --json body -q .body)
-          for phrase in "unaudited" "never executed on mainnet" "not the relationship" \
+          for phrase in "unaudited" "not the relationship" \
                         "Linux x86-64 and macOS arm64"; do
             case "$body" in
               *"$phrase"*) ;;
@@ -312,10 +338,18 @@ jobs:
           PY
 
       - uses: actions/configure-pages@v5
-        id: pages
 
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
       - uses: actions/deploy-pages@v4
+        id: pages
+
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

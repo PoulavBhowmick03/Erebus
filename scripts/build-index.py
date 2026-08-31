@@ -6,7 +6,10 @@ Gradle, NuGet, and Docker, and not PyPI. So wheels attached to a Release are fil
 and `uv`/`pip` cannot resolve a dependency chain from files alone. This generates the static
 index that makes them resolvable, to be served from GitHub Pages:
 
-    uv tool install --index-url https://<owner>.github.io/<repo>/simple erebus-mcp-server
+    uv tool install --index https://<owner>.github.io/<repo>/simple erebus-mcp-server
+
+Use ``--index`` rather than ``--index-url`` so PyPI remains available for third-party
+dependencies that are deliberately not mirrored here.
 
 Usage:
 

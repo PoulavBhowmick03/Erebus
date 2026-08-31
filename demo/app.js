@@ -51,7 +51,7 @@ runButton.addEventListener("click", async () => {
     await addLine(3, `seller countered at <strong>${formatAmount(buyerBudget)}</strong> token units`);
     await addLine(4, "buyer accepted the counteroffer");
     await addLine(5, "accepted offer and shielded payment committed atomically");
-    await addLine(6, "viewing key granted to <strong>0xauditor</strong>");
+    await addLine(6, "deal-scoped viewing grant created for <strong>0xauditor</strong>");
     await addLine(7, "auditor reconstructed two offers and the settlement record");
 
     agreedAmount.textContent = formatAmount(buyerBudget);
