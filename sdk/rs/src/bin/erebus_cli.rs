@@ -563,7 +563,18 @@ fn prover_error_code(error: &ProverError) -> (&'static str, bool) {
             ("PROVER_UNAVAILABLE", true)
         }
         ProverError::Rpc { code: -32005, .. } => ("PROVER_UNAVAILABLE", true),
-        ProverError::Rpc { .. } | ProverError::Malformed(_) => ("PROOF_FAILED", false),
+        ProverError::Relay { code, .. }
+            if matches!(
+                code.as_str(),
+                "prover_queue_full" | "prover_unavailable" | "prover_key_concurrency" | "http_503"
+            ) =>
+        {
+            ("PROVER_UNAVAILABLE", true)
+        }
+        ProverError::Rpc { .. }
+        | ProverError::Malformed(_)
+        | ProverError::Relay { .. }
+        | ProverError::JobState(_) => ("PROOF_FAILED", false),
     }
 }
 

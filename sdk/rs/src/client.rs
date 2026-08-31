@@ -204,7 +204,7 @@ impl Client {
     /// Builds the client without touching either key file.
     pub fn new(config: ClientConfig) -> Result<Self, ClientError> {
         let rpc = StarknetRpc::new(config.rpc_url.clone())?;
-        let prover = ProvingService::new(config.prover_url.clone())?;
+        let prover = ProvingService::new_persistent(config.prover_url.clone(), &config.state_dir)?;
         let execution =
             ExecutionConfig::new(config.pool_address, config.chain_id, config.account_address);
         let state = StateStore::new(&config.state_dir)?;

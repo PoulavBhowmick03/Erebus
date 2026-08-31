@@ -1,4 +1,8 @@
-# Screened local transaction prover
+# Optional screened local transaction prover
+
+The primary Erebus mainnet canary uses Starkscan's operator-approved hosted prover. This
+stack remains available for operators with separate screening-partner credentials who keep
+proving inside their infrastructure. It is not required for the Starkscan path.
 
 This Compose stack connects the pinned `PRIVACY-0.14.3-RC.2` proof interceptor to the
 working local ARM64 prover. The interceptor is reachable only on the private Compose network;

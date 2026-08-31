@@ -40,10 +40,14 @@ fi
 
 [ -r "$ENV_FILE" ] || { echo "cannot read env file: $ENV_FILE" >&2; exit 1; }
 
+PROVER_URL_OVERRIDE="${EREBUS_PROVER_URL_OVERRIDE:-}"
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
+if [ -n "$PROVER_URL_OVERRIDE" ]; then
+    export PROVING_SERVICE_URL="$PROVER_URL_OVERRIDE"
+fi
 
 export EREBUS_BACKEND="${EREBUS_BACKEND:-seam}"
 export EREBUS_SETTLEMENT_ROLE="$SETTLEMENT_ROLE"

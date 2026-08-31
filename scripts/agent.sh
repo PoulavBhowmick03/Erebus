@@ -134,6 +134,13 @@ balance)
     out=$(call balance '{}')
     python3 "$REPO/scripts/balance.py" <<<"$out"
     ;;
+shield)
+    # Use an existing allowance. Unlike `fund`, this does not replace the standing
+    # allowance needed by later offer and settlement writes.
+    amount="${1:?amount in wei}"
+    out=$(write_call shield "$(printf '{\"amount\":\"%s\"}' "$amount")")
+    field tx_hash <<<"$out"
+    ;;
 doctor)
     call doctor '{}'
     ;;

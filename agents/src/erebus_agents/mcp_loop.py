@@ -145,7 +145,11 @@ async def run_negotiation_over_mcp(
     seller_address: str,
     token: str,
     max_rounds: int = 3,
+    buyer_handle: str | None = None,
+    seller_handle: str | None = None,
 ) -> dict[str, Any]:
+    if (buyer_handle is None) != (seller_handle is None):
+        raise ValueError("buyer_handle and seller_handle must be supplied together")
     buyer_intents = IntentStore(_intent_path(buyer_params, buyer_address))
     seller_intents = IntentStore(_intent_path(seller_params, seller_address))
     async with stdio_client(seller_params) as (seller_read, seller_write):
@@ -155,16 +159,17 @@ async def run_negotiation_over_mcp(
                 async with ClientSession(buyer_read, buyer_write) as buyer:
                     await buyer.initialize()
 
-                    opened = await _write_call(
-                        buyer, buyer_intents, "open-channel", "open_channel",
-                        counterparty=seller_address,
-                    )
-                    buyer_handle = opened["channel_handle"]
-                    opened = await _write_call(
-                        seller, seller_intents, "open-channel", "open_channel",
-                        counterparty=buyer_address,
-                    )
-                    seller_handle = opened["channel_handle"]
+                    if buyer_handle is None or seller_handle is None:
+                        opened = await _write_call(
+                            buyer, buyer_intents, "open-channel", "open_channel",
+                            counterparty=seller_address,
+                        )
+                        buyer_handle = opened["channel_handle"]
+                        opened = await _write_call(
+                            seller, seller_intents, "open-channel", "open_channel",
+                            counterparty=buyer_address,
+                        )
+                        seller_handle = opened["channel_handle"]
                     _log_event(
                         "channel_opened",
                         buyer_handle=buyer_handle,

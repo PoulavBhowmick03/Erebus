@@ -50,8 +50,8 @@ Show the observer result beside the authorized disclosure result.
 
 ## 2:45–3:00 — Honest limit and links
 
-“Mainnet shielding still needs screening access from the pool operator. Until that arrives,
-mainnet negotiation and settlement are not claimed. The repository, live demo, receipts,
-and reproducible run records are linked here.”
+“The screened mainnet workflow now covers shielding, MCP negotiation, atomic settlement,
+observer resistance, and scoped disclosure. Erebus still exposes the relationship, timing,
+action shape, and note count. The repository, receipts, and reproducible run record are linked here.”
 
 Finish on the public demo and repository URLs.

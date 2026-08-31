@@ -192,10 +192,11 @@ impl Executor {
         )?;
         let proof_signature = signer.sign(&proof_invoke.transaction_hash()).await?;
         let proof_invocation = proof_invoke.with_signature(proof_signature);
+        let proof_idempotency_seed = operation.record().operation_id.as_str();
         stage("proving, the long stage: tens of seconds to minutes");
         let proof = self
             .prover
-            .prove_transaction(&proving_block, &proof_invocation)
+            .prove_transaction_idempotent(&proving_block, &proof_invocation, proof_idempotency_seed)
             .await?;
         let server_actions = server_actions(&proof, self.config.pool_address)?;
 

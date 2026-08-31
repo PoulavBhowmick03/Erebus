@@ -37,6 +37,8 @@ def main() -> None:
     params["config"] = {target: values[source] for target, source in required.items()}
     if os.environ.get("EREBUS_RPC_URL_OVERRIDE"):
         params["config"]["rpc_url"] = os.environ["EREBUS_RPC_URL_OVERRIDE"]
+    if os.environ.get("EREBUS_PROVER_URL_OVERRIDE"):
+        params["config"]["prover_url"] = os.environ["EREBUS_PROVER_URL_OVERRIDE"]
     params["config"]["wire_version"] = values.get("EREBUS_WIRE_VERSION", "v3")
     print(json.dumps({"method": sys.argv[2], "params": params}))
 

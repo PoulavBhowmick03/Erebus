@@ -10,9 +10,9 @@ privacy claim changed twice. That is why this page exists.
 
 ## In one line
 
-Erebus negotiates and settles privately between two agents on Starknet Sepolia. On mainnet,
-A, B, and C are registered, and A and B have opened channels in both directions; a shielded
-settlement has not completed.
+Erebus negotiates and settles confidentially between two agents on Starknet. On mainnet,
+A shielded 1 STRK, A and B negotiated through MCP, and A settled 0.8 STRK to B with 0.2 STRK
+change; the relationship and traffic metadata remain public.
 
 ---
 
@@ -20,7 +20,7 @@ settlement has not completed.
 
 | | |
 |---|---|
-| Network | Full workflow: Sepolia. Mainnet: A, B, and C registered; A and B opened directional channels in blocks `14100846` and `14101246`; no shield, offer, settlement, or disclosure yet |
+| Network | Full workflow: Sepolia and one bounded mainnet canary. Mainnet: A, B, and C registered; A and B opened directional channels; screened shield, MCP proposal/counter, settlement, observer test, reconciliation, and scoped disclosure passed on 2026-08-31 |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -41,12 +41,15 @@ settlement has not completed.
   both reconciled cleanly after proving depth (`docs/runs/2026-08-30-mainnet-channels.md`).
   C registration `0x159748de…8a99` then succeeded in block `14111797`, emitted the
   canonical-pool event, and became the third hub-qualifying manifest hash
-  (`docs/runs/2026-08-30-mainnet-account-c-registration.md`) |
+  (`docs/runs/2026-08-30-mainnet-account-c-registration.md`). The hosted Starkscan path then
+  completed the first full mainnet canary: shield `0x1a30c0b6…70d1`, proposal
+  `0x5a287657…59b5`, counter `0x4126a3ee…4923`, and settlement `0x72adebfc…6c6d`, with
+  0.8 STRK paid, 0.2 STRK change, no observer content recovery, and scoped disclosure |
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
-| Tests | 287 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
+| Tests | 288 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` release candidate. Mainnet Accounts A, B, and C are deployed and registered. A and B are connected by one channel in each direction. Publication is blocked until operator screening access enables a packaged full mainnet shield, MCP negotiation, settlement, recovery, and disclosure canary. |
-| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. These unpushed workflow changes still need a green GitHub run |
+| In flight | `v0.2.0` release candidate. The Starkscan-backed packaged mainnet canary passed. Publication remains blocked until the evidence record, full repository checks, and release review pass; no tag or package has been published |
+| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The latest pushed workflow run is green; the new Starkscan transport is not pushed yet |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
 ## What Erebus does
@@ -66,8 +69,8 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Run the full workflow on mainnet.** Three registrations and two channel opens are proven.
-  Shielding, offers, settlement, recovery, and disclosure are not.
+- **Prove production readiness from one canary.** One bounded mainnet workflow passed. This
+  does not establish capacity, uptime, independent security review, or safe use with real value.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.
 - **Escrow, or deferred delivery.** Settlement is atomic, so there is no "agree now, deliver
@@ -164,6 +167,6 @@ only metadata and the path. The capsule does not enter the model transcript.
 6. ~~Run the packaged Sepolia recovery canary.~~ Done 2026-08-27 from a clean local wheel
    install. Exact resubmission and expired-proof rebuild both completed. See
    [the run record](./runs/2026-08-27-packaged-recovery-canary.md).
-7. **Prepare Protocol 4 as `v0.2.0`, but do not publish it yet.** Complete the repo-only
-   release work in [v0.2-release-plan.md](./v0.2-release-plan.md). The tag remains blocked
-   until screening credentials arrive and the packaged full workflow passes on mainnet.
+7. **Prepare Protocol 4 as `v0.2.0`, but do not publish it yet.** The Starkscan-backed
+   packaged workflow passed on mainnet on 2026-08-31. Finish the evidence and release review
+   in [v0.2-release-plan.md](./v0.2-release-plan.md) before creating the tag.

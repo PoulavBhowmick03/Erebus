@@ -1,9 +1,39 @@
 # Running the transaction prover locally
 
 A local prover plus a proof-fact-compatible RPC is enough to register on mainnet. It is not
-enough to fund notes without the screening path: see [Limits](#limits).
+enough to fund notes without the screening path: see [Limits](#limits). For the approved
+hosted mainnet path, see [Starkscan hosted proving](#starkscan-hosted-proving).
 
 Verified on 2026-08-28 against the mainnet pool `0x040337b1…812a`.
+
+## Starkscan hosted proving
+
+Starkscan can replace both the local transaction prover and proof interceptor for mainnet.
+It requires an operator-issued API key with `prove` scope:
+
+```text
+PROVING_SERVICE_URL=https://api.starkscan.co/v1/SN_MAIN/prove
+STARKSCAN_API_KEY=<secret>
+```
+
+The relay accepts an explicit block and Invoke transaction, returns a job ID, and is polled
+until terminal. A successful deposit proof includes `additional_data.signature`. Erebus
+stores the job ID and complete one-time result under the identity's mode-`0700`
+`EREBUS_STATE_DIR/prover-jobs`; the files are mode `0600`. Erebus derives the Starkscan
+idempotency key from the durable operation ID and exact proof-request hash. An identical
+rebuild coalesces to the original job, while a new pinned block creates a new logical proof.
+
+The hosted prover receives the proof invocation, including the pool private key. The
+Starknet RPC still receives that key during `compile_actions` and is still required for
+preflight, fee estimation, submission, and receipt reads. Hosted proving removes the local
+prover's compute and storage requirements; it does not remove either trust boundary.
+
+The API key must stay in a protected environment or secret manager. It must not enter an
+identity request JSON, command argument, log, screenshot, or repository file. The hosted
+relay is mainnet-only and does not expose `starknet_specVersion`; Erebus `doctor` checks the
+authenticated capability document and reports `starkscan-async/prove` instead.
+
+Official relay contract: https://starkscan.co/docs/api/strk20-prover
 
 ---
 

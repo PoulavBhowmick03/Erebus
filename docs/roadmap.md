@@ -388,15 +388,15 @@ starts.
 | D12 | Pool allowance mechanism           | Standing approval, decided 2026-08-16                                                                                                                         | Poulav | Decided, built                                                                         |
 | D13 | Who provisions allowance and notes | Operator at install; not an agent tool                                                                                                                        | Both   | Before the operator product                                                            |
 | D15 | AVNU as a swap dependency          | Not selected. Removes all Erebus Cairo; adds an availability and confidentiality dependency, and publishes the bought amount                                  | Both   | Before Phase 10.3 builds                                                               |
-| D14 | Sprint network                     | **Bounded mainnet canary approved 2026-08-28.** A, B, and C registrations and both A/B directional channel opens succeeded; screening still blocks shielding and the full workflow | Both | In progress |
+| D14 | Sprint network                     | **Mainnet canary complete 2026-08-31.** A, B, and C registrations, both A/B channel opens, a screened shield, MCP proposal/counter, settlement, observer test, and scoped disclosure succeeded | Both | Decided and evidenced |
 
 ### External questions
 
 | ID  | Question                                                               | Why it matters                                                                            | Owner                     |
 | --- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------- |
 | Q1  | Can `compile_actions` avoid receiving the full pool key?               | This decides the long-term custody model                                                  | Poulav to StarkWare       |
-| Q2  | Can an operator receive screening access for a self-hosted prover?     | Local fail-closed prover/interceptor stack prepared in `ops/screened-prover`. It still needs the operator-issued `SCREENING_URL`, partner name, and partner secret | Poulav to StarkWare       |
-| Q3  | What are the supported mainnet prover and discovery URLs?              | Partial: local RC.2 prover + Alchemy v0.10 works for registration. Hosted prover and discovery remain unanswered | Poulav to StarkWare       |
+| Q2  | Can an operator receive screened mainnet proofs?                       | **Resolved 2026-08-31.** Starkscan granted operator-issued `prove` scope; its hosted relay returned the screened deposit proof used by the successful shield | Poulav to StarkWare       |
+| Q3  | What is the supported mainnet prover URL?                              | **Resolved for proving:** `https://api.starkscan.co/v1/SN_MAIN/prove`. Discovery still uses Erebus's contract provider over RPC | Poulav to StarkWare       |
 | Q4  | Which pool, prover, ABI, and SDK revisions form one supported set?     | Version drift can cause silent note failures                                              | Poulav to StarkWare       |
 | Q4a | Which transaction-prover tag matches deployed pool class `0x67dddd89`? | Upstream documents a class deployed on neither network, see below. Applies to Sepolia too | Poulav to StarkWare       |
 | Q5  | Which relayer or paymaster path supports direct SDK operators?         | Submission unlinkability depends on it                                                    | Both to StarkWare or AVNU |

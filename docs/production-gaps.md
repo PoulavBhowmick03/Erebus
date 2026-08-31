@@ -12,10 +12,12 @@ The repo-only release work is now:
 1. Change all source package versions to `0.2.0`.
 2. Harden and exercise the supported wheels, checksums, SBOM, MCP quickstart, skill gates,
    and installed-artifact canary without publishing them.
-3. Wait for operator-issued screening credentials.
-4. Complete a packaged full mainnet shield, negotiation, settlement, recovery, and
-   disclosure canary.
-5. Publish only after that evidence passes. See `docs/v0.2-release-plan.md`.
+3. ~~Integrate the operator-approved Starkscan hosted prover and preserve its one-time
+   result.~~ Done 2026-08-31.
+4. ~~Complete a packaged full mainnet shield, negotiation, settlement, recovery, and
+   disclosure canary.~~ Done 2026-08-31; the release evidence record is being finalized.
+5. Publish only after the repository checks and evidence review pass. See
+   `docs/v0.2-release-plan.md`.
 
 The production path then needs these controls:
 
