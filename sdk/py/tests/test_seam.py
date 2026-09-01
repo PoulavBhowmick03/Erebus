@@ -104,6 +104,18 @@ def test_named_network_config_supplies_canonical_values(
     assert configured.pool_address == pool_address
 
 
+def test_config_repr_omits_credential_bearing_urls(config: SeamConfig) -> None:
+    configured = dataclasses.replace(
+        config,
+        rpc_url="https://rpc.example/api-secret",
+        prover_url="https://prover.example?key=prover-secret",
+    )
+
+    shown = repr(configured)
+    assert "api-secret" not in shown
+    assert "prover-secret" not in shown
+
+
 # --- The call gets through ------------------------------------------------------
 
 

@@ -207,6 +207,7 @@ def test_deal_grant_arguments_and_capsule_pass_through_unchanged() -> None:
     ]
     assert grant.viewing_key is capsule
     assert grant.deal_id == "18446744073709551615"
+    assert "ciphertext" not in repr(grant)
 
 
 def test_reveal_reconstructs_the_settlement() -> None:

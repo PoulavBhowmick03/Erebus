@@ -46,7 +46,7 @@ class SeamSettings:
 
     binary: Path
     network: str
-    rpc_url: str
+    rpc_url: str = field(repr=False)
     pool_address: str
     chain_id: str
     pool_key_file: Path
@@ -81,7 +81,7 @@ class SpendingLimits:
 @dataclass(frozen=True)
 class ServerConfig:
     address: str
-    prover_url: str
+    prover_url: str = field(repr=False)
     backend: str
     settlement_role: SettlementRole
     mock_store_path: Path

@@ -15,10 +15,19 @@ use crate::prover::BlockId;
 use crate::tx::{ResourceBound, ResourceBounds, SignedInvokeV3, QUERY_VERSION_3};
 
 /// A Starknet JSON-RPC endpoint.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StarknetRpc {
     url: String,
     client: reqwest::Client,
+}
+
+impl core::fmt::Debug for StarknetRpc {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StarknetRpc")
+            .field("endpoint", &public_endpoint(&self.url))
+            .finish_non_exhaustive()
+    }
 }
 
 impl StarknetRpc {
@@ -35,7 +44,7 @@ impl StarknetRpc {
         let value = self.call("starknet_blockNumber", json!([])).await?;
         value
             .as_u64()
-            .ok_or_else(|| RpcError::Malformed(format!("block number was not a u64: {value}")))
+            .ok_or_else(|| RpcError::Malformed("block number was not a u64".to_owned()))
     }
 
     /// Unix timestamp assigned to an accepted block by Starknet.
@@ -51,7 +60,7 @@ impl StarknetRpc {
             .and_then(Value::as_u64)
             .ok_or_else(|| {
                 RpcError::Malformed(format!(
-                    "block {block_number} timestamp was missing or not a u64: {value}"
+                    "block {block_number} timestamp was missing or not a u64"
                 ))
             })
     }
@@ -123,9 +132,9 @@ impl StarknetRpc {
                 }),
             )
             .await?;
-        let estimates = value.as_array().ok_or_else(|| {
-            RpcError::Malformed(format!("fee estimate was not an array: {value}"))
-        })?;
+        let estimates = value
+            .as_array()
+            .ok_or_else(|| RpcError::Malformed("fee estimate was not an array".to_owned()))?;
         let estimate = estimates
             .first()
             .ok_or_else(|| RpcError::Malformed("fee estimate array was empty".to_owned()))?;
@@ -151,7 +160,7 @@ impl StarknetRpc {
         parse_felt(
             "transaction_hash",
             value.get("transaction_hash").ok_or_else(|| {
-                RpcError::Malformed(format!("submission omitted transaction_hash: {value}"))
+                RpcError::Malformed("submission omitted transaction_hash".to_owned())
             })?,
         )
     }
@@ -177,7 +186,7 @@ impl StarknetRpc {
         parse_felt(
             "transaction_hash",
             value.get("transaction_hash").ok_or_else(|| {
-                RpcError::Malformed(format!("submission omitted transaction_hash: {value}"))
+                RpcError::Malformed("submission omitted transaction_hash".to_owned())
             })?,
         )
     }
@@ -190,9 +199,8 @@ impl StarknetRpc {
                 json!({ "transaction_hash": hex(transaction_hash) }),
             )
             .await?;
-        serde_json::from_value(value.clone()).map_err(|error| {
-            RpcError::Malformed(format!("invalid transaction receipt ({error}): {value}"))
-        })
+        serde_json::from_value(value)
+            .map_err(|error| RpcError::Malformed(format!("invalid transaction receipt: {error}")))
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
@@ -219,7 +227,7 @@ impl StarknetRpc {
         value
             .get("result")
             .cloned()
-            .ok_or_else(|| RpcError::Malformed(format!("HTTP {status}, no result field: {value}")))
+            .ok_or_else(|| RpcError::Malformed(format!("HTTP {status}, no result field")))
     }
 }
 
@@ -262,13 +270,14 @@ impl Receipt {
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
     /// HTTP or JSON transport failure.
-    #[error("Starknet RPC transport error: {0}")]
+    #[error("Starknet RPC transport error (endpoint details redacted)")]
     Transport(#[from] reqwest::Error),
     /// JSON-RPC application error.
     ///
-    /// `data` contains the revert reason for code 40 (`CONTRACT_ERROR`). Without it, the
-    /// message only says `Contract error`. F20 was diagnosed without this detail.
-    #[error("Starknet RPC error {code}: {message}{}", .data.as_ref().map(|d| format!(": {d}")).unwrap_or_default())]
+    /// `data` can contain the revert reason for code 40 (`CONTRACT_ERROR`), but some RPCs
+    /// also echo the request calldata there. `compile_actions` calldata carries the pool
+    /// private key, so display only reviewed diagnostic labels.
+    #[error("Starknet RPC error {code}: {message}{}", .data.as_ref().and_then(public_diagnostic).map(|d| format!(": RPC diagnostic {d}")).unwrap_or_default())]
     Rpc {
         /// RPC error code.
         code: i64,
@@ -290,6 +299,32 @@ impl RpcError {
     }
 }
 
+fn public_diagnostic(value: &Value) -> Option<&'static str> {
+    let text = value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string());
+    // These labels identify the actionable contract failure without forwarding arbitrary
+    // RPC data through the CLI and MCP server. Additions require a regression test that the
+    // surrounding payload remains redacted.
+    [
+        "NON_ZERO_VALUE",
+        "ENTRYPOINT_FAILED",
+        "ENTRYPOINT_NOT_FOUND",
+        "INVALID_SIGNATURE",
+        "INVALID_TRANSACTION_NONCE",
+        "INDEX_NOT_SEQUENTIAL",
+    ]
+    .into_iter()
+    .find(|label| text.contains(label))
+}
+
+fn public_endpoint(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .map(|parsed| parsed.origin().ascii_serialization())
+        .unwrap_or_else(|_| "<invalid URL>".to_owned())
+}
+
 fn block_param(block_id: &BlockId) -> Value {
     match block_id {
         BlockId::Latest => json!("latest"),
@@ -305,15 +340,15 @@ fn estimate_bound(
 ) -> Result<ResourceBound, RpcError> {
     let amount = parse_hex_u64(
         amount_field,
-        estimate.get(amount_field).ok_or_else(|| {
-            RpcError::Malformed(format!("fee estimate omitted {amount_field}: {estimate}"))
-        })?,
+        estimate
+            .get(amount_field)
+            .ok_or_else(|| RpcError::Malformed(format!("fee estimate omitted {amount_field}")))?,
     )?;
     let price = parse_hex_u128(
         price_field,
-        estimate.get(price_field).ok_or_else(|| {
-            RpcError::Malformed(format!("fee estimate omitted {price_field}: {estimate}"))
-        })?,
+        estimate
+            .get(price_field)
+            .ok_or_else(|| RpcError::Malformed(format!("fee estimate omitted {price_field}")))?,
     )?;
 
     // A 50% buffer covers changes between estimation and inclusion. Saturating arithmetic
@@ -327,14 +362,14 @@ fn estimate_bound(
 fn parse_felt(field: &'static str, value: &Value) -> Result<Felt, RpcError> {
     let text = value
         .as_str()
-        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string: {value}")))?;
-    Felt::from_hex(text).map_err(|_| RpcError::Malformed(format!("{field} was not a felt: {text}")))
+        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string")))?;
+    Felt::from_hex(text).map_err(|_| RpcError::Malformed(format!("{field} was not a felt")))
 }
 
 fn parse_felt_array(field: &'static str, value: &Value) -> Result<Vec<Felt>, RpcError> {
     value
         .as_array()
-        .ok_or_else(|| RpcError::Malformed(format!("{field} was not an array: {value}")))?
+        .ok_or_else(|| RpcError::Malformed(format!("{field} was not an array")))?
         .iter()
         .map(|item| parse_felt(field, item))
         .collect()
@@ -343,17 +378,17 @@ fn parse_felt_array(field: &'static str, value: &Value) -> Result<Vec<Felt>, Rpc
 fn parse_hex_u64(field: &'static str, value: &Value) -> Result<u64, RpcError> {
     let text = value
         .as_str()
-        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string: {value}")))?;
+        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string")))?;
     u64::from_str_radix(text.trim_start_matches("0x"), 16)
-        .map_err(|_| RpcError::Malformed(format!("{field} was not a u64: {text}")))
+        .map_err(|_| RpcError::Malformed(format!("{field} was not a u64")))
 }
 
 fn parse_hex_u128(field: &'static str, value: &Value) -> Result<u128, RpcError> {
     let text = value
         .as_str()
-        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string: {value}")))?;
+        .ok_or_else(|| RpcError::Malformed(format!("{field} was not a string")))?;
     u128::from_str_radix(text.trim_start_matches("0x"), 16)
-        .map_err(|_| RpcError::Malformed(format!("{field} was not a u128: {text}")))
+        .map_err(|_| RpcError::Malformed(format!("{field} was not a u128")))
 }
 
 fn hex(value: Felt) -> String {
@@ -390,5 +425,64 @@ mod tests {
         };
         assert!(accepted.is_accepted());
         assert!(!accepted.is_reverted());
+    }
+
+    #[test]
+    fn rpc_display_keeps_a_reviewed_label_but_redacts_the_payload() {
+        let error = RpcError::Rpc {
+            code: 40,
+            message: "Contract error".to_owned(),
+            data: Some(json!({
+                "revert_error": "NON_ZERO_VALUE, ENTRYPOINT_FAILED",
+                "request": {"calldata": ["pool-private-key=secret"]}
+            })),
+        };
+
+        let shown = error.to_string();
+        assert!(shown.contains("NON_ZERO_VALUE"));
+        assert!(!shown.contains("calldata"));
+        assert!(!shown.contains("pool-private-key"));
+        assert!(!shown.contains("secret"));
+    }
+
+    #[test]
+    fn rpc_display_omits_unreviewed_data() {
+        let error = RpcError::Rpc {
+            code: -32603,
+            message: "Internal error".to_owned(),
+            data: Some(json!({"request": {"calldata": ["secret"]}})),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "Starknet RPC error -32603: Internal error"
+        );
+    }
+
+    #[test]
+    fn rpc_debug_omits_credentials_in_the_url() {
+        let rpc = StarknetRpc::new("https://user:password@example.com/api-key?token=secret")
+            .expect("client");
+        let shown = format!("{rpc:?}");
+        assert!(shown.contains("https://example.com"));
+        for secret in ["user", "password", "api-key", "token", "secret"] {
+            assert!(!shown.contains(secret));
+        }
+    }
+
+    #[test]
+    fn malformed_values_are_not_echoed() {
+        let felt_error =
+            parse_felt("nonce", &json!("pool-private-key=secret")).expect_err("invalid felt");
+        let array_error = parse_felt_array(
+            "call result",
+            &json!({"calldata": ["pool-private-key=secret"]}),
+        )
+        .expect_err("invalid array");
+
+        for shown in [felt_error.to_string(), array_error.to_string()] {
+            assert!(!shown.contains("pool-private-key"));
+            assert!(!shown.contains("secret"));
+        }
     }
 }

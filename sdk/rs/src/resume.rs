@@ -45,6 +45,11 @@ pub enum ResumeOutcome {
         /// Its hash, which resubmission cannot change.
         transaction_hash: Felt,
     },
+    /// A hosted proof created before the process stopped was recovered and submitted.
+    RecoveredProof {
+        /// Final result of the original operation.
+        operation_result: Value,
+    },
     /// The earlier attempt was proven unable to produce an effect and the request was rebuilt.
     Rebuilt {
         /// Final result of the replacement attempt.

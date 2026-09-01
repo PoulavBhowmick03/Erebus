@@ -53,7 +53,7 @@ const MAX_SELECTION_NOTES: usize = 256;
 const MAX_SELECTION_STATES: usize = 100_000;
 
 /// Construction inputs for the high-level client.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
     /// Operator-trusted Starknet RPC URL.
     ///
@@ -79,6 +79,24 @@ pub struct ClientConfig {
     /// Wire generation assigned to newly opened channels. Existing records keep their
     /// persisted version and are never silently migrated.
     pub new_channel_wire_version: WireVersion,
+}
+
+impl core::fmt::Debug for ClientConfig {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ClientConfig")
+            .field("rpc_url", &"<redacted>")
+            .field("prover_url", &"<redacted>")
+            .field("pool_address", &self.pool_address)
+            .field("chain_id", &self.chain_id)
+            .field("account_address", &self.account_address)
+            .field("pool_key_file", &self.pool_key_file)
+            .field("account_key_file", &self.account_key_file)
+            .field("state_dir", &self.state_dir)
+            .field("token", &self.token)
+            .field("new_channel_wire_version", &self.new_channel_wire_version)
+            .finish()
+    }
 }
 
 /// Concrete Rust implementation.
@@ -695,6 +713,21 @@ impl Client {
                 "no operation is recorded under {operation_id}"
             )));
         };
+
+        // A hosted prover job is recoverable before any chain effect can exist. Continue
+        // that exact job before reconciliation classifies Prepared as rebuildable.
+        if matches!(
+            lease.record().stage(),
+            OperationStage::Prepared | OperationStage::Proven
+        ) && self
+            .executor
+            .resume_hosted_proof(&mut lease, self.signer.as_ref())
+            .await?
+            .is_some()
+        {
+            let operation_result = self.complete_operation(&mut lease).await?;
+            return Ok(ResumeOutcome::RecoveredProof { operation_result });
+        }
 
         let finding = self.reconcile_lease(&lease).await?;
         if finding.outcome == Outcome::Effect {

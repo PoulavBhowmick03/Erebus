@@ -184,6 +184,21 @@ def test_named_network_supplies_canonical_chain_and_pool(
     assert seam.pool_address == pool_address
 
 
+def test_seam_settings_repr_omits_the_rpc_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _enable_seam(monkeypatch, tmp_path, network="sepolia")
+    monkeypatch.setenv("STARKNET_RPC_URL", "https://rpc.example/api-secret")
+    monkeypatch.setenv("PROVING_SERVICE_URL", "https://prover.example?key=prover-secret")
+
+    config = ServerConfig.from_env()
+    seam = config.seam
+
+    assert seam is not None
+    assert "api-secret" not in repr(seam)
+    assert "prover-secret" not in repr(config)
+
+
 @pytest.mark.parametrize(
     ("variable", "value"),
     [("STARKNET_CHAIN_ID", "0x1"), ("POOL_ADDRESS", "0x1")],

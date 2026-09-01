@@ -117,7 +117,7 @@ enum Request {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigParams {
     rpc_url: String,
@@ -131,6 +131,24 @@ struct ConfigParams {
     token: String,
     #[serde(default = "default_wire_version")]
     wire_version: WireVersion,
+}
+
+impl core::fmt::Debug for ConfigParams {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ConfigParams")
+            .field("rpc_url", &"<redacted>")
+            .field("prover_url", &"<redacted>")
+            .field("pool_address", &self.pool_address)
+            .field("chain_id", &self.chain_id)
+            .field("account_address", &self.account_address)
+            .field("pool_key_file", &self.pool_key_file)
+            .field("account_key_file", &self.account_key_file)
+            .field("state_dir", &self.state_dir)
+            .field("token", &self.token)
+            .field("wire_version", &self.wire_version)
+            .finish()
+    }
 }
 
 fn default_wire_version() -> WireVersion {
@@ -601,7 +619,8 @@ fn execution_error_code(error: &ExecutionError) -> (&'static str, bool) {
         | ExecutionError::AmbiguousPoolMessage
         | ExecutionError::EmptyPoolMessage
         | ExecutionError::InvalidProverFelt { .. }
-        | ExecutionError::SimulationMismatch { .. } => ("PROOF_FAILED", false),
+        | ExecutionError::SimulationMismatch { .. }
+        | ExecutionError::SimulationCommitmentMismatch => ("PROOF_FAILED", false),
     }
 }
 

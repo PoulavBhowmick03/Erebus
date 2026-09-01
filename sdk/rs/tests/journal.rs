@@ -185,6 +185,11 @@ fn every_recovery_fact_survives_a_restart() {
             .record_completion(completion.clone(), 1_002)
             .expect("completion");
         lease
+            .amend(1_002, |attempt| {
+                attempt.simulation_hash = Some("preflight-sha256".to_owned());
+            })
+            .expect("simulation commitment");
+        lease
             .advance(OperationStage::Prepared, 1_003)
             .expect("prepared");
         lease
@@ -228,6 +233,10 @@ fn every_recovery_fact_survives_a_restart() {
         Some(&completion)
     );
     assert_eq!(lease.record().result.as_ref(), Some(&result));
+    assert_eq!(
+        lease.record().attempt().simulation_hash.as_deref(),
+        Some("preflight-sha256")
+    );
     assert_eq!(
         lease
             .record()

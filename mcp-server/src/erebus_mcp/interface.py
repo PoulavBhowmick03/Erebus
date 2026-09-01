@@ -71,7 +71,7 @@ class NoteBalance:
 class ViewingKeyGrant:
     channel_id: ChannelHandle
     grantee: AgentId
-    viewing_key: dict[str, Any] | str  # Rust-owned encrypted capsule, or a legacy fixture
+    viewing_key: dict[str, Any] | str = field(repr=False)  # Rust-owned encrypted capsule
     deal_id: str | None = None
     expires_at: int | None = None
 

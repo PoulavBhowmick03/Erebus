@@ -231,18 +231,13 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish the release and the index
+    name: Create the draft release
     runs-on: ubuntu-latest
     needs: collect
     # Only for a tag. A manual run builds and verifies without publishing anything.
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -291,65 +286,7 @@ jobs:
             esac
           done
 
-      - name: Build the package index
-        # GitHub has no Python registry, so Release assets are just files at URLs and an
-        # installer cannot resolve a dependency chain from them. This static PEP 503 index
-        # points at those files and makes them installable. It only holds links, so Pages
-        # stays small however many releases accumulate.
+      - name: Keep the release gated on the clean-install canary
         run: |
-          python3 scripts/build-index.py \
-            --dist dist \
-            --out site/simple \
-            --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
-
-      - name: Keep older releases resolvable
-        # Publishing Pages replaces the whole site, so an index built from this tag alone
-        # would delete every previous version's links and break pinned installs. Merge the
-        # live index in before deploying.
-        continue-on-error: true
-        run: |
-          base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/simple"
-          python3 - "$base" <<'PY'
-          import sys, urllib.request, pathlib, re
-          base = sys.argv[1]
-          root = pathlib.Path("site/simple")
-          try:
-              live = urllib.request.urlopen(f"{base}/", timeout=20).read().decode()
-          except Exception as exc:
-              print(f"no existing index ({exc}); first release")
-              raise SystemExit(0)
-          for project in re.findall(r'href="([^"/]+)/"', live):
-              page = root / project / "index.html"
-              try:
-                  old = urllib.request.urlopen(f"{base}/{project}/", timeout=20).read().decode()
-              except Exception:
-                  continue
-              new = page.read_text() if page.exists() else ""
-              have = set(re.findall(r'>([^<]+\.whl)<', new))
-              extra = [ln for ln in re.findall(r'(\s*<a href="[^"]+">[^<]+\.whl</a><br>)', old)
-                       if re.search(r'>([^<]+\.whl)<', ln).group(1) not in have]
-              if not extra:
-                  continue
-              page.parent.mkdir(parents=True, exist_ok=True)
-              body = (new.replace("  </body>\n</html>\n", "") if new
-                      else "<!DOCTYPE html>\n<html>\n  <body>\n")
-              page.write_text(body + "\n".join(extra) + "\n  </body>\n</html>\n")
-              print(f"carried {len(extra)} older file(s) into {project}")
-          PY
-
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-      - uses: actions/deploy-pages@v4
-        id: pages
-
-      - name: Publish the verified draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release edit "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
-            --draft=false
+          echo "Draft created. Do not publish it until the Canary workflow passes."
+          echo "Publishing the draft triggers the public-index deployment and published-package canary."

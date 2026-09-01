@@ -26,7 +26,7 @@ use crate::rpc::Receipt;
 use crate::state::ChannelHandle;
 
 /// Journal record schema version. A record written by a newer SDK fails closed.
-pub const JOURNAL_VERSION: u32 = 3;
+pub const JOURNAL_VERSION: u32 = 4;
 
 /// Oldest schema this SDK can classify. Version 1 has no replayable request or completion
 /// plan, so it remains readable but cannot be rebuilt automatically.
@@ -132,6 +132,12 @@ pub struct Attempt {
     pub proving_block: Option<u64>,
     /// Last block at which the proof is still accepted, read live from the pool.
     pub valid_until_block: Option<u64>,
+    /// SHA-256 commitment to the same-block `compile_actions` output.
+    ///
+    /// A recovered hosted proof must match this before it can be submitted. Older records do
+    /// not have it and therefore fail closed into the ordinary rebuild path.
+    #[serde(default)]
+    pub simulation_hash: Option<String>,
     /// Hash of the signed transaction, persisted before submission.
     pub transaction_hash: Option<Felt>,
     /// Account nonce the transaction was signed against.
@@ -170,6 +176,7 @@ impl Attempt {
             updated_at: now,
             proving_block: None,
             valid_until_block: None,
+            simulation_hash: None,
             transaction_hash: None,
             account_nonce: None,
             transaction_stored: false,

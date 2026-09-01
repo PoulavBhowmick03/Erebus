@@ -215,6 +215,10 @@ async fn one_path_preflights_proves_submits_and_waits() {
     assert_eq!(record.stage(), OperationStage::Accepted);
     assert_eq!(record.attempt().proving_block, Some(10));
     assert_eq!(
+        record.attempt().simulation_hash.as_ref().map(String::len),
+        Some(64)
+    );
+    assert_eq!(
         record.attempt().transaction_hash,
         Some(Felt::from_hex_unchecked(SUBMITTED_HASH))
     );

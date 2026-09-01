@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +66,8 @@ class SeamConfig:
     Use an operator-controlled endpoint outside throwaway testnet use.
     """
 
-    rpc_url: str
-    prover_url: str
+    rpc_url: str = field(repr=False)
+    prover_url: str = field(repr=False)
     pool_address: str
     chain_id: str
     account_address: str

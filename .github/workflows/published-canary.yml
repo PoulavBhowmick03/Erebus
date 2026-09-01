@@ -18,8 +18,86 @@ permissions:
   contents: read
 
 jobs:
+  publish-index:
+    name: Publish the package index
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    env:
+      VERSION: ${{ github.event.release.tag_name && format('{0}', github.event.release.tag_name) || inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        shell: bash
+        run: echo "VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+      - name: Download the published wheels
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir dist
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --dir dist \
+            --pattern '*.whl'
+      - name: Build the package index
+        run: |
+          python3 scripts/build-index.py \
+            --dist dist \
+            --out site/simple \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}"
+      - name: Keep older releases resolvable
+        continue-on-error: true
+        run: |
+          base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/simple"
+          python3 - "$base" <<'PY'
+          import pathlib, re, sys, urllib.request
+          base = sys.argv[1]
+          root = pathlib.Path("site/simple")
+          try:
+              live = urllib.request.urlopen(f"{base}/", timeout=20).read().decode()
+          except Exception as exc:
+              print(f"no existing index ({exc}); first release")
+              raise SystemExit(0)
+          for project in re.findall(r'href="([^"/]+)/"', live):
+              page = root / project / "index.html"
+              try:
+                  old = urllib.request.urlopen(f"{base}/{project}/", timeout=20).read().decode()
+              except Exception:
+                  continue
+              new = page.read_text() if page.exists() else ""
+              have = set(re.findall(r'>([^<]+\.whl)<', new))
+              extra = [
+                  line
+                  for line in re.findall(r'(\s*<a href="[^"]+">[^<]+\.whl</a><br>)', old)
+                  if re.search(r'>([^<]+\.whl)<', line).group(1) not in have
+              ]
+              if not extra:
+                  continue
+              page.parent.mkdir(parents=True, exist_ok=True)
+              body = (
+                  new.replace("  </body>\n</html>\n", "")
+                  if new
+                  else "<!DOCTYPE html>\n<html>\n  <body>\n"
+              )
+              page.write_text(body + "\n".join(extra) + "\n  </body>\n</html>\n")
+              print(f"carried {len(extra)} older file(s) into {project}")
+          PY
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        id: pages
+
   install:
     name: ${{ matrix.os }} / py${{ matrix.python }}
+    needs: publish-index
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

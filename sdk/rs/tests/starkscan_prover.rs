@@ -199,14 +199,187 @@ async fn async_result_is_authenticated_and_persisted_before_return() {
         .expect("job directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("job entries");
-    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs.len(), 2);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            jobs[0].metadata().expect("metadata").permissions().mode() & 0o777,
-            0o600
+        for job in &jobs {
+            assert_eq!(
+                job.metadata().expect("metadata").permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    for job in &jobs {
+        let contents = std::fs::read_to_string(job.path()).expect("job contents");
+        assert!(!contents.contains("\"transaction\""));
+        assert!(!contents.contains("test-secret"));
+    }
+    std::fs::remove_dir_all(state_dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_lost_submit_response_recovers_the_original_job() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("lost submit accept");
+        let first = read_request(&mut stream);
+        assert_eq!(first.method, "POST");
+        let idempotency = first
+            .headers
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("idempotency-key:"))
+            .expect("first idempotency header")
+            .to_owned();
+        drop(stream);
+
+        let (mut stream, _) = listener.accept().expect("recovered submit accept");
+        let second = read_request(&mut stream);
+        assert_eq!(second.method, "POST");
+        assert_eq!(second.body, first.body);
+        assert!(second.headers.lines().any(|line| line == idempotency));
+        respond(
+            &mut stream,
+            "200 OK",
+            json!({"jobId":"prv_recovered_job_1","status":"queued","terminal":false}),
         );
+
+        let (mut stream, _) = listener.accept().expect("poll accept");
+        let poll = read_request(&mut stream);
+        assert_eq!(poll.method, "GET");
+        assert_eq!(poll.path, "/v1/SN_MAIN/prove/prv_recovered_job_1");
+        respond(
+            &mut stream,
+            "200 OK",
+            json!({
+                "jobId":"prv_recovered_job_1",
+                "status":"succeeded",
+                "terminal":true,
+                "result":{
+                    "proof":"recovered-proof",
+                    "proof_facts":["0xaa"],
+                    "l2_to_l1_messages":[]
+                }
+            }),
+        );
+    });
+
+    let state_dir = std::env::temp_dir().join(format!(
+        "erebus-starkscan-retry-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::env::set_var("STARKSCAN_API_KEY", "test-secret");
+    let service =
+        ProvingService::new_persistent(format!("http://{address}/v1/SN_MAIN/prove"), &state_dir)
+            .expect("client")
+            .with_max_retries(1);
+    std::env::remove_var("STARKSCAN_API_KEY");
+
+    let result = service
+        .prove_transaction_idempotent(
+            &BlockId::Number(123),
+            &signed_invoke(),
+            &format!("op_{}", "b".repeat(64)),
+        )
+        .await
+        .expect("recovered proof");
+    assert_eq!(result.proof, "recovered-proof");
+    server.join().expect("server");
+    std::fs::remove_dir_all(state_dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_new_process_recovers_the_exact_request_after_submit_response_loss() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("lost submit accept");
+        let first = read_request(&mut stream);
+        assert_eq!(first.method, "POST");
+        let idempotency = first
+            .headers
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("idempotency-key:"))
+            .expect("first idempotency header")
+            .to_owned();
+        drop(stream);
+
+        let (mut stream, _) = listener.accept().expect("restart submit accept");
+        let second = read_request(&mut stream);
+        assert_eq!(second.method, "POST");
+        assert_eq!(second.body, first.body);
+        assert!(second.headers.lines().any(|line| line == idempotency));
+        respond(
+            &mut stream,
+            "200 OK",
+            json!({"jobId":"prv_restart_job_1","status":"queued","terminal":false}),
+        );
+
+        let (mut stream, _) = listener.accept().expect("poll accept");
+        let poll = read_request(&mut stream);
+        assert_eq!(poll.method, "GET");
+        assert_eq!(poll.path, "/v1/SN_MAIN/prove/prv_restart_job_1");
+        respond(
+            &mut stream,
+            "200 OK",
+            json!({
+                "jobId":"prv_restart_job_1",
+                "status":"succeeded",
+                "terminal":true,
+                "result":{
+                    "proof":"restart-proof",
+                    "proof_facts":["0xaa"],
+                    "l2_to_l1_messages":[]
+                }
+            }),
+        );
+    });
+
+    let state_dir = std::env::temp_dir().join(format!(
+        "erebus-starkscan-restart-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let key = format!("op_{}", "c".repeat(64));
+
+    std::env::set_var("STARKSCAN_API_KEY", "test-secret");
+    let first_process =
+        ProvingService::new_persistent(format!("http://{address}/v1/SN_MAIN/prove"), &state_dir)
+            .expect("first client")
+            .with_max_retries(0);
+    std::env::remove_var("STARKSCAN_API_KEY");
+    first_process
+        .prove_transaction_idempotent(&BlockId::Number(123), &signed_invoke(), &key)
+        .await
+        .expect_err("lost response must stop the first process");
+    drop(first_process);
+
+    std::env::set_var("STARKSCAN_API_KEY", "test-secret");
+    let restarted =
+        ProvingService::new_persistent(format!("http://{address}/v1/SN_MAIN/prove"), &state_dir)
+            .expect("restarted client")
+            .with_max_retries(0);
+    std::env::remove_var("STARKSCAN_API_KEY");
+    let result = restarted
+        .resume_transaction_idempotent(&key)
+        .await
+        .expect("resume request")
+        .expect("recoverable job");
+    assert_eq!(result.proof, "restart-proof");
+
+    server.join().expect("server");
+    let job_dir = state_dir.join("prover-jobs");
+    let jobs = std::fs::read_dir(&job_dir)
+        .expect("job directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job entries");
+    assert_eq!(jobs.len(), 2);
+    for job in jobs {
+        let contents = std::fs::read_to_string(job.path()).expect("job contents");
+        assert!(!contents.contains("\"transaction\""));
+        assert!(!contents.contains("test-secret"));
     }
     std::fs::remove_dir_all(state_dir).expect("cleanup");
 }

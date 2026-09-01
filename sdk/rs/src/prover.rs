@@ -35,12 +35,14 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 /// Base backoff, doubled per attempt.
 pub const DEFAULT_BASE_BACKOFF: Duration = Duration::from_millis(500);
+const CACHED_JOB_VERSION: u32 = 2;
+const CACHED_JOB_INDEX_VERSION: u32 = 1;
 
 /// Errors talking to the proving service.
 #[derive(Debug, thiserror::Error)]
 pub enum ProverError {
     /// Transport-level failure.
-    #[error("proving service transport error: {0}")]
+    #[error("proving service transport error (endpoint details redacted)")]
     Transport(#[from] reqwest::Error),
     /// The service returned a JSON-RPC error.
     #[error("proving service returned error {code}: {message}{}", .data.as_ref().and_then(public_diagnostic).map(|d| format!(": prover diagnostic {d}")).unwrap_or_default())]
@@ -175,20 +177,43 @@ impl core::fmt::Debug for Transport {
 struct CachedJob {
     version: u32,
     request_hash: String,
+    /// Exact private request retained only until the relay job ID is durable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<serde_json::Value>,
     #[serde(default)]
     job_id: Option<String>,
     #[serde(default)]
     result: Option<ProveTransactionResult>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedJobIndex {
+    version: u32,
+    request_hash: String,
+    relay_key: String,
+    cache_file: String,
+}
+
 /// Client for a local JSON-RPC prover or Starkscan's asynchronous hosted prover.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProvingService {
     base_url: String,
     client: reqwest::Client,
     max_retries: u32,
     base_backoff: Duration,
     transport: Transport,
+}
+
+impl core::fmt::Debug for ProvingService {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ProvingService")
+            .field("endpoint", &public_endpoint(&self.base_url))
+            .field("max_retries", &self.max_retries)
+            .field("base_backoff", &self.base_backoff)
+            .field("transport", &self.transport)
+            .finish()
+    }
 }
 
 impl ProvingService {
@@ -264,7 +289,7 @@ impl ProvingService {
         value
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| ProverError::Malformed(format!("specVersion was not a string: {value}")))
+            .ok_or_else(|| ProverError::Malformed("specVersion was not a string".to_owned()))
     }
 
     /// Proves a transaction.
@@ -301,6 +326,80 @@ impl ProvingService {
         }
     }
 
+    /// Resumes the hosted proof job recorded for one durable operation.
+    ///
+    /// Returns `None` when this is a local prover or the operation has no recoverable hosted
+    /// job. The private request exists on disk only until the relay job ID is durable.
+    pub async fn resume_transaction_idempotent(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<ProveTransactionResult>, ProverError> {
+        let Transport::Starkscan { api_key, job_dir } = &self.transport else {
+            return Ok(None);
+        };
+        validate_idempotency_key(idempotency_key)?;
+        let index_path = operation_index_path(job_dir, idempotency_key);
+        let Some(index) = read_cached_index(&index_path)? else {
+            return Ok(None);
+        };
+        validate_cached_index(&index)?;
+        let seed_hash = sha256_hex(idempotency_key.as_bytes());
+        let expected_relay_key =
+            format!("erebus-{}-{}", &seed_hash[..32], &index.request_hash[..32]);
+        let expected_cache_file = format!("{}.json", sha256_hex(expected_relay_key.as_bytes()));
+        if index.relay_key != expected_relay_key || index.cache_file != expected_cache_file {
+            return Err(ProverError::JobState(
+                "hosted prover operation index does not match its operation ID".to_owned(),
+            ));
+        }
+        let cache_path = job_dir.join(&index.cache_file);
+        let mut cached = read_cached_job(&cache_path)?.ok_or_else(|| {
+            ProverError::JobState(format!(
+                "hosted prover index points to missing cache {}",
+                cache_path.display()
+            ))
+        })?;
+        if cached.request_hash != index.request_hash {
+            return Err(ProverError::JobState(
+                "hosted prover index request hash does not match its cache".to_owned(),
+            ));
+        }
+        if let Some(result) = cached.result.clone() {
+            return Ok(Some(result));
+        }
+
+        let job_id = match cached.job_id.clone() {
+            Some(job_id) => job_id,
+            None => {
+                let request = cached.request.as_ref().ok_or_else(|| {
+                    ProverError::JobState(
+                        "hosted prover job has neither a job ID nor its exact request".to_owned(),
+                    )
+                })?;
+                let encoded = serde_json::to_vec(request)
+                    .map_err(|error| ProverError::JobState(error.to_string()))?;
+                if sha256_hex(&encoded) != cached.request_hash {
+                    return Err(ProverError::JobState(
+                        "hosted prover cached request does not match its request hash".to_owned(),
+                    ));
+                }
+                let value = self
+                    .starkscan_submit(api_key, &index.relay_key, request)
+                    .await?;
+                let job_id = required_string(&value, "jobId")?;
+                validate_job_id(&job_id)?;
+                cached.job_id = Some(job_id.clone());
+                cached.request = None;
+                write_cached_job(&cache_path, &cached)?;
+                job_id
+            }
+        };
+
+        self.poll_starkscan_job(api_key, &job_id, &mut cached, &cache_path, &index_path)
+            .await
+            .map(Some)
+    }
+
     async fn prove_json_rpc(
         &self,
         block_id: &BlockId,
@@ -318,11 +417,8 @@ impl ProvingService {
                 .await
             {
                 Ok(value) => {
-                    return serde_json::from_value(value.clone()).map_err(|e| {
-                        ProverError::Malformed(format!(
-                            "{e}; response was {}",
-                            truncate(&value.to_string(), 500)
-                        ))
+                    return serde_json::from_value(value).map_err(|error| {
+                        ProverError::Malformed(format!("invalid prove result: {error}"))
                     });
                 }
                 Err(error) if is_transient(&error) && attempt < self.max_retries => {
@@ -382,9 +478,11 @@ impl ProvingService {
         let seed_hash = sha256_hex(idempotency_key.as_bytes());
         let relay_key = format!("erebus-{}-{}", &seed_hash[..32], &request_hash[..32]);
         let cache_path = job_dir.join(format!("{}.json", sha256_hex(relay_key.as_bytes())));
+        let index_path = operation_index_path(job_dir, idempotency_key);
         let mut cached = read_cached_job(&cache_path)?.unwrap_or(CachedJob {
-            version: 1,
+            version: CACHED_JOB_VERSION,
             request_hash: request_hash.clone(),
+            request: Some(body.clone()),
             job_id: None,
             result: None,
         });
@@ -395,12 +493,27 @@ impl ProvingService {
                     .to_owned(),
             });
         }
-        if let Some(result) = cached.result {
+        if let Some(result) = cached.result.clone() {
             return Ok(result);
         }
-        if cached.job_id.is_none() && !cache_path.exists() {
+        let index = CachedJobIndex {
+            version: CACHED_JOB_INDEX_VERSION,
+            request_hash: request_hash.clone(),
+            relay_key: relay_key.clone(),
+            cache_file: cache_path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .ok_or_else(|| {
+                    ProverError::JobState("hosted prover cache filename is not UTF-8".to_owned())
+                })?
+                .to_owned(),
+        };
+        if cached.job_id.is_none() {
+            cached.version = CACHED_JOB_VERSION;
+            cached.request = Some(body.clone());
             write_cached_job(&cache_path, &cached)?;
         }
+        write_cached_index(&index_path, &index)?;
 
         let job_id = match cached.job_id.clone() {
             Some(job_id) => job_id,
@@ -409,13 +522,26 @@ impl ProvingService {
                 let job_id = required_string(&value, "jobId")?;
                 validate_job_id(&job_id)?;
                 cached.job_id = Some(job_id.clone());
+                cached.request = None;
                 write_cached_job(&cache_path, &cached)?;
                 job_id
             }
         };
 
+        self.poll_starkscan_job(api_key, &job_id, &mut cached, &cache_path, &index_path)
+            .await
+    }
+
+    async fn poll_starkscan_job(
+        &self,
+        api_key: &str,
+        job_id: &str,
+        cached: &mut CachedJob,
+        cache_path: &Path,
+        index_path: &Path,
+    ) -> Result<ProveTransactionResult, ProverError> {
         loop {
-            let value = self.starkscan_poll(api_key, &job_id).await?;
+            let value = self.starkscan_poll(api_key, job_id).await?;
             let terminal = value
                 .get("terminal")
                 .and_then(serde_json::Value::as_bool)
@@ -437,29 +563,29 @@ impl ProvingService {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown");
             if status == "succeeded" {
-                let result_value = value.get("result").cloned().ok_or_else(|| {
+                let Some(result_value) = value.get("result").cloned() else {
                     let reason = value
                         .get("resultUnavailableReason")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("missing");
-                    ProverError::Relay {
+                    remove_cached_index(index_path)?;
+                    return Err(ProverError::Relay {
                         code: "result_unavailable".to_owned(),
                         message: format!("proof result unavailable: {reason}"),
-                    }
-                })?;
-                let result: ProveTransactionResult = serde_json::from_value(result_value.clone())
-                    .map_err(|error| {
-                    ProverError::Malformed(format!(
-                        "{error}; response was {}",
-                        truncate(&result_value.to_string(), 500)
-                    ))
-                })?;
+                    });
+                };
+                let result: ProveTransactionResult =
+                    serde_json::from_value(result_value).map_err(|error| {
+                        ProverError::Malformed(format!("invalid hosted prove result: {error}"))
+                    })?;
                 cached.result = Some(result.clone());
-                write_cached_job(&cache_path, &cached)?;
+                write_cached_job(cache_path, cached)?;
                 return Ok(result);
             }
 
-            return Err(starkscan_terminal_error(status, value.get("error")));
+            let error = starkscan_terminal_error(status, value.get("error"));
+            remove_cached_index(index_path)?;
+            return Err(error);
         }
     }
 
@@ -469,15 +595,14 @@ impl ProvingService {
         idempotency_key: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, ProverError> {
-        let response = self
-            .client
-            .post(&self.base_url)
-            .header("X-Starkscan-Api-Key", api_key)
-            .header("Idempotency-Key", idempotency_key)
-            .json(body)
-            .send()
-            .await?;
-        parse_relay_response(response).await
+        self.starkscan_request_with_retry(|| {
+            self.client
+                .post(&self.base_url)
+                .header("X-Starkscan-Api-Key", api_key)
+                .header("Idempotency-Key", idempotency_key)
+                .json(body)
+        })
+        .await
     }
 
     async fn starkscan_poll(
@@ -486,13 +611,47 @@ impl ProvingService {
         job_id: &str,
     ) -> Result<serde_json::Value, ProverError> {
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), job_id);
-        let response = self
-            .client
-            .get(url)
-            .header("X-Starkscan-Api-Key", api_key)
-            .send()
-            .await?;
-        parse_relay_response(response).await
+        self.starkscan_request_with_retry(|| {
+            self.client.get(&url).header("X-Starkscan-Api-Key", api_key)
+        })
+        .await
+    }
+
+    /// Repeats only transport failures and HTTP 503 with the exact same request.
+    ///
+    /// Starkscan binds an idempotency key to the request body. Repeating a submission after
+    /// its response is lost therefore recovers the original job instead of spending another
+    /// proof. Polls are read-only, but use the same bounded retry policy so a transient relay
+    /// failure cannot discard a terminal result that is delivered once.
+    async fn starkscan_request_with_retry<F>(
+        &self,
+        mut request: F,
+    ) -> Result<serde_json::Value, ProverError>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+    {
+        let mut attempt = 0;
+        loop {
+            let (retryable, result) = match request().send().await {
+                Ok(response) => {
+                    let retryable = response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+                    (retryable, parse_relay_response(response).await)
+                }
+                Err(error) => {
+                    let retryable = error.is_request()
+                        || error.is_timeout()
+                        || error.is_connect()
+                        || error.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE);
+                    (retryable, Err(ProverError::Transport(error)))
+                }
+            };
+
+            if !retryable || attempt >= self.max_retries {
+                return result;
+            }
+            tokio::time::sleep(self.base_backoff * 2u32.pow(attempt)).await;
+            attempt += 1;
+        }
     }
 
     async fn call_once(
@@ -526,12 +685,10 @@ impl ProvingService {
             });
         }
 
-        value.get("result").cloned().ok_or_else(|| {
-            ProverError::Malformed(format!(
-                "HTTP {status}, no result field: {}",
-                truncate(&value.to_string(), 500)
-            ))
-        })
+        value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| ProverError::Malformed(format!("HTTP {status}, no result field")))
     }
 }
 
@@ -554,6 +711,12 @@ fn is_transient(error: &ProverError) -> bool {
 
 fn is_starkscan_prove_url(url: &str) -> bool {
     url.trim_end_matches('/').ends_with("/v1/SN_MAIN/prove")
+}
+
+fn public_endpoint(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .map(|parsed| parsed.origin().ascii_serialization())
+        .unwrap_or_else(|_| "<invalid URL>".to_owned())
 }
 
 fn starkscan_capabilities_url(prove_url: &str) -> Result<String, ProverError> {
@@ -664,7 +827,40 @@ fn create_private_dir(path: &Path) -> Result<(), ProverError> {
     set_mode(path, 0o700)
 }
 
+fn operation_index_path(job_dir: &Path, idempotency_key: &str) -> PathBuf {
+    job_dir.join(format!(
+        "operation-{}.json",
+        sha256_hex(idempotency_key.as_bytes())
+    ))
+}
+
 fn read_cached_job(path: &Path) -> Result<Option<CachedJob>, ProverError> {
+    match fs::read(path) {
+        Ok(bytes) => {
+            let job: CachedJob = serde_json::from_slice(&bytes).map_err(|error| {
+                ProverError::JobState(format!("cannot decode {}: {error}", path.display()))
+            })?;
+            if !(1..=CACHED_JOB_VERSION).contains(&job.version) {
+                return Err(ProverError::JobState(format!(
+                    "hosted prover job schema version {} is not supported",
+                    job.version
+                )));
+            }
+            Ok(Some(job))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ProverError::JobState(format!(
+            "cannot read {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn write_cached_job(path: &Path, job: &CachedJob) -> Result<(), ProverError> {
+    write_private_json(path, job)
+}
+
+fn read_cached_index(path: &Path) -> Result<Option<CachedJobIndex>, ProverError> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|error| {
             ProverError::JobState(format!("cannot decode {}: {error}", path.display()))
@@ -677,8 +873,45 @@ fn read_cached_job(path: &Path) -> Result<Option<CachedJob>, ProverError> {
     }
 }
 
-fn write_cached_job(path: &Path, job: &CachedJob) -> Result<(), ProverError> {
-    let bytes = serde_json::to_vec(job)
+fn validate_cached_index(index: &CachedJobIndex) -> Result<(), ProverError> {
+    let hash_is_valid = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    let cache_file_valid = index
+        .cache_file
+        .strip_suffix(".json")
+        .is_some_and(hash_is_valid);
+    if index.version != CACHED_JOB_INDEX_VERSION
+        || !hash_is_valid(&index.request_hash)
+        || !cache_file_valid
+    {
+        return Err(ProverError::JobState(
+            "hosted prover operation index is invalid".to_owned(),
+        ));
+    }
+    validate_idempotency_key(&index.relay_key)
+}
+
+fn write_cached_index(path: &Path, index: &CachedJobIndex) -> Result<(), ProverError> {
+    write_private_json(path, index)
+}
+
+fn remove_cached_index(path: &Path) -> Result<(), ProverError> {
+    match fs::remove_file(path) {
+        Ok(()) => sync_parent(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ProverError::JobState(format!(
+            "cannot remove {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn write_private_json(path: &Path, value: &impl Serialize) -> Result<(), ProverError> {
+    let bytes = serde_json::to_vec(value)
         .map_err(|error| ProverError::JobState(format!("cannot encode job state: {error}")))?;
     let suffix = rand::random::<u64>();
     let temp = path.with_extension(format!("tmp-{suffix:016x}"));
@@ -703,15 +936,19 @@ fn write_cached_job(path: &Path, job: &CachedJob) -> Result<(), ProverError> {
             temp.display()
         ))
     })?;
-    if let Some(parent) = path.parent() {
-        let directory = fs::File::open(parent).map_err(|error| {
-            ProverError::JobState(format!("cannot open {}: {error}", parent.display()))
-        })?;
-        directory.sync_all().map_err(|error| {
-            ProverError::JobState(format!("cannot sync {}: {error}", parent.display()))
-        })?;
-    }
-    Ok(())
+    sync_parent(path)
+}
+
+fn sync_parent(path: &Path) -> Result<(), ProverError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let directory = fs::File::open(parent).map_err(|error| {
+        ProverError::JobState(format!("cannot open {}: {error}", parent.display()))
+    })?;
+    directory.sync_all().map_err(|error| {
+        ProverError::JobState(format!("cannot sync {}: {error}", parent.display()))
+    })
 }
 
 #[cfg(unix)]
@@ -725,14 +962,6 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), ProverError> {
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<(), ProverError> {
     Ok(())
-}
-
-fn truncate(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
-        text.to_owned()
-    } else {
-        format!("{}…", &text[..limit])
-    }
 }
 
 fn public_diagnostic(value: &serde_json::Value) -> Option<&'static str> {
@@ -796,5 +1025,17 @@ mod tests {
             shown,
             "proving service returned error -32603: Internal error"
         );
+    }
+
+    #[test]
+    fn proving_service_debug_omits_credentials_in_the_url() {
+        let service =
+            ProvingService::new("https://user:password@example.com/prover-key?token=secret")
+                .expect("client");
+        let shown = format!("{service:?}");
+        assert!(shown.contains("https://example.com"));
+        for secret in ["user", "password", "prover-key", "token", "secret"] {
+            assert!(!shown.contains(secret));
+        }
     }
 }

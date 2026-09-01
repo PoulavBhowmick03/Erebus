@@ -20,6 +20,7 @@
 
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use starknet_crypto::Signature;
 use starknet_types_core::felt::Felt;
 
@@ -175,6 +176,7 @@ impl Executor {
         operation.amend(now(), |attempt| {
             attempt.proving_block = Some(proving_number);
             attempt.valid_until_block = Some(proving_number.saturating_add(proof_validity_blocks));
+            attempt.simulation_hash = Some(server_actions_hash(&simulated));
         })?;
         operation.advance(OperationStage::Prepared, now())?;
 
@@ -208,7 +210,82 @@ impl Executor {
         }
 
         operation.advance(OperationStage::Proven, now())?;
+        self.finish_proven(
+            operation,
+            proving_number,
+            proof_validity_blocks,
+            signer,
+            proof,
+            server_actions,
+        )
+        .await
+    }
 
+    /// Continues a hosted proof job recorded before a process restart.
+    ///
+    /// `None` means no recoverable hosted job exists, so the caller may use the ordinary
+    /// reconciliation and rebuild policy. A proof is accepted only when its server actions
+    /// match the preflight commitment written before proving began.
+    pub(crate) async fn resume_hosted_proof(
+        &self,
+        operation: &mut OperationLease,
+        signer: &dyn AccountSigner,
+    ) -> Result<Option<ExecutionReceipt>, ExecutionError> {
+        let recorded_stage = operation.record().stage();
+        if !matches!(
+            recorded_stage,
+            OperationStage::Prepared | OperationStage::Proven
+        ) {
+            return Ok(None);
+        }
+        let attempt = operation.record().attempt();
+        let (Some(proving_number), Some(valid_until_block), Some(expected_hash)) = (
+            attempt.proving_block,
+            attempt.valid_until_block,
+            attempt.simulation_hash.clone(),
+        ) else {
+            return Ok(None);
+        };
+        let proof_validity_blocks = valid_until_block.saturating_sub(proving_number);
+        if self.rpc.block_number().await? > valid_until_block {
+            return Ok(None);
+        }
+        let Some(proof) = self
+            .prover
+            .resume_transaction_idempotent(operation.record().operation_id.as_str())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let server_actions = server_actions(&proof, self.config.pool_address)?;
+        let received_hash = server_actions_hash(&server_actions);
+        if received_hash != expected_hash {
+            return Err(ExecutionError::SimulationCommitmentMismatch);
+        }
+        if recorded_stage == OperationStage::Prepared {
+            operation.advance(OperationStage::Proven, now())?;
+        }
+        self.finish_proven(
+            operation,
+            proving_number,
+            proof_validity_blocks,
+            signer,
+            proof,
+            server_actions,
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn finish_proven(
+        &self,
+        operation: &mut OperationLease,
+        proving_number: u64,
+        proof_validity_blocks: u64,
+        signer: &dyn AccountSigner,
+        proof: ProveTransactionResult,
+        server_actions: Vec<Felt>,
+    ) -> Result<ExecutionReceipt, ExecutionError> {
         let submission_head = self.rpc.block_number().await?;
         if submission_head > proving_number.saturating_add(proof_validity_blocks) {
             return Err(ExecutionError::ProofExpired {
@@ -594,6 +671,9 @@ pub enum ExecutionError {
         /// Proof result length.
         proved_len: usize,
     },
+    /// A recovered proof did not match the preflight output committed before restart.
+    #[error("recovered proof does not match the recorded same-block simulation")]
+    SimulationCommitmentMismatch,
     /// Proof aged past the pool's accepted block window before submission.
     #[error(
         "proof anchored at block {proving_block} expired before current block {current_block}"
@@ -649,6 +729,15 @@ pub enum ExecutionError {
 /// One stage line on stderr. Freestanding so the write path reads as its stages.
 fn stage(name: &str) {
     eprintln!("stage: {name}");
+}
+
+fn server_actions_hash(actions: &[Felt]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((actions.len() as u64).to_be_bytes());
+    for action in actions {
+        hasher.update(action.to_bytes_be());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// Unix seconds, saturating at the epoch.
