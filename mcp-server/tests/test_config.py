@@ -129,3 +129,99 @@ def test_startup_doctor_skip_ignores_other_values(
 ) -> None:
     monkeypatch.setenv("EREBUS_SKIP_STARTUP_DOCTOR", value)
     assert ServerConfig.from_env().startup_doctor is True
+
+
+def _enable_seam(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, network: str
+) -> None:
+    for name in ("pool.key", "account.key", "erebus-cli"):
+        (tmp_path / name).write_text("placeholder")
+    values = {
+        "EREBUS_BACKEND": "seam",
+        "EREBUS_NETWORK": network,
+        "EREBUS_CLI": str(tmp_path / "erebus-cli"),
+        "STARKNET_RPC_URL": "http://unused.invalid",
+        "POOL_KEY_FILE": str(tmp_path / "pool.key"),
+        "ACCOUNT_KEY_FILE": str(tmp_path / "account.key"),
+        "EREBUS_STATE_DIR": str(tmp_path / "state"),
+        "TOKEN_ADDRESS": "0x2",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("STARKNET_CHAIN_ID", raising=False)
+    monkeypatch.delenv("POOL_ADDRESS", raising=False)
+
+
+@pytest.mark.parametrize(
+    ("network", "chain_id", "pool_address"),
+    [
+        (
+            "sepolia",
+            "0x534e5f5345504f4c4941",
+            "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+        ),
+        (
+            "mainnet",
+            "0x534e5f4d41494e",
+            "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        ),
+    ],
+)
+def test_named_network_supplies_canonical_chain_and_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    network: str,
+    chain_id: str,
+    pool_address: str,
+) -> None:
+    _enable_seam(monkeypatch, tmp_path, network=network)
+
+    seam = ServerConfig.from_env().seam
+
+    assert seam is not None
+    assert seam.network == network
+    assert seam.chain_id == chain_id
+    assert seam.pool_address == pool_address
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [("STARKNET_CHAIN_ID", "0x1"), ("POOL_ADDRESS", "0x1")],
+)
+def test_named_network_rejects_conflicting_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    variable: str,
+    value: str,
+) -> None:
+    _enable_seam(monkeypatch, tmp_path, network="mainnet")
+    monkeypatch.setenv(variable, value)
+
+    with pytest.raises(ConfigError, match=f"{variable} conflicts"):
+        ServerConfig.from_env()
+
+
+def test_named_network_rejects_unknown_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _enable_seam(monkeypatch, tmp_path, network="testnet")
+
+    with pytest.raises(ConfigError, match="must be one of sepolia, mainnet"):
+        ServerConfig.from_env()
+
+
+def test_legacy_canonical_pair_gets_friendly_network_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _enable_seam(monkeypatch, tmp_path, network="sepolia")
+    monkeypatch.delenv("EREBUS_NETWORK")
+    monkeypatch.setenv("STARKNET_CHAIN_ID", "0x534e5f5345504f4c4941")
+    monkeypatch.setenv(
+        "POOL_ADDRESS",
+        "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+    )
+
+    seam = ServerConfig.from_env().seam
+
+    assert seam is not None
+    assert seam.network == "sepolia"

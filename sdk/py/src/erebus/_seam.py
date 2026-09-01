@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from erebus._network import Network, network_preset
+
 __all__ = ["ErebusError", "Seam", "SeamConfig", "SeamUnavailable"]
 
 #: A write includes preflight, a ~20 s proof, fee estimation, submission, and receipt polling.
@@ -74,6 +76,36 @@ class SeamConfig:
     state_dir: str | Path
     token: str
     wire_version: str = "v3"
+
+    @classmethod
+    def for_network(
+        cls,
+        network: Network | str,
+        *,
+        rpc_url: str,
+        prover_url: str,
+        account_address: str,
+        pool_key_file: str | Path,
+        account_key_file: str | Path,
+        state_dir: str | Path,
+        token: str,
+        wire_version: str = "v3",
+    ) -> SeamConfig:
+        """Build a configuration with the canonical chain and pool for ``network``."""
+
+        preset = network_preset(network)
+        return cls(
+            rpc_url=rpc_url,
+            prover_url=prover_url,
+            pool_address=preset.pool_address,
+            chain_id=preset.chain_id,
+            account_address=account_address,
+            pool_key_file=pool_key_file,
+            account_key_file=account_key_file,
+            state_dir=state_dir,
+            token=token,
+            wire_version=wire_version,
+        )
 
     def as_params(self) -> dict[str, str]:
         return {

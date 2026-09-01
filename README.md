@@ -186,6 +186,25 @@ faucet flow, the three keys and who sees them, and every environment variable ar
 To try the tools without a chain, keys, or gas, set `EREBUS_BACKEND=mock` and skip all of
 that.
 
+For a real chain, set `EREBUS_NETWORK=sepolia` or `EREBUS_NETWORK=mainnet`. The selector
+supplies the canonical chain ID and pool, rejects conflicting overrides, and appears as the
+friendly `network` label in every MCP result. RPC, prover, token, and identity values remain
+operator-supplied; start from [`config/sepolia.env.example`](./config/sepolia.env.example) or
+[`config/mainnet.env.example`](./config/mainnet.env.example).
+
+An installed server has a first-run command. It asks for paths, never key contents, and
+writes a mode-`0600` configuration:
+
+```bash
+erebus-init
+erebus-mcp-server --config ~/.config/erebus/mcp.env
+```
+
+Running `erebus-mcp-server` directly in a terminal triggers the same setup when no config or
+launch environment exists. An MCP marketplace must configure the process before stdio starts;
+`erebus-mcp-server config-schema` prints the platform-neutral field contract. SDK callers can
+use `SeamConfig.for_network("sepolia", ...)` or `SeamConfig.for_network("mainnet", ...)`.
+
 ## Current-source quickstart: Protocol 4
 
 Build and install the current checkout before you use this example. The public `v0.1.0`
@@ -202,7 +221,8 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 params = StdioServerParameters(command="erebus-mcp-server", args=[], env={
-    **base_env, "EREBUS_BACKEND": "seam", "EREBUS_SETTLEMENT_ROLE": "payer",
+    **base_env, "EREBUS_BACKEND": "seam", "EREBUS_NETWORK": "sepolia",
+    "EREBUS_SETTLEMENT_ROLE": "payer",
 })
 
 async with stdio_client(params) as (read, write):

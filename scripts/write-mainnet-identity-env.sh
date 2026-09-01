@@ -39,6 +39,7 @@ TEMP_ENV=$(mktemp "$OUTPUT_ENV.tmp.XXXXXX")
 trap 'rm -f "$TEMP_ENV"' EXIT
 chmod 600 "$TEMP_ENV"
 printf '%s\n' \
+    'EREBUS_NETWORK=mainnet' \
     'STARKNET_CHAIN_ID=0x534e5f4d41494e' \
     "STARKNET_RPC_URL=$RPC_URL" \
     'POOL_ADDRESS=0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a' \

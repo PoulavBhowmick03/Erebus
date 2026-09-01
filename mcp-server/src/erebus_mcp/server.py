@@ -26,12 +26,25 @@ fails at startup when either is absent. The proving call sends the plaintext poo
 key, so the key owner must control the prover. See docs/custody-design.md.
 """
 
+import argparse
 import logging
+import sys
+from collections.abc import Sequence
+from pathlib import Path
 
 from mcp.server import MCPServer
 
 from erebus_mcp.config import ConfigError, ServerConfig
 from erebus_mcp.intent import IntentStore
+from erebus_mcp.onboarding import (
+    OnboardingError,
+    default_config_path,
+    environment_is_configured,
+    init_main,
+    load_config_file,
+    resolve_config_path,
+    schema_main,
+)
 from erebus_mcp.mock_client import MockErebusClient
 from erebus_mcp.seam_client import SeamErebusClient
 from erebus_mcp.spending import SpendGuard
@@ -133,18 +146,48 @@ def build_server() -> MCPServer:
     # task 1). Not yet consulted by Rust — see erebus_mcp/intent.py for the scope boundary.
     intent_store = IntentStore(config.intent_state_dir)
     # Stamped onto every tool result (roadmap 9.2) so a transcript alone tells a model
-    # whether it is talking to a real chain, and which one. "mock" has no chain_id to
-    # report; there is nothing else it could truthfully say.
-    network = config.seam.chain_id if config.seam is not None else "mock"
+    # whether it is talking to a real chain, and which one. "mock" has no chain to report;
+    # canonical seam configurations use a friendly name, and unknown deployments say custom.
+    network = config.seam.network if config.seam is not None else "mock"
     register_tools(
         server, client, config.settlement_role, spend_guard, intent_store, config.backend, network
     )
     return server
 
 
-def main() -> None:
-    """Console entry point: `erebus-mcp-server`."""
-    build_server().run()
+def main(argv: Sequence[str] | None = None) -> None:
+    """Load protected configuration, run first-use setup, or start MCP over stdio."""
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "init":
+        raise SystemExit(init_main(arguments[1:]))
+    if arguments and arguments[0] == "config-schema":
+        if len(arguments) != 1:
+            raise SystemExit("usage: erebus-mcp-server config-schema")
+        raise SystemExit(schema_main())
+
+    parser = argparse.ArgumentParser(prog="erebus-mcp-server")
+    parser.add_argument("--config", type=Path)
+    options = parser.parse_args(arguments)
+    try:
+        config_path = resolve_config_path(options.config)
+        if config_path is not None:
+            load_config_file(config_path)
+        elif not environment_is_configured():
+            if sys.stdin.isatty():
+                created = default_config_path()
+                print(
+                    "Erebus is not configured. Starting one-time setup.", file=sys.stderr
+                )
+                raise SystemExit(init_main(["--config", str(created)]))
+            raise OnboardingError(
+                "Erebus is not configured. A marketplace must inject the fields from "
+                "`erebus-mcp-server config-schema`; locally run `erebus-init` first."
+            )
+        build_server().run()
+    except (ConfigError, OnboardingError) as exc:
+        print(f"erebus-mcp-server: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
 
 if __name__ == "__main__":

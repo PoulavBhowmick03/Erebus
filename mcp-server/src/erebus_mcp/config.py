@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from erebus import Network, identify_network, network_preset
+
 
 class ConfigError(RuntimeError):
     """A required setting is missing at startup."""
@@ -43,6 +45,7 @@ class SeamSettings:
     """
 
     binary: Path
+    network: str
     rpc_url: str
     pool_address: str
     chain_id: str
@@ -186,17 +189,80 @@ def _seam_settings() -> SeamSettings:
             f"EREBUS_WIRE_VERSION must be 'v2' or 'v3', got {wire_version!r}"
         )
 
+    network, chain_id, pool_address = _network_settings()
+
     return SeamSettings(
         binary=binary,
+        network=network,
         rpc_url=_require("STARKNET_RPC_URL"),
-        pool_address=_require("POOL_ADDRESS"),
-        chain_id=_require("STARKNET_CHAIN_ID"),
+        pool_address=pool_address,
+        chain_id=chain_id,
         pool_key_file=pool_key,
         account_key_file=account_key,
         state_dir=Path(_require("EREBUS_STATE_DIR")),
         token=_require("TOKEN_ADDRESS"),
         wire_version=wire_version,
     )
+
+
+def _network_settings() -> tuple[str, str, str]:
+    """Resolve a named canonical network or label a legacy/custom configuration.
+
+    ``EREBUS_NETWORK`` is the operator-facing selector. It supplies the canonical chain and
+    pool defaults and rejects conflicting overrides before a prover can be called. Existing
+    env files without the selector remain compatible: canonical pairs receive a friendly
+    label, while an unknown deployment is labelled ``custom`` rather than misreported as a
+    public network.
+    """
+
+    selected = os.environ.get("EREBUS_NETWORK", "").strip().lower()
+    configured_chain = os.environ.get("STARKNET_CHAIN_ID", "").strip()
+    configured_pool = os.environ.get("POOL_ADDRESS", "").strip()
+
+    if selected:
+        try:
+            network = Network(selected)
+        except ValueError as exc:
+            choices = ", ".join(network.value for network in Network)
+            raise ConfigError(
+                f"EREBUS_NETWORK must be one of {choices}, got {selected!r}"
+            ) from exc
+        preset = network_preset(network)
+        _reject_preset_mismatch(
+            "STARKNET_CHAIN_ID", configured_chain, preset.chain_id, selected
+        )
+        _reject_preset_mismatch(
+            "POOL_ADDRESS", configured_pool, preset.pool_address, selected
+        )
+        return (
+            selected,
+            configured_chain or preset.chain_id,
+            configured_pool or preset.pool_address,
+        )
+
+    chain_id = _require("STARKNET_CHAIN_ID")
+    pool_address = _require("POOL_ADDRESS")
+    identified = identify_network(chain_id, pool_address)
+    if identified is not None:
+        return identified.value, chain_id, pool_address
+    return "custom", chain_id, pool_address
+
+
+def _reject_preset_mismatch(
+    variable: str, configured: str, expected: str, network: str
+) -> None:
+    if configured and not _same_felt(configured, expected):
+        raise ConfigError(
+            f"{variable} conflicts with EREBUS_NETWORK={network}; remove the override or "
+            f"use the canonical {network} value"
+        )
+
+
+def _same_felt(left: str, right: str) -> bool:
+    try:
+        return int(left, 0) == int(right, 0)
+    except ValueError:
+        return False
 
 
 def _spending_limits() -> SpendingLimits:

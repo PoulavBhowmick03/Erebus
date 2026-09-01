@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from erebus import Network
 from erebus._seam import ErebusError, Seam, SeamConfig, SeamUnavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -62,6 +63,45 @@ def config(key_files: tuple[Path, Path], tmp_path: Path) -> SeamConfig:
 @pytest.fixture
 def seam(config: SeamConfig) -> Seam:
     return Seam(config=config, binary=CLI)
+
+
+@pytest.mark.parametrize(
+    ("network", "chain_id", "pool_address"),
+    [
+        (
+            Network.SEPOLIA,
+            "0x534e5f5345504f4c4941",
+            "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+        ),
+        (
+            "mainnet",
+            "0x534e5f4d41494e",
+            "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+        ),
+    ],
+)
+def test_named_network_config_supplies_canonical_values(
+    key_files: tuple[Path, Path],
+    tmp_path: Path,
+    network: Network | str,
+    chain_id: str,
+    pool_address: str,
+) -> None:
+    pool, account = key_files
+
+    configured = SeamConfig.for_network(
+        network,
+        rpc_url="http://127.0.0.1:1",
+        prover_url="http://127.0.0.1:1",
+        account_address="0xa11ce",
+        pool_key_file=pool,
+        account_key_file=account,
+        state_dir=tmp_path / "state",
+        token="0x7042",
+    )
+
+    assert configured.chain_id == chain_id
+    assert configured.pool_address == pool_address
 
 
 # --- The call gets through ------------------------------------------------------

@@ -3,6 +3,7 @@ optional doctor pre-flight. No real erebus-cli involved — Seam itself is repla
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -46,12 +47,11 @@ def seam_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "PROVING_SERVICE_URL": "http://unused.invalid",
         "EREBUS_SETTLEMENT_ROLE": "both",
         "EREBUS_BACKEND": "seam",
+        "EREBUS_NETWORK": "sepolia",
         "EREBUS_CLI": str(cli),
         "POOL_KEY_FILE": str(pool_key),
         "ACCOUNT_KEY_FILE": str(account_key),
         "STARKNET_RPC_URL": "http://unused.invalid",
-        "POOL_ADDRESS": "0x1",
-        "STARKNET_CHAIN_ID": "0x1",
         "EREBUS_STATE_DIR": str(tmp_path / "state"),
         "TOKEN_ADDRESS": "0x2",
     }
@@ -96,3 +96,82 @@ def test_a_not_ready_doctor_report_does_not_block_startup(
 
     # Must not raise: doctor is logged, not fatal.
     server_module.build_server()
+
+
+def test_main_loads_a_protected_config_before_building_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "mcp.env"
+    config.write_text(
+        "AGENT_ADDRESS=0xconfigured\n"
+        "PROVING_SERVICE_URL=http://unused.invalid\n"
+        "EREBUS_SETTLEMENT_ROLE=both\n"
+        "EREBUS_BACKEND=mock\n"
+    )
+    config.chmod(0o600)
+    ran = {"value": False}
+
+    class _Server:
+        def run(self) -> None:
+            ran["value"] = True
+
+    monkeypatch.setattr(server_module, "build_server", lambda: _Server())
+    for name in (
+        "AGENT_ADDRESS",
+        "PROVING_SERVICE_URL",
+        "EREBUS_SETTLEMENT_ROLE",
+        "EREBUS_BACKEND",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    server_module.main(["--config", str(config)])
+
+    assert ran["value"] is True
+    assert os.environ["AGENT_ADDRESS"] == "0xconfigured"
+
+
+def test_noninteractive_unconfigured_start_explains_marketplace_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "AGENT_ADDRESS",
+        "PROVING_SERVICE_URL",
+        "EREBUS_SETTLEMENT_ROLE",
+        "EREBUS_CONFIG_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(server_module, "resolve_config_path", lambda _: None)
+    monkeypatch.setattr(server_module.sys.stdin, "isatty", lambda: False)
+
+    with pytest.raises(SystemExit) as caught:
+        server_module.main([])
+
+    assert caught.value.code == 2
+
+
+def test_terminal_unconfigured_start_triggers_first_run_setup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in (
+        "AGENT_ADDRESS",
+        "PROVING_SERVICE_URL",
+        "EREBUS_SETTLEMENT_ROLE",
+        "EREBUS_CONFIG_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(server_module, "resolve_config_path", lambda _: None)
+    monkeypatch.setattr(server_module.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(server_module, "default_config_path", lambda: tmp_path / "mcp.env")
+    called: list[list[str]] = []
+
+    def fake_init(arguments: list[str]) -> int:
+        called.append(arguments)
+        return 0
+
+    monkeypatch.setattr(server_module, "init_main", fake_init)
+
+    with pytest.raises(SystemExit) as caught:
+        server_module.main([])
+
+    assert caught.value.code == 0
+    assert called == [["--config", str(tmp_path / "mcp.env")]]

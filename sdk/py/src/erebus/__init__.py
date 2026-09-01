@@ -22,9 +22,21 @@ The Rust binary also generates entropy. Python does not produce keys or salts.
 
 from importlib.metadata import version as _metadata_version
 
+from erebus._network import Network, NetworkPreset, identify_network, network_preset
 from erebus._seam import PROTOCOL, ErebusError, Seam, SeamConfig, SeamUnavailable
 
-__all__ = ["PROTOCOL", "ErebusError", "Seam", "SeamConfig", "SeamUnavailable", "__version__"]
+__all__ = [
+    "PROTOCOL",
+    "ErebusError",
+    "Network",
+    "NetworkPreset",
+    "Seam",
+    "SeamConfig",
+    "SeamUnavailable",
+    "__version__",
+    "identify_network",
+    "network_preset",
+]
 
 # Read from installed metadata rather than hardcoded: this string said 0.0.0 through
 # three version bumps because nothing fails when it drifts.

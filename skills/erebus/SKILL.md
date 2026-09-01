@@ -61,10 +61,17 @@ Before doing anything else, establish what's actually on this machine:
   erebus-mcp-server` or `uv run which erebus-mcp-server` answers this.
 - Is `erebus-cli` on `PATH`? The Python binding resolves it with `shutil.which`; the seam
   backend cannot run without it.
+- If no identity configuration exists, run `erebus-init` in a human-controlled terminal.
+  It asks for key-file paths, never key contents, and writes a mode-0600 config. On a
+  marketplace, use `erebus-mcp-server config-schema`; the platform collects protected fields
+  at install time and injects them before stdio starts. Never send credentials through a
+  model-visible MCP tool call.
 - Read the identity's env file (never its key files) to confirm `AGENT_ADDRESS`,
   `PROVING_SERVICE_URL`, and either `EREBUS_BACKEND=mock` or the full seam config are
-  present. Config validates all of this at startup and fails loudly if it's missing — if
-  the server won't start, this is the first thing to check, not the prover.
+  present. A real-chain identity selects `EREBUS_NETWORK=sepolia` or `mainnet`; this supplies
+  the canonical chain and pool defaults and rejects conflicting overrides. Config validates
+  all of this at startup and fails loudly if it's missing — if the server won't start, this
+  is the first thing to check, not the prover.
 - Never assume a version. `erebus-cli version` (or the seam's version handshake the server
   already runs at startup) tells you the protocol number; a stale binary against a newer
   server fails by name, not by a confusing type error mid-call.
@@ -178,10 +185,10 @@ carries one of three labels, stated in the same sentence as the result:
 
 - **mock** — `EREBUS_BACKEND=mock`. No chain, no transaction, no real value moved.
 - **Sepolia** — a real testnet transaction. Real proof, real nullifiers, worth nothing.
-- **mainnet** — a real mainnet transaction or read. Erebus has completed registrations and
-  directional channel setup on mainnet, but not shielding, negotiation, settlement,
-  recovery, or disclosure. Name the exact operation; never turn setup evidence into a
-  claim that the full mainnet workflow ran.
+- **mainnet** — a real mainnet transaction or read. Two bounded full workflows completed on
+  2026-08-31, including screened shielding, negotiation, atomic settlement, recovery,
+  observer checks, and scoped disclosure. Name the exact operation and transaction evidence;
+  two operator-controlled canaries are not production-readiness evidence.
 
 A result with no label is a bug in the report, not a stylistic omission — fix it before
 sending the result on.

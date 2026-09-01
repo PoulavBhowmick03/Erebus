@@ -72,9 +72,10 @@ whatever is missing.
 
 | Variable | Meaning |
 |---|---|
+| `EREBUS_NETWORK` | `sepolia` or `mainnet`. Selects the canonical chain ID and pool defaults and becomes the friendly `network` label in every MCP result |
 | `STARKNET_RPC_URL` | Preflight RPC. Also receives the pool key — operator-controlled |
-| `POOL_ADDRESS` | The STRK20 privacy pool |
-| `STARKNET_CHAIN_ID` | e.g. `0x534e5f5345504f4c4941` for Sepolia. Part of every channel-key preimage, so a mismatch reads as "not found" everywhere |
+| `POOL_ADDRESS` | Optional override for the STRK20 privacy pool. It must match the selected canonical network |
+| `STARKNET_CHAIN_ID` | Optional chain-ID override. It must match the selected network; the value is part of every channel-key preimage |
 | `TOKEN_ADDRESS` | The ERC-20 being settled |
 | `POOL_KEY_FILE`, `ACCOUNT_KEY_FILE` | Paths, mode `0600`. Never read by Python |
 | `EREBUS_STATE_DIR` | Channel state, mode `0700` |
@@ -88,6 +89,35 @@ under `EREBUS_STATE_DIR/prover-jobs` for safe recovery.
 **Optional:** `EREBUS_CLI` (explicit binary path; defaults to the packaged one),
 `EREBUS_SKIP_STARTUP_DOCTOR=1` (skip the boot-time inspection when starting offline), and
 the `EREBUS_MOCK_*` knobs for mock runs.
+
+### First-run and marketplace configuration
+
+`erebus-init` asks for network, role, endpoint, address, and protected paths. It never asks
+for an account-key or pool-key value. It creates `~/.config/erebus/mcp.env` mode `0600` and
+refuses to replace an existing file. Use `--config` for each additional identity:
+
+```bash
+erebus-init --config ~/.config/erebus/buyer.env
+erebus-mcp-server --config ~/.config/erebus/buyer.env
+```
+
+When launched in a terminal without configuration, `erebus-mcp-server` starts this setup.
+When launched over MCP stdio, it never prompts: a prompt would corrupt the protocol stream.
+A marketplace obtains the required install fields from:
+
+```bash
+erebus-mcp-server config-schema
+```
+
+It stores secrets in its own secret manager and injects the fields as process environment
+variables. `EREBUS_CONFIG_FILE` is the non-interactive alternative when the platform mounts
+a protected file.
+
+Python SDK callers select the same canonical presets without copying addresses:
+
+```python
+config = SeamConfig.for_network("sepolia", rpc_url=..., prover_url=..., ...)
+```
 
 `scripts/new-identity.sh` writes a complete env file. Start the server with:
 

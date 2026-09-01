@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 erebus-mcp-server = "erebus_mcp.server:main"
+erebus-init = "erebus_mcp.onboarding:init_main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

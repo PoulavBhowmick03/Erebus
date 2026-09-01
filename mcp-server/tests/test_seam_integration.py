@@ -61,12 +61,11 @@ def _seam_params(tmp_path: Path, role: str = "payer") -> StdioServerParameters:
         env={
             **os.environ,
             "EREBUS_BACKEND": "seam",
+            "EREBUS_NETWORK": "sepolia",
             "EREBUS_CLI": str(CLI),
             "AGENT_ADDRESS": "0xa11ce",
             "PROVING_SERVICE_URL": UNREACHABLE,
             "STARKNET_RPC_URL": UNREACHABLE,
-            "POOL_ADDRESS": "0x254a6b2",
-            "STARKNET_CHAIN_ID": "0x534e5f5345504f4c4941",
             "TOKEN_ADDRESS": "0x7042",
             "POOL_KEY_FILE": str(pool_key),
             "ACCOUNT_KEY_FILE": str(account_key),
@@ -97,6 +96,8 @@ def test_doctor_reaches_the_rust_binary_and_its_report_survives_both_layers(tmp_
                 body = _structured(await session.call_tool("doctor", {}))
 
                 assert body["ok"] is True, f"a fault report is still a successful call: {body}"
+                assert body["backend"] == "seam"
+                assert body["network"] == "sepolia"
                 result = body["result"]
                 assert result["ready"] is False, "an unreachable RPC cannot be ready"
 
