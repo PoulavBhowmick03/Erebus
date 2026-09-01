@@ -25,27 +25,6 @@ fees remain visible.
 
 ## 2. Deadline priorities
 
-### P0 — reconcile the second mainnet canary
-
-The committed file `docs/runs/2026-08-31-mainnet-060-040-canary.md` describes a second
-mainnet workflow. Do not add it to the manifest or public claims until it passes these
-independent checks:
-
-- verify every receipt independently against a mainnet RPC;
-- confirm the shield, proposal, counter, and settlement touched the canonical pool;
-- confirm payment/change conservation and final note balances;
-- confirm `reconcile` reports committed effects with no pending action;
-- confirm the observer and deal-scoped disclosure results;
-- scan the record for secrets and protected paths;
-- confirm the recorded source and artifact provenance.
-
-If it passes, commit the run record, add only its four pool transactions to `strk20.json`,
-and update `status.md`, the public demo, and the video script. ERC-20 allowance transactions
-do not belong in the sprint manifest.
-
-Exit: the repository contains either a verified second-canary record or a written reason for
-excluding it.
-
 ### P0 — write one end-to-end operator guide
 
 Rewrite [`runbook.md`](./runbook.md) as the single current path from an empty machine to a

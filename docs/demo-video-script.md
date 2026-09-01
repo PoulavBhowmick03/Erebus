@@ -36,8 +36,12 @@ proof for a 1 STRK shield. Two role-bound agents negotiated through MCP, settled
 returned 0.2 STRK change, and reconstructed the result for an authorized recipient. Durable
 operation IDs and reconciliation prevented a blind retry when the terminal closed.”
 
-Show `docs/runs/2026-08-31-mainnet-starkscan-workflow.md`, including the four mainnet
-receipts, conservation check, reconciliation result, observer result, and disclosure result.
+“A second bounded canary tested a different path. The buyer opened at 0.48 STRK, the seller
+countered at 0.6, and the buyer accepted. It paid 0.6 STRK, returned 0.4 STRK change, and left
+an unrelated 0.2 STRK note untouched.”
+
+Show both mainnet run records, their eight pool receipts, conservation checks, reconciliation
+results, observer results, and disclosure results.
 
 ## 2:20–2:45 — Observer and disclosure
 
@@ -49,8 +53,8 @@ Show the observer result beside the authorized disclosure result.
 
 ## 2:45–3:00 — Honest limit and links
 
-“The screened mainnet workflow now covers shielding, MCP negotiation, atomic settlement,
-observer resistance, and scoped disclosure. Erebus still exposes the relationship, timing,
-action shape, and note count. The repository, receipts, and reproducible run record are linked here.”
+“Two screened mainnet canaries now cover shielding, different MCP negotiation paths, atomic
+settlement, observer resistance, and scoped disclosure. Erebus still exposes the relationship,
+timing, action shape, and note count. The repository, receipts, and run records are linked here.”
 
 Finish on the public demo and repository URLs.

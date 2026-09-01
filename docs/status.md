@@ -10,9 +10,9 @@ privacy claim changed twice. That is why this page exists.
 
 ## In one line
 
-Erebus negotiates and settles confidentially between two agents on Starknet. On mainnet,
-A shielded 1 STRK, A and B negotiated through MCP, and A settled 0.8 STRK to B with 0.2 STRK
-change; the relationship and traffic metadata remain public.
+Erebus negotiates and settles confidentially between two agents on Starknet. Two bounded
+mainnet canaries shielded 1 STRK each and settled 0.8/0.2 and 0.6/0.4 payment/change splits
+through MCP; the relationship and traffic metadata remain public.
 
 ---
 
@@ -20,7 +20,7 @@ change; the relationship and traffic metadata remain public.
 
 | | |
 |---|---|
-| Network | Full workflow: Sepolia and one bounded mainnet canary. Mainnet: A, B, and C registered; A and B opened directional channels; screened shield, MCP proposal/counter, settlement, observer test, reconciliation, and scoped disclosure passed on 2026-08-31 |
+| Network | Full workflow: Sepolia and two bounded mainnet canaries. Mainnet: A, B, and C registered; A and B opened directional channels; two screened shields, MCP negotiation, settlement, observer tests, reconciliation, and scoped disclosure passed on 2026-08-31 |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -44,7 +44,10 @@ change; the relationship and traffic metadata remain public.
   (`docs/runs/2026-08-30-mainnet-account-c-registration.md`). The hosted Starkscan path then
   completed the first full mainnet canary: shield `0x1a30c0b6…70d1`, proposal
   `0x5a287657…59b5`, counter `0x4126a3ee…4923`, and settlement `0x72adebfc…6c6d`, with
-  0.8 STRK paid, 0.2 STRK change, no observer content recovery, and scoped disclosure |
+  0.8 STRK paid, 0.2 STRK change, no observer content recovery, and scoped disclosure. A
+  second independently checked canary then settled 0.6 STRK with 0.4 STRK change after a
+  0.48-to-0.6 concession; its four pool transactions are recorded in the sprint manifest
+  (`docs/runs/2026-08-31-mainnet-060-040-canary.md`) |
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
 | Tests | 288 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
@@ -69,7 +72,7 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Prove production readiness from one canary.** One bounded mainnet workflow passed. This
+- **Prove production readiness from two canaries.** Two bounded mainnet workflows passed. This
   does not establish capacity, uptime, independent security review, or safe use with real value.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.
@@ -153,15 +156,13 @@ only metadata and the path. The capsule does not enter the model transcript.
 
 The sprint deadline is now September 7. The active work is deliberately narrow:
 
-1. Independently verify and integrate, or explicitly exclude, the committed second mainnet
-   canary.
-2. Rewrite `runbook.md` as a tested end-to-end operator guide.
-3. Complete an external clean install from release-candidate artifacts.
-4. Review hosted-prover recovery, transaction idempotency, and secret boundaries.
-5. Replace the pre-canary video with the complete mainnet workflow.
-6. Evaluate the announced StarkWare tooling without destabilizing the known-good path.
-7. Run the final gates, public-link checks, and sprint-hub refresh.
-8. Request explicit owner approval before publishing `v0.2.0`.
+1. Rewrite `runbook.md` as a tested end-to-end operator guide.
+2. Complete an external clean install from release-candidate artifacts.
+3. Review hosted-prover recovery, transaction idempotency, and secret boundaries.
+4. Replace the pre-canary video with the complete mainnet workflow.
+5. Evaluate the announced StarkWare tooling without destabilizing the known-good path.
+6. Run the final gates, public-link checks, and sprint-hub refresh.
+7. Request explicit owner approval before publishing `v0.2.0`.
 
 [`roadmap.md`](./roadmap.md) defines acceptance checks and sequencing.
 [`v0.2-release-plan.md`](./v0.2-release-plan.md) contains only the remaining release work.

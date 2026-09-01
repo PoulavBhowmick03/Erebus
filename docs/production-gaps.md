@@ -12,7 +12,6 @@ These block a reviewed `v0.2.0` publication, not the already completed mainnet c
 
 - one current end-to-end operator guide tested from a clean shell;
 - one external clean-install canary from release-candidate artifacts;
-- independent verification and public-evidence integration of the second mainnet canary;
 - targeted review of hosted proving, transaction recovery, and secret boundaries;
 - a replacement public video showing the complete mainnet workflow;
 - final public-link, hub, artifact, and secret verification;

@@ -20,10 +20,11 @@ with a grant scoped to one deal and one named recipient.
 ## Status
 
 **Unaudited and experimental.** The full loop — two agents negotiating, settling atomically,
-and disclosing to a third party — runs on Starknet Sepolia at wire v3. One bounded mainnet
-canary also completed a Starkscan-screened 1 STRK shield, MCP proposal and counter, atomic
-0.8 STRK settlement with 0.2 STRK change, reconciliation, observer test, and scoped
-disclosure. See the [mainnet run](./docs/runs/2026-08-31-mainnet-starkscan-workflow.md).
+and disclosing to a third party — runs on Starknet Sepolia at wire v3. Two bounded mainnet
+canaries each completed a Starkscan-screened 1 STRK shield, MCP negotiation, atomic
+settlement, reconciliation, observer test, and scoped disclosure. They exercised 0.8/0.2 and
+0.6/0.4 payment/change splits. See the [first mainnet run](./docs/runs/2026-08-31-mainnet-starkscan-workflow.md)
+and [second mainnet run](./docs/runs/2026-08-31-mainnet-060-040-canary.md).
 It has had no external security review. Do not put value you care about through it.
 
 **Erebus hides the terms, not the relationship.** Negotiation content and settlement amounts
