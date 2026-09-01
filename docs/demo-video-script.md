@@ -25,9 +25,9 @@ Show the architecture diagram. Do not open a terminal containing credentials.
 one channel in each direction. These four transactions succeeded. Channel setup makes the
 relationship public, and it is not a completed settlement.”
 
-The published video records that four-transaction snapshot. It was recorded before the
-later full mainnet canary. Account C subsequently registered, and the screened workflow
-described below completed on 2026-08-31.
+The published video records that four-transaction snapshot. It predates the later full
+mainnet canaries. Account C subsequently registered, and the screened workflows described
+below completed on 2026-08-31.
 
 ## 1:35–2:20 — Complete mainnet workflow
 
@@ -41,7 +41,11 @@ countered at 0.6, and the buyer accepted. It paid 0.6 STRK, returned 0.4 STRK ch
 an unrelated 0.2 STRK note untouched.”
 
 Show both mainnet run records, their eight pool receipts, conservation checks, reconciliation
-results, observer results, and disclosure results.
+results, observer results, and disclosure results. Link the run records on screen:
+
+- `docs/runs/2026-08-31-mainnet-starkscan-workflow.md`
+- `docs/runs/2026-08-31-mainnet-060-040-canary.md`
+- `docs/runs/v0.2-mainnet-canary.json`
 
 ## 2:20–2:45 — Observer and disclosure
 

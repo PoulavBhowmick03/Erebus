@@ -10,6 +10,11 @@ simulation and does not ask for a wallet. The
 [three-minute evidence video](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
 records the sprint state before the later full mainnet canary.
 
+For the current clean-machine operator guide, start with
+[docs/runbook.md](./docs/runbook.md). It covers install, identity setup, hosted proving,
+shielding, negotiation, settlement, recovery, observer inspection, disclosure, and
+shutdown.
+
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
 exchange structured offers over it, and settle atomically through the shielded pool.
 Historical wire-v2 channels can export a whole-channel viewing key. Wire v3 replaces that
@@ -277,7 +282,12 @@ two GPT-backed agents negotiating and settling entirely through the OpenAI Agent
 MCP tool-calling loop, installed from published wheels rather than this checkout.
 
 Worked examples against mainnet and Sepolia, with real transaction hashes, timings, and
-failure and recovery evidence, are in [docs/runs/](./docs/runs/).
+failure and recovery evidence, are in [docs/runs/](./docs/runs/). The mainnet evidence
+records are:
+
+- [First mainnet run](./docs/runs/2026-08-31-mainnet-starkscan-workflow.md)
+- [Second mainnet run](./docs/runs/2026-08-31-mainnet-060-040-canary.md)
+- [Machine-readable gate](./docs/runs/v0.2-mainnet-canary.json)
 
 Configuration, the full tool surface, error handling, and the raw CLI protocol are in the
 [reference](./docs/reference.md).

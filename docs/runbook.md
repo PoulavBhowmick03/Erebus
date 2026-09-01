@@ -1,350 +1,272 @@
-# Runbook: reproducing the on-chain demonstration
+# Runbook: clean-machine operator guide
 
-This runbook uses current source and CLI Protocol 4. The published `v0.1.0` binary speaks
-Protocol 2. Build `erebus-cli` from this checkout before you run these commands.
+This is the current `main` guide for reproducing the documented operator flow from a clean
+shell. It is written for the Protocol 4 source tree, not the published `v0.1.0` artifacts.
 
-What this gets you: two registered identities on Sepolia, each holding a shielded note, a
-directional channel pair between them, negotiation state written into note salts and read
-back with every field intact, an atomic settlement, and an independently reconstructed
-disclosure record.
+This guide follows the proof lifecycle used throughout the repository:
 
-**Evidence boundary. Updated 2026-08-18:** wire v2 completed this live run on 2026-08-07,
-settling as `0x14b38e9dbc65f0749be6da2fa05dd2713f8c4c893bac707961c73e616b34cb3`, and an
-observer with no key recovered nothing from it. The note here previously said wire v2 was
-verified offline only; that stopped being true on 2026-08-07.
+- provision and inspect the identity;
+- approve the pool allowance;
+- wait for the approval to reach proving depth;
+- shield a note to register the identity;
+- negotiate through MCP;
+- settle atomically;
+- reconcile and resume only when the journal says to;
+- inspect observer output;
+- disclose one deal to a registered recipient;
+- shut down cleanly.
 
-Two limits remain. There has been no independent cryptographic review. And content
-confidentiality is not relationship confidentiality: the counterparty's address is written
-into public calldata at channel-open (F38), so an observer learns who dealt with whom
-without decrypting anything. See friction.md F30/F31/F38 and
-[privacy-model.md](./privacy-model.md).
+Privacy wording here is bounded to what the evidence shows. Erebus hides the terms, not the
+relationship. The counterparty address is public at channel-open, the submitter is public,
+and the prover plus preflight RPC both see the pool private key during writes.
 
-First run end to end: 2026-07-31. Roughly 20 minutes, most of it waiting on blocks.
+For privacy scope and the known leaks, read [privacy-model.md](./privacy-model.md) first.
+For the implementation and trust boundaries, read [custody-design.md](./custody-design.md)
+and [local-prover.md](./local-prover.md).
 
----
+## Clean shell
 
-## Local wire-v3 verification (no network, no keys)
+Start from a fresh shell with no exported overrides unless a step says otherwise. Do not
+reuse a shell that has stale `EREBUS_*`, `RPC`, `CLI`, or `REQ` values in it.
 
-Run the focused codec and end-to-end Rust paths first:
-
-```shell
-cd ~/Developer/erebus/sdk/rs
-cargo test --test wire_codec
-cargo test --test channel_ops --test read_path --test index_contiguity \
-  --test settlement --test disclosure
-```
-
-Then run the complete quality gate:
-
-```shell
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
-```
-
-Expected as of 2026-08-28: 351 passed and two intentionally ignored live-prover probes.
-The focused codec suite has 21 tests, including the independent TypeScript wire-v3 known
-answer, native deal-key isolation, round trips, tamper rejection, context binding,
-same-index retry safety, and historical reads.
-
----
-
-## 0. Prerequisites
-
-```shell
+```bash
 export REPO=~/Developer/erebus
-cd "$REPO/sdk/rs" && cargo build --bin erebus-cli
+```
+
+If you need a local build, build `erebus-cli` first:
+
+```bash
+cd "$REPO/sdk/rs"
+cargo build --bin erebus-cli
+```
+
+Then set the helper paths:
+
+```bash
 export CLI="$REPO/sdk/rs/target/debug/erebus-cli"
 export REQ="$REPO/scripts/erebus-request.py"
-export RPC=https://starknet-sepolia-rpc.publicnode.com
-export STRK=0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d
-export POOL=0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91
 ```
 
-`.env` must already hold `PROVING_SERVICE_URL` (StarkWare's endpoint, not in the repo, not
-to be shared) and the pool/chain/RPC values. `.env.example` has the shape.
+## 1. Install
 
-The request builder now lives in the repository; no generated Python file or heredoc is
-needed. Confirm the helper can read the env file:
-
-```shell
-python3 "$REQ" "$REPO/.env" read_channel_state \
-  '{"handle":"ch_0000000000000000000000000000000000000000000000000000000000000000"}' \
-  >/dev/null
-```
-
-The block-depth gate also lives in the repository. **This is not optional.** The client proves against `head - 10`,
-so an `approve` newer than that is invisible to the simulation and the shield fails with a
-bare `-32603` carrying no reason (F20). Waiting a fixed "five minutes" is guesswork; poll:
-
-```shell
-bash "$REPO/scripts/wait-for-depth.sh" 0x_TRANSACTION_HASH
-```
-
----
-
-## 1. Create an identity
-
-> **Sections 1 and 2 are automated.** `scripts/new-identity.sh bootstrap <name> <dir>
-> <funder-account>` runs create → fund → deploy → key files → env → fee-aware approve →
-> depth wait → shield, and finishes with `doctor`. The faucet variant
-> (`create`, fund by hand, `activate`) is in the script header. The manual steps below
-> remain the reference for what the script does and for debugging a step that fails.
-
-Repeat this whole section once per agent. Agent A uses `~/.erebus` and the repo `.env`;
-agent B uses `~/.erebus-b` and `~/.erebus-b/env`. Substitute `NAME` and `DIR` accordingly.
+Install the current checkout from source when you need Protocol 4, reconciliation, resume,
+or rebuild state. The published `v0.1.0` wheel speaks Protocol 2.
 
 ```bash
-NAME=erebus-agent      # or erebus-agent-b
-DIR=~/.erebus          # or ~/.erebus-b
-
-sncast account create --url $RPC --name $NAME
+cd "$REPO"
+uv sync --all-packages
+uv run pytest
 ```
 
-**Pause: fund the printed address** at https://starknet-faucet.vercel.app. Budget ~10 STRK: a
-proof-carrying transaction costs ~3 STRK in gas (F27), and each agent does at least one.
+If you only want the release artifacts, follow the README install section instead. This
+runbook assumes source-built current main.
+
+## 2. Create an identity
+
+Each identity has:
+
+- a Starknet account;
+- an account signing key file;
+- a pool identity key file;
+- a state directory.
+
+Use the repository helper for a clean-machine bootstrap:
 
 ```bash
-sncast account deploy --url $RPC --name $NAME     # answer "No" to making it default
+scripts/new-identity.sh bootstrap erebus-a ~/.erebus-a <funder-account>
 ```
 
-Answer **No** to the default prompt. It writes a machine-wide setting in `~/.config`, and in
-a system where the identity determines which channel your notes live in, an implicit default
-is the wrong ergonomic.
+That script performs:
+
+- account creation;
+- funding;
+- account deployment;
+- pool key generation;
+- account-key extraction;
+- env-file creation;
+- fee-aware allowance approval;
+- proving-depth wait;
+- one shield, which also registers the identity;
+- `doctor`.
+
+If you need the faucet path instead, use the `create` and `activate` phases from the script
+header.
+
+## 3. Verify the identity
+
+Run `doctor` before any write. It is read-only and checks the setup in dependency order.
 
 ```bash
-mkdir -p $DIR/state && chmod 700 $DIR $DIR/state
-$CLI <<< "{\"method\":\"generate_pool_key\",\"params\":{\"path\":\"$DIR/pool.key\"}}"
+python3 "$REQ" "$REPO/.env" doctor '{}' | "$CLI"
 ```
 
-Then extract the account key to its own file. This is a repository helper rather than a
-heredoc: a heredoc terminator must start at column one, so indented copy/paste gets stuck at
-the `heredoc>` prompt. The helper never prints the key, creates the file mode `0600`, and
-refuses to overwrite an existing file:
+If `doctor` is not ready, fix the named `repair` items before continuing.
+
+## 4. Hosted prover
+
+For the mainnet path documented in the repository, use the hosted prover configured by the
+identity env file. The hosted path is still inside the pool-key trust boundary because the
+prover and preflight RPC both receive the pool private key.
+
+The relevant env value is:
 
 ```bash
-python3 "$REPO/scripts/extract-sncast-account-key.py" "$NAME" "$DIR"
+PROVING_SERVICE_URL=https://api.starkscan.co/v1/SN_MAIN/prove
 ```
 
-For every additional identity (B, C, and later), derive a dedicated env from A's without
-pasting an address or using another identity's key paths:
+If you use Starkscan, the env must also include `STARKSCAN_API_KEY` with `prove` scope.
+See [local-prover.md](./local-prover.md) for the local fallback and its screening limits.
+
+## 5. Shield and register
+
+Shielding funds a note and registers the identity. The shield transaction is the first write
+that also makes the identity available as a channel counterparty.
 
 ```bash
-AGENT_ADDR=$(python3 -c 'import json,os,sys; print(json.load(open(os.path.expanduser("~/.starknet_accounts/starknet_open_zeppelin_accounts.json")))["alpha-sepolia"][sys.argv[1]]["address"])' "$NAME")
-ENV="$DIR/env"
-sed -e "s|^AGENT_ADDRESS=.*|AGENT_ADDRESS=$AGENT_ADDR|" \
-    -e "s|^POOL_KEY_FILE=.*|POOL_KEY_FILE=$DIR/pool.key|" \
-    -e "s|^ACCOUNT_KEY_FILE=.*|ACCOUNT_KEY_FILE=$DIR/account.key|" \
-    -e "s|^EREBUS_STATE_DIR=.*|EREBUS_STATE_DIR=$DIR/state|" \
-    "$REPO/.env" > "$ENV"
-chmod 600 "$ENV"
-echo "agent env: $ENV"
-```
-
-**The two key files are not two accounts.** `account.key` signs Starknet transactions and is
-custody; `pool.key` is the STRK20 identity and is confidentiality. Only the account key can
-authorise a spend. `__execute__` calls `assert_valid_signature` against your account
-contract (`utils.cairo:390`). See F26.
-
----
-
-## 2. Shield, which also registers
-
-Registration only happens folded into an action set, so each identity has to do something
-before it can be a channel counterparty. A 1 STRK shield is the cheapest. Skip it for B and
-A's `open_channel` fails with `CounterpartyUnregistered`.
-
-```bash
-ENV=~/Developer/erebus/.env        # or ~/.erebus-b/env
-
-echo "approving token: $STRK"
-echo "for pool:        $POOL"
-sncast --account "$NAME" invoke --url "$RPC" \
-  --contract-address "$STRK" --function approve \
-  --calldata "$POOL" 0xde0b6b3a7640000 0x0
-
-# Set this only after sncast prints "Success: Invoke completed".
-TX=0x_PASTE_THE_APPROVE_TRANSACTION_HASH
-
-bash "$REPO/scripts/wait-for-depth.sh" "$TX"
+ENV=~/.erebus-a/env
 python3 "$REQ" "$ENV" shield '{"amount":"1000000000000000000"}' | "$CLI"
 ```
 
-`--contract-address` is the ERC-20 token (`$STRK`), never `AGENT_ADDRESS`. Calling
-`approve` on an account contract fails with `ENTRYPOINT_NOT_FOUND`; if approve fails, do
-not run the wait or shield commands.
-
-**Warning: registration is irreversible and writes your pool private key encrypted to the pool's
-auditor on-chain** (`channel.cairo:329-334`, and `channel.rs:123-129`). From that moment the
-auditor can decrypt everything that identity ever does. Fine for throwaway testnet keys; it
-is the strongest argument for deploying our own pool instance for the product, where we
-would hold that auditor key.
-
-Verify registration took, and that the pool agrees with what `generate_pool_key` produced:
+If the approval is too fresh, the shield can fail because the proof is built against a
+historical block. Wait for the approval to reach proving depth with:
 
 ```bash
-SEL=$(python3 -c "from Crypto.Hash import keccak;h=keccak.new(digest_bits=256);h.update(b'get_public_key');print(hex(int.from_bytes(h.digest(),'big')&((1<<250)-1)))")
-ADDR=$(grep '^AGENT_ADDRESS=' $ENV | cut -d= -f2)
-curl -s -X POST $RPC -H 'content-type: application/json' \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"starknet_call\",\"params\":[{\"contract_address\":\"$POOL\",\"entry_point_selector\":\"$SEL\",\"calldata\":[\"$ADDR\"]},\"latest\"]}"
+bash "$REPO/scripts/wait-for-depth.sh" 0x_TRANSACTION_HASH
 ```
 
----
+## 6. Negotiate through MCP
 
-## 3. The demonstration
-
-Use a pair that has not already opened directional pool channels, and use fresh local state
-for the first run. The pool permits one directional channel per sender/recipient pair, but
-wire v3 can carry later deal IDs in that same pair. The script captures every handle and
-offer id, keeps the recipient-bound deal grant in a mode-`0600` temporary file, and runs
-offer → counter → atomic settlement → reveal:
+Run one server per identity and bind the role explicitly:
 
 ```bash
-cd ~/Developer/erebus
-./scripts/demo.sh 1000000000000000000
+scripts/erebus-mcp.sh ~/.erebus-a/env payer
+scripts/erebus-mcp.sh ~/.erebus-b/env payee
 ```
 
-The amount must be positive and no larger than A's spendable private total. Settlement can
-select larger notes and return the excess as payer-owned change. The run spends Sepolia gas.
-Do not reuse a pair whose existing directional channels were opened under another wire
-version.
+For an MCP client, the tool surface is:
 
-The commands below show the first offer/read portion manually for debugging:
+- `doctor`
+- `get_note_balance`
+- `open_channel`
+- `propose_offer`
+- `counter_offer`
+- `read_channel_state`
+- `wait_for_offers`
+- `accept_and_settle`
+- `reconcile`
+- `resume_operation`
+- `rebuild_state`
+- `grant_viewing_key`
+- `reveal`
+
+The payer must call `get_note_balance` before naming a price. The payee must not call
+`accept_and_settle`. Every write needs an `operation_id` and the caller should persist the
+canonical intent before the call.
+
+Example shell flow:
 
 ```bash
-B=$(grep '^AGENT_ADDRESS=' ~/.erebus-b/env | cut -d= -f2)
-
-# A opens a channel to B
-OPEN_ID=op_$(openssl rand -hex 32)
-python3 "$REQ" "$REPO/.env" open_channel \
-  "{\"operation_id\":\"$OPEN_ID\",\"counterparty\":\"$B\"}" | "$CLI"
-# -> {"channel_handle":"ch_..."}
-
-H=ch_...   # paste the handle
-
-# A writes an offer into the salt lane
-DEADLINE=$(python3 -c "import time;print(int(time.time())+86400)")
-OFFER_ID=op_$(openssl rand -hex 32)
-python3 "$REQ" "$REPO/.env" propose_offer \
-  "{\"operation_id\":\"$OFFER_ID\",\"handle\":\"$H\",\"terms\":{\"amount\":\"500000000000000000\",\"token\":\"$STRK\",\"deadline\":$DEADLINE,\"memo_hash\":\"0x1234\"}}" | "$CLI"
-
-# read it back off-chain
-python3 "$REQ" "$REPO/.env" read_channel_state "{\"handle\":\"$H\"}" | "$CLI" | python3 -m json.tool
+scripts/agent.sh ~/.erebus-a/env balance
+scripts/agent.sh ~/.erebus-a/env open "$(scripts/agent.sh ~/.erebus-b/env whoami)"
+scripts/agent.sh ~/.erebus-b/env wait <channel-handle> 1
+scripts/agent.sh ~/.erebus-b/env counter <channel-handle> <offer-id> 600000000000000000
+scripts/agent.sh ~/.erebus-a/env accept <channel-handle> <offer-id>
 ```
 
-**What success looks like.** The script first returns an offer whose `amount`, `deadline`,
-`memo_hash` and `token` match exactly what was sent. Its final reveal contains three records
-(offer, counter, acceptance), and `agreed_amount == paid_amount` for the atomic settlement.
+The exact offer amounts, deadlines, and memos belong in the agent policy or the clean-shell
+record you are building. The important point for the guide is the lifecycle, not a single
+example price.
 
-**What wire v3 claims.** The five salts remain public inside `packed_value`, but they contain
-authenticated ciphertext under a native deal key. The three spare bits are derived instead
-of fixed. Round-trip success proves the storage/read path and v3 authentication agree. It
-does not hide the five-note traffic shape, prove relationship anonymity, or replace
-independent cryptographic review.
+## 7. Settle
 
-**What failure looks like, and why it is worth naming.** A wrong derivation does not raise.
-`open_channel` still succeeds, `propose_offer` still succeeds, and `read_channel_state`
-returns `"offers": []`. **An empty transcript after a successful write is the failure
-signal.** There is no error anywhere, because a misderived note id simply addresses a
-storage slot nobody wrote to.
+Settlement is atomic. It consumes the payer's notes, returns change if needed, and keeps the
+channel pair available for later deals.
 
----
+The relevant MCP call is `accept_and_settle`. The documented result includes:
 
-## 4. Autonomous agents through MCP
+- `tx_hash`
+- `nullifiers`
+- `proved_at`
+- `selected_input`
+- `change`
 
-Register separate role-bound servers. The role is required because
-`accept_and_settle` spends the caller's notes: the buyer is the payer and the seller is the
-payee.
+## 8. Recover
 
-```bash
-claude mcp add erebus-seller -- "$REPO/scripts/erebus-mcp.sh" ~/.erebus-d/env payee
-claude mcp add erebus-buyer  -- "$REPO/scripts/erebus-mcp.sh" ~/.erebus-e/env payer
-```
+Recovery is explicit and operator-driven.
 
-Restart the agent clients after adding them. Before negotiating, inspect the buyer's exact
-denominations:
+- Use `reconcile` first.
+- Use `resume_operation` only when the classification says the operation is resumable.
+- Keep the original `operation_id`.
+- Do not mint a replacement ID for an uncertain write.
 
-```bash
-scripts/agent.sh ~/.erebus-e/env balance
-```
+The repository’s recovery model distinguishes:
 
-Inside MCP, call `get_note_balance` before you name a price. Any positive amount less than
-or equal to `total` is payable. Settlement selects sufficient notes and returns change. The
-payer server also applies configured spending limits. A payee server refuses settlement.
-The payee must write the final counter for the buyer to accept.
+- no effect yet, safe to retry;
+- effect exists, commit local state;
+- effect exists, commit the journal;
+- ambiguous, needs operator attention.
 
-Every write needs an operation ID. Persist each ID with its canonical intent before the
-MCP call. After an interruption, call `reconcile`. Use `resume_operation` with the original
-ID only when the result permits it.
+If the result says the proof expired, rebuild the proof under the same operation ID only
+when the journal and classification permit it.
 
-For the full two-agent sequence, read [the reference-agent guide](../agents/README.md) and
-[the Erebus operator skill](../skills/erebus/SKILL.md).
+## 9. Observer test
 
----
+Run the observer against the public chain record and compare it with the authorized reveal.
+The observer should not recover the deal terms from wire v3.
 
-## 5. Recovery canary
+The guide should treat this as a negative control:
 
-Run this canary only with a low-value Sepolia identity. It intentionally stops a process at
-the submission boundary. Do not use it on mainnet.
+- public observer output;
+- authorized disclosure output;
+- explicit note that public calldata still reveals the relationship and timing.
 
-Start the local fault proxy with a new capture path:
+## 10. Disclosure
 
-```bash
-python3 scripts/hold-submit-proxy.py ~/.erebus-e/env /tmp/erebus-held-submit.json
-```
+Use recipient-bound disclosure for one deal and one registered recipient. The raw CLI and
+the MCP wrapper differ:
 
-In a second shell, route one write through the proxy. Keep the operation ID:
+- CLI `grant_viewing_key` returns a grant object.
+- CLI `reveal` consumes that grant object.
+- MCP `grant_viewing_key` writes the grant to a file.
+- MCP `reveal` reads it back from a file.
 
-```bash
-export EREBUS_RPC_URL_OVERRIDE=http://127.0.0.1:18765
-export EREBUS_OPERATION_ID=op_$(openssl rand -hex 32)
-scripts/agent.sh ~/.erebus-e/env accept <channel-handle> <offer-id>
-```
+The disclosure path should say:
 
-After the capture file exists, stop only the `erebus-cli` process for that write. Then stop
-the proxy. Remove `EREBUS_RPC_URL_OVERRIDE` before recovery.
+- the grant is scoped to one deal;
+- the grant has an expiry;
+- the grant gives no spending authority;
+- opening a disclosure does not erase what was already disclosed;
+- the recipient’s pool key must match the grant.
 
-Run read-only reconciliation first:
+## 11. Shutdown
 
-```bash
-scripts/agent.sh ~/.erebus-e/env reconcile
-```
+When the run is complete:
 
-If the result says `wait`, wait for the chain or nonce evidence and run `reconcile` again.
-If it permits resume, use the original operation ID:
+- stop the MCP server process;
+- delete any temporary grant files you created for the test;
+- remove any temporary capture files or proxy files;
+- keep the journal and evidence records that prove what happened.
 
-```bash
-scripts/agent.sh ~/.erebus-e/env resume "$EREBUS_OPERATION_ID"
-```
+## 12. What to record
 
-For exact resubmission, the journal must keep one transaction hash. For an expired-proof
-rebuild, the journal must keep the old attempt and add one new attempt under the same
-operation ID. In both cases, run `reconcile` until the outcome is `effect`. Then run one
-final `resume` to apply any local commit action.
+For the clean-shell validation pass, record:
 
-The 2026-08-27 packaged-source run completed both paths. See
-[the evidence record](./runs/2026-08-27-packaged-recovery-canary.md).
+- the exact command;
+- whether it succeeded;
+- the first failure if it did not;
+- any prerequisite that was not obvious from the docs;
+- any command that needed a retry because of depth, timing, or environment.
 
-The request helper accepts `EREBUS_RPC_URL_OVERRIDE` only for this type of controlled RPC
-fault. It does not write the override into the identity env file. The capture contains a
-signed transaction. The proxy creates it with mode `0600`. Remove it after the audit.
+Do not hide missing prerequisites. If a command needs a secret, endpoint, or funded account,
+say so directly.
 
----
+## Reference order
 
-## Reference: first successful run
+Use this guide together with:
 
-| step | tx | result |
-|---|---|---|
-| A shield | `0x5f57eb...b9e2` | block 12715064, fee 3.04 STRK |
-| B shield | `0x10c3376c...77e0` | registered |
-| A `open_channel` → B |: | `ch_a8f81fdc...2d59` |
-| A `propose_offer` |: | `ch_a8f81fdc...2d59:us:0` |
-| `read_channel_state` |: | offer returned, all fields exact |
-| B `open_channel` → A |: | `ch_c4d09ef1...5aab` |
-| B `counter_offer` |: | 1 STRK counter returned and A read it |
-| A `accept_and_settle` | `0x44289c...84bb7` | accepted on L2; nullifier exists |
-| independent `reveal` | read-only | full offers, acceptance and exact payment reconstructed |
-
-Screening never came up. StarkWare's prover mints the attestation via its
-`proof-interceptor` sidecar and packs it automatically, see F6, which was open for six days
-predicting the opposite.
+- [README.md](../README.md)
+- [reference.md](./reference.md)
+- [status.md](./status.md)
+- [privacy-model.md](./privacy-model.md)
+- [local-prover.md](./local-prover.md)
+- [custody-design.md](./custody-design.md)

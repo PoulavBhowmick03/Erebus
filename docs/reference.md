@@ -223,6 +223,16 @@ Methods: `version`, `generate_pool_key`, `doctor`, `balance`, `allowance`, `appr
 `grant_viewing_key`, and `reveal`. All except `version` and `generate_pool_key` take a
 `config` object. Every chain write also takes `operation_id`.
 
+The raw CLI disclosure calls are:
+
+- `grant_viewing_key(config, handle, deal_id, grantee, expires_at)` returns the grant
+  object on stdout.
+- `reveal(config, viewing_key)` accepts that grant object on stdin and returns the
+  reconstructed record.
+
+The MCP server wraps those same Rust calls with file I/O: its `grant_viewing_key` tool
+writes the grant to `output_path`, and its `reveal` tool reads it back from `grant_path`.
+
 From Python, `erebus-sdk` wraps this:
 
 ```python
