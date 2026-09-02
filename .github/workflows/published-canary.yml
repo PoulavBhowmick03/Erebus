@@ -216,8 +216,9 @@ jobs:
                       await session.initialize()
                       actual = {tool.name for tool in (await session.list_tools()).tools}
                       assert actual == expected, (sorted(actual), sorted(expected))
-                      result = await session.call_tool("doctor", {})
-                      assert not result.isError, result
+                      for tool in ("doctor", "reconcile"):
+                          result = await session.call_tool(tool, {})
+                          assert not result.is_error, (tool, result)
                       print("tools:", sorted(actual))
 
           asyncio.run(main())

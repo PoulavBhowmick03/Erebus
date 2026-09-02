@@ -25,10 +25,12 @@ fees remain visible.
 
 ## 2. Deadline priorities
 
-### P0 — write one end-to-end operator guide
+### P0 — independently verify the end-to-end operator guide
 
-Rewrite [`runbook.md`](./runbook.md) as the single current path from an empty machine to a
-verified Erebus deal. It must cover:
+[`runbook.md`](./runbook.md) is now the single current path from an empty machine to a
+verified Erebus deal. An independent operator must verify its commands and requirements.
+
+The guide covers:
 
 1. supported platforms and release-candidate installation;
 2. two isolated identities and protected state directories;
@@ -43,8 +45,8 @@ verified Erebus deal. It must cover:
 11. local-prover fallback and its screening limitation;
 12. a clear private-versus-public table for every stage.
 
-All commands must be tested from a clean shell. Use placeholders for credentials and keys;
-never print an env file, prover request/result, viewing grant, account key, or pool key.
+The operator must use placeholders for credentials and keys. The operator must not print
+secret files, prover payloads, or viewing grants.
 
 Exit: an operator can follow the document without relying on chat history or a maintainer's
 local files.
@@ -64,22 +66,9 @@ implementation path.
 Exit: a dated, secret-free report records the environment, artifacts, commands, failures,
 and result.
 
-### P1 — targeted release review
-
-Review the code that can lose funds, repeat a write, or expose a pool key:
-
-- `sdk/rs/src/prover.rs`: Starkscan authentication, submit/poll recovery, durable one-time
-  result storage, file modes, and redaction;
-- `sdk/rs/src/execution.rs`: proof expiry, exact-request pinning, submit recovery, and
-  idempotency;
-- operation journal and reconciliation: ambiguous outcomes, reservations, and restart
-  behavior;
-- Python/CLI/MCP boundaries: operation IDs, error names, amounts-as-strings, and secret-safe
-  output;
-- release automation: version parity, artifacts, checksums, SBOM, and secret scanning.
-
-Exit: every finding has a concrete failure sequence and is fixed, explicitly accepted, or
-recorded as a release blocker.
+The automated artifact canary passed on Linux x86-64 and macOS arm64. See
+[`2026-09-02-v0.2-release-candidate-artifacts.md`](./runs/2026-09-02-v0.2-release-candidate-artifacts.md).
+The independent human check remains open.
 
 ### P1 — replace the sprint video
 
@@ -125,8 +114,8 @@ Exit: the final commit is green, public, secret-free, and represented accurately
 ## 3. `v0.2.0` decision
 
 Mainnet execution is no longer the technical blocker. Publication still requires the
-external clean-install canary, end-to-end guide, targeted review, final artifact checks, and
-explicit owner authorization.
+independent guide check, replacement video, final public checks, and explicit owner
+authorization.
 
 If approved, follow [`v0.2-release-plan.md`](./v0.2-release-plan.md). The release must say
 **mainnet-verified, experimental, and unaudited**. It must not say production-ready.

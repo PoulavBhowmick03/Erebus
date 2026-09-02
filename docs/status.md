@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-08-31.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-09-02.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -49,9 +49,9 @@ through MCP; the relationship and traffic metadata remain public.
   0.48-to-0.6 concession; its four pool transactions are recorded in the sprint manifest
   (`docs/runs/2026-08-31-mainnet-060-040-canary.md`) |
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
-| Tests | 288 Rust passed (plus 7 intentionally ignored live tests), 191 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
+| Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 214 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` release candidate. The Starkscan-backed packaged mainnet canary, evidence review, and local repository gates passed. Publication remains held by owner decision; no tag or package has been published |
+| In flight | `v0.2.0` release candidate. The manual Wheels run built and installed Linux x86-64 and macOS arm64 artifacts. A separate toolchain-free Linux container also passed. The independent human guide check and replacement video remain open. No tag or package has been published |
 | CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The Starkscan transport must remain green on `main` before release |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 
@@ -99,7 +99,7 @@ Never describe this as private in an absolute sense.
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
 | What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-31 reconciliation |
-| How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 reference; the clean-machine mainnet end-to-end rewrite is a September 7 gate |
+| How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 clean-machine guide; independent operator verification remains open |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
 | Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-31 reconciliation |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | current gaps only; completed history lives in dated run records |
@@ -156,13 +156,11 @@ only metadata and the path. The capsule does not enter the model transcript.
 
 The sprint deadline is now September 7. The active work is deliberately narrow:
 
-1. Rewrite `runbook.md` as a tested end-to-end operator guide.
-2. Complete an external clean install from release-candidate artifacts.
-3. Review hosted-prover recovery, transaction idempotency, and secret boundaries.
-4. Replace the pre-canary video with the complete mainnet workflow.
-5. Evaluate the announced StarkWare tooling without destabilizing the known-good path.
-6. Run the final gates, public-link checks, and sprint-hub refresh.
-7. Request explicit owner approval before publishing `v0.2.0`.
+1. Ask an independent operator to verify `runbook.md` with the release-candidate artifacts.
+2. Replace the pre-canary video with the complete mainnet workflow.
+3. Evaluate the announced StarkWare tooling without changing the known-good path.
+4. Run the final gates, public-link checks, and sprint-hub refresh.
+5. Request explicit owner approval before publishing `v0.2.0`.
 
 [`roadmap.md`](./roadmap.md) defines acceptance checks and sequencing.
 [`v0.2-release-plan.md`](./v0.2-release-plan.md) contains only the remaining release work.

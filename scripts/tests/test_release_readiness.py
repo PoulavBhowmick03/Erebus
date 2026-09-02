@@ -124,3 +124,10 @@ def test_complete_mainnet_evidence_and_updated_preamble_pass(tmp_path: Path) -> 
 def test_repository_manifests_and_locks_are_aligned() -> None:
     root = Path(__file__).parents[2]
     assert MODULE.check(root) == []
+
+
+def test_published_canary_uses_the_current_mcp_result_field() -> None:
+    root = Path(__file__).parents[2]
+    workflow = (root / ".github/workflows/published-canary.yml").read_text()
+    assert "result.is_error" in workflow
+    assert "result.isError" not in workflow
