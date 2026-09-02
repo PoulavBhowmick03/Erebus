@@ -51,7 +51,7 @@ through MCP; the relationship and traffic metadata remain public.
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
 | Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` release candidate. The manual Wheels run built and installed Linux x86-64 and macOS arm64 artifacts. A separate toolchain-free Linux container also passed. The independent human guide check and replacement video remain open. No tag or package has been published |
+| In flight | `v0.2.0` release candidate. Current-commit wheels passed clean installation and MCP execution on Ubuntu and macOS with Python 3.11 and 3.13. The independent human guide check and replacement video remain open. No tag or package has been published |
 | CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The Starkscan transport must remain green on `main` before release |
 | Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
 

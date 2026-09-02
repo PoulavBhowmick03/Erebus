@@ -66,8 +66,9 @@ implementation path.
 Exit: a dated, secret-free report records the environment, artifacts, commands, failures,
 and result.
 
-The automated artifact canary passed on Linux x86-64 and macOS arm64. See
-[`2026-09-02-v0.2-release-candidate-artifacts.md`](./runs/2026-09-02-v0.2-release-candidate-artifacts.md).
+The current-commit automated artifact canary passed on Linux x86-64 and macOS arm64 with
+Python 3.11 and 3.13. See
+[`2026-09-02-v0.2-clean-install-canary.md`](./runs/2026-09-02-v0.2-clean-install-canary.md).
 The independent human check remains open.
 
 ### P1 — replace the sprint video
