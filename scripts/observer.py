@@ -9,7 +9,8 @@ a Sepolia transaction hash or a JSON fixture containing ``calldata``:
 
 Content recovery and traffic classification are separate findings. This script implements
 the public wire-v1 codec as a positive control. It never receives the wire-v2 channel key.
-The fifth-salt fingerprint uses only the public fixed-zero shape.
+The fifth-salt fingerprint uses only the public fixed-zero shape. A recovered wire-v1
+transcript takes precedence over that shape because a wire-v1 salt can match it by chance.
 """
 
 from __future__ import annotations
@@ -82,6 +83,15 @@ class Analysis:
     def classified_as_erebus(self) -> bool:
         """Whether any salt has wire v2's 59-zero-bit fifth-slot shape."""
         return bool(self.fingerprint_salts)
+
+    @property
+    def classified_wire_version(self) -> str | None:
+        """Return the supported evidence-based wire label, if one is distinguishable."""
+        if self.content_recovered:
+            return "wire-v1"
+        if self.classified_as_erebus:
+            return "wire-v2"
+        return None
 
 
 def _felt(value: object) -> int:
@@ -243,18 +253,26 @@ def _print(analysis: Analysis, source: str) -> None:
         print(f"  deadline: {transcript.deadline}")
         print(f"  memo_hash: {transcript.memo_hash:#x}")
 
-    print("\nTRAFFIC CLASSIFICATION (shape only)")
+    print("\nWIRE VERSION CLASSIFICATION")
+    if analysis.classified_wire_version == "wire-v1":
+        print("Erebus wire-v1: the public legacy decoder recovered a plausible transcript")
+    elif analysis.classified_wire_version == "wire-v2":
+        print("likely Erebus wire-v2: no legacy content recovered and fixed shape matched")
+    else:
+        print("no wire-v1 or wire-v2 label supported by this evidence")
+
+    print("\nFIFTH-SALT FINGERPRINT (shape only)")
     if analysis.classified_as_erebus:
         print(
-            "likely Erebus wire-v2 traffic: found "
-            f"{len(analysis.fingerprint_salts)} salt(s) with bit 119 set and bits 60..118 zero"
+            f"matched {len(analysis.fingerprint_salts)} salt(s) with bit 119 set and "
+            "bits 60..118 zero"
         )
         print(
             "an unrelated uniform 120-bit salt matches with probability 2^-60 "
             "(2^-59 after conditioning on bit 119 being set)"
         )
     else:
-        print("not classified as wire-v2 by the fixed fifth-salt shape")
+        print("no match for the wire-v2 fixed fifth-salt shape")
 
 
 def _parser() -> argparse.ArgumentParser:

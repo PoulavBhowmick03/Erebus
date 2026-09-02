@@ -49,7 +49,7 @@ through MCP; the relationship and traffic metadata remain public.
   0.48-to-0.6 concession; its four pool transactions are recorded in the sprint manifest
   (`docs/runs/2026-08-31-mainnet-060-040-canary.md`) |
 | Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
-| Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 214 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
+| Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
 | In flight | `v0.2.0` release candidate. The manual Wheels run built and installed Linux x86-64 and macOS arm64 artifacts. A separate toolchain-free Linux container also passed. The independent human guide check and replacement video remain open. No tag or package has been published |
 | CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The Starkscan transport must remain green on `main` before release |
@@ -117,9 +117,8 @@ These documents preserve dated evidence and do not describe the current source:
   current wire-v3 evidence.
 - **`docs/runs/`** records exact past configurations and protocol versions. Do not update a
   past run to look like a current run.
-- **`scripts/observer.py`** classifies wire-v1 traffic as wire v2. The recovery results are
-  unaffected — v1 content is recovered, v2 is not — but the version label it prints is not
-  trustworthy.
+- **`scripts/observer.py`** labels a recovered legacy transcript as wire v1 before applying
+  wire v2's weaker fixed-shape classifier. It still reports shape collisions explicitly.
 
 ---
 

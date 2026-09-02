@@ -33,6 +33,7 @@ class ObserverControls(unittest.TestCase):
     def test_recovery_succeeds_on_a_wire_v1_fixture(self) -> None:
         analysis = self.analyse("observer-wire-v1.json")
         self.assertTrue(analysis.content_recovered)
+        self.assertEqual(analysis.classified_wire_version, "wire-v1")
         self.assertEqual(
             analysis.recovered,
             (
@@ -51,11 +52,24 @@ class ObserverControls(unittest.TestCase):
         analysis = self.analyse("observer-wire-v2.json")
         self.assertFalse(analysis.content_recovered)
         self.assertEqual(analysis.recovered, ())
+        self.assertEqual(analysis.classified_wire_version, "wire-v2")
 
     def test_wire_v2_is_classified_separately_by_shape(self) -> None:
         analysis = self.analyse("observer-wire-v2.json")
         self.assertTrue(analysis.classified_as_erebus)
         self.assertEqual(len(analysis.fingerprint_salts), 1)
+
+    def test_wire_v1_recovery_takes_precedence_over_a_shape_collision(self) -> None:
+        analysis = self.analyse("observer-wire-v1.json")
+        self.assertTrue(analysis.classified_as_erebus)
+        self.assertEqual(len(analysis.fingerprint_salts), 2)
+        self.assertEqual(analysis.classified_wire_version, "wire-v1")
+
+    def test_wire_v3_has_no_legacy_version_label(self) -> None:
+        analysis = self.analyse("observer-wire-v3.json")
+        self.assertFalse(analysis.content_recovered)
+        self.assertFalse(analysis.classified_as_erebus)
+        self.assertIsNone(analysis.classified_wire_version)
 
     def test_transaction_hash_input_fetches_public_calldata(self) -> None:
         fixture = ROOT / "scripts" / "fixtures" / "observer-wire-v1.json"

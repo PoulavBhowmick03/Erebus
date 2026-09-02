@@ -6,10 +6,6 @@
 > The overall privacy boundary lives in [privacy-model.md](./privacy-model.md). This file is
 > the harness result only.
 >
-> **Known defect:** the version classifier labels wire-v1 traffic as wire v2. The recovery
-> results below are unaffected — v1 content is recovered and v2 content is not — but the
-> version label the harness prints is not trustworthy.
-
 The no-key observer in `scripts/observer.py` has a positive control: it reconstructs the
 known wire-v1 acceptance from four public salt halves. Against the static wire-v2 fixture,
 the same public recovery attack finds no plausible transcript. The observer therefore does
@@ -21,6 +17,9 @@ prove those assumptions.
 Traffic privacy fails independently. Wire v2 fills only 536 of 595 payload bits, so its
 fifth salt always has bit 119 set and bits 60 through 118 clear. The harness detects that
 shape without decrypting anything and classifies the transaction as likely Erebus traffic.
+Because an individual wire-v1 salt can match that shape by chance, successful wire-v1
+content recovery takes precedence over the shape classifier. The harness still reports the
+shape collision explicitly.
 An unrelated uniform 120-bit salt has that shape with probability 2^-60, or 2^-59 after
 conditioning on the format flag. An observer can therefore identify likely Erebus pool
 interactions and, from public transaction metadata, count and time them and associate each
