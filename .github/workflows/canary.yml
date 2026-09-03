@@ -52,6 +52,10 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - uses: astral-sh/setup-uv@v5
+        with:
+          # This sparse checkout intentionally contains no lockfile. Caching would warn on
+          # every matrix job and cannot produce a reusable dependency-cache key.
+          enable-cache: false
 
       - name: Fetch the wheels
         uses: actions/download-artifact@v4
