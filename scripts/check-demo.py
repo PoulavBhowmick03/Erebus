@@ -13,6 +13,7 @@ REQUIRED_COPY = (
     "This browser simulation",
     "It does not submit a transaction or use a wallet.",
     "Two screened 1 STRK canaries settled through MCP",
+    "Public three-minute walkthrough of the complete mainnet workflow.",
     "Wire v3 encrypts offer terms",
     "It does not hide transaction timing",
     "Readable for one deal",
@@ -20,6 +21,7 @@ REQUIRED_COPY = (
 FORBIDDEN_COPY = (
     "current fixed shape of the fifth salt",
     "Readable for one channel",
+    "Recorded before the later full mainnet canary",
 )
 
 
