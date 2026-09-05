@@ -73,8 +73,7 @@ The independent human check remains open.
 
 ### P1 — replace the sprint video
 
-The current video predates the complete mainnet workflow. Record a new public video of no
-more than three minutes showing:
+The public video and demo URL now work without authentication. The video shows:
 
 - the agent-to-MCP-to-Rust-to-prover/RPC architecture;
 - a screened mainnet shield;
@@ -88,7 +87,7 @@ more than three minutes showing:
 Do not show credentials, keys, protected paths, complete prover payloads, grants, or terminal
 history containing secrets.
 
-Exit: the public URL works without authentication and `strk20.json` points to it.
+Exit: complete.
 
 ### P1 — evaluate new StarkWare tooling
 
@@ -115,8 +114,7 @@ Exit: the final commit is green, public, secret-free, and represented accurately
 ## 3. `v0.2.0` decision
 
 Mainnet execution is no longer the technical blocker. Publication still requires the
-independent guide check, replacement video, final public checks, and explicit owner
-authorization.
+independent guide check, final public checks, and explicit owner authorization.
 
 If approved, follow [`v0.2-release-plan.md`](./v0.2-release-plan.md). The release must say
 **mainnet-verified, experimental, and unaudited**. It must not say production-ready.
