@@ -1,0 +1,258 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────────────────────
+   EREBUS — redacted dossier
+
+   One rule governs colour: cinnabar marks facts a public chain reader can
+   already read. It is never a button, never a link, never decoration. If it
+   appears on something that does not leak, the page is lying.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  --color-bone: #f2efe9;
+  --color-paper: #e9e5dc;
+  --color-paper-3: #ded9cd;
+  --color-ink: #0b0b0c;
+  --color-ink-2: #4a4a4d;
+  --color-ink-3: #6f6f71;
+  --color-rule: #cdc7ba;
+  --color-rule-2: #bab3a3;
+  --color-cinnabar: #c0301a;
+  --color-void: #000000;
+
+  --font-display: var(--font-instrument), "Times New Roman", Times, serif;
+  --font-label: var(--font-cinzel), "Times New Roman", Times, serif;
+  --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --tracking-label: 0.3em;
+}
+
+:root {
+  color-scheme: light;
+  --page: var(--color-bone);
+  --edge: 5vw;
+}
+
+@layer base {
+
+* {
+  box-sizing: border-box;
+  border-radius: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bone);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--color-ink);
+  color: var(--color-bone);
+}
+
+a { color: inherit; text-decoration: none; }
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 3px;
+}
+
+}
+
+@layer components {
+
+/* ── type ─────────────────────────────────────────────────────────────── */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.022em;
+  line-height: 0.92;
+}
+
+.label {
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-ink-2);
+}
+
+.mono-xs { font-size: 10px; letter-spacing: 0.06em; }
+.mono-sm { font-size: 11px; }
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ── hairlines. structure, never decoration ───────────────────────────── */
+
+.rule { border-top: 1px solid var(--color-rule); }
+.rule-b { border-bottom: 1px solid var(--color-rule); }
+.rule-l { border-left: 1px solid var(--color-rule); }
+
+.draw {
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.draw[data-drawn="true"] { transform: scaleX(1); }
+
+/* ── the leak mark. cinnabar lives here and nowhere else ──────────────── */
+
+.leak { color: var(--color-cinnabar); }
+
+.leak-tag {
+  color: var(--color-cinnabar);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.leak-tag::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  background: var(--color-cinnabar);
+  vertical-align: 1px;
+}
+
+/* ── redaction ────────────────────────────────────────────────────────── */
+
+.redact {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.redact::after {
+  content: "";
+  position: absolute;
+  inset: -0.14em -0.3em -0.16em -0.3em;
+  background: var(--color-ink);
+  clip-path: inset(0 0 0 100%);
+  transition: clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+[data-key="dropped"] .redact::after { clip-path: inset(0 0 0 0%); }
+[data-key="dropped"] .redact { user-select: none; cursor: help; }
+
+/* holding a redaction open is a deliberate act: hover, focus, or press */
+[data-key="dropped"] .redact:hover::after,
+[data-key="dropped"] .redact:focus-visible::after,
+[data-key="dropped"] .redact[data-held="true"]::after {
+  clip-path: inset(0 0 0 100%);
+}
+
+/* on the void section the bar inverts, otherwise it is invisible */
+.on-void .redact::after { background: #171717; }
+
+/* ── the void ─────────────────────────────────────────────────────────── */
+
+.on-void {
+  background: var(--color-void);
+  color: #d8d4cb;
+}
+.on-void .label { color: #78746c; }
+.on-void .rule,
+.on-void .rule-b,
+.on-void .rule-l { border-color: #262626; }
+.on-void ::selection { background: #d8d4cb; color: #000; }
+.on-void :focus-visible { outline-color: #d8d4cb; }
+.on-void .leak { color: #e2492f; }
+.on-void .leak-tag { color: #e2492f; }
+.on-void .leak-tag::before { background: #e2492f; }
+
+}
+
+@layer base {
+
+/* ── controls: hairline range, no chrome ──────────────────────────────── */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  cursor: ew-resize;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 1px;
+  background: var(--color-rule-2);
+}
+input[type="range"]::-moz-range-track {
+  height: 1px;
+  background: var(--color-rule-2);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 3px;
+  height: 20px;
+  margin-top: -10px;
+  background: var(--color-ink);
+  border: 0;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 3px;
+  height: 20px;
+  background: var(--color-ink);
+  border: 0;
+  border-radius: 0;
+}
+
+}
+
+@layer components {
+
+/* ── scramble ─────────────────────────────────────────────────────────── */
+
+.scramble { font-variant-numeric: tabular-nums; }
+.scrambling { color: var(--color-ink-3); }
+.on-void .scrambling { color: #5a5a5a; }
+
+/* ── grid paper: the only background treatment, and it is a measuring
+      grid rather than an atmosphere ─────────────────────────────────── */
+
+.plate {
+  background-image:
+    linear-gradient(to right, rgba(11, 11, 12, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(11, 11, 12, 0.045) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+}
+
+/* ── responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 850px) {
+  :root { --edge: 6vw; }
+  .label { letter-spacing: 0.22em; }
+}
+
+/* ── reduced motion ───────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .draw { transition: none; transform: scaleX(1); }
+  .redact::after { transition: none; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
