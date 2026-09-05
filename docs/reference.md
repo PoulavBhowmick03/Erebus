@@ -3,8 +3,9 @@
 Operator and integrator reference for Erebus. The [README](../README.md) covers what Erebus
 is and how to install it; this covers running it.
 
-This page describes current `main` and CLI Protocol 4. The published `v0.1.0` wheel speaks
-Protocol 2 and exposes ten tools. Build the current checkout until `v0.2.0` is published.
+This page describes current `main` and CLI Protocol 4. The published `v0.2.0` wheel speaks
+Protocol 4 and exposes thirteen tools. The older `v0.1.0` wheel speaks Protocol 2 and
+exposes ten tools.
 
 - [Set up an identity](#set-up-an-identity)
 - [Configure](#configure)

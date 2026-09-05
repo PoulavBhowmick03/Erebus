@@ -1,8 +1,8 @@
 # MCP server
 
 This page describes current `main`, which speaks Protocol 4 and exposes thirteen tools.
-The published `v0.1.0` packages speak Protocol 2 and expose ten tools. Build the current
-checkout until `v0.2.0` is published.
+The published `v0.2.0` packages speak Protocol 4 and expose thirteen tools. The older
+`v0.1.0` packages speak Protocol 2 and expose ten tools.
 
 Owned by Ishita (CLAUDE.md, repo layout). Exposes the Erebus tools so an external agent
 framework can drive the whole loop without knowing Erebus exists, that is definition-of-done

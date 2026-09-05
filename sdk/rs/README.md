@@ -1,7 +1,7 @@
 # Erebus Rust SDK
 
-This page describes current `main` and CLI Protocol 4. The published `v0.1.0` binary speaks
-Protocol 2. Protocol 4 will ship with `v0.2.0` after the operator-alpha gates pass.
+This page describes current `main` and CLI Protocol 4. The published `v0.2.0` binary speaks
+Protocol 4. The older `v0.1.0` binary speaks Protocol 2.
 
 `erebus-sdk` is the protocol implementation. It builds STRK20 client actions, preflights
 them against `compile_actions`, requests a proof, submits `apply_actions`, discovers notes

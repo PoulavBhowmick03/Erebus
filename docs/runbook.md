@@ -1,7 +1,7 @@
 # Runbook: clean-machine operator guide
 
 This is the current `main` guide for reproducing the documented operator flow from a clean
-shell. It is written for the Protocol 4 source tree, not the published `v0.1.0` artifacts.
+shell. It is written for the Protocol 4 source tree and the published `v0.2.0` artifacts.
 
 This guide follows the proof lifecycle used throughout the repository:
 
@@ -49,8 +49,8 @@ export REQ="$REPO/scripts/erebus-request.py"
 
 ## 1. Install
 
-Install the current checkout from source when you need Protocol 4, reconciliation, resume,
-or rebuild state. The published `v0.1.0` wheel speaks Protocol 2.
+Install the current checkout from source when you need unreleased changes. The published
+`v0.2.0` wheel speaks Protocol 4 and supports reconciliation, resume, and state rebuild.
 
 ```bash
 cd "$REPO"

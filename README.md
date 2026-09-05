@@ -41,9 +41,8 @@ with whom, is still public.
 [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
 source to quote for privacy claims.
 
-`v0.1.0` is released and installable. It speaks Protocol 2 and exposes ten MCP tools.
-Current `main` speaks Protocol 4 and exposes thirteen tools. Protocol 4 will ship in
-`v0.2.0` after the operator-alpha gates pass.
+`v0.2.0` is released and installable. It speaks Protocol 4 and exposes thirteen MCP tools.
+The older `v0.1.0` release speaks Protocol 2 and exposes ten MCP tools.
 [docs/status.md](./docs/status.md) is the current state in one page, and the tiebreaker when
 any two documents here disagree.
 
@@ -110,9 +109,9 @@ Agent B ─┘                                          │                     
 
 ## Install
 
-> **Release boundary:** The command below installs `v0.1.0`. Build the current source when
-> you need Protocol 4 operation IDs, reconciliation, resume, or state rebuild. Do not use
-> the Protocol 4 quickstart below with the published Protocol 2 binary.
+> **Release boundary:** The command below installs the latest public Erebus packages.
+> Use `v0.2.0` or newer when you need Protocol 4 operation IDs, reconciliation, resume,
+> or state rebuild.
 
 **Requirements.** Linux x86-64 or macOS arm64, Python 3.11+. Intel macOS is not built — its
 CI runner is no longer available, and a cross-build would ship a binary that was never

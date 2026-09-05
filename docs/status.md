@@ -48,12 +48,12 @@ through MCP; the relationship and traffic metadata remain public.
   second independently checked canary then settled 0.6 STRK with 0.4 STRK change after a
   0.48-to-0.6 concession; its four pool transactions are recorded in the sprint manifest
   (`docs/runs/2026-08-31-mainnet-060-040-canary.md`) |
-| Version | Source manifests say `0.2.0` and speak Protocol 4. This is an unpublished release candidate. The published `v0.1.0` artifacts speak Protocol 2. Do not create the `v0.2.0` tag until every release gate passes |
+| Version | `v0.2.0` is published from commit `837d7d9495f08b161c2afc10144544fd0b780218`. It speaks Protocol 4. The older `v0.1.0` artifacts speak Protocol 2 |
 | Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` release candidate. Current-commit wheels passed clean installation and MCP execution on Ubuntu and macOS with Python 3.11 and 3.13. The public demo and replacement video work without authentication. The independent human guide check remains open. No tag or package has been published |
-| CI | The release-candidate workflow covers Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, and the public-demo contract. The Starkscan transport must remain green on `main` before release |
-| Install | Published `v0.1.0`: Protocol 2 with ten MCP tools. Current source: Protocol 4 with thirteen tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported. No Protocol 4 wheel is published yet |
+| In flight | `v0.2.0` is public. The release artifacts passed clean installation and MCP execution on Ubuntu and macOS with Python 3.11 and 3.13, and the published package index passed the same platform matrix. The independent human guide check remains unverified |
+| CI | The release workflow covered Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, the public-demo contract, release artifacts, checksums, SBOM, and public package-index installation |
+| Install | Published `v0.2.0`: Protocol 4 with thirteen MCP tools. Published `v0.1.0`: Protocol 2 with ten MCP tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported |
 
 ## What Erebus does
 
