@@ -4,11 +4,12 @@
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
-[Open the public demo](https://erebus-private-agents.vercel.app). It runs the reference-agent
-flow in the browser and links to the available on-chain evidence. The browser run is a
-simulation and does not ask for a wallet. The
+[Open the public site](https://erebus-private-agents.vercel.app). It sets out what leaks at
+each step, runs the reference-agent flow in the browser, and links every mainnet transaction
+behind the claims. The browser run is a simulation and does not ask for a wallet. The
 [three-minute evidence video](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
-records the sprint state before the later full mainnet canary.
+is a walkthrough of the complete mainnet workflow, linking the two screened canaries,
+recovery, observer limits, and scoped disclosure.
 
 For the current clean-machine operator guide, start with
 [docs/runbook.md](./docs/runbook.md). It covers install, identity setup, hosted proving,
@@ -315,6 +316,8 @@ Configuration, the full tool surface, error handling, and the raw CLI protocol a
 /agents         Reference agents demonstrating the loop (Python)
 /skills         Agent skill for operating Erebus, with unsafe-behavior evals
 /packaging      Platform wheel that ships the erebus-cli binary
+/web            Public site (Next.js, static export): what is served at the demo URL
+/demo           The archived sprint evidence page, kept for its CI copy contract
 /docs           Specs, protocol notes, integration guides, friction log
 ```
 

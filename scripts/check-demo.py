@@ -23,6 +23,12 @@ FORBIDDEN_COPY = (
     "Readable for one channel",
     "Recorded before the later full mainnet canary",
 )
+# The same claim, loosened, so a reworded version cannot slip through. The README
+# carried "records the sprint state before the later full mainnet canary" for two
+# days after the video was replaced, because this gate only read demo/index.html.
+STALE_CLAIMS = ("before the later full mainnet canary",)
+PROSE = ("README.md", "web/README.md")
+WEB_SOURCE_DIRS = ("app", "components", "lib")
 
 
 class DemoParser(HTMLParser):
@@ -32,6 +38,60 @@ class DemoParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.attrs.append((tag, {key: value or "" for key, value in attrs}))
+
+
+def check_web(root: Path) -> list[str]:
+    """The published page.
+
+    `demo/` is the archived sprint page; `web/` is what the pinned demo URL actually
+    serves. The truthful-copy contract has to follow the thing people can read, so it
+    is asserted against the JSX sources — no build step, so CI needs no Node.
+    """
+    errors: list[str] = []
+    web = root / "web"
+    if not web.is_dir():
+        return errors
+
+    sources: list[Path] = []
+    for name in WEB_SOURCE_DIRS:
+        directory = web / name
+        if not directory.is_dir():
+            continue
+        for suffix in ("*.tsx", "*.ts"):
+            sources.extend(
+                path for path in directory.rglob(suffix) if "node_modules" not in path.parts
+            )
+    if not sources:
+        errors.append("web: no page sources found")
+        return errors
+
+    normalized = " ".join(" ".join(path.read_text().split()) for path in sources)
+    for phrase in REQUIRED_COPY:
+        if phrase not in normalized:
+            errors.append(f"web: missing truthful copy {phrase!r}")
+    for phrase in FORBIDDEN_COPY:
+        if phrase in normalized:
+            errors.append(f"web: stale copy {phrase!r}")
+
+    # strk20.json pins demo_video to this host, and web/ is the host now.
+    video = web / "public" / "erebus-private-sprint.mp4"
+    if not video.is_file() or video.stat().st_size < 1_000_000:
+        errors.append("web/public: the pinned demo video is missing or unexpectedly small")
+    return errors
+
+
+def check_prose(root: Path) -> list[str]:
+    """Claims in the README drift out of step with the page they describe."""
+    errors: list[str] = []
+    for name in PROSE:
+        path = root / name
+        if not path.is_file():
+            continue
+        text = " ".join(path.read_text().split())
+        for phrase in STALE_CLAIMS:
+            if phrase in text:
+                errors.append(f"{name}: stale claim {phrase!r}")
+    return errors
 
 
 def check(root: Path) -> list[str]:
@@ -96,6 +156,9 @@ def check(root: Path) -> list[str]:
         errors.append("strk20.json: unexpected public video URL")
     if "deal-scoped viewing grant" not in script:
         errors.append("demo/app.js: disclosure simulation is not deal-scoped")
+
+    errors.extend(check_web(root))
+    errors.extend(check_prose(root))
     return errors
 
 
@@ -106,7 +169,10 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("demo: mobile, keyboard, assets, video, manifest, and truthful-copy checks passed")
+    print(
+        "demo + web: mobile, keyboard, assets, video, manifest, prose, "
+        "and truthful-copy checks passed"
+    )
     return 0
 
 

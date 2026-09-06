@@ -13,12 +13,29 @@ pnpm typecheck
 to it would pull this package into the root `pnpm -r typecheck`/`build` that CI runs against
 the differential-test oracle. It stays standalone on purpose.
 
-## This does not replace `demo/`
+## This is what the demo URL serves
 
-`demo/` is still the sprint's published evidence page. `strk20.json` pins
-`demo_url`/`demo_video` to it, and `scripts/check-demo.py` runs in CI against its three files
-verbatim. Nothing here touches it. Deploy this as a separate Vercel project with the root
-directory set to `web/`.
+`strk20.json` pins `demo_url` and `demo_video` to
+`https://erebus-private-agents.vercel.app`, and **this package is what is published there.**
+It replaced the old `demo/` page on 2026-09-06.
+
+Two consequences, and both have already bitten once:
+
+- **`web/public/erebus-private-sprint.mp4` must stay.** The pinned `demo_video` URL resolves
+  to it. Delete it and a URL in `strk20.json`, the README, and the sprint hub all 404.
+- **The Vercel linkage lives in `out/.vercel`, which `next build` deletes.** Recreate it
+  before every deploy or the CLI will silently create a *new* project instead of updating
+  production:
+
+```bash
+pnpm build
+mkdir -p out/.vercel && cp ../demo/.vercel/project.json out/.vercel/project.json
+cd out && vercel deploy --prod
+```
+
+`demo/` is still in the repo on purpose. `scripts/check-demo.py` and
+`scripts/tests/test_demo.py` both run against it in CI, and it is the archived sprint
+artifact. Do not delete it to tidy up.
 
 ## Design rules
 
