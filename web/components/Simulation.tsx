@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { Eyebrow, Section } from "./Chrome";
+import { Reveal } from "./Reveal";
 import { Secret } from "./Secret";
 import { doc } from "@/lib/content";
 
@@ -55,30 +56,30 @@ export function Simulation() {
 
   return (
     <Section id="run" className="pt-24 md:pt-36">
-      <div className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
         <div>
           <Eyebrow>Fig. 05 — reference agent flow</Eyebrow>
-          <h2 className="display mt-5 mb-0 max-w-[21ch] text-[clamp(34px,5.4vw,74px)]">
+          <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
             Watch one deal move
             <br />
-            <span className="italic text-ink-2">through Erebus.</span>
+            <span className="text-fore-3">through Erebus.</span>
           </h2>
         </div>
         <div className="flex flex-col justify-end">
-          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-ink-2">
+          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
             This browser simulation mirrors{" "}
-            <code className="text-ink">agents/src/erebus_agents/demo.py</code>, the deterministic
+            <code className="text-fore">agents/src/erebus_agents/demo.py</code>, the deterministic
             mock rehearsal the reference agents run. It applies the same accept/reject threshold.
             It does not submit a transaction or use a wallet.
           </p>
           <a
             href={doc("agents/src/erebus_agents/demo.py")}
-            className="mono-xs mt-5 w-fit uppercase tracking-[0.16em] text-ink-2 underline decoration-rule-2 underline-offset-[6px] hover:text-ink"
+            className="mono-xs mt-5 w-fit uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] hover:text-fore"
           >
             demo.py ↗
           </a>
         </div>
-      </div>
+      </Reveal>
 
       <div className="mt-12 grid grid-cols-1 border border-rule lg:grid-cols-[0.62fr_1.38fr]">
         {/* policy */}
@@ -87,7 +88,7 @@ export function Simulation() {
 
           <div className="mb-8">
             <label htmlFor="budget" className="mb-3 flex items-baseline justify-between">
-              <span className="mono-sm uppercase tracking-[0.12em] text-ink-2">Buyer budget</span>
+              <span className="mono-sm uppercase tracking-[0.12em] text-fore-2">Buyer budget</span>
               <output htmlFor="budget" className="tnum text-[15px]">
                 {fmt(budget)}
               </output>
@@ -105,7 +106,7 @@ export function Simulation() {
 
           <div className="mb-9">
             <label htmlFor="reserve" className="mb-3 flex items-baseline justify-between">
-              <span className="mono-sm uppercase tracking-[0.12em] text-ink-2">Seller reserve</span>
+              <span className="mono-sm uppercase tracking-[0.12em] text-fore-2">Seller reserve</span>
               <output htmlFor="reserve" className="tnum text-[15px]">
                 {fmt(reserve)}
               </output>
@@ -126,18 +127,18 @@ export function Simulation() {
             type="button"
             onClick={run}
             disabled={state === "running"}
-            className="w-full border border-ink bg-ink px-5 py-3 text-[11px] uppercase tracking-[0.18em] text-bone transition-opacity hover:opacity-80 disabled:cursor-wait disabled:opacity-45"
+            className="w-full border border-fore bg-fore px-5 py-3 text-[11px] uppercase tracking-[0.18em] text-ground transition-opacity hover:opacity-80 disabled:cursor-wait disabled:opacity-45"
           >
             {state === "running" ? "Negotiating…" : "Run negotiation"}
           </button>
 
-          <p className="mono-xs mt-4 m-0 leading-relaxed text-ink-3">{note}</p>
+          <p className="mono-xs mt-4 m-0 leading-relaxed text-fore-3">{note}</p>
         </div>
 
         {/* transcript */}
         <div className="flex flex-col">
           <div className="flex items-center justify-between border-b border-rule px-6 py-3">
-            <span className="mono-xs uppercase tracking-[0.14em] text-ink-3">
+            <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">
               erebus / agent transcript
             </span>
             <span className="mono-xs uppercase tracking-[0.18em]">{state}</span>
@@ -149,21 +150,21 @@ export function Simulation() {
             className="m-0 min-h-[300px] list-none p-6 lg:min-h-[360px]"
           >
             {lines.length === 0 ? (
-              <li className="mono-sm text-ink-3">
-                <span className="mr-5 inline-block w-5 text-ink-3">00</span>
+              <li className="mono-sm text-fore-3">
+                <span className="mr-5 inline-block w-5 text-fore-3">00</span>
                 Set the policies and run the negotiation.
               </li>
             ) : (
               lines.map((l) => (
                 <li
                   key={l.n}
-                  className="mono-sm flex gap-5 border-b border-rule/60 py-3 text-ink-2 last:border-b-0"
+                  className="mono-sm flex gap-5 border-b border-rule/60 py-3 text-fore-2 last:border-b-0"
                 >
-                  <span className="w-5 shrink-0 text-ink-3">{String(l.n).padStart(2, "0")}</span>
-                  <span className="text-ink-2">
+                  <span className="w-5 shrink-0 text-fore-3">{String(l.n).padStart(2, "0")}</span>
+                  <span className="text-fore-2">
                     {l.text}{" "}
-                    {l.secret ? <Secret value={l.secret} className="text-ink" /> : null}
-                    {l.tail ? <span className="text-ink">{l.tail}</span> : null}
+                    {l.secret ? <Secret value={l.secret} className="text-fore" /> : null}
+                    {l.tail ? <span className="text-fore">{l.tail}</span> : null}
                   </span>
                 </li>
               ))
@@ -179,9 +180,9 @@ export function Simulation() {
                 ["paid", `${fmt(record.paid)} units`],
               ].map(([k, v], i) => (
                 <div key={k} className="border-r border-rule px-6 py-4 last:border-r-0">
-                  <p className="mono-xs m-0 mb-2 uppercase tracking-[0.14em] text-ink-3">{k}</p>
+                  <p className="mono-xs m-0 mb-2 uppercase tracking-[0.14em] text-fore-3">{k}</p>
                   <p className="m-0 text-[13px]">
-                    {i < 2 ? <span className="text-ink-2">{v}</span> : <Secret value={v} />}
+                    {i < 2 ? <span className="text-fore-2">{v}</span> : <Secret value={v} />}
                   </p>
                 </div>
               ))}

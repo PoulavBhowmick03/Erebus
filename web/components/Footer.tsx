@@ -4,10 +4,10 @@ import { Section } from "./Chrome";
 export function Footer() {
   return (
     <Section className="pt-24 pb-16 md:pt-36">
-      <div className="grid grid-cols-1 gap-10 border-t border-ink pt-8 md:grid-cols-[1.2fr_0.9fr_0.9fr]">
+      <div className="grid grid-cols-1 gap-10 border-t border-fore pt-8 md:grid-cols-[1.2fr_0.9fr_0.9fr]">
         <div>
-          <p className="label !text-ink mb-4 !tracking-[0.34em]">Erebus</p>
-          <p className="m-0 max-w-[38ch] text-[13px] leading-[1.7] text-ink-2">
+          <p className="label !text-fore mb-4 !tracking-[0.34em]">Erebus</p>
+          <p className="m-0 max-w-[38ch] text-[13px] leading-[1.7] text-fore-2">
             Private coordination and shielded settlement for AI agents, composed from
             StarkWare&rsquo;s STRK20 privacy pool. Apache-2.0, matching the primitives it builds on.
           </p>
@@ -25,7 +25,7 @@ export function Footer() {
               <li key={label}>
                 <a
                   href={href}
-                  className="mono-sm text-ink-2 underline decoration-transparent underline-offset-[5px] transition hover:text-ink hover:decoration-rule-2"
+                  className="mono-sm text-fore-2 underline decoration-transparent underline-offset-[5px] transition hover:text-fore hover:decoration-rule-2"
                 >
                   {label} ↗
                 </a>
@@ -36,20 +36,20 @@ export function Footer() {
 
         <div>
           <p className="label mb-4">Built by</p>
-          <ul className="m-0 list-none space-y-2 p-0 text-[13px] text-ink-2">
+          <ul className="m-0 list-none space-y-2 p-0 text-[13px] text-fore-2">
             <li>Poulav Bhowmick — protocol, Cairo, Starknet</li>
             <li>Ishita — agents, orchestration, ML</li>
           </ul>
           <a
             href={SOURCE}
-            className="mono-xs mt-5 inline-block uppercase tracking-[0.16em] text-ink underline decoration-rule-2 underline-offset-[6px]"
+            className="mono-xs mt-5 inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
           >
             github ↗
           </a>
         </div>
       </div>
 
-      <div className="mono-xs mt-12 flex flex-wrap justify-between gap-4 border-t border-rule pt-5 text-ink-3">
+      <div className="mono-xs mt-12 flex flex-wrap justify-between gap-4 border-t border-rule pt-5 text-fore-3">
         <span>Erebus · Apache-2.0 · unaudited and experimental</span>
         <span>Built on Starknet and STRK20</span>
       </div>

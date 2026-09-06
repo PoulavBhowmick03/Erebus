@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { RollingLink } from "./RollingLink";
 import { useKey } from "./KeyContext";
 
 export function Eyebrow({ children }: { children: React.ReactNode }) {
@@ -46,39 +47,40 @@ export function Header() {
   return (
     <header
       className={`sticky top-0 z-50 px-[var(--edge)] transition-colors duration-300 ${
-        stuck ? "bg-bone/95" : ""
+        stuck ? "bg-ground/95" : ""
       }`}
       style={{ borderBottom: `1px solid ${stuck ? "var(--color-rule)" : "transparent"}` }}
     >
       <div className="mx-auto flex h-14 w-full max-w-[1560px] items-center justify-between gap-6">
         <a href="#top" className="flex items-baseline gap-3">
-          <span className="label !text-ink !tracking-[0.34em] text-[11px]">Erebus</span>
-          <span className="mono-xs hidden text-ink-3 sm:inline">private settlement for agents</span>
+          <span className="label !text-fore !tracking-[0.34em] text-[11px]">Erebus</span>
+          <span className="mono-xs hidden text-fore-3 sm:inline">private settlement for agents</span>
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
           {NAV.map((n) => (
-            <a
+            <RollingLink
               key={n.href}
               href={n.href}
-              className="mono-xs uppercase tracking-[0.14em] text-ink-2 transition-colors hover:text-ink"
+              className="mono-xs uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore"
             >
               {n.label}
-            </a>
+            </RollingLink>
           ))}
-          <a
+          <RollingLink
             href="https://github.com/PoulavBhowmick03/Erebus"
-            className="mono-xs uppercase tracking-[0.14em] text-ink-2 transition-colors hover:text-ink"
+            external
+            className="mono-xs uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore"
           >
-            Source ↗
-          </a>
+            Source
+          </RollingLink>
         </nav>
 
         <button
           type="button"
           onClick={toggle}
           aria-pressed={held}
-          className="group flex shrink-0 items-center gap-2.5 border border-rule px-3 py-2 transition-colors hover:border-ink"
+          className="group flex shrink-0 items-center gap-2.5 border border-rule px-3 py-2 transition-colors hover:border-fore"
           title={
             held
               ? "Drop the key and read the page as a public chain reader"
@@ -91,7 +93,7 @@ export function Header() {
             style={{ background: held ? "var(--color-ink)" : "transparent", border: "1px solid var(--color-ink)" }}
           />
           <span className="mono-xs uppercase tracking-[0.16em]">
-            Viewing key <span className="text-ink-3">/</span>{" "}
+            Viewing key <span className="text-fore-3">/</span>{" "}
             <span className="tabular-nums">{held ? "held" : "dropped"}</span>
           </span>
         </button>

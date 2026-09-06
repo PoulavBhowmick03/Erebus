@@ -1,35 +1,45 @@
 @import "tailwindcss";
 
 /* ───────────────────────────────────────────────────────────────────────────
-   EREBUS — redacted dossier
+   EREBUS — instrument black
 
-   One rule governs colour: cinnabar marks facts a public chain reader can
-   already read. It is never a button, never a link, never decoration. If it
-   appears on something that does not leak, the page is lying.
+   Two rules govern this page.
+
+   1. No warmth. Every neutral here is cold or dead neutral. The moment a
+      cream, a beige or a warm grey enters, the page starts reading as the
+      house style of every AI product shipped since 2025, which is the one
+      thing it must not look like.
+
+   2. Cinnabar marks facts a public chain reader can already read. Never a
+      button, never a link, never decoration. If it appears on something that
+      does not leak, the page is lying.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  --color-bone: #f2efe9;
-  --color-paper: #e9e5dc;
-  --color-paper-3: #ded9cd;
-  --color-ink: #0b0b0c;
-  --color-ink-2: #4a4a4d;
-  --color-ink-3: #6f6f71;
-  --color-rule: #cdc7ba;
-  --color-rule-2: #bab3a3;
-  --color-cinnabar: #c0301a;
-  --color-void: #000000;
+  /* ground and structure */
+  --color-ground: #000000;
+  --color-panel: #0a0a0b;
+  --color-panel-2: #121214;
+  --color-rule: #1e1e21;
+  --color-rule-2: #303035;
 
-  --font-display: var(--font-instrument), "Times New Roman", Times, serif;
-  --font-label: var(--font-cinzel), "Times New Roman", Times, serif;
+  /* foreground. cold, never cream */
+  --color-fore: #e9e9ec;
+  --color-fore-2: #8b8b93;
+  --color-fore-3: #55555c;
+
+  /* the one accent: this leaks */
+  --color-cinnabar: #ff3b1f;
+
+  /* the inversion, used once */
+  --color-flare: #f3f4f6;
+
+  --font-display: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
   --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, Menlo, monospace;
-
-  --tracking-label: 0.3em;
 }
 
 :root {
-  color-scheme: light;
-  --page: var(--color-bone);
+  color-scheme: dark;
   --edge: 5vw;
 }
 
@@ -43,63 +53,78 @@
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 body {
   margin: 0;
-  background: var(--color-bone);
-  color: var(--color-ink);
+  background: var(--color-ground);
+  color: var(--color-fore);
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.6;
   overflow-x: hidden;
 }
 
-::selection {
-  background: var(--color-ink);
-  color: var(--color-bone);
-}
+::selection { background: var(--color-fore); color: var(--color-ground); }
 
 a { color: inherit; text-decoration: none; }
 
-:focus-visible {
-  outline: 2px solid var(--color-ink);
-  outline-offset: 3px;
+:focus-visible { outline: 2px solid var(--color-fore); outline-offset: 3px; }
+
+/* hairline range, no chrome */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  cursor: ew-resize;
+}
+input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--color-rule-2); }
+input[type="range"]::-moz-range-track { height: 1px; background: var(--color-rule-2); }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 3px; height: 20px; margin-top: -10px;
+  background: var(--color-fore); border: 0;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 3px; height: 20px;
+  background: var(--color-fore); border: 0; border-radius: 0;
 }
 
 }
 
 @layer components {
 
-/* ── type ─────────────────────────────────────────────────────────────── */
+/* ── type. a grotesque and a mono. no serif anywhere on this page. ────── */
 
 .display {
   font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: -0.022em;
-  line-height: 0.92;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: -0.028em;
+  line-height: 0.88;
 }
 
+.display-lo { text-transform: none; letter-spacing: -0.022em; }
+
 .label {
-  font-family: var(--font-label);
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
-  letter-spacing: var(--tracking-label);
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--color-ink-2);
+  color: var(--color-fore-3);
 }
 
 .mono-xs { font-size: 10px; letter-spacing: 0.06em; }
 .mono-sm { font-size: 11px; }
-
 .tnum { font-variant-numeric: tabular-nums; }
 
-/* ── hairlines. structure, never decoration ───────────────────────────── */
+/* ── hairlines ────────────────────────────────────────────────────────── */
 
 .rule { border-top: 1px solid var(--color-rule); }
 .rule-b { border-bottom: 1px solid var(--color-rule); }
-.rule-l { border-left: 1px solid var(--color-rule); }
 
 .draw {
   transform: scaleX(0);
@@ -108,7 +133,7 @@ a { color: inherit; text-decoration: none; }
 }
 .draw[data-drawn="true"] { transform: scaleX(1); }
 
-/* ── the leak mark. cinnabar lives here and nowhere else ──────────────── */
+/* ── the leak mark ────────────────────────────────────────────────────── */
 
 .leak { color: var(--color-cinnabar); }
 
@@ -123,26 +148,25 @@ a { color: inherit; text-decoration: none; }
 .leak-tag::before {
   content: "";
   display: inline-block;
-  width: 5px;
-  height: 5px;
+  width: 5px; height: 5px;
   margin-right: 6px;
   background: var(--color-cinnabar);
   vertical-align: 1px;
 }
 
-/* ── redaction ────────────────────────────────────────────────────────── */
+/* ── redaction ────────────────────────────────────────────────────────────
+   On black an ink bar is invisible, so a blanked field is a raised grey block
+   with a hairline: it reads as something deliberately removed rather than as
+   empty space. */
 
-.redact {
-  position: relative;
-  display: inline-block;
-  white-space: nowrap;
-}
+.redact { position: relative; display: inline-block; white-space: nowrap; }
 
 .redact::after {
   content: "";
   position: absolute;
-  inset: -0.14em -0.3em -0.16em -0.3em;
-  background: var(--color-ink);
+  inset: -0.16em -0.32em -0.18em -0.32em;
+  background: #26262b;
+  border: 1px solid #35353c;
   clip-path: inset(0 0 0 100%);
   transition: clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
@@ -151,87 +175,45 @@ a { color: inherit; text-decoration: none; }
 [data-key="dropped"] .redact::after { clip-path: inset(0 0 0 0%); }
 [data-key="dropped"] .redact { user-select: none; cursor: help; }
 
-/* holding a redaction open is a deliberate act: hover, focus, or press */
 [data-key="dropped"] .redact:hover::after,
 [data-key="dropped"] .redact:focus-visible::after,
-[data-key="dropped"] .redact[data-held="true"]::after {
-  clip-path: inset(0 0 0 100%);
-}
+[data-key="dropped"] .redact[data-held="true"]::after { clip-path: inset(0 0 0 100%); }
 
-/* on the void section the bar inverts, otherwise it is invisible */
-.on-void .redact::after { background: #171717; }
+/* ── the inversion. used exactly once, on the observer section. ───────── */
 
-/* ── the void ─────────────────────────────────────────────────────────── */
+.on-flare { background: var(--color-flare); color: #0b0b0d; }
+.on-flare .label { color: #6b6b73; }
+.on-flare .rule, .on-flare .rule-b { border-color: #d2d4d8; }
+.on-flare ::selection { background: #0b0b0d; color: var(--color-flare); }
+.on-flare :focus-visible { outline-color: #0b0b0d; }
+.on-flare .leak { color: #cc2a10; }
+.on-flare .leak-tag { color: #cc2a10; }
+.on-flare .leak-tag::before { background: #cc2a10; }
+.on-flare .redact::after { background: #0b0b0d; border-color: #0b0b0d; }
 
-.on-void {
-  background: var(--color-void);
-  color: #d8d4cb;
-}
-.on-void .label { color: #78746c; }
-.on-void .rule,
-.on-void .rule-b,
-.on-void .rule-l { border-color: #262626; }
-.on-void ::selection { background: #d8d4cb; color: #000; }
-.on-void :focus-visible { outline-color: #d8d4cb; }
-.on-void .leak { color: #e2492f; }
-.on-void .leak-tag { color: #e2492f; }
-.on-void .leak-tag::before { background: #e2492f; }
+/* ── rolling link ─────────────────────────────────────────────────────── */
 
+.roll { display: inline-block; overflow: hidden; vertical-align: bottom; }
+.roll-label {
+  display: block; position: relative; white-space: nowrap;
+  transition: transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-
-@layer base {
-
-/* ── controls: hairline range, no chrome ──────────────────────────────── */
-
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 24px;
-  background: transparent;
-  cursor: ew-resize;
-}
-input[type="range"]::-webkit-slider-runnable-track {
-  height: 1px;
-  background: var(--color-rule-2);
-}
-input[type="range"]::-moz-range-track {
-  height: 1px;
-  background: var(--color-rule-2);
-}
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 3px;
-  height: 20px;
-  margin-top: -10px;
-  background: var(--color-ink);
-  border: 0;
-}
-input[type="range"]::-moz-range-thumb {
-  width: 3px;
-  height: 20px;
-  background: var(--color-ink);
-  border: 0;
-  border-radius: 0;
-}
-
-}
-
-@layer components {
+.roll-label-copy { position: absolute; left: 0; top: 100%; }
+.roll:hover .roll-label,
+.roll:focus-visible .roll-label { transform: translateY(-100%); }
 
 /* ── scramble ─────────────────────────────────────────────────────────── */
 
 .scramble { font-variant-numeric: tabular-nums; }
-.scrambling { color: var(--color-ink-3); }
-.on-void .scrambling { color: #5a5a5a; }
+.scrambling { color: var(--color-fore-3); }
+.on-flare .scrambling { color: #9a9aa2; }
 
-/* ── grid paper: the only background treatment, and it is a measuring
-      grid rather than an atmosphere ─────────────────────────────────── */
+/* ── measuring grid, not atmosphere ───────────────────────────────────── */
 
 .plate {
   background-image:
-    linear-gradient(to right, rgba(11, 11, 12, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(11, 11, 12, 0.045) 1px, transparent 1px);
+    linear-gradient(to right, rgba(233, 233, 236, 0.032) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(233, 233, 236, 0.032) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
@@ -241,7 +223,7 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 850px) {
   :root { --edge: 6vw; }
-  .label { letter-spacing: 0.22em; }
+  .label { letter-spacing: 0.16em; }
 }
 
 /* ── reduced motion ───────────────────────────────────────────────────── */
@@ -250,6 +232,8 @@ input[type="range"]::-moz-range-thumb {
   html { scroll-behavior: auto; }
   .draw { transition: none; transform: scaleX(1); }
   .redact::after { transition: none; }
+  .roll-label { transition: none; }
+  .roll:hover .roll-label { transform: none; }
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;

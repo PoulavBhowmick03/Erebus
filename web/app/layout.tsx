@@ -1,20 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Serif, Cinzel, IBM_Plex_Mono } from "next/font/google";
+import { Archivo, IBM_Plex_Mono } from "next/font/google";
 import { KeyProvider } from "@/components/KeyContext";
+import { SmoothScroll } from "@/components/SmoothScroll";
+import { Grain } from "@/components/Grain";
 import "./globals.css";
 
-const instrument = Instrument_Serif({
+// A grotesque and a mono, and nothing else. An editorial serif on a warm
+// ground is the exact look this page is trying not to have.
+const archivo = Archivo({
   subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
-  variable: "--font-instrument",
-  display: "swap",
-});
-
-const cinzel = Cinzel({
-  subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-cinzel",
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-archivo",
   display: "swap",
 });
 
@@ -41,7 +37,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f2efe9",
+  themeColor: "#000000",
 };
 
 /**
@@ -64,7 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       data-key="dropped"
-      className={`${instrument.variable} ${cinzel.variable} ${plex.variable}`}
+      className={`${archivo.variable} ${plex.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT }} />
@@ -73,7 +69,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </noscript>
       </head>
       <body>
-        <KeyProvider>{children}</KeyProvider>
+        <KeyProvider>
+          <SmoothScroll />
+          {children}
+          <Grain />
+        </KeyProvider>
       </body>
     </html>
   );
