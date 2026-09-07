@@ -177,6 +177,6 @@ export const FACTS = [
   { k: "wire", v: "v3 · AES-256-GCM-SIV" },
   { k: "release", v: "v0.2.0" },
   { k: "tests", v: "359 rs / 216 py / 43 ts" },
-  { k: "friction entries", v: "40" },
+  { k: "friction entries", v: "42" },
   { k: "licence", v: "Apache-2.0" },
 ] as const;

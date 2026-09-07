@@ -94,7 +94,7 @@ export function Evidence() {
           },
           {
             k: "Where the stack fought us",
-            v: "Forty entries. What we tried, what the stack did instead, whether we worked around it, and what would have made it easier. Kept honest on purpose.",
+            v: "Forty-two entries. What we tried, what the stack did instead, whether we worked around it, and what would have made it easier. Kept honest on purpose.",
             href: doc("docs/friction.md"),
             cta: "friction.md ↗",
           },

@@ -8,6 +8,53 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F42: `approve` is an operator action, and the MCP surface deliberately cannot fund a run (2026-09-07)
+
+**What we were trying to do.** Drive a full mainnet negotiation from two agent sessions with
+nothing but MCP tools.
+
+**What the stack did instead.** There is no `shield` or `approve` tool on the MCP surface, by
+design — funding stays an operator action through `erebus-cli`. That is the right call for key
+custody, but it means an agent-driven run is never fully agent-driven: a human has to size and
+grant the allowance first, and `approve` **replaces** the standing allowance rather than adding
+to it, so it must be sized for the entire run up front. A needed 20.5 STRK for three writes plus
+a 2.5 STRK deposit; B needed 6 STRK for one.
+
+**Worked around it?** Yes. Allowances granted before the agents started, sized exactly; both read
+back `0` afterwards.
+
+**What would have made it easier.** A read-only `funding_plan` tool that takes an intended run
+shape and returns the exact allowance each identity needs. The arithmetic is mechanical and
+getting it wrong costs a failed write and 6 STRK.
+
+---
+
+## F41: the stale `target/release` binary fails Starkscan proving with a 401 that blames the prover (2026-09-07)
+
+**What we were trying to do.** Shield 2.5 STRK on mainnet through `erebus-cli`, using the
+documented hosted-prover path.
+
+**What the stack did instead.** Three attempts failed with
+`PROVER_UNAVAILABLE: HTTP status client error (401 Unauthorized)`. The error points squarely at
+the prover or the API key. Both were fine: the same key returned HTTP 202 on a hand-built prove
+request, and `/v1/meta/capabilities` confirmed the `prove` scope. The real cause was that
+`sdk/rs/target/release/erebus-cli` was two days older than `target/debug`, and
+`scripts/erebus-mcp.sh` defaults `EREBUS_CLI` to the **debug** build — which is why every MCP
+call worked while every direct CLI call failed. Running the identical request through the debug
+binary succeeded in 34 seconds.
+
+Note the diagnostic trap: `caller.keyClass` reads `"shadow"` on that endpoint and
+`apiKeyLifecycle.inactiveKeyResponse` is documented as `generic_401_invalid_token`, which makes
+a stale-binary failure look exactly like a revoked key. We spent three attempts on that theory.
+
+**Worked around it?** Yes — used the debug binary.
+
+**What would have made it easier.** `runbook.md` does not say which binary to use. Either it
+should, or `erebus-cli` should report its build commit in the error envelope so a version skew
+is visible instead of being reported as someone else's outage.
+
+---
+
 ## F40: one reveal document encodes the same quantity two different ways, and the number form breaks above 18.4 STRK (2026-08-22)
 
 Found in the output of the wire-v3 Sepolia run, immediately after F39 made the failure mode

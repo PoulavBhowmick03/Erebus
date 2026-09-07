@@ -1,6 +1,6 @@
 # Status
 
-**As of 2026-09-02.** One page, current, and the tiebreaker: where any other document in
+**As of 2026-09-07.** One page, current, and the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
 Nine documents describe this system and they were written across three weeks in which the
@@ -10,9 +10,10 @@ privacy claim changed twice. That is why this page exists.
 
 ## In one line
 
-Erebus negotiates and settles confidentially between two agents on Starknet. Two bounded
-mainnet canaries shielded 1 STRK each and settled 0.8/0.2 and 0.6/0.4 payment/change splits
-through MCP; the relationship and traffic metadata remain public.
+Erebus negotiates and settles confidentially between two agents on Starknet. Three bounded
+mainnet runs settled 0.8/0.2, 0.6/0.4 and 2.0/0.5 payment/change splits through MCP — the last
+of them driven by two different agent frameworks, Claude Code as payer and Codex as payee. The
+relationship and traffic metadata remain public.
 
 ---
 
@@ -47,7 +48,12 @@ through MCP; the relationship and traffic metadata remain public.
   0.8 STRK paid, 0.2 STRK change, no observer content recovery, and scoped disclosure. A
   second independently checked canary then settled 0.6 STRK with 0.4 STRK change after a
   0.48-to-0.6 concession; its four pool transactions are recorded in the sprint manifest
-  (`docs/runs/2026-08-31-mainnet-060-040-canary.md`) |
+  (`docs/runs/2026-08-31-mainnet-060-040-canary.md`). On 2026-09-07 a third run settled
+  **2.0 STRK with 0.5 STRK change**, and was the first driven by **two different agent
+  frameworks** — Claude Code as payer, Codex as payee, neither able to see the other except
+  through the channel. Account C then reconstructed that one deal from a scoped grant and
+  could not read the two earlier deals in the same channel
+  (`docs/runs/2026-09-07-mainnet-2strk-agents.md`) |
 | Version | `v0.2.0` is published from commit `837d7d9495f08b161c2afc10144544fd0b780218`. It speaks Protocol 4. The older `v0.1.0` artifacts speak Protocol 2 |
 | Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
@@ -97,7 +103,7 @@ Never describe this as private in an absolute sense.
 | Question | Read | Confidence |
 |---|---|---|
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
-| What fought us, and how | [friction.md](./friction.md) | current, 38 entries |
+| What fought us, and how | [friction.md](./friction.md) | current, 42 entries |
 | What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-31 reconciliation |
 | How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 clean-machine guide; independent operator verification remains open |
 | Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
