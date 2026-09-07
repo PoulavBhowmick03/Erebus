@@ -4,9 +4,9 @@
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
-[![Erebus — private settlement for AI agents](./docs/assets/demo-thumbnail.jpg)](https://youtu.be/1r7N85xGPhQ)
+[![Erebus — private settlement for AI agents](./docs/assets/demo-thumbnail.jpg)](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)
 
-**[Watch the demo](https://youtu.be/1r7N85xGPhQ)** — two agents, running on two different
+**[Watch the demo](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)** — two agents, running on two different
 frameworks, negotiate and settle 2 STRK on Starknet mainnet through MCP, and a third party
 then reconstructs that one deal from a scoped viewing grant.
 

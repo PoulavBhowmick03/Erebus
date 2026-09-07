@@ -150,9 +150,12 @@ def check(root: Path) -> list[str]:
         errors.append("demo video is missing or unexpectedly small")
     if manifest.get("demo_url") != "https://erebus-private-agents.vercel.app":
         errors.append("strk20.json: unexpected public demo URL")
-    # The submission video is the published YouTube cut; the self-hosted mp4 stays
+    # The submission video is the published Google Drive cut; the self-hosted mp4 stays
     # served and stays pinned, so a judge has a second route if either host is down.
-    if manifest.get("demo_video") != "https://youtu.be/1r7N85xGPhQ":
+    if manifest.get("demo_video") != (
+        "https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/"
+        "view?usp=sharing"
+    ):
         errors.append("strk20.json: unexpected public video URL")
     if manifest.get("demo_video_mp4") != (
         "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4"
