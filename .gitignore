@@ -37,3 +37,6 @@ reference/
 
 # macOS
 .DS_Store
+
+# Local video/audio masters and generated decks. Large, regenerable, not part of the submission.
+artifacts/

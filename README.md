@@ -4,12 +4,18 @@
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
+[![Erebus — private settlement for AI agents](https://img.youtube.com/vi/1r7N85xGPhQ/maxresdefault.jpg)](https://youtu.be/1r7N85xGPhQ)
+
+**[Watch the demo](https://youtu.be/1r7N85xGPhQ)** — two agents, running on two different
+frameworks, negotiate and settle 2 STRK on Starknet mainnet through MCP, and a third party
+then reconstructs that one deal from a scoped viewing grant.
+
 [Open the public site](https://erebus-private-agents.vercel.app). It sets out what leaks at
 each step, runs the reference-agent flow in the browser, and links every mainnet transaction
-behind the claims. The browser run is a simulation and does not ask for a wallet. The
-[three-minute evidence video](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
-is a walkthrough of the complete mainnet workflow, linking the two screened canaries,
-recovery, observer limits, and scoped disclosure.
+behind the claims. The browser run is a simulation and does not ask for a wallet. The earlier
+[self-hosted evidence walkthrough](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
+covers the complete mainnet workflow of the two screened canaries, recovery, observer limits,
+and scoped disclosure.
 
 For the current clean-machine operator guide, start with
 [docs/runbook.md](./docs/runbook.md). It covers install, identity setup, hosted proving,

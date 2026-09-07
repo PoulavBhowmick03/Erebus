@@ -10,9 +10,14 @@
     "0x0273b0f97f1c0707a259bbe5cacc337df6876509adba09b7376a0501a0f028b7",
     "0x051fa13c6d11c529208785af163f2d5bc1cc95451192e3265150e0067aadeda4",
     "0x06e55194809fec58c1426a8178dcdb10270d5e8aecfcfd6db2b28f6284ce5467",
-    "0x079167f213952fb33a57eec6457963fa7dd7ba3a38160d5ef04540e91bd4f97a"
+    "0x079167f213952fb33a57eec6457963fa7dd7ba3a38160d5ef04540e91bd4f97a",
+    "0x0067b6e2e69dad6018fb2cdf7d81b900fc89de050397a3ecae6c943407609a2a",
+    "0x018c7fb7340ec0df8f22fb1ff8af8ba604590df95679156ded296c18a2e40645",
+    "0x05a7a24b55a256602698ec37dd38e87707d43e5da50b28b9725d981e98798cff",
+    "0x02582f34a10f6a3c9f1fbfdad4622c2f8a79398a1782c7d425eac13698e7f5a7"
   ],
   "contracts": [],
-  "demo_video": "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4",
-  "demo_url": "https://erebus-private-agents.vercel.app"
+  "demo_video": "https://youtu.be/1r7N85xGPhQ",
+  "demo_url": "https://erebus-private-agents.vercel.app",
+  "demo_video_mp4": "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4"
 }

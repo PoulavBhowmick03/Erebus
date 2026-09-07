@@ -150,10 +150,14 @@ def check(root: Path) -> list[str]:
         errors.append("demo video is missing or unexpectedly small")
     if manifest.get("demo_url") != "https://erebus-private-agents.vercel.app":
         errors.append("strk20.json: unexpected public demo URL")
-    if manifest.get("demo_video") != (
+    # The submission video is the published YouTube cut; the self-hosted mp4 stays
+    # served and stays pinned, so a judge has a second route if either host is down.
+    if manifest.get("demo_video") != "https://youtu.be/1r7N85xGPhQ":
+        errors.append("strk20.json: unexpected public video URL")
+    if manifest.get("demo_video_mp4") != (
         "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4"
     ):
-        errors.append("strk20.json: unexpected public video URL")
+        errors.append("strk20.json: unexpected self-hosted video URL")
     if "deal-scoped viewing grant" not in script:
         errors.append("demo/app.js: disclosure simulation is not deal-scoped")
 
