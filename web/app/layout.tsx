@@ -3,6 +3,7 @@ import { Archivo, IBM_Plex_Mono } from "next/font/google";
 import { KeyProvider } from "@/components/KeyContext";
 import { SmoothScroll } from "@/components/SmoothScroll";
 import { Grain } from "@/components/Grain";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 // A grotesque and a mono, and nothing else. An editorial serif on a warm
@@ -74,6 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           <Grain />
         </KeyProvider>
+        <Analytics />
       </body>
     </html>
   );

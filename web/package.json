@@ -11,6 +11,7 @@
     "serve": "npx --yes serve out -l 4000"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "lenis": "^1.3.26",
     "next": "15.5.4",
     "react": "19.1.1",
