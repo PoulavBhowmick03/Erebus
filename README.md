@@ -4,6 +4,8 @@
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
 
+**[Install the MCP server](#install) · [Add it to your client](#add-it-to-your-mcp-client) · [The thirteen tools](#the-thirteen-tools) · [Docs](#documentation)**
+
 [![Erebus — private settlement for AI agents](./docs/assets/demo-thumbnail.jpg)](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)
 
 **[Watch the demo](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)** — two agents, running on two different
@@ -21,6 +23,71 @@ For the current clean-machine operator guide, start with
 [docs/runbook.md](./docs/runbook.md). It covers install, identity setup, hosted proving,
 shielding, negotiation, settlement, recovery, observer inspection, disclosure, and
 shutdown.
+
+---
+
+## Quickstart
+
+Two commands from nothing to thirteen MCP tools in your client. No Rust toolchain, no
+chain, no keys, no gas — `mock` runs the whole negotiate-and-settle loop in memory.
+
+```bash
+uv tool install \
+  --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \
+  erebus-mcp-server
+
+claude mcp add erebus \
+  --env EREBUS_BACKEND=mock \
+  --env AGENT_ADDRESS=0xdemo \
+  --env PROVING_SERVICE_URL=http://placeholder \
+  --env EREBUS_SETTLEMENT_ROLE=both \
+  -- erebus-mcp-server
+```
+
+All four variables are load-bearing even in `mock`. The server refuses to start unless
+`AGENT_ADDRESS`, `PROVING_SERVICE_URL` and `EREBUS_SETTLEMENT_ROLE` are all set
+(`environment_is_configured`, `mcp-server/src/erebus_mcp/onboarding.py`), and
+`PROVING_SERVICE_URL` is never dialled in `mock`, so any placeholder works.
+
+Then ask your agent to `open_channel`, `propose_offer`, `counter_offer` and
+`accept_and_settle`. When you want a real chain, swap `EREBUS_BACKEND=mock` for a funded
+identity — [Next: an identity](#next-an-identity) — and keep everything else.
+
+### Download links
+
+| | |
+|---|---|
+| Package index (PEP 503) | <https://poulavbhowmick03.github.io/Erebus/simple/> |
+| Latest release | [releases/latest](https://github.com/PoulavBhowmick03/Erebus/releases/latest) |
+| `erebus-cli`, Linux x86-64 | [erebus-cli-x86_64-unknown-linux-gnu](https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/erebus-cli-x86_64-unknown-linux-gnu) |
+| `erebus-cli`, macOS arm64 | [erebus-cli-aarch64-apple-darwin](https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/erebus-cli-aarch64-apple-darwin) |
+| Checksums | [SHA256SUMS](https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/SHA256SUMS) |
+| SBOM (CycloneDX) | [sbom.json](https://github.com/PoulavBhowmick03/Erebus/releases/latest/download/sbom.json) |
+
+### The thirteen tools
+
+Protocol 4. Every write takes an `operation_id` — `op_` plus 64 lowercase hex characters —
+so a retry after a crash is the same operation rather than a second one.
+
+| Tool | Writes? | What it does |
+|---|---|---|
+| `open_channel` | yes | Establish a channel with a counterparty. Their address lands in **public** calldata |
+| `propose_offer` | yes | Write a new offer: amount, token, deadline, `memo_hash` |
+| `counter_offer` | yes | Counter a specific `reply_to` offer from the other party |
+| `accept_and_settle` | yes | **Payer only.** Accept and privately settle in one atomic action set |
+| `grant_viewing_key` | yes | Encrypt one deal to a registered recipient, written `0600` |
+| `resume_operation` | yes | The only recovery tool that can submit. Reuses the original ID |
+| `read_channel_state` | no | Every offer in the channel, plus the settlement if any |
+| `get_note_balance` | no | This identity's spendable denominations and total |
+| `wait_for_offers` | no | Block until the channel holds `expected_count` offers |
+| `reveal` | no | Open a recipient-bound grant and reconstruct only that deal |
+| `doctor` | no | Pre-flight every check; each failure names one repair |
+| `reconcile` | no | Classify every journal entry against the chain |
+| `rebuild_state` | no | Re-derive missing channel records from keys and chain data |
+
+`accept_and_settle` always spends the **caller's** notes, which is why the role is a
+launch-time decision and not a prompt: a `payee` server refuses the call outright.
+
 
 Two agents open an **Eleusis**, an encrypted channel carried in privacy-pool note salts,
 exchange structured offers over it, and settle atomically through the shielded pool.
@@ -180,6 +247,78 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 > If a download times out, the release assets are served by a CDN that can be slow from
 > some networks. `UV_HTTP_TIMEOUT=600` raises uv's default 30-second limit.
+
+### Add it to your MCP client
+
+The installed entry point is `erebus-mcp-server`, on `PATH` after `uv tool install`. It is
+configured entirely through environment, so every client that can set environment can run
+it. `erebus-mcp-server config-schema` prints the machine-readable field contract.
+
+**Claude Code:**
+
+```bash
+claude mcp add erebus-buyer \
+  --env EREBUS_BACKEND=seam --env EREBUS_NETWORK=sepolia \
+  --env EREBUS_SETTLEMENT_ROLE=payer \
+  --env AGENT_ADDRESS=0x... \
+  --env STARKNET_RPC_URL=https://... --env PROVING_SERVICE_URL=https://... \
+  --env TOKEN_ADDRESS=0x... \
+  --env POOL_KEY_FILE=~/.erebus-a/agent.pool.key \
+  --env ACCOUNT_KEY_FILE=~/.erebus-a/agent.account.key \
+  --env EREBUS_STATE_DIR=~/.erebus-a/state \
+  -- erebus-mcp-server
+```
+
+**Claude Desktop, Cursor, and any client reading `mcpServers` JSON:**
+
+```json
+{
+  "mcpServers": {
+    "erebus-buyer": {
+      "command": "erebus-mcp-server",
+      "env": {
+        "EREBUS_BACKEND": "seam",
+        "EREBUS_NETWORK": "sepolia",
+        "EREBUS_SETTLEMENT_ROLE": "payer",
+        "AGENT_ADDRESS": "0x...",
+        "STARKNET_RPC_URL": "https://...",
+        "PROVING_SERVICE_URL": "https://...",
+        "TOKEN_ADDRESS": "0x...",
+        "POOL_KEY_FILE": "/home/you/.erebus-a/agent.pool.key",
+        "ACCOUNT_KEY_FILE": "/home/you/.erebus-a/agent.account.key",
+        "EREBUS_STATE_DIR": "/home/you/.erebus-a/state"
+      }
+    }
+  }
+}
+```
+
+Prefer not to put this in a client config at all? `erebus-init` writes a mode-`0600` env
+file once, and then the whole entry collapses to
+`erebus-mcp-server --config ~/.config/erebus/mcp.env`.
+
+**Two agents means two servers.** Negotiation has two sides, so register the counterparty
+as a second entry with its own identity, its own state directory, and
+`EREBUS_SETTLEMENT_ROLE=payee`. Nothing is shared between them — that is the point.
+
+| Variable | Required | Notes |
+|---|---|---|
+| `AGENT_ADDRESS` | always | This identity's Starknet account |
+| `PROVING_SERVICE_URL` | always | Unused in `mock`, but must be set |
+| `EREBUS_SETTLEMENT_ROLE` | always | `payer`, `payee`, or `both` |
+| `EREBUS_BACKEND` | — | `seam` (default) or `mock` |
+| `EREBUS_NETWORK` | `seam` | `sepolia` or `mainnet`; supplies chain ID and pool |
+| `STARKNET_RPC_URL` | `seam` | Sees the pool key. Operator-chosen |
+| `TOKEN_ADDRESS` | `seam` | Settlement token |
+| `POOL_KEY_FILE` | `seam` | Path only; contents never cross the seam |
+| `ACCOUNT_KEY_FILE` | `seam` | Path only |
+| `EREBUS_STATE_DIR` | `seam` | Locked, mode-`0600` Rust state |
+| `STARKSCAN_API_KEY` | mainnet prover | Only for the hosted Starkscan prover |
+
+The prover and RPC both receive the pool private key as calldata, so choosing them is a
+custody decision, not a config detail — [custody-design.md](./docs/custody-design.md).
+Running from a source checkout instead? `scripts/erebus-mcp.sh <env-file> <role>` wraps all
+of the above; see [mcp-server/README.md](./mcp-server/README.md).
 
 ### Next: an identity
 
