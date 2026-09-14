@@ -35,8 +35,9 @@ the root `vercel.json`, which installs and builds only `web/`:
 the builder. Without it, `pnpm install` fails before the page is ever built. Push to `main` and
 Vercel rebuilds.
 
-**`web/public/erebus-private-sprint.mp4` must stay.** The pinned `demo_video` URL resolves
-to it. Delete it and a URL in `strk20.json`, the README, and the sprint hub all 404.
+**`web/public/erebus-final-cut.mp4` must stay.** The pinned `demo_video_mp4` URL resolves
+to it. Delete it and a URL in `strk20.json` and the README 404s. The archived `demo/` page keeps
+its own three-minute `erebus-private-sprint.mp4`.
 
 `demo/` is still in the repo on purpose. `scripts/check-demo.py` and
 `scripts/tests/test_demo.py` both run against it in CI, and it is the archived sprint
@@ -57,6 +58,11 @@ Three rules carry the whole page. Breaking any one of them makes it an ordinary 
    and the ciphertext substitution happens client-side after mount. No-JS readers, crawlers and
    link previews get the complete page. It is a demonstration of the disclosure model, not a
    security boundary.
+
+**One exception, on purpose:** the brand lockup (`web/public/erebus-lockup.svg`) keeps its own
+palette — a `#FB4020` mark and a `#EEEBE3` wordmark. It is the only warm element on the page and
+the only orange that is not cinnabar; the header and the ghosted footer mark use it knowingly.
+Nothing else may borrow those two colors.
 
 ## The two states
 

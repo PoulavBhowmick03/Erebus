@@ -61,9 +61,9 @@ export function Header() {
       style={{ borderBottom: `1px solid ${stuck || mobileOpen ? "var(--color-rule)" : "transparent"}` }}
     >
       <div className="mx-auto flex h-14 w-full max-w-[1560px] items-center justify-between gap-6">
-        <a href="#top" className="flex items-baseline gap-3">
-          <span className="label !text-fore !tracking-[0.34em] text-[11px]">Erebus</span>
-          <span className="mono-xs hidden text-fore-3 sm:inline">private settlement for agents</span>
+        <a href="#top" className="flex items-center gap-3">
+          <img src="/erebus-lockup.svg" alt="Erebus" className="h-[15px] w-auto sm:h-[17px]" />
+          <span className="mono-xs hidden text-fore-3 lg:inline">private settlement for agents</span>
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">

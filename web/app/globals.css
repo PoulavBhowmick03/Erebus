@@ -8,11 +8,13 @@
    1. No warmth. Every neutral here is cold or dead neutral. The moment a
       cream, a beige or a warm grey enters, the page starts reading as the
       house style of every AI product shipped since 2025, which is the one
-      thing it must not look like.
+      thing it must not look like. The brand lockup is the single exception,
+      and it is an asset rather than a neutral — see web/README.md.
 
    2. Cinnabar marks facts a public chain reader can already read. Never a
       button, never a link, never decoration. If it appears on something that
-      does not leak, the page is lying.
+      does not leak, the page is lying. The lockup keeps its own #FB4020 mark;
+      that is not --color-cinnabar and must not be read as a leak.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {

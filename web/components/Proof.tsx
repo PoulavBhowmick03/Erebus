@@ -20,8 +20,8 @@ export function Proof() {
           <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
             Two screened 1 STRK canaries settled through MCP on Starknet mainnet on 2026-08-31,
             exercising 0.8/0.2 and 0.6/0.4 payment/change splits. No edits, no cuts. Public
-            three-minute walkthrough of the complete mainnet workflow. Every fee below is the
-            actual receipt amount.
+            walkthrough of the complete mainnet workflow. Every fee below is the actual receipt
+            amount.
           </p>
           <a
             href={doc("docs/runs/2026-08-31-mainnet-060-040-canary.md")}
@@ -38,9 +38,9 @@ export function Proof() {
           controls
           preload="metadata"
           playsInline
-          aria-label="Three-minute walkthrough of the Erebus mainnet workflow"
+          aria-label="Walkthrough of the Erebus mainnet workflow"
         >
-          <source src="/erebus-private-sprint.mp4" type="video/mp4" />
+          <source src="/erebus-final-cut.mp4" type="video/mp4" />
         </video>
       </Reveal>
 

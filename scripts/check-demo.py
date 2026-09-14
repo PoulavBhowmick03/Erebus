@@ -13,7 +13,7 @@ REQUIRED_COPY = (
     "This browser simulation",
     "It does not submit a transaction or use a wallet.",
     "Two screened 1 STRK canaries settled through MCP",
-    "Public three-minute walkthrough of the complete mainnet workflow.",
+    "Public walkthrough of the complete mainnet workflow.",
     "Wire v3 encrypts offer terms",
     "It does not hide transaction timing",
     "Readable for one deal",
@@ -74,7 +74,7 @@ def check_web(root: Path) -> list[str]:
             errors.append(f"web: stale copy {phrase!r}")
 
     # strk20.json pins demo_video to this host, and web/ is the host now.
-    video = web / "public" / "erebus-private-sprint.mp4"
+    video = web / "public" / "erebus-final-cut.mp4"
     if not video.is_file() or video.stat().st_size < 1_000_000:
         errors.append("web/public: the pinned demo video is missing or unexpectedly small")
     return errors
@@ -158,7 +158,7 @@ def check(root: Path) -> list[str]:
     ):
         errors.append("strk20.json: unexpected public video URL")
     if manifest.get("demo_video_mp4") != (
-        "https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4"
+        "https://erebus-private-agents.vercel.app/erebus-final-cut.mp4"
     ):
         errors.append("strk20.json: unexpected self-hosted video URL")
     if "deal-scoped viewing grant" not in script:
