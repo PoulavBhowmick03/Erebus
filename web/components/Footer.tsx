@@ -11,7 +11,7 @@ export function Footer() {
         <div className="grid grid-cols-1 gap-10 border-t border-fore pt-8 md:grid-cols-[1.2fr_0.9fr_0.9fr]">
           <div>
             <p className="label !text-fore mb-4 !tracking-[0.34em]">Erebus</p>
-            <p className="m-0 max-w-[38ch] text-[13px] leading-[1.7] text-fore-2">
+            <p className="prose m-0 max-w-[40ch]">
               Private coordination and shielded settlement for AI agents, composed from
               StarkWare&rsquo;s STRK20 privacy pool. Apache-2.0, matching the primitives it builds
               on.

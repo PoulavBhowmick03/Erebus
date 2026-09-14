@@ -219,6 +219,87 @@ input[type="range"]::-moz-range-thumb {
   background-size: 28px 28px;
 }
 
+/* ── prose. Mono is for data; sentences get a font that can be read. ────── */
+
+.prose {
+  font-family: var(--font-display);
+  font-size: clamp(15px, 1.02vw, 17px);
+  font-weight: 400;
+  line-height: 1.7;
+  letter-spacing: -0.011em;
+  color: var(--color-fore-2);
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  color: var(--color-fore);
+}
+
+.prose a {
+  color: var(--color-fore);
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-2);
+  text-underline-offset: 5px;
+  transition: text-decoration-color 160ms;
+}
+.prose a:hover { text-decoration-color: var(--color-fore); }
+
+.lead {
+  font-family: var(--font-display);
+  font-size: clamp(17px, 1.5vw, 22px);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.015em;
+  color: var(--color-fore-2);
+}
+
+/* ── actions. One filled primary, one text link. Nothing else. ─────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  border: 1px solid var(--color-fore);
+  background: var(--color-fore);
+  color: var(--color-ground);
+  padding: 0.85rem 1.35rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  transition: opacity 160ms;
+}
+.btn:hover { opacity: 0.82; }
+
+.link {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-fore-2);
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-2);
+  text-underline-offset: 6px;
+  transition: color 160ms;
+}
+.link:hover { color: var(--color-fore); }
+
+/* ── the section head, one shape for all four sections ─────────────────── */
+
+.section-head {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  border-top: 1px solid var(--color-rule);
+  padding-top: 1.5rem;
+}
+@media (min-width: 1024px) {
+  .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
+}
+
 }
 
 /* ── responsive ───────────────────────────────────────────────────────── */

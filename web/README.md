@@ -64,6 +64,27 @@ palette — a `#FB4020` mark and a `#EEEBE3` wordmark. It is the only warm eleme
 the only orange that is not cinnabar; the header and the ghosted footer mark use it knowingly.
 Nothing else may borrow those two colors.
 
+## Routes
+
+Two static routes:
+
+- `/` — the landing page. Four sections: hero, evidence, the pool band, the replay, the boundary.
+- `/docs` — the quickstart. Install, configure, the tool surface, the call path. The install
+  block in the hero is the primary action and it points here; the header nav walks back to the
+  landing anchors from `/docs` via `usePathname`.
+
+## Type
+
+Mono is for data: labels, hashes, block numbers, tool names, code. Sentences are set in the
+grotesque via `.prose` (and `.lead` for the one-line intro). Mono body copy at 13px was a
+readability tax at exactly the moment the page wanted to be read; if you add a paragraph, give it
+`.prose`, not a mono utility.
+
+## Social
+
+`web/public/og.png` (1200×630) is the social card, wired through `openGraph.images` and
+`twitter`. Regenerate it if the tagline or the lockup changes.
+
 ## The two states
 
 `<html data-key="held|dropped">` is the only global state. The document ships `dropped` and is

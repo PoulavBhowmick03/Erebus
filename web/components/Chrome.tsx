@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { RollingLink } from "./RollingLink";
 import { useKey } from "./KeyContext";
 
@@ -28,12 +29,19 @@ const NAV = [
   { href: "#proof", label: "Proof" },
   { href: "#how", label: "How it works" },
   { href: "#limits", label: "Limits" },
+  { href: "/docs", label: "Docs" },
 ];
 
 export function Header() {
   const { keyState, toggle } = useKey();
+  const pathname = usePathname();
   const [stuck, setStuck] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // In-page anchors only resolve on the landing page; from /docs they have to
+  // walk back to the root first.
+  const onHome = pathname === "/";
+  const navHref = (href: string) => (onHome || !href.startsWith("#") ? href : `/${href}`);
 
   useEffect(() => {
     const onScroll = () => setStuck(window.scrollY > 8);
@@ -61,16 +69,15 @@ export function Header() {
       style={{ borderBottom: `1px solid ${stuck || mobileOpen ? "var(--color-rule)" : "transparent"}` }}
     >
       <div className="mx-auto flex h-14 w-full max-w-[1560px] items-center justify-between gap-6">
-        <a href="#top" className="flex items-center gap-3">
-          <img src="/erebus-lockup.svg" alt="Erebus" className="h-[15px] w-auto sm:h-[17px]" />
-          <span className="mono-xs hidden text-fore-3 lg:inline">private settlement for agents</span>
+        <a href={onHome ? "#top" : "/"} className="flex items-center">
+          <img src="/erebus-lockup.svg" alt="Erebus" className="h-[16px] w-auto sm:h-[18px]" />
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
           {NAV.map((n) => (
             <RollingLink
               key={n.href}
-              href={n.href}
+              href={navHref(n.href)}
               className="mono-xs uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore"
             >
               {n.label}
@@ -96,28 +103,32 @@ export function Header() {
             {mobileOpen ? "Close" : "Menu"}
           </button>
 
-          <button
-            type="button"
-            onClick={toggle}
-            aria-pressed={held}
-            className="group flex shrink-0 items-center gap-2.5 border px-3 py-2 transition-colors duration-300"
-            style={{
-              borderColor: held ? "var(--color-fore)" : "var(--color-cinnabar)",
-              color: held ? "var(--color-fore)" : "var(--color-cinnabar)",
-            }}
-            title={
-              held
-                ? "Drop the key and read the page as a public chain reader"
-                : "Take a viewing key and decrypt the record"
-            }
-          >
-            <span className="mono-xs uppercase tracking-[0.16em]">
-              <span className="hidden sm:inline" style={{ opacity: 0.7 }}>
-                Viewing key /{" "}
+          {/* The key only means something where there is a record to reveal, so it
+              is not shown on /docs where it would be an inert control. */}
+          {onHome ? (
+            <button
+              type="button"
+              onClick={toggle}
+              aria-pressed={held}
+              className="group flex shrink-0 items-center gap-2.5 border px-3 py-2 transition-colors duration-300"
+              style={{
+                borderColor: held ? "var(--color-fore)" : "var(--color-cinnabar)",
+                color: held ? "var(--color-fore)" : "var(--color-cinnabar)",
+              }}
+              title={
+                held
+                  ? "Drop the key and read the page as a public chain reader"
+                  : "Take a viewing key and decrypt the record"
+              }
+            >
+              <span className="mono-xs uppercase tracking-[0.16em]">
+                <span className="hidden sm:inline" style={{ opacity: 0.7 }}>
+                  Viewing key /{" "}
+                </span>
+                <span className="tabular-nums">{held ? "held" : "dropped"}</span>
               </span>
-              <span className="tabular-nums">{held ? "held" : "dropped"}</span>
-            </span>
-          </button>
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -130,7 +141,7 @@ export function Header() {
           {NAV.map((n) => (
             <a
               key={n.href}
-              href={n.href}
+              href={navHref(n.href)}
               onClick={() => setMobileOpen(false)}
               className="mono-xs flex min-h-[44px] items-center uppercase tracking-[0.16em] text-fore-2 transition-colors hover:text-fore"
             >

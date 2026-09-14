@@ -10,7 +10,7 @@ import { Reveal } from "./Reveal";
 export function Boundary() {
   return (
     <Section id="limits" className="pt-24 md:pt-36">
-      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+      <Reveal className="section-head">
         <div>
           <Eyebrow>Fig. 03 — the boundary</Eyebrow>
           <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
@@ -20,7 +20,7 @@ export function Boundary() {
           </h2>
         </div>
         <div className="flex flex-col justify-end">
-          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
+          <p className="prose m-0 max-w-[54ch]">
             An observer with no key still sees the submitting account, the timing, the pool usage,
             and the counterparty at channel-open. Wire v3 removed wire v2&rsquo;s fixed salt
             classifier; that defeats one classifier. It is not anonymisation, and this page will
@@ -59,7 +59,7 @@ export function Boundary() {
               {String(i + 1).padStart(2, "0")}
             </span>
             <h3 className="display m-0 text-[clamp(19px,2.2vw,31px)] leading-[1.06]">{c.title}</h3>
-            <p className="m-0 max-w-[46ch] self-center text-[13px] leading-[1.75] text-fore-2">
+            <p className="prose m-0 max-w-[48ch] self-center">
               {c.body}
             </p>
           </Reveal>

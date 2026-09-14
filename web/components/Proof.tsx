@@ -7,7 +7,7 @@ const short = (h: string) => `${h.slice(0, 10)}…${h.slice(-6)}`;
 export function Proof() {
   return (
     <Section id="proof" className="pt-24 md:pt-32">
-      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+      <Reveal className="section-head">
         <div>
           <Eyebrow>Fig. 01 — the run</Eyebrow>
           <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
@@ -17,7 +17,7 @@ export function Proof() {
           </h2>
         </div>
         <div className="flex flex-col justify-end">
-          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
+          <p className="prose m-0 max-w-[54ch]">
             Two screened 1 STRK canaries settled through MCP on Starknet mainnet on 2026-08-31,
             exercising 0.8/0.2 and 0.6/0.4 payment/change splits. No edits, no cuts. Public
             walkthrough of the complete mainnet workflow. Every fee below is the actual receipt
@@ -34,10 +34,11 @@ export function Proof() {
 
       <Reveal className="mt-12" delay={80}>
         <video
-          className="w-full border border-rule"
+          className="aspect-video w-full border border-rule bg-panel"
           controls
-          preload="metadata"
+          preload="none"
           playsInline
+          poster="/erebus-final-cut-poster.jpg"
           aria-label="Walkthrough of the Erebus mainnet workflow"
         >
           <source src="/erebus-final-cut.mp4" type="video/mp4" />

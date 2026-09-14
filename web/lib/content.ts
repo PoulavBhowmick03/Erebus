@@ -152,3 +152,43 @@ export const TOOL_GROUPS = [
     tools: ["reconcile", "resume_operation", "rebuild_state", "doctor"],
   },
 ] as const;
+
+/* ── Configuration · README.md ───────────────────────────────────────────── */
+
+/** One MCP client entry. Two agents means two of these, one per identity. */
+export const MCP_CONFIG = `{
+  "mcpServers": {
+    "erebus-buyer": {
+      "command": "erebus-mcp-server",
+      "env": {
+        "EREBUS_BACKEND": "seam",
+        "EREBUS_NETWORK": "sepolia",
+        "EREBUS_SETTLEMENT_ROLE": "payer",
+        "AGENT_ADDRESS": "0x...",
+        "STARKNET_RPC_URL": "https://...",
+        "PROVING_SERVICE_URL": "https://...",
+        "TOKEN_ADDRESS": "0x...",
+        "POOL_KEY_FILE": "/home/you/.erebus-a/agent.pool.key",
+        "ACCOUNT_KEY_FILE": "/home/you/.erebus-a/agent.account.key",
+        "EREBUS_STATE_DIR": "/home/you/.erebus-a/state"
+      }
+    }
+  }
+}`;
+
+export const ENV_VARS = [
+  { k: "EREBUS_BACKEND", v: "mock · seam", note: "mock drives the whole surface with no chain" },
+  { k: "EREBUS_NETWORK", v: "sepolia · mainnet", note: "" },
+  { k: "EREBUS_SETTLEMENT_ROLE", v: "payer · payee", note: "accept_and_settle spends the caller’s notes" },
+  { k: "AGENT_ADDRESS", v: "0x…", note: "the calling account" },
+  { k: "STARKNET_RPC_URL", v: "https://…", note: "" },
+  { k: "PROVING_SERVICE_URL", v: "https://…", note: "hosted prover" },
+  { k: "TOKEN_ADDRESS", v: "0x…", note: "the shielded token" },
+  { k: "POOL_KEY_FILE", v: "path", note: "key values never cross the binding" },
+  { k: "ACCOUNT_KEY_FILE", v: "path", note: "" },
+  { k: "EREBUS_STATE_DIR", v: "path", note: "locked, mode-0600 state" },
+] as const;
+
+/* ── The call path · CLAUDE.md ───────────────────────────────────────────── */
+
+export const CALL_PATH = ["agents", "mcp-server", "sdk/py", "sdk/rs", "Starknet"] as const;

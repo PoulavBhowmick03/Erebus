@@ -55,7 +55,7 @@ export function Replay() {
 
   return (
     <Section id="how" className="pt-24 md:pt-36">
-      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+      <Reveal className="section-head">
         <div>
           <Eyebrow>Fig. 02 — one deal, step by step</Eyebrow>
           <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
@@ -65,7 +65,7 @@ export function Replay() {
           </h2>
         </div>
         <div className="flex flex-col justify-end">
-          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
+          <p className="prose m-0 max-w-[54ch]">
             This browser simulation mirrors{" "}
             <code className="text-fore">agents/src/erebus_agents/demo.py</code>, the deterministic
             mock rehearsal the reference agents run. It does not submit a transaction or use a
@@ -193,8 +193,8 @@ export function Replay() {
         </div>
       </div>
 
-      <div className="mt-12 grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
-        <p className="m-0 max-w-[54ch] text-[13px] leading-[1.75] text-fore-2">
+      <div className="section-head mt-12">
+        <p className="prose m-0 max-w-[54ch]">
           Wire v3 encrypts offer terms under AES-256-GCM-SIV. It does not hide transaction timing,
           pool usage, or who you opened a channel with. The terms are the secret here; the fact
           that a deal moved is not.

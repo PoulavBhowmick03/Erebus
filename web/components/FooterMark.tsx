@@ -21,8 +21,8 @@ export function FooterMark() {
     const mark = host?.firstElementChild;
     if (!host || !(mark instanceof HTMLElement)) return;
     const p = progressOf(host, scrollY, viewport);
-    mark.style.transform = `scale(${(0.94 + p * 0.12).toFixed(3)})`;
-    mark.style.opacity = (0.07 + p * 0.12).toFixed(3);
+    mark.style.transform = `scale(${(0.9 + p * 0.14).toFixed(3)})`;
+    mark.style.opacity = (0.05 + p * 0.07).toFixed(3);
   });
 
   return (
@@ -31,7 +31,7 @@ export function FooterMark() {
         src="/erebus-lockup.svg"
         alt=""
         className="mx-auto block w-[112%] max-w-none"
-        style={{ transform: "scale(0.98)", opacity: "0.12", transformOrigin: "center center" }}
+        style={{ transform: "scale(0.96)", opacity: "0.08", transformOrigin: "center center" }}
       />
     </div>
   );

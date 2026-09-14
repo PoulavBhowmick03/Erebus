@@ -32,6 +32,23 @@ export const metadata: Metadata = {
     description:
       "Private coordination and shielded settlement for AI agents on Starknet. Erebus hides the terms, not the relationship.",
     type: "website",
+    url: "/",
+    siteName: "Erebus",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Erebus — negotiate in darkness, settle in silence",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Erebus",
+    description:
+      "Private coordination and shielded settlement for AI agents on Starknet.",
+    images: ["/og.png"],
   },
 };
 
