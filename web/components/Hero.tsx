@@ -11,7 +11,7 @@ export function Hero() {
 
   return (
     <Section id="top" className="pt-10 pb-0 md:pt-16">
-      <Eyebrow>ΕΛΕΥΣΙΣ · Fig. 01 — one settlement, mainnet, 2026-08-31</Eyebrow>
+      <Eyebrow>ΕΛΕΥΣΙΣ · one settlement, mainnet, 2026-08-31</Eyebrow>
 
       <div className="mt-10 grid grid-cols-1 gap-10 lg:grid-cols-[1.35fr_0.65fr] lg:gap-14">
         <div>
@@ -23,8 +23,8 @@ export function Hero() {
 
           <p className="mt-7 max-w-[54ch] font-[family-name:var(--font-display)] text-[clamp(15px,1.35vw,19px)] font-normal leading-[1.55] text-fore-2">
             Two agents open an encrypted channel carried in privacy-pool note salts, exchange
-            structured offers over it, and settle atomically through the shielded pool. A third
-            party can be handed one deal afterwards, and nothing else.
+            structured offers, and settle atomically through the shielded pool. A third party can
+            be handed one deal afterwards — and nothing else.
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-x-8 gap-y-4">
@@ -33,18 +33,6 @@ export function Hero() {
               className="border border-fore bg-fore px-5 py-3 text-[11px] uppercase tracking-[0.18em] text-ground transition-opacity hover:opacity-80"
             >
               Run a deal ↓
-            </a>
-            <a
-              href="#leaks"
-              className="mono-xs uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] transition-colors hover:text-fore"
-            >
-              Read what still leaks
-            </a>
-            <a
-              href="https://github.com/PoulavBhowmick03/Erebus"
-              className="mono-xs uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] transition-colors hover:text-fore"
-            >
-              Source ↗
             </a>
           </div>
         </div>
@@ -55,16 +43,16 @@ export function Hero() {
             <NoteLattice className="absolute inset-0" story />
             <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-x-4 gap-y-1 p-3">
               <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">
-                Fig. 02 — one deal
+                One deal
               </span>
               <span className="leak-tag">7 notes public</span>
             </figcaption>
           </div>
           <p className="mono-xs mt-3 leading-relaxed text-fore-3">
-            Every shielded position in STRK20 is a note; the drifting field is that set. The
-            deal playing over it draws <em className="not-text-fore">only what leaks</em> —
-            the pair, the crossings, seven settlement notes, one scoped grant. No amount ever
-            appears, and nothing here changes when you drop the key.
+            Every shielded position in STRK20 is a note — the drifting field is that set. The
+            deal playing over it draws <em className="not-text-fore">only what leaks</em>:
+            the pair, the crossings, seven settlement notes, one scoped grant. No amount appears,
+            and nothing here changes when you drop the key.
           </p>
         </figure>
       </div>
@@ -73,7 +61,7 @@ export function Hero() {
 
       <div className="mt-16 border-t border-rule pt-4 md:mt-24">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <Eyebrow>Fig. 03 — the record of one mainnet deal</Eyebrow>
+          <Eyebrow>The record of one mainnet deal</Eyebrow>
           <p className="mono-xs m-0 text-fore-3">
             {keyState === "held"
               ? "You hold a viewing key. This is the deal."
@@ -103,7 +91,7 @@ export function Hero() {
           ))}
         </dl>
 
-        <div className="mt-6 flex flex-wrap items-center gap-x-8 gap-y-3 pb-4">
+        <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 border-t border-dashed border-rule pb-4 pt-6">
           <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">Path to agreement</span>
           {NEGOTIATION.map((n, i) => (
             <span key={n.step} className="flex items-baseline gap-2">

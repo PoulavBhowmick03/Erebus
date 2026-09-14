@@ -1,4 +1,7 @@
-import { FACTS, TOOLS, doc } from "@/lib/content";
+"use client";
+
+import { useState } from "react";
+import { FACTS, TOOL_GROUPS, doc } from "@/lib/content";
 import { Eyebrow, Section } from "./Chrome";
 import { Reveal } from "./Reveal";
 
@@ -8,12 +11,37 @@ const INSTALL = `uv tool install \\
 
 const PATH = ["agents", "mcp-server", "sdk/py", "sdk/rs", "Starknet"];
 
+function CopyInstall() {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // clipboard unavailable — the command is still selectable text
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="mono-xs uppercase tracking-[0.16em] transition-colors"
+      style={{ color: copied ? "var(--color-fore)" : "var(--color-cinnabar)" }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 export function Consume() {
   return (
-    <Section id="consume" className="pt-24 md:pt-36">
+    <Section id="consume" className="pt-28 md:pt-40">
       <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
         <div>
-          <Eyebrow>Fig. 09 — the tool surface</Eyebrow>
+          <Eyebrow>Quickstart</Eyebrow>
           <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
             Infrastructure,
             <br />
@@ -23,8 +51,8 @@ export function Consume() {
         <div className="flex flex-col justify-end">
           <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
             There is no dashboard. Agents are the users, and they consume Erebus as MCP tools and
-            SDK calls the same way they consume anything else. Any framework in any language can
-            drive the whole loop without touching Erebus internals.
+            SDK calls like anything else. Any framework, in any language, can drive the whole loop
+            without touching Erebus internals.
           </p>
           <a
             href={doc("docs/reference.md")}
@@ -36,9 +64,17 @@ export function Consume() {
       </Reveal>
 
       <div className="mt-12 grid grid-cols-1 border border-rule lg:grid-cols-2">
-        <div className="border-b border-rule p-7 lg:border-b-0 lg:border-r">
-          <p className="label mb-5">Install</p>
-          <pre className="m-0 overflow-x-auto text-[12px] leading-[1.8] text-fore">
+        <div
+          className="border-b border-rule p-7 lg:border-b-0 lg:border-r"
+          style={{ borderLeft: "2px solid var(--color-cinnabar)" }}
+        >
+          <div className="mb-5 flex items-center justify-between">
+            <p className="label m-0" style={{ color: "var(--color-cinnabar)" }}>
+              Install
+            </p>
+            <CopyInstall />
+          </div>
+          <pre className="m-0 overflow-x-auto text-[13px] leading-[1.9] text-fore md:text-[14px]">
             <code>{INSTALL}</code>
           </pre>
           <p className="mono-xs mt-6 leading-relaxed text-fore-3">
@@ -53,49 +89,77 @@ export function Consume() {
 
         <div className="p-7">
           <p className="label mb-5">Thirteen tools · Protocol 4</p>
-          <ul className="m-0 grid list-none grid-cols-1 gap-x-8 gap-y-2 p-0 sm:grid-cols-2">
-            {TOOLS.map((t, i) => (
-              <li key={t} className="mono-sm flex gap-4 text-fore-2">
-                <span className="w-5 shrink-0 text-fore-3">{String(i + 1).padStart(2, "0")}</span>
-                <span>{t}</span>
-              </li>
-            ))}
-          </ul>
+          {TOOL_GROUPS.map((group, gi) => (
+            <div key={group.label} className={gi > 0 ? "mt-8" : undefined}>
+              <p className="mono-xs mb-3 border-b border-rule pb-2 font-semibold uppercase tracking-[0.14em] text-fore">
+                {group.label}
+              </p>
+              <ul className="m-0 grid list-none grid-cols-1 gap-x-8 gap-y-2 p-0 sm:grid-cols-2">
+                {group.tools.map((t) => (
+                  <li key={t} className="mono-sm flex gap-4 text-fore-2">
+                    <span>{t}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       </div>
 
       {/* the call path */}
-      <div className="mt-12 border-t border-rule pt-6">
-        <p className="label mb-6">The call path — Python above the binding, Rust below it</p>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+      <div className="mt-12 border-t border-rule pt-10 pb-2">
+        <p className="label mb-8 text-center">
+          The call path — Python above the binding, Rust below it
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3 py-4">
           {PATH.map((p, i) => (
             <span key={p} className="flex items-center gap-4">
               <span
-                className={`border px-4 py-2.5 text-[12px] ${
-                  i >= 2 && i <= 3 ? "border-fore text-fore" : "border-rule text-fore-2"
-                }`}
+                className="border px-4 py-2.5 text-[12px] text-fore-2 transition-shadow"
+                style={
+                  i === 3
+                    ? {
+                        borderColor: "var(--color-cinnabar)",
+                        color: "var(--color-fore)",
+                        boxShadow: "0 0 28px 4px rgba(255, 59, 31, 0.22)",
+                      }
+                    : i === 0
+                      ? { borderColor: "var(--color-fore)", color: "var(--color-fore)", fontWeight: 600 }
+                      : { borderColor: "var(--color-rule)" }
+                }
               >
                 {p}
               </span>
-              {i < PATH.length - 1 ? <span className="text-fore-3">→</span> : null}
+              {i < PATH.length - 1 ? (
+                <span
+                  className={i === 2 ? "text-[16px]" : "text-fore-3"}
+                  style={i === 2 ? { color: "var(--color-cinnabar)" } : undefined}
+                >
+                  →
+                </span>
+              ) : null}
             </span>
           ))}
         </div>
-        <p className="mono-xs mt-5 max-w-[74ch] leading-relaxed text-fore-3">
-          Key material never crosses upward past the binding, which makes that boundary an
-          enforced one rather than a convention.
+        <p className="mono-xs mx-auto mt-5 max-w-[62ch] text-center leading-relaxed text-fore-3">
+          You write <span className="text-fore">agents</span>; everything after it is Erebus
+          infrastructure. Key material never crosses one arrow — an enforced boundary at{" "}
+          <span style={{ color: "var(--color-cinnabar)" }}>sdk/rs</span>, not a convention.
         </p>
       </div>
 
       {/* facts */}
-      <dl className="mt-16 grid grid-cols-2 border-t border-rule sm:grid-cols-3 lg:grid-cols-6">
-        {FACTS.map((f) => (
-          <div key={f.k} className="border-b border-rule py-5 pr-6 lg:border-l lg:pl-5 lg:first:border-l-0 lg:first:pl-0">
-            <dt className="mono-xs mb-2 uppercase tracking-[0.14em] text-fore-3">{f.k}</dt>
-            <dd className="m-0 text-[13px] text-fore">{f.v}</dd>
-          </div>
+      <div className="mt-16 flex flex-wrap items-center gap-x-3 gap-y-3 border-t border-rule pt-8">
+        {FACTS.map((f, i) => (
+          <span key={f.k} className="flex items-center gap-3">
+            <span className="mono-xs whitespace-nowrap">
+              <span className="uppercase tracking-[0.14em] text-fore-3">{f.k}</span>{" "}
+              <span className="text-fore">{f.v}</span>
+            </span>
+            {i < FACTS.length - 1 ? <span className="text-fore-3">·</span> : null}
+          </span>
         ))}
-      </dl>
+      </div>
     </Section>
   );
 }

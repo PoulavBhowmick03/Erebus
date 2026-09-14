@@ -1,12 +1,12 @@
-import { NON_CLAIMS, doc } from "@/lib/content";
+import { NON_CLAIMS } from "@/lib/content";
 import { Eyebrow, Section } from "./Chrome";
 import { Reveal } from "./Reveal";
 
 export function NonClaims() {
   return (
-    <Section id="limits" className="pt-24 md:pt-36">
-      <Reveal className="border-t border-rule pt-6">
-        <Eyebrow>Fig. 08 — the non-claims</Eyebrow>
+    <Section id="limits" className="bg-[#0a0a0c] mt-28 pb-14 md:mt-40 md:pb-20">
+      <Reveal className="border-t border-rule pt-14 md:pt-20">
+        <Eyebrow>The non-claims</Eyebrow>
         <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
           What this
           <br />
@@ -30,23 +30,10 @@ export function NonClaims() {
             </h3>
             <p className="m-0 max-w-[46ch] self-center text-[13px] leading-[1.75] text-fore-2">
               {c.body}
-              {c.ref ? (
-                <a
-                  href={doc("docs/friction.md")}
-                  className="ml-2 leak underline decoration-transparent underline-offset-[5px] hover:decoration-current"
-                >
-                  {c.ref} ↗
-                </a>
-              ) : null}
             </p>
           </Reveal>
         ))}
       </ol>
-
-      <p className="mono-xs mt-6 max-w-[74ch] border-t border-rule pt-6 leading-relaxed text-fore-3">
-        Unaudited and experimental. It has had no external security review. Do not put value you
-        care about through it.
-      </p>
     </Section>
   );
 }

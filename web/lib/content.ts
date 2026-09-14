@@ -25,10 +25,8 @@ export type Field = {
 
 export const SETTLEMENT: Field[] = [
   { label: "network", value: "SN_MAIN", leaks: true },
-  { label: "counterparty", value: "0x0572…7189", leaks: true, note: "written in public calldata at channel open — F38" },
-  { label: "submitting account", value: "0x6597…e54c", leaks: true, note: "the same identity signs every write" },
-  { label: "block", value: "14147370", leaks: true },
-  { label: "timestamp", value: "2026-08-31T11:51:10Z", leaks: true },
+  { label: "counterparty", value: "0x0572…7189", leaks: true, note: "public at channel open — see what leaks ↓" },
+  { label: "submitting account", value: "0x6597…e54c", leaks: true },
   { label: "notes created", value: "7", leaks: true, note: "wire v3 always creates seven" },
   { label: "amount paid", value: "0.6 STRK", leaks: false },
   { label: "change returned", value: "0.4 STRK", leaks: false },
@@ -55,7 +53,7 @@ export const LEAKS: LeakRow[] = [
   {
     step: "1 · open channel",
     hidden: "the channel key",
-    open: "the counterparty’s address, in the clear — plus the submitting account and timing",
+    open: "the counterparty’s address in the clear, plus submitting account and timing",
     severe: true,
   },
   {
@@ -138,45 +136,42 @@ export const MANIFEST_TOTALS = {
 
 /* ── What this does not do · docs/status.md ─────────────────────────────── */
 
-export type NonClaim = { title: string; body: string; ref?: string };
+export type NonClaim = { title: string; body: string };
 
 export const NON_CLAIMS: NonClaim[] = [
   {
-    title: "Hide who you are dealing with.",
-    body: "The counterparty’s address is written in public calldata at channel-open. This is upstream of our encryption and no wire change fixes it.",
-    ref: "F38",
-  },
-  {
-    title: "Hide that a negotiation happened.",
-    body: "Wire v3 removes the fixed v2 salt classifier, but the submitting account, transaction timing, action shape, and note count remain public.",
-  },
-  {
     title: "Prove production readiness from two canaries.",
-    body: "Two bounded mainnet workflows passed. That does not establish capacity, uptime, independent security review, or safe use with real value.",
+    body: "Two bounded mainnet workflows passed — not capacity, uptime, or independent security review. Do not put value you care about through it.",
   },
   {
     title: "Revoke facts already disclosed.",
-    body: "A wire-v3 expiry stops a later verification. It cannot make a recipient forget a record opened before expiry.",
+    body: "A wire-v3 expiry stops later verification. It cannot make a recipient forget a record already opened.",
   },
   {
     title: "Escrow, or deferred delivery.",
-    body: "Settlement is atomic, so there is no “agree now, deliver later”. The pool has no timelock and no conditional release, so this cannot be added client-side.",
+    body: "Settlement is atomic, so there is no “agree now, deliver later”. The pool has no timelock or conditional release, and neither can be bolted on client-side.",
   },
 ];
 
 /* ── The tool surface · thirteen MCP tools, Protocol 4 ──────────────────── */
 
-export const TOOLS = [
-  "open_channel", "propose_offer", "counter_offer", "wait_for_offers",
-  "read_channel_state", "accept_and_settle", "get_note_balance", "grant_viewing_key",
-  "reveal", "reconcile", "resume_operation", "rebuild_state", "doctor",
+export const TOOL_GROUPS = [
+  {
+    label: "Negotiate, settle, disclose",
+    tools: [
+      "open_channel", "propose_offer", "counter_offer", "wait_for_offers",
+      "read_channel_state", "accept_and_settle", "get_note_balance", "grant_viewing_key",
+      "reveal",
+    ],
+  },
+  {
+    label: "Recovery & ops",
+    tools: ["reconcile", "resume_operation", "rebuild_state", "doctor"],
+  },
 ] as const;
 
 export const FACTS = [
-  { k: "protocol", v: "Erebus 4" },
   { k: "wire", v: "v3 · AES-256-GCM-SIV" },
   { k: "release", v: "v0.2.0" },
   { k: "tests", v: "359 rs / 216 py / 43 ts" },
-  { k: "friction entries", v: "42" },
-  { k: "licence", v: "Apache-2.0" },
 ] as const;

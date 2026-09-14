@@ -14,12 +14,12 @@ export default function Page() {
       <Header />
       <main>
         <Hero />
+        <Consume />
         <LeakLedger />
         <Simulation />
         <Observer />
         <Evidence />
         <NonClaims />
-        <Consume />
       </main>
       <Footer />
     </>

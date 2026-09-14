@@ -4,10 +4,10 @@ import { Reveal } from "./Reveal";
 
 export function LeakLedger() {
   return (
-    <Section id="leaks" className="pt-24 md:pt-36">
-      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
+    <Section id="leaks" className="bg-[#0a0a0c] mt-28 pb-14 md:mt-40 md:pb-20">
+      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-14 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16 md:pt-20">
         <div>
-          <Eyebrow>Fig. 04 — the privacy boundary</Eyebrow>
+          <Eyebrow>The privacy boundary</Eyebrow>
           <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
             Erebus hides the terms,
             <br />
@@ -16,10 +16,9 @@ export function LeakLedger() {
         </div>
         <div className="flex flex-col justify-end">
           <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
-            Wire v3 encrypts offer terms under AES-256-GCM-SIV and removes wire v2&rsquo;s fixed
-            fifth-salt marker. It does not hide transaction timing, pool usage, the note frame, or
-            who you opened a channel with. Every row below is reproduced from the privacy model,
-            which is the only document in the repository allowed to make a privacy claim.
+            Wire v3 encrypts offer terms and hides the negotiation. It does not hide who you
+            opened a channel with, or that you opened one at all. Every row below is sourced from
+            the privacy model — the only document here allowed to make a privacy claim.
           </p>
           <a
             href={doc("docs/privacy-model.md")}
@@ -67,39 +66,24 @@ export function LeakLedger() {
         </table>
       </div>
 
-      <p className="mono-xs mt-5 max-w-[70ch] leading-relaxed text-fore-3">
-        Steps 6 and 7 produce no chain activity at all. Disclosure is a local read against data
-        that is already on chain, which is why a grant costs no gas and leaves no trace.
-      </p>
-
       {/* who sees what. a wire-v3 grant is scoped to one deal, not to the channel. */}
-      <div className="mt-16 overflow-x-auto">
-        <p className="label mb-5">Fig. 04b — and who sees it</p>
-        <table className="w-full min-w-[560px] border-collapse text-left">
-          <thead>
-            <tr className="border-y border-fore">
-              <th className="label !text-fore-3 w-[40%] py-3 pr-6 font-normal">Observer</th>
-              <th className="label !text-fore-3 w-[34%] py-3 pr-6 font-normal">Offer terms</th>
-              <th className="label !text-fore-3 w-[26%] py-3 font-normal">Traffic shape</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              ["Public chain reader", "Hidden", false],
-              ["Channel party", "Readable", true],
-              ["Viewing-grant holder", "Readable for one deal", true],
-            ].map(([who, terms, readable]) => (
-              <tr key={who as string} className="border-b border-rule">
-                <td className="py-4 pr-6 text-[13px]">{who}</td>
-                <td className={`py-4 pr-6 text-[13px] ${readable ? "text-fore" : "text-fore-2"}`}>
-                  {terms}
-                </td>
-                <td className="py-4 text-[13px] leak">Visible</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <details className="group mt-16">
+        <summary className="label flex w-fit cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="inline-block transition-transform group-open:rotate-90">
+            →
+          </span>
+          And who sees it
+        </summary>
+        <div className="mt-5 max-w-[70ch]">
+          <p className="m-0 text-[13px] leading-[1.8] text-fore-2">
+            Traffic shape — <span className="leak">that a deal happened</span> — is visible to
+            every observer, key or no key. Offer terms are the only thing a key changes:{" "}
+            <span className="text-fore-3">hidden</span> to a public chain reader,{" "}
+            <span className="text-fore">readable</span> to the channel party, and{" "}
+            <span className="text-fore">readable for one deal</span> to a viewing-grant holder.
+          </p>
+        </div>
+      </details>
     </Section>
   );
 }

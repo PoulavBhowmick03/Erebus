@@ -26,7 +26,7 @@
   /* foreground. cold, never cream */
   --color-fore: #e9e9ec;
   --color-fore-2: #8b8b93;
-  --color-fore-3: #55555c;
+  --color-fore-3: #828289;
 
   /* the one accent: this leaks */
   --color-cinnabar: #ff3b1f;
@@ -110,8 +110,8 @@ input[type="range"]::-moz-range-thumb {
 
 .label {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--color-fore-3);

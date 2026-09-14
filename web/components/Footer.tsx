@@ -8,8 +8,7 @@ export function Footer() {
         <div>
           <p className="label !text-fore mb-4 !tracking-[0.34em]">Erebus</p>
           <p className="m-0 max-w-[38ch] text-[13px] leading-[1.7] text-fore-2">
-            Private coordination and shielded settlement for AI agents, composed from
-            StarkWare&rsquo;s STRK20 privacy pool. Apache-2.0, matching the primitives it builds on.
+            Private coordination and shielded settlement for AI agents.
           </p>
         </div>
 

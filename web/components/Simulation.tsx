@@ -56,28 +56,19 @@ export function Simulation() {
 
   return (
     <Section id="run" className="pt-24 md:pt-36">
-      <Reveal className="grid grid-cols-1 gap-8 border-t border-rule pt-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16">
-        <div>
-          <Eyebrow>Fig. 05 — reference agent flow</Eyebrow>
-          <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
-            Watch one deal move
-            <br />
-            <span className="text-fore-3">through Erebus.</span>
-          </h2>
-        </div>
-        <div className="flex flex-col justify-end">
-          <p className="m-0 max-w-[52ch] text-[13px] leading-[1.75] text-fore-2">
-            This browser simulation mirrors{" "}
-            <code className="text-fore">agents/src/erebus_agents/demo.py</code>, the deterministic
-            mock rehearsal the reference agents run. It applies the same accept/reject threshold.
-            It does not submit a transaction or use a wallet.
+      <Reveal className="border-t border-rule pt-6">
+        <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4">
+          <div>
+            <Eyebrow>Reference agent flow</Eyebrow>
+            <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
+              Watch one deal move
+              <br />
+              <span className="text-fore-3">through Erebus.</span>
+            </h2>
+          </div>
+          <p className="mono-xs m-0 max-w-[30ch] leading-relaxed text-fore-3">
+            No keys, no wallet, no transaction — the policy sliders below drive a real negotiation.
           </p>
-          <a
-            href={doc("agents/src/erebus_agents/demo.py")}
-            className="mono-xs mt-5 w-fit uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] hover:text-fore"
-          >
-            demo.py ↗
-          </a>
         </div>
       </Reveal>
 
@@ -190,6 +181,17 @@ export function Simulation() {
           ) : null}
         </div>
       </div>
+
+      <p className="mono-xs mt-4 max-w-[74ch] leading-relaxed text-fore-3">
+        Mirrors <code className="text-fore-2">agents/src/erebus_agents/demo.py</code>, the same
+        deterministic accept/reject threshold the reference agents run.{" "}
+        <a
+          href={doc("agents/src/erebus_agents/demo.py")}
+          className="text-fore-2 underline decoration-rule-2 underline-offset-[5px] hover:text-fore"
+        >
+          demo.py ↗
+        </a>
+      </p>
     </Section>
   );
 }
