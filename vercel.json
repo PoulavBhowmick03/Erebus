@@ -1,0 +1,18 @@
+{
+  "installCommand": "pnpm --dir web install --frozen-lockfile --ignore-workspace",
+  "buildCommand": "pnpm --dir web build",
+  "outputDirectory": "web/out",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "erebus-private-agents.vercel.app"
+        }
+      ],
+      "destination": "https://erebusagents.live/:path*",
+      "permanent": true
+    }
+  ]
+}
