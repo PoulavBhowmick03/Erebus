@@ -6,115 +6,19 @@
  *   docs/threat-model.md ............. the measured observer metrics
  *   docs/runs/2026-08-31-mainnet-060-040-canary.md
  *   docs/runs/v0.2-mainnet-canary.json
- *   README.md
+ *   agents/src/erebus_agents/demo.py . the replay
+ *   README.md ........................ install and the MCP tool surface
  */
 
 export const SOURCE = "https://github.com/PoulavBhowmick03/Erebus";
 export const doc = (p: string) => `${SOURCE}/blob/main/${p}`;
 export const starkscan = (h: string) => `https://starkscan.co/tx/${h}`;
 
-/* ── Hero ledger: the second mainnet canary, 2026-08-31 ─────────────────── */
+/* ── Install · README.md ─────────────────────────────────────────────────── */
 
-export type Field = {
-  label: string;
-  value: string;
-  /** true when a public chain reader can read this. cinnabar. */
-  leaks: boolean;
-  note?: string;
-};
-
-export const SETTLEMENT: Field[] = [
-  { label: "network", value: "SN_MAIN", leaks: true },
-  { label: "counterparty", value: "0x0572…7189", leaks: true, note: "public at channel open — see what leaks ↓" },
-  { label: "submitting account", value: "0x6597…e54c", leaks: true },
-  { label: "notes created", value: "7", leaks: true, note: "wire v3 always creates seven" },
-  { label: "amount paid", value: "0.6 STRK", leaks: false },
-  { label: "change returned", value: "0.4 STRK", leaks: false },
-  { label: "recipient", value: "account B", leaks: false },
-  { label: "deal id", value: "10977364695535158093", leaks: false },
-];
-
-export const NEGOTIATION = [
-  { step: "buyer opens", value: "0.48 STRK", who: "buyer-authored" },
-  { step: "seller counters", value: "0.60 STRK", who: "seller-authored" },
-  { step: "buyer accepts", value: "0.60 STRK", who: "settled atomically" },
-];
-
-/* ── What leaks at each step · docs/privacy-model.md ────────────────────── */
-
-export type LeakRow = { step: string; hidden: string; open: string; severe?: boolean };
-
-export const LEAKS: LeakRow[] = [
-  {
-    step: "0 · fund",
-    hidden: "nothing",
-    open: "depositor account, amount, token, timing — the whole ERC-20 leg",
-  },
-  {
-    step: "1 · open channel",
-    hidden: "the channel key",
-    open: "the counterparty’s address in the clear, plus submitting account and timing",
-    severe: true,
-  },
-  {
-    step: "2–4 · offer, counter, final offer",
-    hidden: "amount, token, deadline, memo hash, message type, replyTo",
-    open: "submitting account, five salt values per message, note count, timing",
-  },
-  {
-    step: "5 · accept and settle",
-    hidden: "amount paid, recipient, change amount",
-    open: "submitting account, that a settlement occurred, seven created notes on wire v3",
-  },
-  {
-    step: "6 · grant",
-    hidden: "everything — local only, no transaction",
-    open: "nothing",
-  },
-  {
-    step: "7 · reveal",
-    hidden: "everything — local only, no transaction",
-    open: "nothing",
-  },
-];
-
-/* ── Measured observer results · docs/threat-model.md §4 ────────────────── */
-
-export const METRICS = [
-  {
-    id: "M1",
-    question: "Can an observer tell an Erebus transaction from other pool traffic?",
-    result: "1.0000",
-    detail:
-      "wire v2, measured 2026-08-21 — 2 fixtures against 10,000 synthetic negatives, zero false positives",
-    target: "0.5",
-    bad: true,
-  },
-  {
-    id: "M2",
-    question: "Can an observer read the exact-vs-change bit from a settlement?",
-    result: "0.5008",
-    detail: "measured offline 2026-08-22 — wire v3 always creates seven notes",
-    target: "0.5",
-    bad: false,
-  },
-  {
-    id: "M3",
-    question: "How accurately can an observer count deals per account?",
-    result: "exact",
-    detail: "given M1. not separately measured",
-    target: "bounded by M1",
-    bad: true,
-  },
-  {
-    id: "M4",
-    question: "Can an observer link a submission to the pool identity acting?",
-    result: "1.0",
-    detail: "by construction — the same account signs every write. there is no relayer",
-    target: "≈0",
-    bad: true,
-  },
-] as const;
+export const INSTALL = `uv tool install \\
+  --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \\
+  erebus-mcp-server`;
 
 /* ── Evidence manifest · the 0.6/0.4 canary, all fees are receipt amounts ── */
 
@@ -131,8 +35,87 @@ export const MANIFEST_TOTALS = {
   network: "11.211356 STRK",
   pool: "24 STRK",
   poolFee: "6 STRK per apply_actions",
-  pool_address: "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
 };
+
+/* ── The replay · agents/src/erebus_agents/demo.py ───────────────────────── */
+
+export type ReplayStage = { id: string; title: string; hidden: string; open: string };
+
+export const REPLAY: ReplayStage[] = [
+  {
+    id: "01",
+    title: "open channel",
+    hidden: "the channel key",
+    open: "the counterparty’s address, the submitting account, timing",
+  },
+  {
+    id: "02",
+    title: "offer, counter, accept",
+    hidden: "amount, token, deadline, memo hash",
+    open: "the submitting account, note count, timing",
+  },
+  {
+    id: "03",
+    title: "settle atomically",
+    hidden: "amount paid, recipient, change",
+    open: "the submitting account, that a settlement occurred, seven created notes",
+  },
+];
+
+export type TranscriptLine = {
+  stage: number;
+  text: string;
+  secret?: string;
+  tail?: string;
+};
+
+export const TRANSCRIPT: TranscriptLine[] = [
+  { stage: 1, text: "opened encrypted channel", tail: "ch_b7afee5f…8d9af8" },
+  { stage: 2, text: "buyer proposed", secret: "0.48 STRK" },
+  { stage: 2, text: "seller countered", secret: "0.60 STRK" },
+  { stage: 2, text: "buyer accepted the counteroffer" },
+  { stage: 3, text: "accepted offer and shielded payment committed atomically" },
+  { stage: 3, text: "deal-scoped viewing grant created for", tail: "0xauditor" },
+  { stage: 3, text: "auditor reconstructed two offers and the settlement record" },
+];
+
+export const DEAL_SUMMARY = [
+  { k: "channel", v: "ch_b7afee5f…8d9af8", hidden: false },
+  { k: "participants", v: "buyer ↔ seller", hidden: false },
+  { k: "agreed", v: "0.60 STRK", hidden: true },
+  { k: "paid", v: "0.60 STRK", hidden: true },
+] as const;
+
+/* ── Who sees what · docs/privacy-model.md ───────────────────────────────── */
+
+export const DISCLOSURE = [
+  { who: "Public chain reader", terms: "Hidden" },
+  { who: "Channel party", terms: "Readable" },
+  { who: "Viewing-grant holder", terms: "Readable for one deal" },
+] as const;
+
+/* ── Three measured lines · docs/threat-model.md §4 ─────────────────────── */
+
+export const OBSERVER = [
+  {
+    k: "M1 · wire v2 classifier",
+    v: "1.0000",
+    note: "an Erebus message, identified — the failure wire v3 set out to fix",
+    bad: true,
+  },
+  {
+    k: "M2 · wire v3 classifier",
+    v: "0.5008",
+    note: "chance, against the v3 fixture and 10,000 synthetic negatives",
+    bad: false,
+  },
+  {
+    k: "M4 · submission linkage",
+    v: "1.0",
+    note: "the same account signs every write; there is no relayer",
+    bad: true,
+  },
+] as const;
 
 /* ── What this does not do · docs/status.md ─────────────────────────────── */
 
@@ -168,10 +151,4 @@ export const TOOL_GROUPS = [
     label: "Recovery & ops",
     tools: ["reconcile", "resume_operation", "rebuild_state", "doctor"],
   },
-] as const;
-
-export const FACTS = [
-  { k: "wire", v: "v3 · AES-256-GCM-SIV" },
-  { k: "release", v: "v0.2.0" },
-  { k: "tests", v: "359 rs / 216 py / 43 ts" },
 ] as const;

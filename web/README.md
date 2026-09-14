@@ -19,19 +19,24 @@ the differential-test oracle. It stays standalone on purpose.
 `https://erebus-private-agents.vercel.app`, and **this package is what is published there.**
 It replaced the old `demo/` page on 2026-09-06.
 
-Two consequences, and both have already bitten once:
+`erebusagents.live` is the custom domain; the `.vercel.app` host redirects to it.
 
-- **`web/public/erebus-private-sprint.mp4` must stay.** The pinned `demo_video` URL resolves
-  to it. Delete it and a URL in `strk20.json`, the README, and the sprint hub all 404.
-- **The Vercel linkage lives in `out/.vercel`, which `next build` deletes.** Recreate it
-  before every deploy or the CLI will silently create a *new* project instead of updating
-  production:
+Deploys are git-driven. The Vercel project's root directory is the repository root, so it reads
+the root `vercel.json`, which installs and builds only `web/`:
 
-```bash
-pnpm build
-mkdir -p out/.vercel && cp ../demo/.vercel/project.json out/.vercel/project.json
-cd out && vercel deploy --prod
+```json
+"installCommand": "pnpm --dir web install --frozen-lockfile --ignore-workspace",
+"buildCommand": "pnpm --dir web build",
+"outputDirectory": "web/out"
 ```
+
+`--ignore-workspace` is load-bearing: the root workspace lists `sdk/ts`, whose
+`@starkware-libs/starknet-privacy-sdk` dependency is a sibling checkout that does not exist on
+the builder. Without it, `pnpm install` fails before the page is ever built. Push to `main` and
+Vercel rebuilds.
+
+**`web/public/erebus-private-sprint.mp4` must stay.** The pinned `demo_video` URL resolves
+to it. Delete it and a URL in `strk20.json`, the README, and the sprint hub all 404.
 
 `demo/` is still in the repo on purpose. `scripts/check-demo.py` and
 `scripts/tests/test_demo.py` both run against it in CI, and it is the archived sprint
@@ -43,10 +48,11 @@ Three rules carry the whole page. Breaking any one of them makes it an ordinary 
 
 1. **Cinnabar means "a public chain reader can already read this."** Never a button, never a
    link, never decoration. `--color-cinnabar` appears on the counterparty address, the
-   submitting account, block, timestamp, note count, the Public column of the leak ledger, and
-   the metrics that came out badly. Grep for it before committing and check every use is a leak.
+   submitting account, block, timestamp, note count, the public side of the replay, and the
+   observer metrics that came out badly. Grep for it before committing and check every use is a
+   leak.
 2. **Structure comes from hairlines and space.** No cards, no fills, no shadows, no radii, no
-   gradients — the one gradient in the tree is the legibility veil over the void section.
+   gradients.
 3. **The plaintext is always in the DOM.** Redaction is an ink bar drawn over readable markup,
    and the ciphertext substitution happens client-side after mount. No-JS readers, crawlers and
    link previews get the complete page. It is a demonstration of the disclosure model, not a

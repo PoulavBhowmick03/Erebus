@@ -25,11 +25,8 @@ export function Section({
 }
 
 const NAV = [
-  { href: "#consume", label: "Surface" },
-  { href: "#leaks", label: "What leaks" },
-  { href: "#run", label: "Run a deal" },
-  { href: "#observer", label: "Observer" },
-  { href: "#evidence", label: "Evidence" },
+  { href: "#proof", label: "Proof" },
+  { href: "#how", label: "How it works" },
   { href: "#limits", label: "Limits" },
 ];
 

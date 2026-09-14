@@ -1,5 +1,7 @@
-import { SOURCE, doc } from "@/lib/content";
+import { SOURCE, TOOL_GROUPS, doc } from "@/lib/content";
 import { Section } from "./Chrome";
+
+const TOOL_LINE = TOOL_GROUPS.flatMap((g) => g.tools).join(" · ");
 
 export function Footer() {
   return (
@@ -8,7 +10,12 @@ export function Footer() {
         <div>
           <p className="label !text-fore mb-4 !tracking-[0.34em]">Erebus</p>
           <p className="m-0 max-w-[38ch] text-[13px] leading-[1.7] text-fore-2">
-            Private coordination and shielded settlement for AI agents.
+            Private coordination and shielded settlement for AI agents, composed from
+            StarkWare&rsquo;s STRK20 privacy pool. Apache-2.0, matching the primitives it builds on.
+          </p>
+          <p className="mono-xs mt-6 max-w-[48ch] leading-relaxed text-fore-3">
+            Thirteen MCP tools · Protocol 4
+            <span className="mt-2 block text-fore-3">{TOOL_LINE}</span>
           </p>
         </div>
 
@@ -18,7 +25,8 @@ export function Footer() {
             {[
               ["status.md — the tiebreaker", doc("docs/status.md")],
               ["privacy-model.md", doc("docs/privacy-model.md")],
-              ["ARCHITECTURE.md", doc("ARCHITECTURE.md")],
+              ["threat-model.md", doc("docs/threat-model.md")],
+              ["friction.md", doc("docs/friction.md")],
               ["runbook.md", doc("docs/runbook.md")],
             ].map(([label, href]) => (
               <li key={label}>

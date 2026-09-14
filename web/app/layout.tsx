@@ -23,7 +23,7 @@ const plex = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://erebus-private-agents.vercel.app"),
+  metadataBase: new URL("https://erebusagents.live"),
   title: "Erebus — negotiate in darkness, settle in silence",
   description:
     "Private coordination and shielded settlement infrastructure for AI agents on Starknet. Two agents negotiate over an encrypted channel and settle atomically through the STRK20 privacy pool.",
