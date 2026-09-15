@@ -321,6 +321,17 @@ export function NoteLattice({
 
     group.rotation.set(-0.32, 0.5, 0);
 
+    // the pool tilts toward the cursor. target set on pointermove, eased
+    // toward each frame so a fast flick doesn't snap the field — this is
+    // meant to feel like weight, not like a cursor-follower toy.
+    const pointer = { x: 0, y: 0 };
+    const pointerEased = { x: 0, y: 0 };
+    const onPointerMove = (e: PointerEvent) => {
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = (e.clientY / window.innerHeight) * 2 - 1;
+    };
+    if (!reduced) window.addEventListener("pointermove", onPointerMove, { passive: true });
+
     let raf = 0;
     let visible = true;
     const io = new IntersectionObserver((e) => (visible = !!e[0]?.isIntersecting));
@@ -330,8 +341,10 @@ export function NoteLattice({
     const draw = (t: number) => {
       fieldMat.uniforms.uTime.value = t;
       if (actorMat) actorMat.uniforms.uTime.value = t;
-      group.rotation.y = 0.5 + t * 0.045;
-      group.rotation.x = -0.32 + Math.sin(t * 0.11) * 0.06;
+      pointerEased.x += (pointer.x - pointerEased.x) * 0.045;
+      pointerEased.y += (pointer.y - pointerEased.y) * 0.045;
+      group.rotation.y = 0.5 + t * 0.045 + pointerEased.x * 0.22;
+      group.rotation.x = -0.32 + Math.sin(t * 0.11) * 0.06 - pointerEased.y * 0.16;
       if (story) playDeal((t % CYCLE) / CYCLE);
       renderer.render(scene, camera);
     };
@@ -350,6 +363,7 @@ export function NoteLattice({
 
     return () => {
       cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", onPointerMove);
       io.disconnect();
       ro.disconnect();
       fieldGeo.dispose();

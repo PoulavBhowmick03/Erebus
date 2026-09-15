@@ -43,7 +43,7 @@ export default function Docs() {
     <>
       <Header />
       <main>
-        <Section className="pt-16 md:pt-24">
+        <Section className="pt-28 md:pt-36">
           <Reveal className="max-w-[68ch]">
             <h1 className="display mb-0 text-[clamp(36px,6vw,80px)]">Get started.</h1>
             <p className="lead mt-8 max-w-[56ch]">

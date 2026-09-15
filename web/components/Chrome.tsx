@@ -64,7 +64,7 @@ export function Header() {
 
   return (
     <header
-      className={`sticky top-0 z-50 px-[var(--edge)] transition-colors duration-300 ${
+      className={`fixed inset-x-0 top-0 z-50 px-[var(--edge)] transition-colors duration-300 ${
         stuck || mobileOpen ? "bg-ground/80 backdrop-blur-md" : ""
       }`}
       style={{ borderBottom: `1px solid ${stuck || mobileOpen ? "var(--color-rule)" : "transparent"}` }}

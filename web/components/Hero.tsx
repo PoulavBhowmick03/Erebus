@@ -16,10 +16,6 @@ export function Hero() {
       </div>
       <div aria-hidden className="hero-scrim absolute inset-0" />
 
-      <span className="leak-tag pointer-events-none absolute right-[var(--edge)] top-20 md:top-24">
-        7 notes public
-      </span>
-
       <div className="relative px-[var(--edge)] pb-14 pt-28 md:pb-20">
         <div className="mx-auto w-full max-w-[1560px]">
           <h1 className="display enter mb-0 text-[clamp(42px,10vw,152px)]">
@@ -54,11 +50,6 @@ export function Hero() {
 
               <div className="w-full max-w-[400px]">
                 <Snippet command={INSTALL} label="install" highlight />
-                <p className="mono-xs mt-3 leading-relaxed text-fore-3">
-                  Three packages: the MCP server, the Python binding, and the Rust binary as a
-                  platform wheel. <code className="text-fore-2">EREBUS_BACKEND=mock</code> runs it
-                  all with no chain, no keys, no gas.
-                </p>
               </div>
             </div>
           </div>
