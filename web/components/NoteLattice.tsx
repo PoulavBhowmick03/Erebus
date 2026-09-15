@@ -132,12 +132,14 @@ export function NoteLattice({
         uniform float uSize;
         uniform float uTime;
         uniform float uCamZ;
+        uniform float uSpreadX;
         varying float vTint;
         varying float vFade;
         varying float vAlpha;
         void main() {
           vTint = tint; vAlpha = alpha;
           vec3 p = offset;
+          p.x *= uSpreadX;
           p.y += sin(uTime * 0.18 + seed * 6.2831) * 0.012;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           float s = uSize * (1.0 + tint * 1.35) * (0.4 + 0.6 * alpha);
@@ -164,9 +166,10 @@ export function NoteLattice({
     };
 
     const uniforms = () => ({
-      uSize: { value: small ? 0.019 : 0.016 },
+      uSize: { value: small ? 0.03 : 0.026 },
       uTime: { value: 0 },
       uCamZ: { value: camZ },
+      uSpreadX: { value: 1 },
       uBase: { value: INK.clone() },
       uLeak: { value: LEAK.clone() },
       uOpacity: { value: isVoid ? 0.58 : 0.55 },
@@ -314,6 +317,12 @@ export function NoteLattice({
       camera.right = frustum * aspect;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      // the field's own horizontal spread is narrower than the frustum by
+      // design at aspect 1; stretch it out so the ambient dots reach both
+      // edges of the screen instead of leaving bare margins on a wide viewport
+      // (this is what shows behind the header). The actor mesh — the deal's
+      // fixed A/B/C geometry — is left unscaled.
+      fieldMat.uniforms.uSpreadX.value = (frustum * aspect) / (span / 2);
     };
     resize();
     const ro = new ResizeObserver(resize);
