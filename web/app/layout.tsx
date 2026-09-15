@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, IBM_Plex_Mono } from "next/font/google";
+import { Syne, JetBrains_Mono } from "next/font/google";
 import { KeyProvider } from "@/components/KeyContext";
 import { SmoothScroll } from "@/components/SmoothScroll";
 import { Grain } from "@/components/Grain";
@@ -8,17 +8,24 @@ import "./globals.css";
 
 // A grotesque and a mono, and nothing else. An editorial serif on a warm
 // ground is the exact look this page is trying not to have.
-const archivo = Archivo({
+//
+// Neither face is Archivo or IBM Plex Mono. Those two are the reflex choice
+// for every dark, technical, AI-adjacent product built since 2025 — using
+// them is how a page ends up looking like a template even when nothing else
+// about it is. Syne's proportions are unusual enough at display size to read
+// as a deliberate choice; JetBrains Mono still reads as "terminal" without
+// being the same terminal font as everything else.
+const display = Syne({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-archivo",
+  weight: ["500", "600", "700", "800"],
+  variable: "--font-display-face",
   display: "swap",
 });
 
-const plex = IBM_Plex_Mono({
+const mono = JetBrains_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
-  variable: "--font-plex",
+  variable: "--font-mono-face",
   display: "swap",
 });
 
@@ -78,7 +85,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       data-key="dropped"
-      className={`${archivo.variable} ${plex.variable}`}
+      className={`${display.variable} ${mono.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT }} />

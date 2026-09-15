@@ -42,8 +42,8 @@
   /* the inversion, unused today but kept for a light band */
   --color-flare: #f3f4f6;
 
-  --font-display: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
-  --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-display-face), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 :root {
