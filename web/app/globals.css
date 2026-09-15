@@ -341,6 +341,30 @@ input[type="range"]::-moz-range-thumb {
 }
 .hero-floor > * { position: relative; }
 
+/* an ember bloom behind the pool figure only — atmosphere, not a data value,
+   so it stays in the brand's own orange rather than cinnabar. */
+.figure-glow {
+  position: absolute;
+  inset: -8%;
+  background: radial-gradient(circle at 50% 42%, rgba(251, 64, 32, 0.14), transparent 62%);
+  filter: blur(30px);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+/* ── on-load entrance, not just scroll reveal ────────────────────────────
+   `Reveal` covers content below the fold; this covers first paint, so the
+   hero itself feels alive before a reader has scrolled or clicked anything. */
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.enter {
+  animation: rise-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 }
 
 /* ── responsive ───────────────────────────────────────────────────────── */
@@ -358,6 +382,7 @@ input[type="range"]::-moz-range-thumb {
   .redact::after { transition: none; }
   .roll-label { transition: none; }
   .roll:hover .roll-label { transform: none; }
+  .enter { animation: none; }
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
