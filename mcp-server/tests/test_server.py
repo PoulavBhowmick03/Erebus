@@ -149,6 +149,22 @@ def test_noninteractive_unconfigured_start_explains_marketplace_setup(
     assert caught.value.code == 2
 
 
+def test_explicit_config_selects_its_wallet_over_inherited_environment(monkeypatch, tmp_path):
+    config = tmp_path / "chosen.env"
+    config.write_text("AGENT_ADDRESS=0xchosen\nEREBUS_NETWORK=sepolia\n")
+    config.chmod(0o600)
+    monkeypatch.setenv("AGENT_ADDRESS", "0xother")
+    monkeypatch.setenv("STARKNET_CHAIN_ID", "0x534e5f4d41494e")
+    monkeypatch.setenv("POOL_ADDRESS", "0xotherpool")
+    class Server:
+        def run(self):
+            assert os.environ["AGENT_ADDRESS"] == "0xchosen"
+            assert "STARKNET_CHAIN_ID" not in os.environ
+            assert "POOL_ADDRESS" not in os.environ
+    monkeypatch.setattr(server_module, "build_server", lambda: Server())
+    server_module.main(["--config", str(config)])
+
+
 def test_terminal_unconfigured_start_triggers_first_run_setup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

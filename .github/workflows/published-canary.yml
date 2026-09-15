@@ -151,7 +151,7 @@ jobs:
             sleep 15
           done
 
-      - name: Verify package versions and Protocol 4
+      - name: Verify package versions and matching protocol
         shell: bash
         run: |
           export PATH="/tmp/erebus-published/bin:$PATH"
@@ -161,6 +161,8 @@ jobs:
           import json
           import os
           import subprocess
+
+          from erebus import PROTOCOL
 
           expected = os.environ["VERSION"]
           for package in ("erebus-cli", "erebus-sdk", "erebus-mcp-server"):
@@ -176,7 +178,7 @@ jobs:
           body = json.loads(response.stdout)
           assert body["ok"] is True, body
           assert body["result"]["version"] == expected, body
-          assert body["result"]["protocol"] == 4, body
+          assert body["result"]["protocol"] == PROTOCOL, body
           print(body["result"])
           PY
 

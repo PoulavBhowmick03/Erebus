@@ -7,7 +7,8 @@ It separates implemented behavior, future use cases, and cases outside the prese
 > change-note settlement, and Protocol 4 recovery. [`status.md`](./status.md) remains the
 > tiebreaker when documents disagree.
 
-For the full technical explanation, read [`tech.md`](../tech.md).
+For the architecture, read [ARCHITECTURE.md](../ARCHITECTURE.md).
+For the first application proposal, read [product.md](./product.md).
 
 ## What Erebus is
 

@@ -233,5 +233,5 @@ meaning to an external verifier.
 - [friction.md](./friction.md) F30, F31 — how the salt lane turned out to be public, and what
   wire v2 fixed and did not
 - [privacy-observer-finding.md](./privacy-observer-finding.md) — the harness result in full
-- [roadmap.md](./roadmap.md) §4 — the same boundary, in planning terms
+- [roadmap.md](./roadmap.md) — privacy requirements for planned features
 - [runbook.md](./runbook.md) — the seven steps, reproducible

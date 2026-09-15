@@ -98,7 +98,7 @@ class ServerConfig:
     #: Where daily cumulative spend is persisted, so a restart does not reset it. Defaults
     #: to a path scoped to this identity; see `_spending_state_path`.
     spending_state_path: Path = field(default_factory=lambda: Path("/tmp/erebus-spending-state.json"))
-    #: Base directory for durable caller-intent records (plan.md, Ishita task 1). Scoped
+    #: Base directory for durable caller-intent records. Scoped
     #: per identity for the same reason spending state is; see `_intent_state_dir`.
     intent_state_dir: Path = field(default_factory=lambda: Path("/tmp/erebus-intent-state"))
 

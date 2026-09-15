@@ -123,7 +123,7 @@ def test_version_round_trips(seam: Seam) -> None:
     result = seam.version()
 
     assert result["name"] == "erebus-sdk"
-    assert result["protocol"] == 4
+    assert result["protocol"] == 5
     assert result["default_wire_version"] == "v3"
 
 

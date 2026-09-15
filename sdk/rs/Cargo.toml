@@ -1,6 +1,6 @@
 [package]
 name = "erebus-sdk"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Rust client for Erebus: private agent coordination on STRK20"
 license = "Apache-2.0"
@@ -34,6 +34,8 @@ sha2 = "0.10"
 # A one-shot CLI can have concurrent callers. Advisory locks keep a channel's cursor
 # single-writer across processes.
 fs2 = "0.4"
+# Standard account creation/deployment only; proof-carrying invokes keep our own model.
+starknet = "0.17"
 
 [[bin]]
 name = "erebus-cli"

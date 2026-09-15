@@ -755,7 +755,7 @@ def test_every_result_names_its_backend_and_network(tmp_path):
 
 
 def test_a_write_leaves_no_pending_intent_once_it_has_returned(tmp_path):
-    """Durable caller intent (plan.md, Ishita task 1): the record `IntentStore.begin`
+    """Durable caller intent: the record `IntentStore.begin`
     persists before a chain-writing call must be gone once the call has returned to this
     process, success or a caught error, because that return is proof the process did not
     crash. A record surviving past the call would mean every ordinary write leaked one."""

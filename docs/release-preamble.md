@@ -15,9 +15,10 @@ prove capacity, uptime, independent review, or safe use with material value.
 
 **Relationship privacy is not complete.** Erebus hides the terms, not the relationship.
 Negotiation content and settlement amounts are confidential, and that is demonstrated: an
-observer with no key recovers the full terms from wire v1 and nothing from wire v2. But
-opening a channel writes the counterparty's address to public calldata (F38), and a fixed
-fifth-salt shape lets an observer count and time Erebus traffic without reading it (F31).
+observer with no key cannot recover the terms in the recorded wire-v3 runs.
+Wire v3 removes the historical wire-v2 fixed-salt classifier. Opening a channel still
+writes the counterparty's address to public calldata (F38). Submitting accounts, timing,
+action shape, note count, and public funding legs remain visible.
 Never describe this release as private without qualification. The full boundary is in
 [docs/privacy-model.md](https://github.com/PoulavBhowmick03/Erebus/blob/main/docs/privacy-model.md).
 

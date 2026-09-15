@@ -3,26 +3,33 @@
 **Negotiate in darkness, settle in silence.**
 
 Erebus is experimental coordination and shielded-settlement infrastructure for AI agents.
+Two agents negotiate over an encrypted channel and settle atomically through Starknet's
+STRK20 privacy pool.
+
+**Erebus hides the terms, not the relationship.** Unaudited. Do not put value you care
+about through it.
+
+## Four settlements on mainnet
+
+| Date | Paid | Transaction |
+|---|---|---|
+| 2026-08-31 | 0.8 STRK | [`0x72adebfc…6c6d`](https://starkscan.co/tx/0x72adebfcffdfd45bba66d2152c7e11b50107aa0fe2b4c9f1ea851da16ab6c6d) |
+| 2026-08-31 | 0.6 STRK | [`0x79167f21…f97a`](https://starkscan.co/tx/0x79167f213952fb33a57eec6457963fa7dd7ba3a38160d5ef04540e91bd4f97a) |
+| 2026-09-07 | 2.0 STRK | [`0x2582f34a…f5a7`](https://starkscan.co/tx/0x2582f34a10f6a3c9f1fbfdad4622c2f8a79398a1782c7d425eac13698e7f5a7) |
+| 2026-09-12 | 0.8 STRK | [`0x43329b0f…adcd`](https://starkscan.co/tx/0x43329b0ff5d7865e0be3d4180e608229a5e8fd0d90312f4189f7aa9b8acadcd) |
+
+Amount and recipient are not recoverable from any of them. Every negotiation round is.
+Full ledger and the observer check: [docs/evidence.md](./docs/evidence.md).
 
 **[Install the MCP server](#install) · [Add it to your client](#add-it-to-your-mcp-client) · [The thirteen tools](#the-thirteen-tools) · [Docs](#documentation)**
 
 [![Erebus — private settlement for AI agents](./docs/assets/demo-thumbnail.jpg)](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)
 
-**[Watch the demo](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)** — two agents, running on two different
-frameworks, negotiate and settle 2 STRK on Starknet mainnet through MCP, and a third party
-then reconstructs that one deal from a scoped viewing grant.
+**[Watch the demo](https://drive.google.com/file/d/1zOkEJt08DwRiHeLIu4IaXCl1s8VRSKuu/view?usp=sharing)** — two agents on two different frameworks
+negotiate and settle 2 STRK on mainnet through MCP. A third party then reconstructs that one
+deal from a scoped viewing grant.
 
-[Open the public site](https://erebus-private-agents.vercel.app). It sets out what leaks at
-each step, runs the reference-agent flow in the browser, and links every mainnet transaction
-behind the claims. The browser run is a simulation and does not ask for a wallet. The earlier
-[self-hosted evidence walkthrough](https://erebus-private-agents.vercel.app/erebus-private-sprint.mp4)
-covers the complete mainnet workflow of the two screened canaries, recovery, observer limits,
-and scoped disclosure.
-
-For the current clean-machine operator guide, start with
-[docs/runbook.md](./docs/runbook.md). It covers install, identity setup, hosted proving,
-shielding, negotiation, settlement, recovery, observer inspection, disclosure, and
-shutdown.
+[Public site](https://erebus-private-agents.vercel.app) · [operator guide](./docs/runbook.md)
 
 ---
 
@@ -52,6 +59,26 @@ All four variables are load-bearing even in `mock`. The server refuses to start 
 Then ask your agent to `open_channel`, `propose_offer`, `counter_offer` and
 `accept_and_settle`. When you want a real chain, swap `EREBUS_BACKEND=mock` for a funded
 identity — [Next: an identity](#next-an-identity) — and keep everything else.
+
+### Account onboarding in the next release
+
+The source tree now targets **0.3.0 / Protocol 5 (unreleased)**. The public install above
+still resolves the published release until new wheels are published.
+
+With the 0.3.0 packages installed, run:
+
+```bash
+erebus-init
+```
+
+The initializer lists existing Erebus identities and local `sncast` accounts. Select one
+or choose **new**. It creates keys locally, prints the address and funding shortfall, and
+continues through deployment, allowance approval, shielding, and readiness checks. No repo
+checkout, Rust toolchain, or `sncast` executable is needed. Existing pool keys are retained.
+
+For agents, `--list-accounts --json`, `--account <id>`, `--new`, and `--resume` make the
+choice explicit. `--json` never prompts; `--yes` authorizes the setup transactions.
+See [installed onboarding](docs/onboarding.md) for commands, funding, and supported wallets.
 
 ### Download links
 
@@ -446,8 +473,11 @@ Configuration, the full tool surface, error handling, and the raw CLI protocol a
 | [Architecture](./ARCHITECTURE.md) | Component boundaries, the interface contract, the data model |
 | [Privacy model](./docs/privacy-model.md) | What leaks and what does not. The only source for privacy claims |
 | [Status](./docs/status.md) | Current state in one page; the tiebreaker between documents |
+| [Roadmap](./docs/roadmap.md) | Post-v0.2.0 direction, and what STRK20 now provides natively |
+| [First product](./docs/product.md) | Agent-to-agent paid work: the four gaps, sequence, and open decisions |
 | [Friction log](./docs/friction.md) | Where the stack fought us, and how we worked around it |
 | [Agent skill](./skills/erebus/) | Operating Erebus from an agent, with unsafe-behavior evals |
+| [Evidence](./docs/evidence.md) | Every mainnet transaction, and the observer check against one |
 | [Run evidence](./docs/runs/) | Real mainnet and Sepolia runs with transaction hashes and timings |
 
 ## Repo layout

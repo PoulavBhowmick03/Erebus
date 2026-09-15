@@ -36,7 +36,7 @@ def test_pre_canary_video_copy_is_rejected(tmp_path: Path) -> None:
     path = demo / "index.html"
     path.write_text(
         path.read_text().replace(
-            "Public walkthrough of the complete mainnet workflow. It links the two screened canaries, recovery, observer limits, and scoped disclosure.",
+            "Public three-minute walkthrough of the complete mainnet workflow. It links the two screened canaries, recovery, observer limits, and scoped disclosure.",
             "Recorded before the later full mainnet canary; it shows setup and the complete Sepolia workflow.",
         )
     )

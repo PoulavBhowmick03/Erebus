@@ -1,8 +1,11 @@
 import { Header } from "@/components/Chrome";
 import { Hero } from "@/components/Hero";
-import { Proof } from "@/components/Proof";
-import { Replay } from "@/components/Replay";
-import { Boundary } from "@/components/Boundary";
+import { LeakLedger } from "@/components/LeakLedger";
+import { Simulation } from "@/components/Simulation";
+import { Observer } from "@/components/Observer";
+import { Evidence } from "@/components/Evidence";
+import { NonClaims } from "@/components/NonClaims";
+import { Consume } from "@/components/Consume";
 import { Footer } from "@/components/Footer";
 
 export default function Page() {
@@ -11,9 +14,12 @@ export default function Page() {
       <Header />
       <main>
         <Hero />
-        <Proof />
-        <Replay />
-        <Boundary />
+        <LeakLedger />
+        <Simulation />
+        <Observer />
+        <Evidence />
+        <NonClaims />
+        <Consume />
       </main>
       <Footer />
     </>

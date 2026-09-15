@@ -1768,3 +1768,34 @@ should also say what it currently does not: that this field is not a digest and 
 must be truncated, which silently destroys collision resistance, relevant because T19 still
 owes a published `memo_hash` preimage convention, and this is an argument for that convention
 specifying a string encoding.
+
+---
+
+## F43: Installed onboarding answers 403 for the RPC the repo itself documents (2026-09-15)
+
+**What we were trying to do.** Run the new `erebus-init` onboarding on Sepolia, against the
+endpoint the repository hands every operator by default: the identity env files and
+`.env.example` both name `https://starknet-sepolia-rpc.publicnode.com`.
+
+**What the stack did instead.** Onboarding stopped at
+`setup_error: RPC request failed; rerun onboarding when the endpoint is available`, twice, with
+no further detail. The endpoint was up: `starknet_blockNumber` returned a fresh head, and a
+`curl` POST to the same URL with the same JSON-RPC body succeeded. Reproduced outside the
+tool, `urllib.request.urlopen` against that host raises `HTTPError: HTTP Error 403: Forbidden`
+for the readiness read and the block-number read alike. `setup.py`'s `rpc()` helper built its
+`urllib` request with `Content-Type` only, so it went out as `Python-urllib/3.11`, and the
+provider rejects that agent. Adding any `User-Agent` returns 200.
+
+**Whether we worked around it.** Fixed rather than worked around. `rpc()` now sends
+`User-Agent: erebus-mcp-server`. The onboarding then completed: approve, shield, and `doctor`
+reaching `ready` on Sepolia. The fix is one header, but it was the difference between a release
+that onboards and one that cannot take its first step on its own documented network.
+
+**Why this one is worth writing down.** The failure is opaque in the exact way this file keeps
+flagging: a 403 is swallowed into "the endpoint is unavailable", which sends the operator to
+check their network and the provider's status page, not their client. It also only reproduces
+in the packaged path. Source-tree runs use `sncast`, which sends a normal agent, so nothing in
+the checkout saw it. The lesson repeats F12's shape — the defect hides in the one layer that is
+not the one you are testing — and it argues for the install check to hit a real endpoint, since
+the existing `check-onboarding-install.py` uses a local stub server that had no opinion about
+the `User-Agent`.

@@ -1,60 +1,138 @@
-import { INSTALL, SOURCE } from "@/lib/content";
-import { Snippet } from "./Snippet";
+"use client";
+
+import { NEGOTIATION, SETTLEMENT } from "@/lib/content";
 import { NoteLattice } from "./NoteLattice";
+import { Secret } from "./Secret";
+import { Eyebrow, Section } from "./Chrome";
+import { useKey } from "./KeyContext";
 
-/**
- * Full-bleed poster hero. The pool itself is the background, not an
- * illustration boxed off to one side — the copy sits on top of it with a
- * scrim for contrast, so the strongest visual on the page is the first thing
- * a reader sees rather than a chart-shaped rectangle competing with text.
- */
 export function Hero() {
-  return (
-    <section id="top" className="relative isolate flex min-h-[100svh] flex-col justify-end overflow-hidden">
-      <div aria-hidden className="absolute inset-0">
-        <NoteLattice className="h-full w-full" story density={18} />
-      </div>
-      <div aria-hidden className="hero-scrim absolute inset-0" />
+  const { keyState } = useKey();
 
-      <div className="relative px-[var(--edge)] pb-14 pt-28 md:pb-20">
-        <div className="mx-auto w-full max-w-[1560px]">
-          <h1 className="display enter mb-0 text-[clamp(42px,10vw,152px)]">
-            <span className="block">Negotiate in darkness,</span>
-            <span
-              className="enter block"
-              style={{ animationDelay: "90ms", color: "var(--color-ember)" }}
-            >
+  return (
+    <Section id="top" className="relative overflow-hidden pt-10 pb-0 md:pt-16">
+      <div aria-hidden className="atmosphere" />
+
+      <Eyebrow>
+        <span className="enter inline-block">
+          ΕΛΕΥΣΙΣ · Fig. 01 — one settlement, mainnet, 2026-08-31
+        </span>
+      </Eyebrow>
+
+      <div className="relative mt-8 grid grid-cols-1 gap-10 lg:grid-cols-[1.18fr_0.82fr] lg:gap-10">
+        <div>
+          <h1 className="display m-0 text-[clamp(36px,7vw,104px)]">
+            <span className="enter block" style={{ animationDelay: "60ms" }}>
+              Negotiate in darkness,
+            </span>
+            <span className="enter block text-fore-3" style={{ animationDelay: "160ms" }}>
               settle in silence
             </span>
           </h1>
 
-          <div className="mt-10 grid grid-cols-1 gap-10 border-t border-rule/70 pt-8 lg:grid-cols-[1fr_auto] lg:items-start lg:gap-16">
-            <p className="enter lead max-w-[46ch]" style={{ animationDelay: "160ms" }}>
-              Private coordination and shielded settlement for AI agents. Two agents negotiate
-              over an encrypted channel held in pool note salts, then settle atomically through
-              STRK20. A third party can later be given one deal.
-            </p>
+          <p
+            className="enter mt-8 max-w-[54ch] font-[family-name:var(--font-display)] text-[clamp(15px,1.35vw,19px)] font-normal leading-[1.55] text-fore-2"
+            style={{ animationDelay: "260ms" }}
+          >
+            Two agents open an encrypted channel carried in privacy-pool note salts, exchange
+            structured offers over it, and settle atomically through the shielded pool. A third
+            party can be handed one deal afterwards, and nothing else.
+          </p>
 
-            <div
-              className="enter flex flex-col items-start gap-6 lg:w-[400px] lg:items-end"
-              style={{ animationDelay: "230ms" }}
+          <div
+            className="enter mt-9 flex flex-wrap items-center gap-x-8 gap-y-4"
+            style={{ animationDelay: "340ms" }}
+          >
+            <a
+              href="#run"
+              className="border border-fore bg-fore px-5 py-3 text-[11px] uppercase tracking-[0.18em] text-ground transition-transform duration-300 hover:-translate-y-0.5 hover:opacity-90"
             >
-              <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-                <a href="/docs" className="btn transition-transform duration-300 hover:-translate-y-0.5">
-                  Get started <span aria-hidden>→</span>
-                </a>
-                <a href={SOURCE} className="link">
-                  Source ↗
-                </a>
-              </div>
-
-              <div className="w-full max-w-[400px]">
-                <Snippet command={INSTALL} label="install" highlight />
-              </div>
-            </div>
+              Run a deal ↓
+            </a>
+            <a
+              href="#leaks"
+              className="mono-xs uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] transition-colors hover:text-fore"
+            >
+              Read what still leaks
+            </a>
+            <a
+              href="https://github.com/PoulavBhowmick03/Erebus"
+              className="mono-xs uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] transition-colors hover:text-fore"
+            >
+              Source ↗
+            </a>
           </div>
         </div>
+
+        {/* the anonymity set */}
+        <figure
+          className="enter relative m-0 flex min-h-[380px] flex-col lg:min-h-[520px]"
+          style={{ animationDelay: "180ms" }}
+        >
+          <div className="relative flex-1 border border-rule-2 plate">
+            <div aria-hidden className="figure-glow" />
+            <NoteLattice className="absolute inset-0" story />
+            <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-x-4 gap-y-1 p-3">
+              <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">
+                Fig. 02 — one deal
+              </span>
+              <span className="leak-tag">7 notes public</span>
+            </figcaption>
+          </div>
+          <p className="mono-xs mt-3 leading-relaxed text-fore-3">
+            Every shielded position in STRK20 is a note; the drifting field is that set. The
+            deal playing over it draws <em className="not-text-fore">only what leaks</em> —
+            the pair, the crossings, seven settlement notes, one scoped grant. No amount ever
+            appears, and nothing here changes when you drop the key.
+          </p>
+        </figure>
       </div>
-    </section>
+
+      {/* ── the record ─────────────────────────────────────────────────── */}
+
+      <div className="mt-16 border-t border-rule pt-4 md:mt-24">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <Eyebrow>Fig. 03 — the record of one mainnet deal</Eyebrow>
+          <p className="mono-xs m-0 text-fore-3">
+            {keyState === "held"
+              ? "You hold a viewing key. This is the deal."
+              : "You are a public chain reader. Hold a field to see what you actually get."}
+          </p>
+        </div>
+
+        <dl className="mt-5 grid grid-cols-1 border-t border-rule sm:grid-cols-2 lg:grid-cols-5">
+          {SETTLEMENT.map((f, i) => (
+            <div
+              key={f.label}
+              className="border-b border-rule px-0 py-4 sm:px-4 lg:border-l lg:first:border-l-0 lg:[&:nth-child(5n+1)]:border-l-0 lg:[&:nth-child(5n+1)]:pl-0"
+            >
+              <dt className="mono-xs mb-2 uppercase tracking-[0.14em] text-fore-3">{f.label}</dt>
+              <dd className="m-0 text-[13px] leading-snug">
+                {f.leaks ? (
+                  <span className="leak tnum break-all">{f.value}</span>
+                ) : (
+                  <Secret value={f.value} delay={i * 40} className="tnum" />
+                )}
+              </dd>
+              <p className="mono-xs mt-2 m-0 leading-snug text-fore-3">
+                {f.leaks ? <span className="leak-tag">public</span> : "hidden"}
+                {f.note ? <span className="block pt-1 text-fore-3">{f.note}</span> : null}
+              </p>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-6 flex flex-wrap items-center gap-x-8 gap-y-3 pb-4">
+          <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">Path to agreement</span>
+          {NEGOTIATION.map((n, i) => (
+            <span key={n.step} className="flex items-baseline gap-2">
+              <span className="mono-xs text-fore-3">{String(i + 1).padStart(2, "0")}</span>
+              <span className="mono-sm text-fore-2">{n.step}</span>
+              <Secret value={n.value} className="tnum text-[13px]" delay={400 + i * 60} />
+            </span>
+          ))}
+        </div>
+      </div>
+    </Section>
   );
 }

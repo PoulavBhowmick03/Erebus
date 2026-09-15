@@ -175,7 +175,7 @@ def register_tools(
     async def _write_call(
         tool: str, params: dict[str, Any], operation_id: str, coro: Any
     ) -> dict[str, Any]:
-        """Wraps a chain-writing seam call with durable caller intent (plan.md task 1):
+        """Wraps a chain-writing seam call with durable caller intent:
         persist before the call, resolve once it has returned to this process. `_call`
         already returning — `ok` true or a caught `ErebusError` — is itself proof this
         process did not crash; only a killed process leaves the record on disk."""

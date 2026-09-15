@@ -1,19 +1,18 @@
 # Status
 
-**As of 2026-09-07.** One page, current, and the tiebreaker: where any other document in
+**Planning updated 2026-09-11; execution evidence through 2026-09-07.** This page is the tiebreaker: where any other document in
 this repository disagrees with this one, this one is right and the other is stale.
 
-Nine documents describe this system and they were written across three weeks in which the
-privacy claim changed twice. That is why this page exists.
+The linked run records preserve their original dates, configurations, and measurements.
 
 ---
 
 ## In one line
 
-Erebus negotiates and settles confidentially between two agents on Starknet. Three bounded
-mainnet runs settled 0.8/0.2, 0.6/0.4 and 2.0/0.5 payment/change splits through MCP — the last
-of them driven by two different agent frameworks, Claude Code as payer and Codex as payee. The
-relationship and traffic metadata remain public.
+Erebus negotiates and settles confidentially between two agents on Starknet. Four bounded
+mainnet runs settled 0.8/0.2, 0.6/0.4, 2.0/0.5 and 0.8/0.1 payment/change splits through MCP.
+The 2026-09-07 run is the strongest: two different agent frameworks, Claude Code as payer and
+Codex as payee. The relationship and traffic metadata remain public.
 
 ---
 
@@ -21,7 +20,7 @@ relationship and traffic metadata remain public.
 
 | | |
 |---|---|
-| Network | Full workflow: Sepolia and two bounded mainnet canaries. Mainnet: A, B, and C registered; A and B opened directional channels; two screened shields, MCP negotiation, settlement, observer tests, reconciliation, and scoped disclosure passed on 2026-08-31 |
+| Network | Full workflow: Sepolia and four bounded mainnet runs. Two canaries completed on 2026-08-31; a third used two different agent frameworks on 2026-09-07; a fourth ran on 2026-09-11 (`docs/runs/2026-09-11-mainnet-subagent-canary.md`) |
 | Wire | Source default: v3 — framed messages, authenticated deal IDs, and three masked spare bits. Persisted v1/v2 reads remain supported |
 | Live evidence | `0xc897e94b…92cb` (2026-08-22): BuyerPolicy/SellerPolicy negotiating
   autonomously over MCP on the seam backend at wire v3, settled atomically, and disclosed to
@@ -55,9 +54,9 @@ relationship and traffic metadata remain public.
   could not read the two earlier deals in the same channel
   (`docs/runs/2026-09-07-mainnet-2strk-agents.md`) |
 | Version | `v0.2.0` is published from commit `837d7d9495f08b161c2afc10144544fd0b780218`. It speaks Protocol 4. The older `v0.1.0` artifacts speak Protocol 2 |
-| Tests | 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
+| Recorded tests | September 7 snapshot: 359 Rust passed (plus 7 intentionally ignored live tests), 216 Python passed (plus 2 opt-in Sepolia canaries skipped), 43 TypeScript |
 | Sprint | Complete. The hub independently reports three verified mainnet pool transactions, public demo and video requirements satisfied, and status `finished` at source commit `306c2f2` |
-| In flight | `v0.2.0` is public. The release artifacts passed clean installation and MCP execution on Ubuntu and macOS with Python 3.11 and 3.13, and the published package index passed the same platform matrix. The independent human guide check remains unverified |
+| In flight | `v0.2.0` is public. The release artifacts passed clean installation and MCP execution on Ubuntu and macOS with Python 3.11 and 3.13, and the published package index passed the same platform matrix. The independent human guide check is complete |
 | CI | The release workflow covered Rust, Python, TypeScript against a pinned upstream oracle, full-history secret scanning, dependency hashes, the nine-rule static operator-skill contract, the public-demo contract, release artifacts, checksums, SBOM, and public package-index installation |
 | Install | Published `v0.2.0`: Protocol 4 with thirteen MCP tools. Published `v0.1.0`: Protocol 2 with ten MCP tools. Linux x86-64 and macOS arm64 are supported. Intel macOS is unsupported |
 
@@ -78,7 +77,7 @@ own is deployed: the negotiation rides in note salts the pool already provides.
   See F38 and [privacy-model.md](./privacy-model.md).
 - **Hide that a negotiation happened.** Wire v3 removes the fixed v2 salt classifier, but
   the submitting account, transaction timing, action shape, and note count remain public.
-- **Prove production readiness from two canaries.** Two bounded mainnet workflows passed. This
+- **Prove production readiness from bounded runs.** Four bounded mainnet workflows passed. This
   does not establish capacity, uptime, independent security review, or safe use with real value.
 - **Revoke facts already disclosed.** A wire-v3 expiry stops a later verification, but it
   cannot make a recipient forget a record opened before expiry.
@@ -104,23 +103,20 @@ Never describe this as private in an absolute sense.
 |---|---|---|
 | What leaks, and what does not | [privacy-model.md](./privacy-model.md) | current, canonical |
 | What fought us, and how | [friction.md](./friction.md) | current, 42 entries |
-| What to do next | [roadmap.md](./roadmap.md) | current after the 2026-08-31 reconciliation |
-| How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 clean-machine guide; independent operator verification remains open |
-| Historical source walkthrough | [tech.md](../tech.md) | historical snapshot; wire-v3 sections are stale |
+| What to do next | [roadmap.md](./roadmap.md) | post-v0.2.0 plan, updated 2026-09-11 |
+| How to reproduce a run | [runbook.md](./runbook.md) | Protocol 4 clean-machine guide; independently verified by an external operator |
+| Architecture and interfaces | [ARCHITECTURE.md](../ARCHITECTURE.md), [reference.md](./reference.md) | source and operator references |
 | Does this fit my use case | [usecases.md](./usecases.md) | current after the 2026-08-31 reconciliation |
 | What is missing for production | [production-gaps.md](./production-gaps.md) | current gaps only; completed history lives in dated run records |
 | Key custody reasoning | [custody-design.md](./custody-design.md) | current as a decision record |
 | What a lost key or state directory costs | [custody-operations.md](./custody-operations.md) | current; behaviour only, no tooling |
-| The pitch | [poc.md](./poc.md) | current |
+| First application | [product.md](./product.md) | agent-to-agent paid work; customer demand remains unverified |
 | How to operate it as an agent | [skills/erebus/SKILL.md](../skills/erebus/SKILL.md) | current static nine-rule contract passes; the retained behavioral 9/9 result is optional regression evidence, not a release dependency (`skills/erebus/evals/results-2026-08-26.md`) |
 
 ### Historical documents and known limits
 
 These documents preserve dated evidence and do not describe the current source:
 
-- **`tech.md`** describes the 2026-08-05 tree. Its banner names the obsolete areas.
-- **`poc.md`** preserves the original wire-v2 design record. Its banner points to the
-  current wire-v3 evidence.
 - **`docs/runs/`** records exact past configurations and protocol versions. Do not update a
   past run to look like a current run.
 - **`scripts/observer.py`** labels a recovered legacy transcript as wire v1 before applying
@@ -159,12 +155,17 @@ only metadata and the path. The capsule does not enter the model transcript.
 
 ## The next work
 
-The sprint deadline is now September 7. The active work is deliberately narrow:
+`v0.2.0` is published. Post-release work covers:
 
-1. Ask an independent operator to verify `runbook.md` with the release-candidate artifacts.
-2. Evaluate the announced StarkWare tooling without changing the known-good path.
-3. Run the final gates, public-link checks, and sprint-hub refresh.
-4. Request explicit owner approval before publishing `v0.2.0`.
+1. Publish a `memo_hash` preimage convention, so a settlement record says what was bought
+   and not only what was paid.
+2. Add a counterparty allowlist beside the existing spending limits.
+3. Add a read-only `funding_plan` tool, so a first run cannot fail on a wrong allowance.
+4. Add minimal counterparty discovery.
+5. Complete the remaining production work in [production-gaps.md](./production-gaps.md).
 
-[`roadmap.md`](./roadmap.md) defines acceptance checks and sequencing.
-[`v0.2-release-plan.md`](./v0.2-release-plan.md) contains only the remaining release work.
+Standalone private transfers and private swaps are **not** on this list. STRK20 provides both
+natively; Erebus's layer is the agreement, not the payment.
+
+The [roadmap](./roadmap.md) defines feature acceptance checks.
+The [product plan](./product.md) separates current capabilities from proposed application work.

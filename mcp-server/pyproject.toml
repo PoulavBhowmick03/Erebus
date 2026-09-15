@@ -1,11 +1,11 @@
 [project]
 name = "erebus-mcp-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server exposing Erebus tools to any agent framework"
 requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]>=2.0.0,<3.0.0",
-    "erebus-sdk",
+    "erebus-sdk==0.3.0",
 ]
 
 [project.scripts]

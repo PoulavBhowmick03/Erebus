@@ -7,7 +7,6 @@ variables; local users can run the interactive initializer once.
 
 from __future__ import annotations
 
-import argparse
 import getpass
 import json
 import os
@@ -236,14 +235,9 @@ def configuration_schema() -> dict[str, object]:
 def init_main(argv: Sequence[str] | None = None) -> int:
     """Console entry point for ``erebus-init`` and ``erebus-mcp-server init``."""
 
-    parser = argparse.ArgumentParser(prog="erebus-init")
-    parser.add_argument("--config", type=Path, default=None)
-    args = parser.parse_args(argv)
-    target = args.config or default_config_path()
-    created = interactive_init(target)
-    print(f"Erebus configuration written to {created}")
-    print(f"Start with: erebus-mcp-server --config {shlex.quote(str(created))}")
-    return 0
+    from erebus_mcp.setup import main
+
+    return main(list(argv) if argv is not None else None)
 
 
 def schema_main() -> int:

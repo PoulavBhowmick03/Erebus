@@ -14,7 +14,7 @@
 //! call rather than the length of a write. That is a custody improvement on its own,
 //! independent of who implements the trait.
 //!
-//! It also makes the thing `plan.md` and `custody-design.md` both point at possible: a
+//! It also supports the signing options described in `docs/custody-design.md`: a
 //! hardware wallet, a browser wallet, or a scoped session key can implement `AccountSigner`
 //! without the SDK ever seeing a private key at all. `CLAUDE.md` constraint 6 says key
 //! material never leaves the SDK boundary; a signer lets it never enter.

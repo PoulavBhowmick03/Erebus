@@ -115,6 +115,9 @@ jobs:
         # release is the wrong moment to discover one, so this runs on every push.
         run: python3 scripts/sbom.py --check
 
+      - name: Package-only onboarding through uv tool install
+        run: uv run python scripts/check-onboarding-install.py
+
       - name: Operator-skill safety contract
         run: python3 scripts/check-skill-safety.py
 

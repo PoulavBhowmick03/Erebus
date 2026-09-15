@@ -6,19 +6,117 @@
  *   docs/threat-model.md ............. the measured observer metrics
  *   docs/runs/2026-08-31-mainnet-060-040-canary.md
  *   docs/runs/v0.2-mainnet-canary.json
- *   agents/src/erebus_agents/demo.py . the replay
- *   README.md ........................ install and the MCP tool surface
+ *   README.md
  */
 
 export const SOURCE = "https://github.com/PoulavBhowmick03/Erebus";
 export const doc = (p: string) => `${SOURCE}/blob/main/${p}`;
 export const starkscan = (h: string) => `https://starkscan.co/tx/${h}`;
 
-/* ── Install · README.md ─────────────────────────────────────────────────── */
+/* ── Hero ledger: the second mainnet canary, 2026-08-31 ─────────────────── */
 
-export const INSTALL = `uv tool install \\
-  --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \\
-  erebus-mcp-server`;
+export type Field = {
+  label: string;
+  value: string;
+  /** true when a public chain reader can read this. cinnabar. */
+  leaks: boolean;
+  note?: string;
+};
+
+export const SETTLEMENT: Field[] = [
+  { label: "network", value: "SN_MAIN", leaks: true },
+  { label: "counterparty", value: "0x0572…7189", leaks: true, note: "written in public calldata at channel open — F38" },
+  { label: "submitting account", value: "0x6597…e54c", leaks: true, note: "the same identity signs every write" },
+  { label: "block", value: "14147370", leaks: true },
+  { label: "timestamp", value: "2026-08-31T11:51:10Z", leaks: true },
+  { label: "notes created", value: "7", leaks: true, note: "wire v3 always creates seven" },
+  { label: "amount paid", value: "0.6 STRK", leaks: false },
+  { label: "change returned", value: "0.4 STRK", leaks: false },
+  { label: "recipient", value: "account B", leaks: false },
+  { label: "deal id", value: "10977364695535158093", leaks: false },
+];
+
+export const NEGOTIATION = [
+  { step: "buyer opens", value: "0.48 STRK", who: "buyer-authored" },
+  { step: "seller counters", value: "0.60 STRK", who: "seller-authored" },
+  { step: "buyer accepts", value: "0.60 STRK", who: "settled atomically" },
+];
+
+/* ── What leaks at each step · docs/privacy-model.md ────────────────────── */
+
+export type LeakRow = { step: string; hidden: string; open: string; severe?: boolean };
+
+export const LEAKS: LeakRow[] = [
+  {
+    step: "0 · fund",
+    hidden: "nothing",
+    open: "depositor account, amount, token, timing — the whole ERC-20 leg",
+  },
+  {
+    step: "1 · open channel",
+    hidden: "the channel key",
+    open: "the counterparty’s address, in the clear — plus the submitting account and timing",
+    severe: true,
+  },
+  {
+    step: "2–4 · offer, counter, final offer",
+    hidden: "amount, token, deadline, memo hash, message type, replyTo",
+    open: "submitting account, five salt values per message, note count, timing",
+  },
+  {
+    step: "5 · accept and settle",
+    hidden: "amount paid, recipient, change amount",
+    open: "submitting account, that a settlement occurred, seven created notes on wire v3",
+  },
+  {
+    step: "6 · grant",
+    hidden: "everything — local only, no transaction",
+    open: "nothing",
+  },
+  {
+    step: "7 · reveal",
+    hidden: "everything — local only, no transaction",
+    open: "nothing",
+  },
+];
+
+/* ── Measured observer results · docs/threat-model.md §4 ────────────────── */
+
+export const METRICS = [
+  {
+    id: "M1",
+    question: "Can an observer tell an Erebus transaction from other pool traffic?",
+    result: "1.0000",
+    detail:
+      "wire v2, measured 2026-08-21 — 2 fixtures against 10,000 synthetic negatives, zero false positives",
+    target: "0.5",
+    bad: true,
+  },
+  {
+    id: "M2",
+    question: "Can an observer read the exact-vs-change bit from a settlement?",
+    result: "0.5008",
+    detail: "measured offline 2026-08-22 — wire v3 always creates seven notes",
+    target: "0.5",
+    bad: false,
+  },
+  {
+    id: "M3",
+    question: "How accurately can an observer count deals per account?",
+    result: "exact",
+    detail: "given M1. not separately measured",
+    target: "bounded by M1",
+    bad: true,
+  },
+  {
+    id: "M4",
+    question: "Can an observer link a submission to the pool identity acting?",
+    result: "1.0",
+    detail: "by construction — the same account signs every write. there is no relayer",
+    target: "≈0",
+    bad: true,
+  },
+] as const;
 
 /* ── Evidence manifest · the 0.6/0.4 canary, all fees are receipt amounts ── */
 
@@ -35,160 +133,50 @@ export const MANIFEST_TOTALS = {
   network: "11.211356 STRK",
   pool: "24 STRK",
   poolFee: "6 STRK per apply_actions",
+  pool_address: "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
 };
-
-/* ── The replay · agents/src/erebus_agents/demo.py ───────────────────────── */
-
-export type ReplayStage = { id: string; title: string; hidden: string; open: string };
-
-export const REPLAY: ReplayStage[] = [
-  {
-    id: "01",
-    title: "open channel",
-    hidden: "the channel key",
-    open: "counterparty address, submitting account, timing",
-  },
-  {
-    id: "02",
-    title: "offer and counter",
-    hidden: "amount, token, deadline, memo hash",
-    open: "submitting account, note count, timing",
-  },
-  {
-    id: "03",
-    title: "settle",
-    hidden: "amount paid, recipient, change",
-    open: "submitting account, that a settlement occurred, seven notes",
-  },
-];
-
-export type TranscriptLine = {
-  stage: number;
-  text: string;
-  secret?: string;
-  tail?: string;
-};
-
-export const TRANSCRIPT: TranscriptLine[] = [
-  { stage: 1, text: "opened encrypted channel", tail: "ch_b7afee5f…8d9af8" },
-  { stage: 2, text: "buyer proposed", secret: "0.48 STRK" },
-  { stage: 2, text: "seller countered", secret: "0.60 STRK" },
-  { stage: 2, text: "buyer accepted the counteroffer" },
-  { stage: 3, text: "accepted offer and shielded payment committed atomically" },
-  { stage: 3, text: "deal-scoped viewing grant created for", tail: "0xauditor" },
-  { stage: 3, text: "auditor reconstructed two offers and the settlement record" },
-];
-
-export const DEAL_SUMMARY = [
-  { k: "channel", v: "ch_b7afee5f…8d9af8", hidden: false },
-  { k: "participants", v: "buyer ↔ seller", hidden: false },
-  { k: "agreed", v: "0.60 STRK", hidden: true },
-  { k: "paid", v: "0.60 STRK", hidden: true },
-] as const;
-
-/* ── Who sees what · docs/privacy-model.md ───────────────────────────────── */
-
-export const DISCLOSURE = [
-  { who: "Public chain reader", terms: "Hidden" },
-  { who: "Channel party", terms: "Readable" },
-  { who: "Viewing-grant holder", terms: "Readable for one deal" },
-] as const;
-
-/* ── Three measured lines · docs/threat-model.md §4 ─────────────────────── */
-
-export const OBSERVER = [
-  {
-    k: "M1 · wire v2 classifier",
-    v: "1.0000",
-    note: "identifies an Erebus message against 10,000 negatives",
-    bad: true,
-  },
-  {
-    k: "M2 · wire v3 classifier",
-    v: "0.5008",
-    note: "chance, on the same 10,000 negatives",
-    bad: false,
-  },
-  {
-    k: "M4 · submission linkage",
-    v: "1.0",
-    note: "the same account signs every write",
-    bad: true,
-  },
-] as const;
 
 /* ── What this does not do · docs/status.md ─────────────────────────────── */
 
-export type NonClaim = { title: string; body: string };
+export type NonClaim = { title: string; body: string; ref?: string };
 
 export const NON_CLAIMS: NonClaim[] = [
   {
-    title: "Not production ready",
-    body: "Two mainnet workflows passed. That is not capacity, uptime, or an independent security review.",
+    title: "Hide who you are dealing with.",
+    body: "The counterparty’s address is written in public calldata at channel-open. This is upstream of our encryption and no wire change fixes it.",
+    ref: "F38",
   },
   {
-    title: "Disclosure cannot be undone",
-    body: "A wire-v3 expiry stops later verification. It cannot make a recipient forget a record they already opened.",
+    title: "Hide that a negotiation happened.",
+    body: "Wire v3 removes the fixed v2 salt classifier, but the submitting account, transaction timing, action shape, and note count remain public.",
   },
   {
-    title: "No escrow or deferred delivery",
-    body: "Settlement is atomic, so there is no agree-now-deliver-later. The pool has no timelock and no conditional release.",
+    title: "Prove production readiness from two canaries.",
+    body: "Two bounded mainnet workflows passed. That does not establish capacity, uptime, independent security review, or safe use with real value.",
+  },
+  {
+    title: "Revoke facts already disclosed.",
+    body: "A wire-v3 expiry stops a later verification. It cannot make a recipient forget a record opened before expiry.",
+  },
+  {
+    title: "Escrow, or deferred delivery.",
+    body: "Settlement is atomic, so there is no “agree now, deliver later”. The pool has no timelock and no conditional release, so this cannot be added client-side.",
   },
 ];
 
 /* ── The tool surface · thirteen MCP tools, Protocol 4 ──────────────────── */
 
-export const TOOL_GROUPS = [
-  {
-    label: "Negotiate, settle, disclose",
-    tools: [
-      "open_channel", "propose_offer", "counter_offer", "wait_for_offers",
-      "read_channel_state", "accept_and_settle", "get_note_balance", "grant_viewing_key",
-      "reveal",
-    ],
-  },
-  {
-    label: "Recovery & ops",
-    tools: ["reconcile", "resume_operation", "rebuild_state", "doctor"],
-  },
+export const TOOLS = [
+  "open_channel", "propose_offer", "counter_offer", "wait_for_offers",
+  "read_channel_state", "accept_and_settle", "get_note_balance", "grant_viewing_key",
+  "reveal", "reconcile", "resume_operation", "rebuild_state", "doctor",
 ] as const;
 
-/* ── Configuration · README.md ───────────────────────────────────────────── */
-
-/** One MCP client entry. Two agents means two of these, one per identity. */
-export const MCP_CONFIG = `{
-  "mcpServers": {
-    "erebus-buyer": {
-      "command": "erebus-mcp-server",
-      "env": {
-        "EREBUS_BACKEND": "seam",
-        "EREBUS_NETWORK": "sepolia",
-        "EREBUS_SETTLEMENT_ROLE": "payer",
-        "AGENT_ADDRESS": "0x...",
-        "STARKNET_RPC_URL": "https://...",
-        "PROVING_SERVICE_URL": "https://...",
-        "TOKEN_ADDRESS": "0x...",
-        "POOL_KEY_FILE": "/home/you/.erebus-a/agent.pool.key",
-        "ACCOUNT_KEY_FILE": "/home/you/.erebus-a/agent.account.key",
-        "EREBUS_STATE_DIR": "/home/you/.erebus-a/state"
-      }
-    }
-  }
-}`;
-
-export const ENV_VARS = [
-  { k: "EREBUS_BACKEND", v: "mock · seam", note: "mock drives the whole surface with no chain" },
-  { k: "EREBUS_NETWORK", v: "sepolia · mainnet", note: "" },
-  { k: "EREBUS_SETTLEMENT_ROLE", v: "payer · payee", note: "accept_and_settle spends the caller’s notes" },
-  { k: "AGENT_ADDRESS", v: "0x…", note: "the calling account" },
-  { k: "STARKNET_RPC_URL", v: "https://…", note: "" },
-  { k: "PROVING_SERVICE_URL", v: "https://…", note: "hosted prover" },
-  { k: "TOKEN_ADDRESS", v: "0x…", note: "the shielded token" },
-  { k: "POOL_KEY_FILE", v: "path", note: "key values never cross the binding" },
-  { k: "ACCOUNT_KEY_FILE", v: "path", note: "" },
-  { k: "EREBUS_STATE_DIR", v: "path", note: "locked, mode-0600 state" },
+export const FACTS = [
+  { k: "protocol", v: "Erebus 4" },
+  { k: "wire", v: "v3 · AES-256-GCM-SIV" },
+  { k: "release", v: "v0.2.0" },
+  { k: "tests", v: "359 rs / 216 py / 43 ts" },
+  { k: "friction entries", v: "42" },
+  { k: "licence", v: "Apache-2.0" },
 ] as const;
-
-/* ── The call path · CLAUDE.md ───────────────────────────────────────────── */
-
-export const CALL_PATH = ["agents", "mcp-server", "sdk/py", "sdk/rs", "Starknet"] as const;

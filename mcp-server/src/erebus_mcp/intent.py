@@ -1,6 +1,5 @@
 """Durable caller intent: persist an operation's identity and parameters before the write
-reaches the seam, so a crash mid-call leaves a record instead of silence (plan.md, Ishita
-task 1).
+reaches the seam, so a crash mid-call leaves a record instead of silence.
 
 This module records whether the MCP process attempted a call and records its exact
 parameters. It does not classify the chain outcome. The Rust journal and `reconcile()` are
@@ -8,8 +7,8 @@ authoritative for that outcome. Protocol 4 carries the same `operation_id` throu
 and the CLI into Rust. A caller can then use `resume_operation` with the original ID.
 Nothing in this module submits a transaction or infers success.
 
-Decision 1 (plan.md): operation IDs are caller supplied, ``op_`` followed by 64 lowercase
-hex characters. Decision 3: the Python binding stays mechanical and never generates one —
+Protocol 4 operation IDs are caller supplied, ``op_`` followed by 64 lowercase
+hex characters. The Python binding stays mechanical and never generates one —
 this module is the caller above it that does.
 """
 
@@ -39,7 +38,7 @@ class IntentConflict(ValueError):
 
 
 def new_operation_id() -> str:
-    """A fresh ``op_`` + 64 lowercase hex character id (plan.md decision 1)."""
+    """A fresh Protocol 4 id: ``op_`` + 64 lowercase hex characters."""
     return "op_" + secrets.token_hex(_ID_BYTES)
 
 

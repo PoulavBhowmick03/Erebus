@@ -34,6 +34,7 @@ pub mod journal;
 pub mod keys;
 pub mod negotiation;
 pub mod notecache;
+pub mod onboarding;
 pub mod operation;
 pub mod prover;
 pub mod read;

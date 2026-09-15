@@ -10,7 +10,8 @@ known-answer test here means that protocol logic crossed the binding boundary. S
 :class:`SeamConfig` contains paths to two key files. The Rust binary opens them. The Python
 heap never holds a pool private key.
 
-Protocol 4, 2026-08-26. Every method except ``version`` and ``generate_pool_key`` carries
+Protocol 5 adds installed account onboarding. Settlement requests retain Protocol 4's
+operation IDs. Every method except ``version``, ``generate_pool_key`` and ``onboarding`` carries
 the same configuration because ``erebus-cli`` keeps no process state. Channel
 state lives in ``state_dir`` behind an opaque handle.
 """
@@ -33,7 +34,7 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 #: The request/response contract this binding speaks. The binary reports its own on every
 #: envelope; ``call`` refuses a mismatch by name instead of failing on a changed shape.
-PROTOCOL = 4
+PROTOCOL = 5
 
 
 class SeamUnavailable(RuntimeError):
@@ -137,6 +138,16 @@ class Seam:
         timeout: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         resolved = str(binary) if binary else shutil.which("erebus-cli")
+        if not resolved:
+            # uv tool installs expose only the top-level package's entry points.
+            # The dependency wheel keeps its binary inside that tool environment.
+            try:
+                from erebus_cli import binary_path
+
+                packaged = binary_path()
+                resolved = str(packaged) if packaged else None
+            except ImportError:
+                pass
         if not resolved:
             raise SeamUnavailable(
                 "erebus-cli not found on PATH. Build it with "

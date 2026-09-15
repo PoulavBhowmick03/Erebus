@@ -1,6 +1,6 @@
 """Erebus MCP server.
 
-Owned by Ishita. The production backend reaches the protocol-4 Rust client through the
+Owned by Ishita. The production backend reaches the protocol-5 Rust client through the
 Python binding. The mock backend supports deterministic tests.
 
 Run the installed entry point:
@@ -27,6 +27,7 @@ key, so the key owner must control the prover. See docs/custody-design.md.
 """
 
 import argparse
+import os
 import logging
 import sys
 from collections.abc import Sequence
@@ -142,10 +143,10 @@ def build_server() -> MCPServer:
 
     spend_guard = SpendGuard(config.spending_limits, config.spending_state_path)
     # Persists an operation id and its canonical parameters before a write reaches the
-    # seam, so a crashed process leaves a record instead of silence (plan.md, Ishita
-    # task 1). Not yet consulted by Rust — see erebus_mcp/intent.py for the scope boundary.
+    # seam, so a crashed process leaves a record instead of silence.
+    # Rust owns its separate journal; see erebus_mcp/intent.py for the scope boundary.
     intent_store = IntentStore(config.intent_state_dir)
-    # Stamped onto every tool result (roadmap 9.2) so a transcript alone tells a model
+    # Stamped onto every tool result so a transcript alone tells a model
     # whether it is talking to a real chain, and which one. "mock" has no chain to report;
     # canonical seam configurations use a friendly name, and unknown deployments say custom.
     network = config.seam.network if config.seam is not None else "mock"
@@ -172,7 +173,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         config_path = resolve_config_path(options.config)
         if config_path is not None:
-            load_config_file(config_path)
+            if options.config is not None:
+                # An explicitly selected identity must not inherit another wallet's
+                # address or chain from the launcher's environment.
+                selected: dict[str, str] = {}
+                load_config_file(config_path, selected)
+                if selected.get("EREBUS_NETWORK"):
+                    for name in ("STARKNET_CHAIN_ID", "POOL_ADDRESS"):
+                        if name not in selected:
+                            os.environ.pop(name, None)
+                os.environ.update(selected)
+            else:
+                load_config_file(config_path)
         elif not environment_is_configured():
             if sys.stdin.isatty():
                 created = default_config_path()

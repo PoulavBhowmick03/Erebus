@@ -34,6 +34,10 @@ use starknet_types_core::felt::Felt;
 )]
 enum Request {
     Version,
+    Onboarding {
+        action: String,
+        args: serde_json::Value,
+    },
     /// Creates a pool identity key directly in a protected Rust-owned file.
     GeneratePoolKey {
         path: PathBuf,
@@ -61,7 +65,7 @@ enum Request {
         handle: String,
     },
     /// Classify every journalled operation against the chain. Read-only: it submits
-    /// nothing and never repairs by itself (plan.md decision 5).
+    /// nothing and never repairs by itself.
     Reconcile {
         config: ConfigParams,
     },
@@ -203,7 +207,7 @@ impl TermsParams {
 /// so a consumer can fail with a named mismatch instead of a shape error deep inside its
 /// own decoding — a stale server against a newer binary surfaced exactly that way on
 /// 2026-08-19. Bump on any change to a request or result shape, not only breaking ones.
-const PROTOCOL: u8 = 4;
+const PROTOCOL: u8 = 5;
 
 #[derive(Debug, Serialize)]
 struct Response {
@@ -265,6 +269,8 @@ enum CliError {
     #[error(transparent)]
     KeyFile(#[from] KeyFileError),
     #[error(transparent)]
+    Onboarding(#[from] erebus_sdk::onboarding::OnboardingError),
+    #[error(transparent)]
     Client(#[from] ClientError),
 }
 
@@ -276,6 +282,7 @@ impl CliError {
             }
             Self::BadResponse(_) => Response::err("INTERNAL", self.to_string(), false),
             Self::KeyFile(_) => Response::err("IDENTITY_UNAVAILABLE", self.to_string(), false),
+            Self::Onboarding(_) => Response::err("ONBOARDING_REQUIRED", self.to_string(), false),
             Self::Client(error) => client_error_response(error),
         }
     }
@@ -290,6 +297,9 @@ fn operation_id(value: String) -> Result<OperationId, CliError> {
 
 async fn dispatch(request: Request) -> Result<serde_json::Value, CliError> {
     match request {
+        Request::Onboarding { action, args } => {
+            Ok(erebus_sdk::onboarding::run(&action, args).await?)
+        }
         Request::Version => Ok(serde_json::json!({
             "name": env!("CARGO_PKG_NAME"),
             "version": env!("CARGO_PKG_VERSION"),

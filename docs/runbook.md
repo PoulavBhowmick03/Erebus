@@ -163,19 +163,37 @@ The payer must call `get_note_balance` before naming a price. The payee must not
 `accept_and_settle`. Every write needs an `operation_id` and the caller should persist the
 canonical intent before the call.
 
-Example shell flow:
+Example shell flow. **Both sides open their own direction**, and each then reads the other's
+offers through its own handle. This is not optional: a one-sided open leaves the counterparty
+with `unknown channel handle`, and a payee that never opens cannot see the offer it is meant to
+counter. `scripts/demo.sh` follows the same two-open shape.
 
 ```bash
+# A opens its direction and proposes
+HANDLE_A=$(scripts/agent.sh ~/.erebus-a/env open "$(scripts/agent.sh ~/.erebus-b/env whoami)")
 scripts/agent.sh ~/.erebus-a/env balance
-scripts/agent.sh ~/.erebus-a/env open "$(scripts/agent.sh ~/.erebus-b/env whoami)"
-scripts/agent.sh ~/.erebus-b/env wait <channel-handle> 1
-scripts/agent.sh ~/.erebus-b/env counter <channel-handle> <offer-id> 600000000000000000
-scripts/agent.sh ~/.erebus-a/env accept <channel-handle> <offer-id>
+scripts/agent.sh ~/.erebus-a/env offer "$HANDLE_A" 600000000000000000
+
+# B opens its own direction, then sees A's offer there
+HANDLE_B=$(scripts/agent.sh ~/.erebus-b/env open "$(scripts/agent.sh ~/.erebus-a/env whoami)")
+scripts/agent.sh ~/.erebus-b/env status "$HANDLE_B"
+scripts/agent.sh ~/.erebus-b/env counter "$HANDLE_B" them:0 1000000000000000000
+
+# A reads B's counter through A's direction and settles
+scripts/agent.sh ~/.erebus-a/env status "$HANDLE_A"
+scripts/agent.sh ~/.erebus-a/env accept "$HANDLE_A" them:0
 ```
 
 The exact offer amounts, deadlines, and memos belong in the agent policy or the clean-shell
 record you are building. The important point for the guide is the lifecycle, not a single
 example price.
+
+Two consequences worth budgeting for before a run. A payee needs an allowance for **two**
+charged writes (its own open and its counter) even though it never pays the price — opening a
+direction is an `apply_actions`, not a read. And the pool fee is pulled from the identity's
+**public STRK**, through `transfer_from`; neither a healthy shielded balance nor a large
+allowance is sufficient if the public balance is low. `doctor` reports that case as a
+`gas_balance` warning. See F36 and F43.
 
 ## 7. Settle
 

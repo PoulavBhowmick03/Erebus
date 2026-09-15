@@ -1,23 +1,22 @@
 # What remains before production
 
-**Updated 2026-08-31.** Erebus is a mainnet-verified technical preview. It is not ready for
+**Updated 2026-09-11.** Erebus v0.2.0 is a published, mainnet-verified technical preview. It is not ready for
 material real value.
 
 Completed protocol and canary history lives in [`status.md`](./status.md) and
 [`runs/`](./runs/). This file lists current gaps only.
 
-## Release-candidate gaps
+## Post-release operator gap
 
-These block a reviewed `v0.2.0` publication, not the already completed mainnet canary:
+The release artifacts and public package index passed automated installation checks, and an
+independent operator has since followed the published [runbook](./runbook.md) from a clean
+machine. What remains is repetition: multiple external operators, across time, without
+maintainer assistance.
 
-- one current end-to-end operator guide tested from a clean shell;
-- one external clean-install canary from release-candidate artifacts;
-- targeted review of hosted proving, transaction recovery, and secret boundaries;
-- a replacement public video showing the complete mainnet workflow;
-- final public-link, hub, artifact, and secret verification;
-- explicit owner authorization to publish.
+The [targeted review](./v0.2-targeted-review.md) records completed fixes and residual risk.
+It is not an independent security audit.
 
-See [`v0.2-release-plan.md`](./v0.2-release-plan.md).
+The [roadmap](./roadmap.md) tracks the first application.
 
 ## Custody and infrastructure
 
@@ -39,7 +38,7 @@ Production needs:
 Protocol 4 has durable operation IDs and reconciliation, but production still needs:
 
 - long-running failure tests against real provider timeouts and restarts;
-- bounded journal retention without losing recovery evidence;
+- operational validation of journal pruning without losing unresolved recovery evidence;
 - spending limits enforced in Rust and preserved across restarts;
 - operator alerts for ambiguous operations, expired proofs, allowance drift, and RPC drift;
 - a documented incident response process.
@@ -92,8 +91,9 @@ The protocol does not provide delivery-versus-payment, escrow, refunds, deferred
 or outcome-only proofs. A scoped grant reveals a deal record; it does not prove external
 delivery or expose only a single business outcome.
 
-Do not add those features to the sprint release. Each requires a separate product and
-security decision after the current operator path is reproducible.
+The [product plan](./product.md) covers agent-to-agent paid work on the existing wire.
+Escrow, refunds, and outcome-only proofs require separate product and security decisions.
+Standalone transfers and swaps are STRK20 platform features and are not Erebus gaps.
 
 ## Production finish line
 

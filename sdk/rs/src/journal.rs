@@ -117,7 +117,7 @@ impl OperationStage {
 
 /// One attempt to carry an operation through to a chain effect.
 ///
-/// Recovery mode 2 in plan.md rebuilds an expired proof under the same operation id, which
+/// Recovery can rebuild an expired proof under the same operation id, which
 /// starts a new attempt rather than mutating the old one. The old attempt is retained: it
 /// holds the transaction hash that reconciliation must still prove never landed.
 #[derive(Debug, Clone, Serialize, Deserialize)]

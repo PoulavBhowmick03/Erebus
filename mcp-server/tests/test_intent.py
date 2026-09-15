@@ -1,4 +1,4 @@
-"""Unit tests for IntentStore: durable caller intent (plan.md, Ishita task 1)."""
+"""Unit tests for IntentStore: durable caller intent."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from erebus_mcp.intent import IntentConflict, IntentStore, new_operation_id
 _ID_PATTERN = re.compile(r"^op_[0-9a-f]{64}$")
 
 
-def test_operation_id_matches_the_plan_md_format() -> None:
+def test_operation_id_matches_the_protocol_4_format() -> None:
     assert _ID_PATTERN.match(new_operation_id())
 
 
