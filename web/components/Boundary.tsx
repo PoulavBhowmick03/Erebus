@@ -18,10 +18,16 @@ export function Boundary() {
 
       <div className="mt-14 grid grid-cols-1 gap-px border-t border-rule sm:grid-cols-3">
         {OBSERVER.map((m) => (
-          <div key={m.k} className="border-b border-rule py-6 pr-6">
-            <p className="mono-xs m-0 mb-3 uppercase tracking-[0.14em] text-fore-3">{m.k}</p>
+          <div
+            key={m.k}
+            className="group border-b border-rule py-6 pr-6 transition-colors duration-300 hover:bg-panel"
+          >
+            <p className="mono-xs m-0 mb-3 uppercase tracking-[0.14em] text-fore-3 transition-colors group-hover:text-fore-2">
+              {m.k}
+            </p>
             <p
-              className={`tnum m-0 text-[clamp(28px,3vw,40px)] leading-none ${m.bad ? "leak" : ""}`}
+              className={`tnum m-0 text-[clamp(28px,3vw,40px)] leading-none transition-transform duration-300 group-hover:scale-105 ${m.bad ? "leak" : ""}`}
+              style={{ transformOrigin: "left center" }}
             >
               {m.v}
             </p>
@@ -36,12 +42,14 @@ export function Boundary() {
             as="li"
             key={c.title}
             delay={i * 90}
-            className="grid grid-cols-1 gap-4 border-t border-rule py-8 md:grid-cols-[3rem_1.1fr_1fr] md:gap-10"
+            className="group grid grid-cols-1 gap-4 border-t border-rule py-8 transition-colors duration-300 hover:border-rule-2 md:grid-cols-[3rem_1.1fr_1fr] md:gap-10"
           >
-            <span className="mono-xs pt-3 uppercase tracking-[0.16em] text-fore-3">
+            <span className="mono-xs pt-3 uppercase tracking-[0.16em] text-fore-3 transition-colors group-hover:text-fore-2">
               {String(i + 1).padStart(2, "0")}
             </span>
-            <h3 className="display m-0 text-[clamp(19px,2.2vw,31px)] leading-[1.06]">{c.title}</h3>
+            <h3 className="display m-0 text-[clamp(19px,2.2vw,31px)] leading-[1.06] transition-transform duration-300 group-hover:translate-x-1.5">
+              {c.title}
+            </h3>
             <p className="prose m-0 max-w-[48ch] self-center">{c.body}</p>
           </Reveal>
         ))}

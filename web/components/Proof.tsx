@@ -36,16 +36,20 @@ export function Proof() {
       <div className="mt-10 overflow-x-auto">
         <ol className="m-0 flex min-w-[820px] list-none gap-px border-t border-rule p-0">
           {MANIFEST.map((r, i) => (
-            <li key={r.hash} className="flex-1 border-b border-rule py-5 pr-6">
-              <p className="mono-xs m-0 mb-3 flex items-baseline gap-2 uppercase tracking-[0.14em] text-fore-3">
+            <li
+              key={r.hash}
+              className="group flex-1 border-b border-rule py-5 pr-6 transition-colors hover:border-b-rule-2"
+            >
+              <p className="mono-xs m-0 mb-3 flex items-baseline gap-2 uppercase tracking-[0.14em] text-fore-3 transition-colors group-hover:text-fore-2">
                 <span>{String(i + 1).padStart(2, "0")}</span>
                 <span>{r.action}</span>
               </p>
               <a
                 href={starkscan(r.hash)}
-                className="mono-sm tnum text-fore-2 underline decoration-rule-2 underline-offset-[5px] transition-colors hover:text-fore"
+                className="mono-sm tnum inline-flex items-center gap-1 text-fore-2 underline decoration-rule-2 underline-offset-[5px] transition-all group-hover:decoration-fore hover:text-fore"
               >
-                {short(r.hash)} ↗
+                {short(r.hash)}
+                <span className="inline-block transition-transform group-hover:translate-x-0.5">↗</span>
               </a>
               <p className="mono-xs m-0 mt-3">
                 <span className="leak tnum">block {r.block}</span>

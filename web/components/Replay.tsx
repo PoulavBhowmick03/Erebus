@@ -76,7 +76,7 @@ export function Replay() {
             return (
               <li
                 key={s.id}
-                className={`border-b border-rule border-l-2 p-6 transition-colors last:border-b-0 ${
+                className={`border-b border-rule border-l-2 p-6 transition-colors last:border-b-0 hover:bg-panel ${
                   active ? "border-l-fore" : "border-l-transparent"
                 }`}
               >
@@ -197,7 +197,7 @@ export function Replay() {
           </thead>
           <tbody>
             {DISCLOSURE.map((r) => (
-              <tr key={r.who} className="border-b border-rule">
+              <tr key={r.who} className="border-b border-rule transition-colors hover:bg-panel">
                 <td className="py-4 pr-6 text-[13px]">{r.who}</td>
                 <td
                   className={`py-4 pr-6 text-[13px] ${
