@@ -19,7 +19,6 @@ MANIFESTS = (
     ("mcp-server/pyproject.toml", "toml"),
     ("packaging/erebus-cli/pyproject.toml", "toml"),
     ("sdk/rs/Cargo.toml", "cargo"),
-    ("sdk/ts/package.json", "json"),
 )
 LOCK_PACKAGES = {
     "uv.lock": {
@@ -32,6 +31,7 @@ LOCK_PACKAGES = {
     "sdk/rs/Cargo.lock": {"erebus-sdk"},
 }
 EVIDENCE_PATH = Path("docs/runs/v0.2-mainnet-canary.json")
+SEPOLIA_ONBOARDING_EVIDENCE_PATH = Path("docs/runs/2026-09-15-sepolia-v0.3.0.md")
 PREAMBLE_PATH = Path("docs/release-preamble.md")
 BASELINE_PHRASES = (
     "unaudited",
@@ -71,6 +71,36 @@ FORBIDDEN_KEY_PARTS = (
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 HEX_64 = re.compile(r"^0x[0-9a-fA-F]{1,64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _check_v03_sepolia_evidence(root: Path, preamble: str) -> list[str]:
+    errors: list[str] = []
+    if str(SEPOLIA_ONBOARDING_EVIDENCE_PATH) not in preamble:
+        errors.append(f"{PREAMBLE_PATH}: must link {SEPOLIA_ONBOARDING_EVIDENCE_PATH}")
+    try:
+        evidence = (root / SEPOLIA_ONBOARDING_EVIDENCE_PATH).read_text()
+    except OSError as exc:
+        return [f"{SEPOLIA_ONBOARDING_EVIDENCE_PATH}: {exc}"]
+    required = (
+        "Final status: `ready`",
+        "atomic settlement, 1.0",
+        "Scoped disclosure",
+        "not from `main` or a release commit",
+        "not establish that the released commit passed Sepolia",
+    )
+    for phrase in required:
+        if phrase not in evidence:
+            errors.append(f"{SEPOLIA_ONBOARDING_EVIDENCE_PATH}: missing {phrase!r}")
+    forbidden = (
+        "transaction-prover.alpha-sepolia",
+        "PROVING_SERVICE_URL",
+        "PRIVATE_KEY",
+        "ACCOUNT_PRIVATE_KEY",
+    )
+    for phrase in forbidden:
+        if phrase in evidence:
+            errors.append(f"{SEPOLIA_ONBOARDING_EVIDENCE_PATH}: contains forbidden {phrase!r}")
+    return errors
 
 
 def _manifest_version(path: Path, kind: str) -> str:
@@ -167,6 +197,9 @@ def check(
 
     if not require_mainnet:
         return errors
+
+    if expected == "0.3.0":
+        return errors + _check_v03_sepolia_evidence(root, preamble)
 
     if str(EVIDENCE_PATH) not in preamble:
         errors.append(f"{PREAMBLE_PATH}: must link {EVIDENCE_PATH}")

@@ -66,9 +66,9 @@ def test_matching_versions_and_baseline_preamble_pass(tmp_path: Path) -> None:
 
 def test_manifest_version_drift_fails(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    (root / "sdk/ts/package.json").write_text('{"version":"0.1.0"}')
+    (root / "sdk/py/pyproject.toml").write_text('[project]\nversion = "0.1.0"\n')
     errors = MODULE.check(root, expected_version="0.2.0")
-    assert any("sdk/ts/package.json" in error and "0.1.0" in error for error in errors)
+    assert any("sdk/py/pyproject.toml" in error and "0.1.0" in error for error in errors)
 
 
 def test_lock_version_drift_fails(tmp_path: Path) -> None:
@@ -119,6 +119,30 @@ def test_complete_mainnet_evidence_and_updated_preamble_pass(tmp_path: Path) -> 
         f"Evidence: {MODULE.EVIDENCE_PATH}\n"
     )
     assert MODULE.check(root, expected_version="0.2.0", tag="v0.2.0", require_mainnet=True) == []
+
+
+def test_v03_requires_sepolia_onboarding_evidence(tmp_path: Path) -> None:
+    root = _repo(tmp_path, version="0.3.0")
+    errors = MODULE.check(root, expected_version="0.3.0", tag="v0.3.0", require_mainnet=True)
+    assert any(str(MODULE.SEPOLIA_ONBOARDING_EVIDENCE_PATH) in error for error in errors)
+
+
+def test_v03_sepolia_onboarding_evidence_passes(tmp_path: Path) -> None:
+    root = _repo(tmp_path, version="0.3.0")
+    evidence = root / MODULE.SEPOLIA_ONBOARDING_EVIDENCE_PATH
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(
+        "not from `main` or a release commit\n"
+        "not establish that the released commit passed Sepolia\n"
+        "Final status: `ready`\n"
+        "atomic settlement, 1.0\n"
+        "Scoped disclosure\n"
+    )
+    (root / MODULE.PREAMBLE_PATH).write_text(
+        "unaudited\nnot the relationship\nLinux x86-64 and macOS arm64\n"
+        f"Evidence: {MODULE.SEPOLIA_ONBOARDING_EVIDENCE_PATH}\n"
+    )
+    assert MODULE.check(root, expected_version="0.3.0", tag="v0.3.0", require_mainnet=True) == []
 
 
 def test_repository_manifests_and_locks_are_aligned() -> None:

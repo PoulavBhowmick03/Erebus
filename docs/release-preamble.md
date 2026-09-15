@@ -6,12 +6,14 @@
 performed on the wire, the settlement path, or the disclosure design. Do not put value you
 care about through it.
 
-**Mainnet readiness is a release gate, not a forecast.** The `v0.2.0` source completed one
-bounded Starkscan-backed mainnet canary: screened shield, MCP negotiation, atomic settlement,
+**Live readiness is evidence, not a forecast.** The `v0.2.0` source completed one bounded
+Starkscan-backed mainnet canary: screened shield, MCP negotiation, atomic settlement,
 reconciliation, observer test, and scoped disclosure. The secret-free evidence is in
 [`docs/runs/v0.2-mainnet-canary.json`](docs/runs/v0.2-mainnet-canary.json) and the
-[dated run record](docs/runs/2026-08-31-mainnet-starkscan-workflow.md). One canary does not
-prove capacity, uptime, independent review, or safe use with material value.
+[dated run record](docs/runs/2026-08-31-mainnet-starkscan-workflow.md). The `v0.3.0`
+onboarding path was exercised on Sepolia in
+[`docs/runs/2026-09-15-sepolia-v0.3.0.md`](docs/runs/2026-09-15-sepolia-v0.3.0.md). One
+canary does not prove capacity, uptime, independent review, or safe use with material value.
 
 **Relationship privacy is not complete.** Erebus hides the terms, not the relationship.
 Negotiation content and settlement amounts are confidential, and that is demonstrated: an
