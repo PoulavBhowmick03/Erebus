@@ -294,8 +294,8 @@ input[type="range"]::-moz-range-thumb {
   display: inline-flex;
   align-items: center;
   gap: 0.55em;
-  border: 1px solid var(--color-fore);
-  background: var(--color-fore);
+  border: 1px solid var(--color-ember);
+  background: var(--color-ember);
   color: var(--color-ground);
   padding: 0.85rem 1.35rem;
   font-family: var(--font-mono);
