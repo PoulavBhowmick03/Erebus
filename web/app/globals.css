@@ -1,41 +1,50 @@
 @import "tailwindcss";
 
 /* ───────────────────────────────────────────────────────────────────────────
-   EREBUS — instrument black
+   EREBUS — warm obsidian and ember
 
-   Two rules govern this page.
+   Two oranges, two jobs. Do not blur them.
 
-   1. No warmth. Every neutral here is cold or dead neutral. The moment a
-      cream, a beige or a warm grey enters, the page starts reading as the
-      house style of every AI product shipped since 2025, which is the one
-      thing it must not look like.
+   1. EMBER (#FB4020, the mark's own orange) is the brand. It lives in the
+      ground: the hero's atmospheric floor, the ember tick that opens every
+      section rule, the glow under the footer mark, and the single filled CTA.
+      Ember is atmosphere and action. It is never a data value.
 
-   2. Cinnabar marks facts a public chain reader can already read. Never a
-      button, never a link, never decoration. If it appears on something that
-      does not leak, the page is lying.
+   2. CINNABAR (#FF3B1F, a touch redder) means one thing: a public chain reader
+      can already read this. Text, tags, and the public side of the replay.
+      Never a button, never decoration. If it appears on something that does not
+      leak, the page is lying.
+
+   The ground is warm on purpose. #0a0908 rather than a cold near-black, so the
+   page reads as heated obsidian even where no orange is visible. Surfaces step
+   up 0a0908 → 131010 → 1b1717 and separation is a warm hairline, not a shadow.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  /* ground and structure */
-  --color-ground: #000000;
-  --color-panel: #0a0a0b;
-  --color-panel-2: #121214;
-  --color-rule: #1e1e21;
-  --color-rule-2: #303035;
+  /* warm obsidian ground and structure */
+  --color-ground: #0a0908;
+  --color-panel: #131010;
+  --color-panel-2: #1b1717;
+  --color-rule: #292220;
+  --color-rule-2: #3d332f;
 
-  /* foreground. cold, never cream */
-  --color-fore: #e9e9ec;
-  --color-fore-2: #8b8b93;
-  --color-fore-3: #55555c;
+  /* foreground. warm neutral, not cream, not grey */
+  --color-fore: #f0ebe4;
+  --color-fore-2: #9c948c;
+  --color-fore-3: #736b64;
 
-  /* the one accent: this leaks */
+  /* brand: atmosphere and the one action */
+  --color-ember: #fb4020;
+
+  /* signal: this leaks */
   --color-cinnabar: #ff3b1f;
 
-  /* the inversion, used once */
+  /* the inversion, unused today but kept for a light band */
   --color-flare: #f3f4f6;
 
-  --font-display: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
-  --font-mono: var(--font-plex), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-display-face), "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-body-face), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 :root {
@@ -100,18 +109,18 @@ input[type="range"]::-moz-range-thumb {
 
 .display {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: -0.028em;
-  line-height: 0.88;
+  letter-spacing: -0.008em;
+  line-height: 0.86;
 }
 
 .display-lo { text-transform: none; letter-spacing: -0.022em; }
 
 .label {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--color-fore-3);
@@ -165,8 +174,8 @@ input[type="range"]::-moz-range-thumb {
   content: "";
   position: absolute;
   inset: -0.16em -0.32em -0.18em -0.32em;
-  background: #26262b;
-  border: 1px solid #35353c;
+  background: #2a2422;
+  border: 1px solid #3a322e;
   clip-path: inset(0 0 0 100%);
   transition: clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
@@ -202,6 +211,33 @@ input[type="range"]::-moz-range-thumb {
 .roll:hover .roll-label,
 .roll:focus-visible .roll-label { transform: translateY(-100%); }
 
+/* ── nav mark ─────────────────────────────────────────────────────────────
+   The same block a text selection makes — fore fill, ground text — as a
+   hover state on header links, instead of a plain color fade. Negative
+   margin cancels the padding so neighboring nav items don't visibly shift.
+
+   Applied as a wrapper around `RollingLink`, not on `.roll` itself: `.roll`'s
+   overflow:hidden box has to stay exactly text-line-height, or the sliding
+   duplicate label is no longer fully clipped and peeks out under the padding.
+   A plain link (no roll animation, e.g. GitHub) can take `.nav-mark` directly. */
+
+.nav-mark {
+  display: inline-block;
+  padding: 0.3rem 0.5rem;
+  margin: -0.3rem -0.5rem;
+  transition: background-color 160ms, color 160ms;
+}
+.nav-mark:hover,
+.nav-mark:focus-within,
+.nav-mark:focus-visible {
+  background: var(--color-fore);
+  color: var(--color-ground);
+}
+.nav-mark:hover .roll,
+.nav-mark:focus-within .roll {
+  color: inherit;
+}
+
 /* ── scramble ─────────────────────────────────────────────────────────── */
 
 .scramble { font-variant-numeric: tabular-nums; }
@@ -212,41 +248,143 @@ input[type="range"]::-moz-range-thumb {
 
 .plate {
   background-image:
-    linear-gradient(to right, rgba(233, 233, 236, 0.032) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(233, 233, 236, 0.032) 1px, transparent 1px);
+    linear-gradient(to right, rgba(226, 214, 204, 0.038) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(226, 214, 204, 0.038) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
-/* ── hero atmosphere ──────────────────────────────────────────────────────
-   Flat #000 reads cheap in a way #000 with a slow radial falloff does not.
-   Cold only — a dead-neutral bloom off the settlement figure, never cinnabar,
-   never soft enough to read as a "hero gradient". */
+/* ── prose. Mono is for data; sentences get a font that can be read. ────── */
 
-.atmosphere {
-  position: absolute;
-  inset: -18% -8% auto -8%;
-  height: 130%;
-  background: radial-gradient(
-    58% 52% at 74% 22%,
-    rgba(233, 233, 236, 0.05) 0%,
-    rgba(233, 233, 236, 0.021) 32%,
-    transparent 68%
-  );
-  pointer-events: none;
+.prose {
+  font-family: var(--font-body);
+  font-size: clamp(15px, 1.02vw, 17px);
+  font-weight: 400;
+  line-height: 1.7;
+  letter-spacing: -0.011em;
+  color: var(--color-fore-2);
 }
 
-.figure-glow {
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  color: var(--color-fore);
+}
+
+.prose a {
+  color: var(--color-fore);
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-2);
+  text-underline-offset: 5px;
+  transition: text-decoration-color 160ms;
+}
+.prose a:hover { text-decoration-color: var(--color-fore); }
+
+.lead {
+  font-family: var(--font-body);
+  font-size: clamp(17px, 1.5vw, 22px);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.012em;
+  color: var(--color-fore-2);
+}
+
+/* ── actions. One filled primary, one text link. Nothing else. ─────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  border: 1px solid var(--color-ember);
+  background: var(--color-ember);
+  color: var(--color-ground);
+  padding: 0.85rem 1.35rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  transition: opacity 160ms;
+}
+.btn:hover { opacity: 0.88; }
+
+.link {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-fore-2);
+  text-decoration: underline;
+  text-decoration-color: var(--color-rule-2);
+  text-underline-offset: 6px;
+  transition: color 160ms;
+}
+.link:hover { color: var(--color-fore); }
+
+/* ── the section head, one shape for all four sections ─────────────────── */
+
+.section-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  border-top: 1px solid var(--color-rule);
+  padding-top: 1.5rem;
+}
+
+/* an ember tick opening each section rule. one 46px segment of brand orange,
+   the smallest mark that still reads as identity rather than decoration. */
+.section-head::before {
+  content: "";
   position: absolute;
-  inset: -6%;
-  background: radial-gradient(circle at 50% 42%, rgba(255, 59, 31, 0.1), transparent 62%);
-  filter: blur(28px);
-  opacity: 0.7;
+  top: -1px;
+  left: 0;
+  width: 46px;
+  height: 1px;
+  background: var(--color-ember);
+}
+@media (min-width: 1024px) {
+  .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
+}
+
+/* ── the hero scrim. The pool visual runs full-bleed behind the hero copy;
+   this is what keeps the type readable over a field of moving points without
+   boxing the visual off into a chart-shaped rectangle. Ground at the very
+   bottom so the hero blends into the section below it, ember rising off the
+   bottom-left because that is the one place the brand orange shows without
+   making a privacy claim, and a light top vignette so the nav reads over the
+   field before the header's own scroll background kicks in. ─────────────── */
+
+.hero-scrim {
   pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(10, 9, 8, 0.55) 0%, transparent 22%),
+    linear-gradient(
+      to top,
+      var(--color-ground) 0%,
+      rgba(10, 9, 8, 0.93) 15%,
+      rgba(10, 9, 8, 0.5) 38%,
+      rgba(10, 9, 8, 0.1) 62%,
+      transparent 100%
+    ),
+    radial-gradient(90% 60% at 8% 105%, rgba(251, 64, 32, 0.38), transparent 62%),
+    radial-gradient(60% 45% at 96% 8%, rgba(251, 64, 32, 0.14), transparent 65%);
+}
+
+/* ── the install card. Highlighted with color and a border, sitting beside
+   the CTA in the hero — not folded into the nav where an action this
+   load-bearing gets lost among links. ─────────────────────────────────── */
+
+.install-card {
+  border: 1px solid var(--color-ember);
+  background: rgba(10, 9, 8, 0.72);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(251, 64, 32, 0.18), 0 20px 60px -20px rgba(251, 64, 32, 0.45);
 }
 
 /* ── on-load entrance, not just scroll reveal ────────────────────────────
-   The Reveal component covers scroll; this covers the first paint, so the
-   fold itself feels alive before a reader has done anything at all. */
+   `Reveal` covers content below the fold; this covers first paint, so the
+   hero itself feels alive before a reader has scrolled or clicked anything. */
 
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(14px); }

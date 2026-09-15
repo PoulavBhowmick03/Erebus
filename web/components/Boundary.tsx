@@ -1,0 +1,63 @@
+import { NON_CLAIMS, OBSERVER } from "@/lib/content";
+import { Section } from "./Chrome";
+import { Reveal } from "./Reveal";
+
+export function Boundary() {
+  return (
+    <Section id="limits" className="pt-24 md:pt-36">
+      <Reveal className="section-head">
+        <h2 className="display mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">Limits.</h2>
+        <div className="flex flex-col justify-end">
+          <p className="prose m-0 max-w-[54ch]">
+            An observer with no key still sees the submitting account, the timing, the pool usage,
+            and the counterparty at channel-open. Wire v3 removed the v2 salt classifier. That is
+            one classifier defeated; the other exposure stays.
+          </p>
+        </div>
+      </Reveal>
+
+      <div className="mt-14 grid grid-cols-1 gap-px border-t border-rule sm:grid-cols-3">
+        {OBSERVER.map((m) => (
+          <div
+            key={m.k}
+            className="group border-b border-rule py-6 pr-6 transition-colors duration-300 hover:bg-panel"
+          >
+            <p className="mono-xs m-0 mb-3 uppercase tracking-[0.14em] text-fore-3 transition-colors group-hover:text-fore-2">
+              {m.k}
+            </p>
+            <p
+              className={`tnum m-0 text-[clamp(28px,3vw,40px)] leading-none transition-transform duration-300 group-hover:scale-105 ${m.bad ? "leak" : ""}`}
+              style={{ transformOrigin: "left center" }}
+            >
+              {m.v}
+            </p>
+            <p className="mono-xs mt-3 m-0 max-w-[38ch] leading-relaxed text-fore-3">{m.note}</p>
+          </div>
+        ))}
+      </div>
+
+      <ol className="m-0 mt-16 list-none p-0">
+        {NON_CLAIMS.map((c, i) => (
+          <Reveal
+            as="li"
+            key={c.title}
+            delay={i * 90}
+            className="group grid grid-cols-1 gap-4 border-t border-rule py-8 transition-colors duration-300 hover:border-rule-2 md:grid-cols-[3rem_1.1fr_1fr] md:gap-10"
+          >
+            <span className="mono-xs pt-3 uppercase tracking-[0.16em] text-fore-3 transition-colors group-hover:text-fore-2">
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <h3 className="display m-0 text-[clamp(19px,2.2vw,31px)] leading-[1.06] transition-transform duration-300 group-hover:translate-x-1.5">
+              {c.title}
+            </h3>
+            <p className="prose m-0 max-w-[48ch] self-center">{c.body}</p>
+          </Reveal>
+        ))}
+      </ol>
+
+      <p className="mono-xs mt-6 max-w-[74ch] border-t border-rule pt-6 leading-relaxed text-fore-3">
+        Unaudited. No external security review has been done. Do not put real value through it.
+      </p>
+    </Section>
+  );
+}

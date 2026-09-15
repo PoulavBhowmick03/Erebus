@@ -1,44 +1,74 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, IBM_Plex_Mono } from "next/font/google";
+import { Anton, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import { KeyProvider } from "@/components/KeyContext";
 import { SmoothScroll } from "@/components/SmoothScroll";
 import { Grain } from "@/components/Grain";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
-// A grotesque and a mono, and nothing else. An editorial serif on a warm
-// ground is the exact look this page is trying not to have.
-const archivo = Archivo({
+// Three faces doing three different jobs, not one grotesque stretched to
+// cover headline, body, and data. A single family everywhere is exactly what
+// makes a page read as templated: there's no contrast in the type itself for
+// the eye to register as "someone chose this." Anton is a poster face —
+// ultra-heavy, condensed, built to be shouted at headline size, not a
+// slightly-bolder version of a body font. Space Grotesk carries the actual
+// sentences, where a poster face would be unreadable. JetBrains Mono stays
+// for data and labels.
+const display = Anton({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-archivo",
+  weight: ["400"],
+  variable: "--font-display-face",
   display: "swap",
 });
 
-const plex = IBM_Plex_Mono({
+const body = Space_Grotesk({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
-  variable: "--font-plex",
+  variable: "--font-body-face",
+  display: "swap",
+});
+
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-mono-face",
   display: "swap",
 });
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://erebusagents.live"),
-  title: "Erebus — negotiate in darkness, settle in silence",
+  title: "Erebus",
   description:
-    "Private coordination and shielded settlement infrastructure for AI agents on Starknet. Two agents negotiate over an encrypted channel and settle atomically through the STRK20 privacy pool.",
+    "Private coordination and shielded settlement for AI agents on Starknet. Two agents negotiate over an encrypted channel and settle atomically through the STRK20 pool.",
   openGraph: {
     title: "Erebus",
     description:
-      "Private coordination and shielded settlement for AI agents on Starknet. Erebus hides the terms, not the relationship.",
+      "Private coordination and shielded settlement for AI agents on Starknet.",
     type: "website",
+    url: "/",
+    siteName: "Erebus",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Erebus",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Erebus",
+    description:
+      "Private coordination and shielded settlement for AI agents on Starknet.",
+    images: ["/og.png"],
   },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#000000",
+  themeColor: "#0a0908",
 };
 
 /**
@@ -61,7 +91,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       data-key="dropped"
-      className={`${archivo.variable} ${plex.variable}`}
+      className={`${display.variable} ${body.variable} ${mono.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT }} />

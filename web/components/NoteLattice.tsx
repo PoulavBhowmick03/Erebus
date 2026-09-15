@@ -132,12 +132,14 @@ export function NoteLattice({
         uniform float uSize;
         uniform float uTime;
         uniform float uCamZ;
+        uniform float uSpreadX;
         varying float vTint;
         varying float vFade;
         varying float vAlpha;
         void main() {
           vTint = tint; vAlpha = alpha;
           vec3 p = offset;
+          p.x *= uSpreadX;
           p.y += sin(uTime * 0.18 + seed * 6.2831) * 0.012;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           float s = uSize * (1.0 + tint * 1.35) * (0.4 + 0.6 * alpha);
@@ -164,9 +166,10 @@ export function NoteLattice({
     };
 
     const uniforms = () => ({
-      uSize: { value: small ? 0.019 : 0.016 },
+      uSize: { value: small ? 0.03 : 0.026 },
       uTime: { value: 0 },
       uCamZ: { value: camZ },
+      uSpreadX: { value: 1 },
       uBase: { value: INK.clone() },
       uLeak: { value: LEAK.clone() },
       uOpacity: { value: isVoid ? 0.58 : 0.55 },
@@ -314,12 +317,29 @@ export function NoteLattice({
       camera.right = frustum * aspect;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      // the field's own horizontal spread is narrower than the frustum by
+      // design at aspect 1; stretch it out so the ambient dots reach both
+      // edges of the screen instead of leaving bare margins on a wide viewport
+      // (this is what shows behind the header). The actor mesh — the deal's
+      // fixed A/B/C geometry — is left unscaled.
+      fieldMat.uniforms.uSpreadX.value = (frustum * aspect) / (span / 2);
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(el);
 
     group.rotation.set(-0.32, 0.5, 0);
+
+    // the pool tilts toward the cursor. target set on pointermove, eased
+    // toward each frame so a fast flick doesn't snap the field — this is
+    // meant to feel like weight, not like a cursor-follower toy.
+    const pointer = { x: 0, y: 0 };
+    const pointerEased = { x: 0, y: 0 };
+    const onPointerMove = (e: PointerEvent) => {
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = (e.clientY / window.innerHeight) * 2 - 1;
+    };
+    if (!reduced) window.addEventListener("pointermove", onPointerMove, { passive: true });
 
     let raf = 0;
     let visible = true;
@@ -330,8 +350,10 @@ export function NoteLattice({
     const draw = (t: number) => {
       fieldMat.uniforms.uTime.value = t;
       if (actorMat) actorMat.uniforms.uTime.value = t;
-      group.rotation.y = 0.5 + t * 0.045;
-      group.rotation.x = -0.32 + Math.sin(t * 0.11) * 0.06;
+      pointerEased.x += (pointer.x - pointerEased.x) * 0.045;
+      pointerEased.y += (pointer.y - pointerEased.y) * 0.045;
+      group.rotation.y = 0.5 + t * 0.045 + pointerEased.x * 0.22;
+      group.rotation.x = -0.32 + Math.sin(t * 0.11) * 0.06 - pointerEased.y * 0.16;
       if (story) playDeal((t % CYCLE) / CYCLE);
       renderer.render(scene, camera);
     };
@@ -350,6 +372,7 @@ export function NoteLattice({
 
     return () => {
       cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", onPointerMove);
       io.disconnect();
       ro.disconnect();
       fieldGeo.dispose();

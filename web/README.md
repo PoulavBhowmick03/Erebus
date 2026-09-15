@@ -19,19 +19,25 @@ the differential-test oracle. It stays standalone on purpose.
 `https://erebus-private-agents.vercel.app`, and **this package is what is published there.**
 It replaced the old `demo/` page on 2026-09-06.
 
-Two consequences, and both have already bitten once:
+`erebusagents.live` is the custom domain; the `.vercel.app` host redirects to it.
 
-- **`web/public/erebus-private-sprint.mp4` must stay.** The pinned `demo_video` URL resolves
-  to it. Delete it and a URL in `strk20.json`, the README, and the sprint hub all 404.
-- **The Vercel linkage lives in `out/.vercel`, which `next build` deletes.** Recreate it
-  before every deploy or the CLI will silently create a *new* project instead of updating
-  production:
+Deploys are git-driven. The Vercel project's root directory is the repository root, so it reads
+the root `vercel.json`, which installs and builds only `web/`:
 
-```bash
-pnpm build
-mkdir -p out/.vercel && cp ../demo/.vercel/project.json out/.vercel/project.json
-cd out && vercel deploy --prod
+```json
+"installCommand": "pnpm --dir web install --frozen-lockfile --ignore-workspace",
+"buildCommand": "pnpm --dir web build",
+"outputDirectory": "web/out"
 ```
+
+`--ignore-workspace` is load-bearing: the root workspace lists `sdk/ts`, whose
+`@starkware-libs/starknet-privacy-sdk` dependency is a sibling checkout that does not exist on
+the builder. Without it, `pnpm install` fails before the page is ever built. Push to `main` and
+Vercel rebuilds.
+
+**`web/public/erebus-final-cut.mp4` must stay.** The pinned `demo_video_mp4` URL resolves
+to it. Delete it and a URL in `strk20.json` and the README 404s. The archived `demo/` page keeps
+its own three-minute `erebus-private-sprint.mp4`.
 
 `demo/` is still in the repo on purpose. `scripts/check-demo.py` and
 `scripts/tests/test_demo.py` both run against it in CI, and it is the archived sprint
@@ -41,16 +47,48 @@ artifact. Do not delete it to tidy up.
 
 Three rules carry the whole page. Breaking any one of them makes it an ordinary site.
 
-1. **Cinnabar means "a public chain reader can already read this."** Never a button, never a
-   link, never decoration. `--color-cinnabar` appears on the counterparty address, the
-   submitting account, block, timestamp, note count, the Public column of the leak ledger, and
-   the metrics that came out badly. Grep for it before committing and check every use is a leak.
-2. **Structure comes from hairlines and space.** No cards, no fills, no shadows, no radii, no
-   gradients — the one gradient in the tree is the legibility veil over the void section.
+1. **Two oranges, two jobs.** `--color-ember` (`#FB4020`, the mark's own orange) is the brand: the
+   hero's atmospheric floor, the ember tick opening each `.section-head` rule, the glow under the
+   footer mark, and the one filled CTA. Atmosphere and action only — never a data value.
+   `--color-cinnabar` (`#FF3B1F`, a touch redder) means "a public chain reader can already read
+   this." Never a button, never decoration. It appears on the counterparty address, the
+   submitting account, block, timestamp, note count, the public side of the replay, the observer
+   metrics that came out badly, and the `leak-tag`. Grep for it before committing and check every
+   use is a leak. If ember ever lands on a data value, or cinnabar on a control, the system has
+   collapsed back into one orange and the page is lying.
+2. **Warm obsidian, separated by hairlines.** The canvas is `#0a0908`, not a cold near-black, and
+   surfaces step up to `--color-panel` on warm neutrals. No cards, no fills, no shadows, no radii.
+   **One gradient, hero only:** `.hero-floor` is an ember bloom off the top edge plus a dotted
+   measure, masked to fade out. Do not add a second.
 3. **The plaintext is always in the DOM.** Redaction is an ink bar drawn over readable markup,
    and the ciphertext substitution happens client-side after mount. No-JS readers, crawlers and
    link previews get the complete page. It is a demonstration of the disclosure model, not a
    security boundary.
+
+The brand lockup (`web/public/erebus-lockup.svg`) carries the same `#FB4020` mark in the header
+and the ghosted footer mark, which is why ember is the right atmosphere color here: the glow and
+the logo are the same orange, so the page reads as one material.
+
+## Routes
+
+Two static routes:
+
+- `/` — the landing page. Four sections: hero, evidence, the pool band, the replay, the boundary.
+- `/docs` — the quickstart. Install, configure, the tool surface, the call path. The install
+  block in the hero is the primary action and it points here; the header nav walks back to the
+  landing anchors from `/docs` via `usePathname`.
+
+## Type
+
+Mono is for data: labels, hashes, block numbers, tool names, code. Sentences are set in the
+grotesque via `.prose` (and `.lead` for the one-line intro). Mono body copy at 13px was a
+readability tax at exactly the moment the page wanted to be read; if you add a paragraph, give it
+`.prose`, not a mono utility.
+
+## Social
+
+`web/public/og.png` (1200×630) is the social card, wired through `openGraph.images` and
+`twitter`. Regenerate it if the tagline or the lockup changes.
 
 ## The two states
 
