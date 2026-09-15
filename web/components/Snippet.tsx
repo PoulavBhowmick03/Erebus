@@ -9,7 +9,16 @@ import { useState } from "react";
  * The whole command is in the DOM as text, so a no-JS or crawler reader gets it
  * whether or not the copy button ever hydrates.
  */
-export function Snippet({ command, label }: { command: string; label: string }) {
+export function Snippet({
+  command,
+  label,
+  highlight = false,
+}: {
+  command: string;
+  label: string;
+  /** Ember border and glow, for the one command that shouldn't blend in. */
+  highlight?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -23,9 +32,15 @@ export function Snippet({ command, label }: { command: string; label: string }) 
   };
 
   return (
-    <div className="border border-rule">
-      <div className="flex items-center justify-between border-b border-rule px-4 py-2">
-        <span className="label">{label}</span>
+    <div className={highlight ? "install-card" : "border border-rule"}>
+      <div
+        className={`flex items-center justify-between px-4 py-2 ${
+          highlight ? "border-b border-ember/40" : "border-b border-rule"
+        }`}
+      >
+        <span className="label" style={highlight ? { color: "var(--color-ember)" } : undefined}>
+          {label}
+        </span>
         <button
           type="button"
           onClick={copy}

@@ -1,24 +1,30 @@
 import type { Metadata, Viewport } from "next";
-import { Syne, JetBrains_Mono } from "next/font/google";
+import { Anton, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import { KeyProvider } from "@/components/KeyContext";
 import { SmoothScroll } from "@/components/SmoothScroll";
 import { Grain } from "@/components/Grain";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
-// A grotesque and a mono, and nothing else. An editorial serif on a warm
-// ground is the exact look this page is trying not to have.
-//
-// Neither face is Archivo or IBM Plex Mono. Those two are the reflex choice
-// for every dark, technical, AI-adjacent product built since 2025 — using
-// them is how a page ends up looking like a template even when nothing else
-// about it is. Syne's proportions are unusual enough at display size to read
-// as a deliberate choice; JetBrains Mono still reads as "terminal" without
-// being the same terminal font as everything else.
-const display = Syne({
+// Three faces doing three different jobs, not one grotesque stretched to
+// cover headline, body, and data. A single family everywhere is exactly what
+// makes a page read as templated: there's no contrast in the type itself for
+// the eye to register as "someone chose this." Anton is a poster face —
+// ultra-heavy, condensed, built to be shouted at headline size, not a
+// slightly-bolder version of a body font. Space Grotesk carries the actual
+// sentences, where a poster face would be unreadable. JetBrains Mono stays
+// for data and labels.
+const display = Anton({
   subsets: ["latin"],
-  weight: ["500", "600", "700", "800"],
+  weight: ["400"],
   variable: "--font-display-face",
+  display: "swap",
+});
+
+const body = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-body-face",
   display: "swap",
 });
 
@@ -85,7 +91,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="en"
       data-key="dropped"
-      className={`${display.variable} ${mono.variable}`}
+      className={`${display.variable} ${body.variable} ${mono.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT }} />

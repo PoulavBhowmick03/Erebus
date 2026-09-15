@@ -43,6 +43,7 @@
   --color-flare: #f3f4f6;
 
   --font-display: var(--font-display-face), "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-body-face), "Helvetica Neue", Arial, sans-serif;
   --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -108,10 +109,10 @@ input[type="range"]::-moz-range-thumb {
 
 .display {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: -0.028em;
-  line-height: 0.88;
+  letter-spacing: -0.008em;
+  line-height: 0.86;
 }
 
 .display-lo { text-transform: none; letter-spacing: -0.022em; }
@@ -228,7 +229,7 @@ input[type="range"]::-moz-range-thumb {
 /* ── prose. Mono is for data; sentences get a font that can be read. ────── */
 
 .prose {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: clamp(15px, 1.02vw, 17px);
   font-weight: 400;
   line-height: 1.7;
@@ -252,11 +253,11 @@ input[type="range"]::-moz-range-thumb {
 .prose a:hover { text-decoration-color: var(--color-fore); }
 
 .lead {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: clamp(17px, 1.5vw, 22px);
   font-weight: 400;
   line-height: 1.5;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.012em;
   color: var(--color-fore-2);
 }
 
@@ -339,7 +340,19 @@ input[type="range"]::-moz-range-thumb {
       rgba(10, 9, 8, 0.1) 62%,
       transparent 100%
     ),
-    radial-gradient(120% 70% at 10% 100%, rgba(251, 64, 32, 0.18), transparent 60%);
+    radial-gradient(90% 60% at 8% 105%, rgba(251, 64, 32, 0.38), transparent 62%),
+    radial-gradient(60% 45% at 96% 8%, rgba(251, 64, 32, 0.14), transparent 65%);
+}
+
+/* ── the install card. Highlighted with color and a border, sitting beside
+   the CTA in the hero — not folded into the nav where an action this
+   load-bearing gets lost among links. ─────────────────────────────────── */
+
+.install-card {
+  border: 1px solid var(--color-ember);
+  background: rgba(10, 9, 8, 0.72);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(251, 64, 32, 0.18), 0 20px 60px -20px rgba(251, 64, 32, 0.45);
 }
 
 /* ── on-load entrance, not just scroll reveal ────────────────────────────

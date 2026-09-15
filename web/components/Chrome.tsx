@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { RollingLink } from "./RollingLink";
 import { useKey } from "./KeyContext";
-import { InstallPill } from "./InstallPill";
 
 export function Eyebrow({ children }: { children: React.ReactNode }) {
   return <p className="label m-0">{children}</p>;
@@ -87,8 +86,6 @@ export function Header() {
           ))}
         </nav>
 
-        <InstallPill className="hidden max-w-[300px] lg:flex" />
-
         <div className="flex shrink-0 items-center gap-6">
           <button
             type="button"
@@ -142,9 +139,6 @@ export function Header() {
           aria-label="Primary mobile"
           className="flex flex-col border-t border-rule pb-2 md:hidden"
         >
-          <div className="py-3">
-            <InstallPill className="w-full" />
-          </div>
           {NAV.map((n) => (
             <a
               key={n.href}
