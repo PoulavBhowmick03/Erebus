@@ -47,25 +47,27 @@ artifact. Do not delete it to tidy up.
 
 Three rules carry the whole page. Breaking any one of them makes it an ordinary site.
 
-1. **Cinnabar means "a public chain reader can already read this."** Never a button, never a
-   link, never decoration. `--color-cinnabar` appears on the counterparty address, the
-   submitting account, block, timestamp, note count, the public side of the replay, and the
-   observer metrics that came out badly. Grep for it before committing and check every use is a
-   leak.
-2. **Structure comes from hairlines and surface steps, not shadows.** The canvas is `#08090a`,
-   surfaces step up to `--color-panel`, and separation is a hairline. No cards, no fills, no
-   shadows, no radii. **One exception:** the hero carries a single atmospheric gradient
-   (`.hero-floor`) — a monochrome top-light and dotted measure, masked to fade out. It is the only
-   gradient in the system; do not add a second.
+1. **Two oranges, two jobs.** `--color-ember` (`#FB4020`, the mark's own orange) is the brand: the
+   hero's atmospheric floor, the ember tick opening each `.section-head` rule, the glow under the
+   footer mark, and the one filled CTA. Atmosphere and action only — never a data value.
+   `--color-cinnabar` (`#FF3B1F`, a touch redder) means "a public chain reader can already read
+   this." Never a button, never decoration. It appears on the counterparty address, the
+   submitting account, block, timestamp, note count, the public side of the replay, the observer
+   metrics that came out badly, and the `leak-tag`. Grep for it before committing and check every
+   use is a leak. If ember ever lands on a data value, or cinnabar on a control, the system has
+   collapsed back into one orange and the page is lying.
+2. **Warm obsidian, separated by hairlines.** The canvas is `#0a0908`, not a cold near-black, and
+   surfaces step up to `--color-panel` on warm neutrals. No cards, no fills, no shadows, no radii.
+   **One gradient, hero only:** `.hero-floor` is an ember bloom off the top edge plus a dotted
+   measure, masked to fade out. Do not add a second.
 3. **The plaintext is always in the DOM.** Redaction is an ink bar drawn over readable markup,
    and the ciphertext substitution happens client-side after mount. No-JS readers, crawlers and
    link previews get the complete page. It is a demonstration of the disclosure model, not a
    security boundary.
 
-**One exception, on purpose:** the brand lockup (`web/public/erebus-lockup.svg`) keeps its own
-palette — a `#FB4020` mark and a `#EEEBE3` wordmark. It is the only warm element on the page and
-the only orange that is not cinnabar; the header and the ghosted footer mark use it knowingly.
-Nothing else may borrow those two colors.
+The brand lockup (`web/public/erebus-lockup.svg`) carries the same `#FB4020` mark in the header
+and the ghosted footer mark, which is why ember is the right atmosphere color here: the glow and
+the logo are the same orange, so the page reads as one material.
 
 ## Routes
 

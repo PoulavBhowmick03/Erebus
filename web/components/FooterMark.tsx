@@ -18,7 +18,7 @@ export function FooterMark() {
 
   useConductor((scrollY, viewport) => {
     const host = ref.current;
-    const mark = host?.firstElementChild;
+    const mark = host?.querySelector("img");
     if (!host || !(mark instanceof HTMLElement)) return;
     const p = progressOf(host, scrollY, viewport);
     mark.style.transform = `scale(${(0.9 + p * 0.14).toFixed(3)})`;
@@ -26,11 +26,19 @@ export function FooterMark() {
   });
 
   return (
-    <div ref={ref} className="overflow-hidden py-4" aria-hidden>
+    <div ref={ref} className="relative overflow-hidden py-4" aria-hidden>
+      {/* ember rising off the bottom edge, so the page closes on its own light */}
+      <span
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(62% 130% at 50% 122%, rgba(251, 64, 32, 0.22), transparent 70%)",
+        }}
+      />
       <img
         src="/erebus-lockup.svg"
         alt=""
-        className="mx-auto block w-[112%] max-w-none"
+        className="relative mx-auto block w-[112%] max-w-none"
         style={{ transform: "scale(0.96)", opacity: "0.08", transformOrigin: "center center" }}
       />
     </div>

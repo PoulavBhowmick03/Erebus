@@ -1,41 +1,45 @@
 @import "tailwindcss";
 
 /* ───────────────────────────────────────────────────────────────────────────
-   EREBUS — instrument black
+   EREBUS — warm obsidian and ember
 
-   Two rules govern this page.
+   Two oranges, two jobs. Do not blur them.
 
-   1. No warmth. Every neutral here is cold or dead neutral. The moment a
-      cream, a beige or a warm grey enters, the page starts reading as the
-      house style of every AI product shipped since 2025, which is the one
-      thing it must not look like. The brand lockup is the single exception,
-      and it is an asset rather than a neutral — see web/README.md.
+   1. EMBER (#FB4020, the mark's own orange) is the brand. It lives in the
+      ground: the hero's atmospheric floor, the ember tick that opens every
+      section rule, the glow under the footer mark, and the single filled CTA.
+      Ember is atmosphere and action. It is never a data value.
 
-   2. Cinnabar marks facts a public chain reader can already read. Never a
-      button, never a link, never decoration. If it appears on something that
-      does not leak, the page is lying. The lockup keeps its own #FB4020 mark;
-      that is not --color-cinnabar and must not be read as a leak.
+   2. CINNABAR (#FF3B1F, a touch redder) means one thing: a public chain reader
+      can already read this. Text, tags, and the public side of the replay.
+      Never a button, never decoration. If it appears on something that does not
+      leak, the page is lying.
+
+   The ground is warm on purpose. #0a0908 rather than a cold near-black, so the
+   page reads as heated obsidian even where no orange is visible. Surfaces step
+   up 0a0908 → 131010 → 1b1717 and separation is a warm hairline, not a shadow.
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  /* ground and structure. A lifted near-black, not #000: flat void has no
-     depth, so surfaces step 08090a → 0f1010 → 161618 the way an instrument
-     panel does, and separation comes from hairlines rather than shadow. */
-  --color-ground: #08090a;
-  --color-panel: #0f1010;
-  --color-panel-2: #161618;
-  --color-rule: #1e1e21;
-  --color-rule-2: #303035;
+  /* warm obsidian ground and structure */
+  --color-ground: #0a0908;
+  --color-panel: #131010;
+  --color-panel-2: #1b1717;
+  --color-rule: #292220;
+  --color-rule-2: #3d332f;
 
-  /* foreground. cold, never cream */
-  --color-fore: #e9e9ec;
-  --color-fore-2: #8b8b93;
-  --color-fore-3: #828289;
+  /* foreground. warm neutral, not cream, not grey */
+  --color-fore: #f0ebe4;
+  --color-fore-2: #9c948c;
+  --color-fore-3: #736b64;
 
-  /* the one accent: this leaks */
+  /* brand: atmosphere and the one action */
+  --color-ember: #fb4020;
+
+  /* signal: this leaks */
   --color-cinnabar: #ff3b1f;
 
-  /* the inversion, used once */
+  /* the inversion, unused today but kept for a light band */
   --color-flare: #f3f4f6;
 
   --font-display: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
@@ -169,8 +173,8 @@ input[type="range"]::-moz-range-thumb {
   content: "";
   position: absolute;
   inset: -0.16em -0.32em -0.18em -0.32em;
-  background: #26262b;
-  border: 1px solid #35353c;
+  background: #2a2422;
+  border: 1px solid #3a322e;
   clip-path: inset(0 0 0 100%);
   transition: clip-path 520ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
@@ -216,8 +220,8 @@ input[type="range"]::-moz-range-thumb {
 
 .plate {
   background-image:
-    linear-gradient(to right, rgba(233, 233, 236, 0.032) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(233, 233, 236, 0.032) 1px, transparent 1px);
+    linear-gradient(to right, rgba(226, 214, 204, 0.038) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(226, 214, 204, 0.038) 1px, transparent 1px);
   background-size: 28px 28px;
 }
 
@@ -262,18 +266,18 @@ input[type="range"]::-moz-range-thumb {
   display: inline-flex;
   align-items: center;
   gap: 0.55em;
-  border: 1px solid var(--color-fore);
-  background: var(--color-fore);
-  color: var(--color-ground);
+  border: 1px solid var(--color-ember);
+  background: var(--color-ember);
+  color: #0a0908;
   padding: 0.85rem 1.35rem;
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   transition: opacity 160ms;
 }
-.btn:hover { opacity: 0.82; }
+.btn:hover { opacity: 0.88; }
 
 .link {
   font-family: var(--font-mono);
@@ -292,19 +296,34 @@ input[type="range"]::-moz-range-thumb {
 /* ── the section head, one shape for all four sections ─────────────────── */
 
 .section-head {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr;
   gap: 2rem;
   border-top: 1px solid var(--color-rule);
   padding-top: 1.5rem;
 }
+
+/* an ember tick opening each section rule. one 46px segment of brand orange,
+   the smallest mark that still reads as identity rather than decoration. */
+.section-head::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 46px;
+  height: 1px;
+  background: var(--color-ember);
+}
 @media (min-width: 1024px) {
   .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
 }
 
 /* ── the floor. One atmospheric gradient, in the hero only. ──────────────
-   A monochrome top-light plus a faint dotted measure, masked so it fades
-   before it can become decoration. This is the only gradient on the page. */
+   An ember bloom off the top edge plus a faint dotted measure, masked so it
+   fades before it can become decoration. This is the only gradient on the
+   page, and it is the main place the brand orange shows without saying
+   anything about privacy — it is light, not a claim. */
 
 .hero-floor { position: relative; }
 .hero-floor::before {
@@ -313,9 +332,9 @@ input[type="range"]::-moz-range-thumb {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(72% 58% at 74% -8%, rgba(233, 233, 236, 0.09), transparent 60%),
-    radial-gradient(54% 48% at 15% -12%, rgba(233, 233, 236, 0.05), transparent 64%),
-    radial-gradient(rgba(233, 233, 236, 0.075) 1px, transparent 1px);
+    radial-gradient(72% 58% at 74% -8%, rgba(251, 64, 32, 0.16), transparent 60%),
+    radial-gradient(54% 48% at 15% -12%, rgba(251, 64, 32, 0.07), transparent 64%),
+    radial-gradient(rgba(251, 64, 32, 0.10) 1px, transparent 1px);
   background-size: auto, auto, 36px 36px;
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
   mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
