@@ -136,13 +136,26 @@ export function NoteLattice({
         varying float vTint;
         varying float vFade;
         varying float vAlpha;
+        varying vec2 vUv;
+        varying float vStar;
+        varying float vSeed;
         void main() {
           vTint = tint; vAlpha = alpha;
+          vUv = position.xy;
+          vSeed = seed;
+
+          // A minority of the field reads as a fixed star rather than a note:
+          // bigger, brighter, gently twinkling, independent of the settlement
+          // tint. Deterministic off seed so it doesn't reshuffle every frame.
+          float star = step(0.86, seed);
+          vStar = star;
+
           vec3 p = offset;
           p.x *= uSpreadX;
           p.y += sin(uTime * 0.18 + seed * 6.2831) * 0.012;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
-          float s = uSize * (1.0 + tint * 1.35) * (0.4 + 0.6 * alpha);
+
+          float s = uSize * (1.0 + tint * 1.35) * (0.4 + 0.6 * alpha) * (1.0 + star * 0.85);
           mv.xy += position.xy * s;
           vFade = smoothstep(-1.75, 1.75, mv.z + uCamZ);
           gl_Position = projectionMatrix * mv;
@@ -152,15 +165,34 @@ export function NoteLattice({
         uniform vec3 uBase;
         uniform vec3 uLeak;
         uniform float uOpacity;
+        uniform float uTime;
         varying float vTint;
         varying float vFade;
         varying float vAlpha;
+        varying vec2 vUv;
+        varying float vStar;
+        varying float vSeed;
         void main() {
+          // A glowing point, not a soft blob: a small bright core plus its own
+          // separate, tighter-falling halo around it, instead of one wide
+          // gradient that reads as haze once a few marks overlap.
+          float d = length(vUv) * 2.0;
+          float core = smoothstep(0.42, 0.0, d);
+          float halo = pow(clamp(1.0 - d, 0.0, 1.0), 4.0);
+          float glow = clamp(core + halo * 0.55, 0.0, 1.0);
+          if (glow < 0.02) discard;
+
           vec3 c = mix(uBase, uLeak, vTint);
           float a = uOpacity * mix(0.28, 1.0, vFade);
-          a = mix(a, 1.0, vTint) * vAlpha;
+          a = mix(a, 1.0, vTint) * vAlpha * glow;
+
+          // stars sit brighter and drift in and out slowly, each on its own
+          // clock (phased off its seed, not its screen position)
+          float twinkle = 0.55 + 0.45 * sin(uTime * 1.3 + vSeed * 6.2831);
+          a *= mix(1.0, 1.5 + 0.4 * twinkle, vStar);
+
           if (a < 0.004) discard;
-          gl_FragColor = vec4(c, a);
+          gl_FragColor = vec4(c, min(a, 1.0));
         }
       `,
     };

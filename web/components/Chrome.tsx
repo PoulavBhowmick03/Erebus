@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { RollingLink } from "./RollingLink";
-import { useKey } from "./KeyContext";
 
 export function Eyebrow({ children }: { children: React.ReactNode }) {
   return <p className="label m-0">{children}</p>;
@@ -34,7 +33,6 @@ const NAV = [
 const SOURCE_URL = "https://github.com/PoulavBhowmick03/Erebus";
 
 export function Header() {
-  const { keyState, toggle } = useKey();
   const pathname = usePathname();
   const [stuck, setStuck] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -60,8 +58,6 @@ export function Header() {
     return () => window.removeEventListener("resize", onResize);
   }, [mobileOpen]);
 
-  const held = keyState === "held";
-
   return (
     <header
       className={`fixed inset-x-0 top-0 z-50 px-[var(--edge)] transition-colors duration-300 ${
@@ -79,7 +75,7 @@ export function Header() {
             <span key={n.href} className="nav-mark">
               <RollingLink
                 href={navHref(n.href)}
-                className="mono-xs uppercase tracking-[0.14em] text-fore-2"
+                className="mono-xs uppercase tracking-[0.14em]"
               >
                 {n.label}
               </RollingLink>
@@ -100,37 +96,10 @@ export function Header() {
 
           <a
             href={SOURCE_URL}
-            className="nav-mark mono-xs hidden uppercase tracking-[0.14em] text-fore-2 md:inline"
+            className="mono-xs hidden uppercase tracking-[0.14em] text-fore md:inline"
           >
             GitHub ↗
           </a>
-
-          {/* A status LED, not a button in a box. Cinnabar while the key is
-              dropped, because that is the state in which the page shows what a
-              chain reader sees. Hidden on /docs, where there is no record. */}
-          {onHome ? (
-            <button
-              type="button"
-              onClick={toggle}
-              aria-pressed={held}
-              className="group hidden shrink-0 items-center gap-2.5 transition-colors duration-300 md:flex"
-              style={{ color: held ? "var(--color-fore-2)" : "var(--color-cinnabar)" }}
-              title={
-                held
-                  ? "Drop the key and read the page as a public chain reader"
-                  : "Take a viewing key and decrypt the record"
-              }
-            >
-              <span
-                aria-hidden
-                className="inline-block h-1.5 w-1.5"
-                style={{ background: "currentColor" }}
-              />
-              <span className="mono-xs uppercase tracking-[0.18em] transition-colors group-hover:text-fore">
-                key {held ? "held" : "dropped"}
-              </span>
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -145,7 +114,7 @@ export function Header() {
               key={n.href}
               href={navHref(n.href)}
               onClick={() => setMobileOpen(false)}
-              className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore-2 transition-colors hover:bg-fore hover:text-ground"
+              className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore-2 transition-colors hover:text-fore"
             >
               {n.label}
             </a>
@@ -153,28 +122,10 @@ export function Header() {
           <a
             href={SOURCE_URL}
             onClick={() => setMobileOpen(false)}
-            className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore-2 transition-colors hover:bg-fore hover:text-ground"
+            className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore"
           >
             GitHub ↗
           </a>
-          {onHome ? (
-            <button
-              type="button"
-              onClick={() => {
-                toggle();
-                setMobileOpen(false);
-              }}
-              className="mono-xs flex min-h-[44px] items-center gap-2.5 uppercase tracking-[0.16em]"
-              style={{ color: held ? "var(--color-fore-2)" : "var(--color-cinnabar)" }}
-            >
-              <span
-                aria-hidden
-                className="inline-block h-1.5 w-1.5"
-                style={{ background: "currentColor" }}
-              />
-              key {held ? "held" : "dropped"}
-            </button>
-          ) : null}
         </nav>
       ) : null}
     </header>

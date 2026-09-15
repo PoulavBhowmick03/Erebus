@@ -1,6 +1,7 @@
 import { INSTALL, SOURCE } from "@/lib/content";
 import { Snippet } from "./Snippet";
 import { NoteLattice } from "./NoteLattice";
+import { HeadlineHighlight } from "./HeadlineHighlight";
 
 /**
  * Full-bleed poster hero. The pool itself is the background, not an
@@ -19,7 +20,7 @@ export function Hero() {
       <div className="relative px-[var(--edge)] pb-14 pt-28 md:pb-20">
         <div className="mx-auto w-full max-w-[1560px]">
           <h1 className="display enter mb-0 text-[clamp(42px,10vw,152px)]">
-            <span className="block">Negotiate in darkness,</span>
+            <HeadlineHighlight />
             <span
               className="enter block"
               style={{ animationDelay: "90ms", color: "var(--color-ember)" }}
@@ -36,7 +37,7 @@ export function Hero() {
             </p>
 
             <div
-              className="enter flex flex-col items-start gap-6 lg:w-[400px] lg:items-end"
+              className="enter flex flex-col items-start gap-6 lg:w-[580px] lg:items-end"
               style={{ animationDelay: "230ms" }}
             >
               <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
@@ -48,7 +49,7 @@ export function Hero() {
                 </a>
               </div>
 
-              <div className="w-full max-w-[400px]">
+              <div className="w-full max-w-[580px]">
                 <Snippet command={INSTALL} label="install" highlight />
               </div>
             </div>
