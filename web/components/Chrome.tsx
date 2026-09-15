@@ -76,13 +76,14 @@ export function Header() {
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
           {NAV.map((n) => (
-            <RollingLink
-              key={n.href}
-              href={navHref(n.href)}
-              className="mono-xs uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore"
-            >
-              {n.label}
-            </RollingLink>
+            <span key={n.href} className="nav-mark">
+              <RollingLink
+                href={navHref(n.href)}
+                className="mono-xs uppercase tracking-[0.14em] text-fore-2"
+              >
+                {n.label}
+              </RollingLink>
+            </span>
           ))}
         </nav>
 
@@ -99,7 +100,7 @@ export function Header() {
 
           <a
             href={SOURCE_URL}
-            className="mono-xs hidden uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore md:inline"
+            className="nav-mark mono-xs hidden uppercase tracking-[0.14em] text-fore-2 md:inline"
           >
             GitHub ↗
           </a>
@@ -144,7 +145,7 @@ export function Header() {
               key={n.href}
               href={navHref(n.href)}
               onClick={() => setMobileOpen(false)}
-              className="mono-xs flex min-h-[44px] items-center uppercase tracking-[0.16em] text-fore-2 transition-colors hover:text-fore"
+              className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore-2 transition-colors hover:bg-fore hover:text-ground"
             >
               {n.label}
             </a>
@@ -152,7 +153,7 @@ export function Header() {
           <a
             href={SOURCE_URL}
             onClick={() => setMobileOpen(false)}
-            className="mono-xs flex min-h-[44px] items-center uppercase tracking-[0.16em] text-fore-2 transition-colors hover:text-fore"
+            className="mono-xs flex min-h-[44px] items-center px-[var(--edge)] uppercase tracking-[0.16em] text-fore-2 transition-colors hover:bg-fore hover:text-ground"
           >
             GitHub ↗
           </a>
