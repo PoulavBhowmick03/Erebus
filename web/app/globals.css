@@ -319,37 +319,27 @@ input[type="range"]::-moz-range-thumb {
   .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
 }
 
-/* ── the floor. One atmospheric gradient, in the hero only. ──────────────
-   An ember bloom off the top edge plus a faint dotted measure, masked so it
-   fades before it can become decoration. This is the only gradient on the
-   page, and it is the main place the brand orange shows without saying
-   anything about privacy — it is light, not a claim. */
+/* ── the hero scrim. The pool visual runs full-bleed behind the hero copy;
+   this is what keeps the type readable over a field of moving points without
+   boxing the visual off into a chart-shaped rectangle. Ground at the very
+   bottom so the hero blends into the section below it, ember rising off the
+   bottom-left because that is the one place the brand orange shows without
+   making a privacy claim, and a light top vignette so the nav reads over the
+   field before the header's own scroll background kicks in. ─────────────── */
 
-.hero-floor { position: relative; }
-.hero-floor::before {
-  content: "";
-  position: absolute;
-  inset: 0;
+.hero-scrim {
   pointer-events: none;
   background:
-    radial-gradient(72% 58% at 74% -8%, rgba(251, 64, 32, 0.16), transparent 60%),
-    radial-gradient(54% 48% at 15% -12%, rgba(251, 64, 32, 0.07), transparent 64%),
-    radial-gradient(rgba(251, 64, 32, 0.10) 1px, transparent 1px);
-  background-size: auto, auto, 36px 36px;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
-  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
-}
-.hero-floor > * { position: relative; }
-
-/* an ember bloom behind the pool figure only — atmosphere, not a data value,
-   so it stays in the brand's own orange rather than cinnabar. */
-.figure-glow {
-  position: absolute;
-  inset: -8%;
-  background: radial-gradient(circle at 50% 42%, rgba(251, 64, 32, 0.14), transparent 62%);
-  filter: blur(30px);
-  opacity: 0.8;
-  pointer-events: none;
+    linear-gradient(to bottom, rgba(10, 9, 8, 0.55) 0%, transparent 22%),
+    linear-gradient(
+      to top,
+      var(--color-ground) 0%,
+      rgba(10, 9, 8, 0.93) 15%,
+      rgba(10, 9, 8, 0.5) 38%,
+      rgba(10, 9, 8, 0.1) 62%,
+      transparent 100%
+    ),
+    radial-gradient(120% 70% at 10% 100%, rgba(251, 64, 32, 0.18), transparent 60%);
 }
 
 /* ── on-load entrance, not just scroll reveal ────────────────────────────

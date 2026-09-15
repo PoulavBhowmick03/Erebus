@@ -1,36 +1,45 @@
 import { INSTALL, SOURCE } from "@/lib/content";
 import { Snippet } from "./Snippet";
 import { NoteLattice } from "./NoteLattice";
-import { Section } from "./Chrome";
-import { Reveal } from "./Reveal";
 
+/**
+ * Full-bleed poster hero. The pool itself is the background, not an
+ * illustration boxed off to one side — the copy sits on top of it with a
+ * scrim for contrast, so the strongest visual on the page is the first thing
+ * a reader sees rather than a chart-shaped rectangle competing with text.
+ */
 export function Hero() {
   return (
-    <Section id="top" className="hero-floor pt-16 md:pt-28">
-      <h1 className="display enter mb-0 text-[clamp(30px,6.4vw,94px)]">
-        <span className="block">Negotiate in darkness,</span>
-        <span className="enter block text-fore-3" style={{ animationDelay: "90ms" }}>
-          settle in silence
-        </span>
-      </h1>
+    <section id="top" className="relative isolate flex min-h-[100svh] flex-col justify-end overflow-hidden">
+      <div aria-hidden className="absolute inset-0">
+        <NoteLattice className="h-full w-full" story density={18} />
+      </div>
+      <div aria-hidden className="hero-scrim absolute inset-0" />
 
-      <div className="mt-14 grid grid-cols-1 gap-12 border-t border-rule pt-10 lg:grid-cols-[1fr_0.82fr] lg:gap-16">
-        <div>
-          <p className="enter lead max-w-[46ch]" style={{ animationDelay: "160ms" }}>
-            Private coordination and shielded settlement for AI agents. Two agents negotiate over
-            an encrypted channel held in pool note salts, then settle atomically through STRK20. A
-            third party can later be given one deal.
-          </p>
+      <span className="leak-tag pointer-events-none absolute right-[var(--edge)] top-20 md:top-24">
+        7 notes public
+      </span>
 
-          <div className="enter mt-10 max-w-[540px]" style={{ animationDelay: "230ms" }}>
-            <Snippet command={INSTALL} label="install" />
-            <p className="mono-xs mt-3 leading-relaxed text-fore-3">
-              Three packages: the MCP server, the Python binding, and the Rust binary as a
-              platform wheel. Set EREBUS_BACKEND=mock to run everything with no chain, no keys,
-              and no gas.
+      <div className="relative px-[var(--edge)] pb-14 pt-28 md:pb-20">
+        <div className="mx-auto w-full max-w-[1560px]">
+          <h1 className="display enter mb-0 text-[clamp(42px,10vw,152px)]">
+            <span className="block">Negotiate in darkness,</span>
+            <span className="enter block text-fore-3" style={{ animationDelay: "90ms" }}>
+              settle in silence
+            </span>
+          </h1>
+
+          <div className="mt-10 grid grid-cols-1 gap-10 border-t border-rule/70 pt-8 lg:grid-cols-[1fr_auto] lg:items-end lg:gap-16">
+            <p className="enter lead max-w-[46ch]" style={{ animationDelay: "160ms" }}>
+              Private coordination and shielded settlement for AI agents. Two agents negotiate
+              over an encrypted channel held in pool note salts, then settle atomically through
+              STRK20. A third party can later be given one deal.
             </p>
 
-            <div className="mt-7 flex flex-wrap items-center gap-x-8 gap-y-4">
+            <div
+              className="enter flex flex-wrap items-center gap-x-8 gap-y-4 lg:justify-end"
+              style={{ animationDelay: "300ms" }}
+            >
               <a href="/docs" className="btn transition-transform duration-300 hover:-translate-y-0.5">
                 Get started <span aria-hidden>→</span>
               </a>
@@ -39,28 +48,17 @@ export function Hero() {
               </a>
             </div>
           </div>
-        </div>
 
-        <Reveal as="div" variant="right" delay={140}>
-          <figure className="relative m-0">
-            <div aria-hidden className="figure-glow" />
-            <div className="relative h-[320px] border border-rule-2 plate sm:h-[380px] lg:h-[460px]">
-              <NoteLattice className="absolute inset-0" story />
-              <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-3">
-                <span className="mono-xs uppercase tracking-[0.14em] text-fore-3">
-                  the pool, one deal
-                </span>
-                <span className="leak-tag">7 notes public</span>
-              </figcaption>
-            </div>
-            <p className="mono-xs mt-3 max-w-[52ch] leading-relaxed text-fore-3">
-              Every shielded position in STRK20 is a note. This field is that set. One deal is drawn
-              over it: the two parties, the offers, seven settlement notes, one viewing grant.
-              Cinnabar marks what a chain reader can see.
+          <div className="enter mt-8 max-w-[540px]" style={{ animationDelay: "230ms" }}>
+            <Snippet command={INSTALL} label="install" />
+            <p className="mono-xs mt-3 leading-relaxed text-fore-3">
+              Three packages: the MCP server, the Python binding, and the Rust binary as a
+              platform wheel. Set EREBUS_BACKEND=mock to run everything with no chain, no keys,
+              and no gas.
             </p>
-          </figure>
-        </Reveal>
+          </div>
+        </div>
       </div>
-    </Section>
+    </section>
   );
 }
