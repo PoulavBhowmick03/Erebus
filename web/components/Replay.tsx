@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { DEAL_SUMMARY, DISCLOSURE, REPLAY, TRANSCRIPT, doc } from "@/lib/content";
-import { Eyebrow, Section } from "./Chrome";
+import { DEAL_SUMMARY, DISCLOSURE, REPLAY, TRANSCRIPT } from "@/lib/content";
+import { Section } from "./Chrome";
 import { Reveal } from "./Reveal";
 import { Secret } from "./Secret";
 
@@ -56,27 +56,15 @@ export function Replay() {
   return (
     <Section id="how" className="pt-24 md:pt-36">
       <Reveal className="section-head">
-        <div>
-          <Eyebrow>Fig. 02 — one deal, step by step</Eyebrow>
-          <h2 className="display mt-5 mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
-            Watch one deal move
-            <br />
-            <span className="text-fore-3">through Erebus.</span>
-          </h2>
-        </div>
+        <h2 className="display mb-0 max-w-[27ch] text-[clamp(25px,3.5vw,49px)]">
+          Run the negotiation.
+        </h2>
         <div className="flex flex-col justify-end">
           <p className="prose m-0 max-w-[54ch]">
             This browser simulation mirrors{" "}
-            <code className="text-fore">agents/src/erebus_agents/demo.py</code>, the deterministic
-            mock rehearsal the reference agents run. It does not submit a transaction or use a
-            wallet.
+            <code className="text-fore">agents/src/erebus_agents/demo.py</code>, the mock rehearsal
+            the reference agents run. It does not submit a transaction or use a wallet.
           </p>
-          <a
-            href={doc("agents/src/erebus_agents/demo.py")}
-            className="mono-xs mt-5 w-fit uppercase tracking-[0.16em] text-fore-2 underline decoration-rule-2 underline-offset-[6px] hover:text-fore"
-          >
-            demo.py ↗
-          </a>
         </div>
       </Reveal>
 
@@ -196,8 +184,7 @@ export function Replay() {
       <div className="section-head mt-12">
         <p className="prose m-0 max-w-[54ch]">
           Wire v3 encrypts offer terms under AES-256-GCM-SIV. It does not hide transaction timing,
-          pool usage, or who you opened a channel with. The terms are the secret here; the fact
-          that a deal moved is not.
+          pool usage, or who you opened a channel with.
         </p>
 
         <table className="w-full border-collapse text-left">

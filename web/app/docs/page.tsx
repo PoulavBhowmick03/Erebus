@@ -1,21 +1,21 @@
 import type { Metadata } from "next";
-import { Eyebrow, Header, Section } from "@/components/Chrome";
+import { Header, Section } from "@/components/Chrome";
 import { Footer } from "@/components/Footer";
 import { Snippet } from "@/components/Snippet";
 import { Reveal } from "@/components/Reveal";
 import { CALL_PATH, ENV_VARS, INSTALL, MCP_CONFIG, TOOL_GROUPS, doc } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Get started — Erebus",
+  title: "Erebus docs",
   description:
-    "Install the Erebus MCP server, configure an identity, and drive a private negotiation and shielded settlement from any agent framework.",
+    "Install the Erebus MCP server, configure an identity, and drive a shielded settlement from any agent framework.",
 };
 
 const NEXT = [
-  ["runbook.md — clean-machine operator guide", doc("docs/runbook.md")],
-  ["reference.md — the tool and SDK surface", doc("docs/reference.md")],
-  ["ARCHITECTURE.md — the protocol, end to end", doc("ARCHITECTURE.md")],
-  ["status.md — what actually works today", doc("docs/status.md")],
+  ["runbook.md", doc("docs/runbook.md")],
+  ["reference.md", doc("docs/reference.md")],
+  ["ARCHITECTURE.md", doc("ARCHITECTURE.md")],
+  ["status.md", doc("docs/status.md")],
 ] as const;
 
 function Step({
@@ -45,16 +45,10 @@ export default function Docs() {
       <main>
         <Section className="pt-16 md:pt-24">
           <Reveal className="max-w-[68ch]">
-            <Eyebrow>Get started</Eyebrow>
-            <h1 className="display mt-6 mb-0 text-[clamp(36px,6vw,80px)]">
-              Run Erebus
-              <br />
-              <span className="text-fore-3">in ten minutes.</span>
-            </h1>
-            <p className="lead mt-8">
-              Erebus is consumed as MCP tools. Install the server, give it an identity, and any
-              client that can set environment can drive a private negotiation and an atomic
-              shielded settlement without touching Erebus internals.
+            <h1 className="display mb-0 text-[clamp(36px,6vw,80px)]">Get started.</h1>
+            <p className="lead mt-8 max-w-[56ch]">
+              Erebus runs as an MCP server. Install it, give it an identity, and any client that can
+              set environment can drive a negotiation and a shielded settlement.
             </p>
           </Reveal>
 
@@ -62,12 +56,11 @@ export default function Docs() {
             <Step n="01" title="Install">
               <Snippet command={INSTALL} label="install" />
               <p className="prose mt-5 max-w-[62ch]">
-                That pulls three packages: <code>erebus-mcp-server</code> (the tool layer),
-                <code>erebus-sdk</code> (the Python binding), and the Rust binary as a platform
+                That installs the MCP server, the Python binding, and the Rust binary as a platform
                 wheel. No Rust toolchain is needed. Linux x86-64 and macOS arm64.
               </p>
               <p className="prose mt-4 max-w-[62ch]">
-                To try the whole surface with no chain, no keys, and no gas, set{" "}
+                To run everything with no chain, no keys, and no gas, set{" "}
                 <code>EREBUS_BACKEND=mock</code>.
               </p>
             </Step>
@@ -75,10 +68,9 @@ export default function Docs() {
             <Step n="02" title="Configure an identity">
               <Snippet command={MCP_CONFIG} label="mcpServers" />
               <p className="prose mt-5 max-w-[62ch]">
-                Negotiation has two sides, so register the counterparty as a second entry with its
-                own identity, its own state directory, and{" "}
-                <code>EREBUS_SETTLEMENT_ROLE=payee</code>. Nothing is shared between them — that is
-                the point.
+                A negotiation has two sides. Register the counterparty as a second entry with its
+                own identity, state directory, and{" "}
+                <code>EREBUS_SETTLEMENT_ROLE=payee</code>.
               </p>
 
               <dl className="mt-8 border-t border-rule">
@@ -114,10 +106,10 @@ export default function Docs() {
                 ))}
               </div>
               <p className="prose mt-5 max-w-[62ch]">
-                Thirteen tools, Protocol 4. A full negotiation is: <code>open_channel</code>,{" "}
-                <code>propose_offer</code>, <code>wait_for_offers</code>, <code>counter_offer</code>,{" "}
+                A full negotiation is <code>open_channel</code>, <code>propose_offer</code>,{" "}
+                <code>wait_for_offers</code>, <code>counter_offer</code>,{" "}
                 <code>accept_and_settle</code>, then <code>grant_viewing_key</code> and{" "}
-                <code>reveal</code> for scoped disclosure.
+                <code>reveal</code>.
               </p>
             </Step>
 
@@ -137,9 +129,8 @@ export default function Docs() {
                 ))}
               </div>
               <p className="prose mt-6 max-w-[62ch]">
-                Key material never crosses upward past the binding. The negotiation policy engine
-                decides <em>what</em> to do and never handles keys, which makes that boundary
-                enforced rather than conventional.
+                Key material never crosses above the binding. The policy engine decides what to do
+                and never touches keys.
               </p>
             </Step>
 
@@ -154,8 +145,7 @@ export default function Docs() {
                 ))}
               </ul>
               <p className="prose mt-6 max-w-[62ch]">
-                Unaudited and experimental, with no external security review. Do not put value you
-                care about through it.
+                Unaudited, with no external security review. Do not use it for value you care about.
               </p>
             </Step>
           </div>

@@ -46,19 +46,19 @@ export const REPLAY: ReplayStage[] = [
     id: "01",
     title: "open channel",
     hidden: "the channel key",
-    open: "the counterparty’s address, the submitting account, timing",
+    open: "counterparty address, submitting account, timing",
   },
   {
     id: "02",
-    title: "offer, counter, accept",
+    title: "offer and counter",
     hidden: "amount, token, deadline, memo hash",
-    open: "the submitting account, note count, timing",
+    open: "submitting account, note count, timing",
   },
   {
     id: "03",
-    title: "settle atomically",
+    title: "settle",
     hidden: "amount paid, recipient, change",
-    open: "the submitting account, that a settlement occurred, seven created notes",
+    open: "submitting account, that a settlement occurred, seven notes",
   },
 ];
 
@@ -100,19 +100,19 @@ export const OBSERVER = [
   {
     k: "M1 · wire v2 classifier",
     v: "1.0000",
-    note: "an Erebus message, identified — the failure wire v3 set out to fix",
+    note: "identifies an Erebus message against 10,000 negatives",
     bad: true,
   },
   {
     k: "M2 · wire v3 classifier",
     v: "0.5008",
-    note: "chance, against the v3 fixture and 10,000 synthetic negatives",
+    note: "chance, on the same 10,000 negatives",
     bad: false,
   },
   {
     k: "M4 · submission linkage",
     v: "1.0",
-    note: "the same account signs every write; there is no relayer",
+    note: "the same account signs every write",
     bad: true,
   },
 ] as const;
@@ -123,16 +123,16 @@ export type NonClaim = { title: string; body: string };
 
 export const NON_CLAIMS: NonClaim[] = [
   {
-    title: "Prove production readiness from two canaries.",
-    body: "Two bounded mainnet workflows passed — not capacity, uptime, or independent security review. Do not put value you care about through it.",
+    title: "Not production ready",
+    body: "Two mainnet workflows passed. That is not capacity, uptime, or an independent security review.",
   },
   {
-    title: "Revoke facts already disclosed.",
-    body: "A wire-v3 expiry stops later verification. It cannot make a recipient forget a record already opened.",
+    title: "Disclosure cannot be undone",
+    body: "A wire-v3 expiry stops later verification. It cannot make a recipient forget a record they already opened.",
   },
   {
-    title: "Escrow, or deferred delivery.",
-    body: "Settlement is atomic, so there is no “agree now, deliver later”. The pool has no timelock or conditional release, and neither can be bolted on client-side.",
+    title: "No escrow or deferred delivery",
+    body: "Settlement is atomic, so there is no agree-now-deliver-later. The pool has no timelock and no conditional release.",
   },
 ];
 

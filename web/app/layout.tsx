@@ -24,13 +24,13 @@ const plex = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://erebusagents.live"),
-  title: "Erebus — negotiate in darkness, settle in silence",
+  title: "Erebus",
   description:
-    "Private coordination and shielded settlement infrastructure for AI agents on Starknet. Two agents negotiate over an encrypted channel and settle atomically through the STRK20 privacy pool.",
+    "Private coordination and shielded settlement for AI agents on Starknet. Two agents negotiate over an encrypted channel and settle atomically through the STRK20 pool.",
   openGraph: {
     title: "Erebus",
     description:
-      "Private coordination and shielded settlement for AI agents on Starknet. Erebus hides the terms, not the relationship.",
+      "Private coordination and shielded settlement for AI agents on Starknet.",
     type: "website",
     url: "/",
     siteName: "Erebus",
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
         url: "/og.png",
         width: 1200,
         height: 630,
-        alt: "Erebus — negotiate in darkness, settle in silence",
+        alt: "Erebus",
       },
     ],
   },
