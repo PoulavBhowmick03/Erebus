@@ -28,9 +28,10 @@ export function Section({
 const NAV = [
   { href: "#proof", label: "Proof" },
   { href: "#how", label: "How it works" },
-  { href: "#limits", label: "Limits" },
   { href: "/docs", label: "Docs" },
 ];
+
+const SOURCE_URL = "https://github.com/PoulavBhowmick03/Erebus";
 
 export function Header() {
   const { keyState, toggle } = useKey();
@@ -64,7 +65,7 @@ export function Header() {
   return (
     <header
       className={`sticky top-0 z-50 px-[var(--edge)] transition-colors duration-300 ${
-        stuck || mobileOpen ? "bg-ground/95" : ""
+        stuck || mobileOpen ? "bg-ground/80 backdrop-blur-md" : ""
       }`}
       style={{ borderBottom: `1px solid ${stuck || mobileOpen ? "var(--color-rule)" : "transparent"}` }}
     >
@@ -83,16 +84,9 @@ export function Header() {
               {n.label}
             </RollingLink>
           ))}
-          <RollingLink
-            href="https://github.com/PoulavBhowmick03/Erebus"
-            external
-            className="mono-xs uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore"
-          >
-            Source
-          </RollingLink>
         </nav>
 
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="flex shrink-0 items-center gap-6">
           <button
             type="button"
             onClick={() => setMobileOpen((o) => !o)}
@@ -103,29 +97,36 @@ export function Header() {
             {mobileOpen ? "Close" : "Menu"}
           </button>
 
-          {/* The key only means something where there is a record to reveal, so it
-              is not shown on /docs where it would be an inert control. */}
+          <a
+            href={SOURCE_URL}
+            className="mono-xs hidden uppercase tracking-[0.14em] text-fore-2 transition-colors hover:text-fore md:inline"
+          >
+            GitHub ↗
+          </a>
+
+          {/* A status LED, not a button in a box. Cinnabar while the key is
+              dropped, because that is the state in which the page shows what a
+              chain reader sees. Hidden on /docs, where there is no record. */}
           {onHome ? (
             <button
               type="button"
               onClick={toggle}
               aria-pressed={held}
-              className="group flex shrink-0 items-center gap-2.5 border px-3 py-2 transition-colors duration-300"
-              style={{
-                borderColor: held ? "var(--color-fore)" : "var(--color-cinnabar)",
-                color: held ? "var(--color-fore)" : "var(--color-cinnabar)",
-              }}
+              className="group hidden shrink-0 items-center gap-2.5 transition-colors duration-300 md:flex"
+              style={{ color: held ? "var(--color-fore-2)" : "var(--color-cinnabar)" }}
               title={
                 held
                   ? "Drop the key and read the page as a public chain reader"
                   : "Take a viewing key and decrypt the record"
               }
             >
-              <span className="mono-xs uppercase tracking-[0.16em]">
-                <span className="hidden sm:inline" style={{ opacity: 0.7 }}>
-                  Viewing key /{" "}
-                </span>
-                <span className="tabular-nums">{held ? "held" : "dropped"}</span>
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5"
+                style={{ background: "currentColor" }}
+              />
+              <span className="mono-xs uppercase tracking-[0.18em] transition-colors group-hover:text-fore">
+                key {held ? "held" : "dropped"}
               </span>
             </button>
           ) : null}
@@ -149,12 +150,30 @@ export function Header() {
             </a>
           ))}
           <a
-            href="https://github.com/PoulavBhowmick03/Erebus"
+            href={SOURCE_URL}
             onClick={() => setMobileOpen(false)}
             className="mono-xs flex min-h-[44px] items-center uppercase tracking-[0.16em] text-fore-2 transition-colors hover:text-fore"
           >
-            Source ↗
+            GitHub ↗
           </a>
+          {onHome ? (
+            <button
+              type="button"
+              onClick={() => {
+                toggle();
+                setMobileOpen(false);
+              }}
+              className="mono-xs flex min-h-[44px] items-center gap-2.5 uppercase tracking-[0.16em]"
+              style={{ color: held ? "var(--color-fore-2)" : "var(--color-cinnabar)" }}
+            >
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5"
+                style={{ background: "currentColor" }}
+              />
+              key {held ? "held" : "dropped"}
+            </button>
+          ) : null}
         </nav>
       ) : null}
     </header>

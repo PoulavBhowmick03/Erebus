@@ -18,10 +18,12 @@
    ─────────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  /* ground and structure */
-  --color-ground: #000000;
-  --color-panel: #0a0a0b;
-  --color-panel-2: #121214;
+  /* ground and structure. A lifted near-black, not #000: flat void has no
+     depth, so surfaces step 08090a → 0f1010 → 161618 the way an instrument
+     panel does, and separation comes from hairlines rather than shadow. */
+  --color-ground: #08090a;
+  --color-panel: #0f1010;
+  --color-panel-2: #161618;
   --color-rule: #1e1e21;
   --color-rule-2: #303035;
 
@@ -299,6 +301,26 @@ input[type="range"]::-moz-range-thumb {
 @media (min-width: 1024px) {
   .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
 }
+
+/* ── the floor. One atmospheric gradient, in the hero only. ──────────────
+   A monochrome top-light plus a faint dotted measure, masked so it fades
+   before it can become decoration. This is the only gradient on the page. */
+
+.hero-floor { position: relative; }
+.hero-floor::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(72% 58% at 74% -8%, rgba(233, 233, 236, 0.09), transparent 60%),
+    radial-gradient(54% 48% at 15% -12%, rgba(233, 233, 236, 0.05), transparent 64%),
+    radial-gradient(rgba(233, 233, 236, 0.075) 1px, transparent 1px);
+  background-size: auto, auto, 36px 36px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.4) 52%, transparent 86%);
+}
+.hero-floor > * { position: relative; }
 
 }
 

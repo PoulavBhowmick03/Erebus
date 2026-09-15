@@ -52,8 +52,11 @@ Three rules carry the whole page. Breaking any one of them makes it an ordinary 
    submitting account, block, timestamp, note count, the public side of the replay, and the
    observer metrics that came out badly. Grep for it before committing and check every use is a
    leak.
-2. **Structure comes from hairlines and space.** No cards, no fills, no shadows, no radii, no
-   gradients.
+2. **Structure comes from hairlines and surface steps, not shadows.** The canvas is `#08090a`,
+   surfaces step up to `--color-panel`, and separation is a hairline. No cards, no fills, no
+   shadows, no radii. **One exception:** the hero carries a single atmospheric gradient
+   (`.hero-floor`) — a monochrome top-light and dotted measure, masked to fade out. It is the only
+   gradient in the system; do not add a second.
 3. **The plaintext is always in the DOM.** Redaction is an ink bar drawn over readable markup,
    and the ciphertext substitution happens client-side after mount. No-JS readers, crawlers and
    link previews get the complete page. It is a demonstration of the disclosure model, not a
