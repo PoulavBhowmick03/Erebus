@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export type KeyState = "held" | "dropped";
 
@@ -16,14 +9,12 @@ type Ctx = {
   /** true once the opening reveal has finished, so sections can stagger after it */
   booted: boolean;
   reduced: boolean;
-  toggle: () => void;
 };
 
 const KeyCtx = createContext<Ctx>({
   keyState: "held",
   booted: true,
   reduced: false,
-  toggle: () => {},
 });
 
 export const useKey = () => useContext(KeyCtx);
@@ -62,14 +53,9 @@ export function KeyProvider({ children }: { children: React.ReactNode }) {
     document.documentElement.setAttribute("data-key", keyState);
   }, [keyState]);
 
-  const toggle = useCallback(() => {
-    setBooted(true);
-    setKeyState((k) => (k === "held" ? "dropped" : "held"));
-  }, []);
-
   const value = useMemo(
-    () => ({ keyState, booted, reduced, toggle }),
-    [keyState, booted, reduced, toggle],
+    () => ({ keyState, booted, reduced }),
+    [keyState, booted, reduced],
   );
 
   return <KeyCtx.Provider value={value}>{children}</KeyCtx.Provider>;
