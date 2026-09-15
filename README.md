@@ -469,7 +469,8 @@ Configuration, the full tool surface, error handling, and the raw CLI protocol a
 | | |
 |---|---|
 | [Reference](./docs/reference.md) | Identity setup, configuration, the thirteen MCP tools, recovery, and CLI protocol 4 |
-| [Runbook](./docs/runbook.md) | Reproduce the on-chain demonstration step by step |
+| [Two-agent setup](./docs/setup.md) | Install to negotiated settlement with `erebus-init`, for 0.3.0 / Protocol 5 |
+| [Runbook](./docs/runbook.md) | The older Protocol 4 / manual-identity path; superseded by Two-agent setup on current `main` |
 | [Architecture](./ARCHITECTURE.md) | Component boundaries, the interface contract, the data model |
 | [Privacy model](./docs/privacy-model.md) | What leaks and what does not. The only source for privacy claims |
 | [Status](./docs/status.md) | Current state in one page; the tiebreaker between documents |
