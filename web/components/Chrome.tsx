@@ -28,7 +28,7 @@ export function Section({
 const NAV = [
   { href: "#proof", label: "Proof" },
   { href: "#how", label: "How it works" },
-  { href: "/docs", label: "Docs" },
+  { href: "https://docs.erebusagents.live", label: "Docs" },
 ];
 
 const SOURCE_URL = "https://github.com/PoulavBhowmick03/Erebus";
@@ -101,6 +101,7 @@ export function Header() {
                 <RollingLink
                   href={navHref(n.href)}
                   className="mono-xs uppercase tracking-[0.14em]"
+                  external={n.href.startsWith("http")}
                 >
                   {n.label}
                 </RollingLink>

@@ -41,7 +41,10 @@ export function Hero() {
               style={{ animationDelay: "230ms" }}
             >
               <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
-                <a href="/docs" className="btn transition-transform duration-300 hover:-translate-y-0.5">
+                <a
+                  href="https://docs.erebusagents.live"
+                  className="btn transition-transform duration-300 hover:-translate-y-0.5"
+                >
                   Get started <span aria-hidden>→</span>
                 </a>
                 <a href={SOURCE} className="link">
