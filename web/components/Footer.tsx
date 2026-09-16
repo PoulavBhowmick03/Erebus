@@ -21,7 +21,7 @@ export function Footer() {
               {[
                 ["status.md", doc("docs/status.md")],
                 ["privacy-model.md", doc("docs/privacy-model.md")],
-                ["threat-model.md", doc("docs/threat-model.md")],
+                ["threat-model.md", doc("docs/metropolis-threat-model.md")],
                 ["friction.md", doc("docs/friction.md")],
                 ["runbook.md", doc("docs/runbook.md")],
               ].map(([label, href]) => (

@@ -392,6 +392,19 @@ input[type="range"]::-moz-range-thumb {
   .section-head { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; }
 }
 
+/* ── the same ember tick, sized for the docs page's n/content grid instead
+   of section-head's two-column one. Same mark, same job. ──────────────── */
+.doc-step { position: relative; }
+.doc-step::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 46px;
+  height: 1px;
+  background: var(--color-ember);
+}
+
 /* ── the hero scrim. The pool visual runs full-bleed behind the hero copy;
    this is what keeps the type readable over a field of moving points without
    boxing the visual off into a chart-shaped rectangle. Ground at the very
@@ -425,6 +438,26 @@ input[type="range"]::-moz-range-thumb {
   background: rgba(10, 9, 8, 0.72);
   backdrop-filter: blur(6px);
   box-shadow: 0 0 0 1px rgba(251, 64, 32, 0.18), 0 20px 60px -20px rgba(251, 64, 32, 0.45);
+}
+
+/* ── the boundary mark. Same ember border language as install-card, sized
+   down for one box in a call-path diagram instead of a whole card — this is
+   the one edge in the chain that is enforced, not a convention. ──────────── */
+.boundary-mark {
+  border: 1px solid var(--color-ember);
+  color: var(--color-fore);
+  box-shadow: 0 0 0 1px rgba(251, 64, 32, 0.18), 0 0 28px -6px rgba(251, 64, 32, 0.65);
+}
+
+/* ── the pager glow. Same recipe as boundary-mark, but only on hover — the
+   prev/next links are a destination, not a standing warning, so the ember
+   border earns itself in only when you're actually pointed at it. ────────── */
+.pager-link {
+  transition: border-color 200ms, box-shadow 200ms, transform 200ms;
+}
+.pager-link:hover {
+  border-color: var(--color-ember);
+  box-shadow: 0 0 0 1px rgba(251, 64, 32, 0.18), 0 0 28px -6px rgba(251, 64, 32, 0.65);
 }
 
 /* ── on-load entrance, not just scroll reveal ────────────────────────────

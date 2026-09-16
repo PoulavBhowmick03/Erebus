@@ -13,11 +13,17 @@ export function Snippet({
   command,
   label,
   highlight = false,
+  accent = false,
 }: {
   command: string;
   label: string;
   /** Ember border and glow, for the one command that shouldn't blend in. */
   highlight?: boolean;
+  /** A quiet ember rule on the left edge only, for the one command that
+   *  matters most on a reference page — without the full install-card
+   *  treatment, which is reserved for the single most load-bearing command
+   *  on the whole site. */
+  accent?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -31,8 +37,14 @@ export function Snippet({
     }
   };
 
+  const boxClass = highlight
+    ? "install-card"
+    : accent
+      ? "border border-rule border-l-2"
+      : "border border-rule";
+
   return (
-    <div className={highlight ? "install-card" : "border border-rule"}>
+    <div className={boxClass} style={accent ? { borderLeftColor: "var(--color-ember)" } : undefined}>
       <div
         className={`flex items-center justify-between px-4 py-2 ${
           highlight ? "border-b border-ember/40" : "border-b border-rule"
