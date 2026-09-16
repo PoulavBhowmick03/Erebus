@@ -70,7 +70,7 @@ export function Header() {
       <div className="mx-auto flex h-14 w-full max-w-[1560px] items-center justify-between gap-6">
         <div className="flex items-center gap-3">
           <a
-            href={onHome ? "#top" : "/"}
+            href={onHome ? "#top" : onDocs ? "https://erebusagents.live" : "/"}
             className="nav-mark flex items-center"
             title={onDocs ? "Back to erebusagents.live" : undefined}
           >

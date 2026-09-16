@@ -1,0 +1,10 @@
+{
+  "redirects": [
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "docs.erebusagents.live" }],
+      "destination": "/docs/",
+      "permanent": false
+    }
+  ]
+}
