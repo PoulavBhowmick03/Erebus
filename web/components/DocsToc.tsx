@@ -140,13 +140,17 @@ export function DocsToc() {
           {DOCS_PAGES.map((p) => {
             const isActive = pathname === p.href;
             const pageSections = PAGE_SECTIONS[p.href] ?? [];
-            const expanded = pageSections.length > 1 && (isActive || hoveredHref === p.href);
+            const expanded = pageSections.length > 1 && hoveredHref === p.href;
             return (
               <li
                 key={p.href}
                 className={isActive ? "-ml-px border-l-2 border-ember" : undefined}
                 onMouseEnter={() => setHoveredHref(p.href)}
                 onMouseLeave={() => setHoveredHref(null)}
+                onFocus={() => setHoveredHref(p.href)}
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoveredHref(null);
+                }}
               >
                 <a
                   href={p.href}
