@@ -3,7 +3,7 @@
  *
  *   docs/status.md ................... the tiebreaker for current state
  *   docs/privacy-model.md ............ the only source for privacy claims
- *   docs/threat-model.md ............. the measured observer metrics
+ *   docs/metropolis-threat-model.md ............. the measured observer metrics
  *   docs/runs/2026-08-31-mainnet-060-040-canary.md
  *   docs/runs/v0.2-mainnet-canary.json
  *   agents/src/erebus_agents/demo.py . the replay
@@ -14,9 +14,14 @@ export const SOURCE = "https://github.com/PoulavBhowmick03/Erebus";
 export const doc = (p: string) => `${SOURCE}/blob/main/${p}`;
 export const starkscan = (h: string) => `https://starkscan.co/tx/${h}`;
 
+/* ── System map · README.md, docs/assets/erebus-overview.excalidraw.svg ──── */
+
+export const SYSTEM_MAP_ALT =
+  "Erebus system overview: the stack from agent to pool, the three layers, a deal end to end, how an offer becomes five notes, the note frames, who sees what, and what the system does and does not claim";
+
 /* ── Install · README.md ─────────────────────────────────────────────────── */
 
-export const INSTALL = `uv tool install \\
+export const INSTALL = `uv tool install --python 3.12 \\
   --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \\
   erebus-mcp-server`;
 
@@ -94,7 +99,7 @@ export const DISCLOSURE = [
   { who: "Viewing-grant holder", terms: "Readable for one deal" },
 ] as const;
 
-/* ── Three measured lines · docs/threat-model.md §4 ─────────────────────── */
+/* ── Three measured lines · docs/metropolis-threat-model.md §4 ─────────────────────── */
 
 export const OBSERVER = [
   {
@@ -187,8 +192,290 @@ export const ENV_VARS = [
   { k: "POOL_KEY_FILE", v: "path", note: "key values never cross the binding" },
   { k: "ACCOUNT_KEY_FILE", v: "path", note: "" },
   { k: "EREBUS_STATE_DIR", v: "path", note: "locked, mode-0600 state" },
+  { k: "EREBUS_SPENDING_LIMITS", v: "JSON, optional", note: "per-token cap on what accept_and_settle can spend" },
 ] as const;
 
 /* ── The call path · CLAUDE.md ───────────────────────────────────────────── */
 
 export const CALL_PATH = ["agents", "mcp-server", "sdk/py", "sdk/rs", "Starknet"] as const;
+
+/* ── Concepts · docs/reference.md, docs/privacy-model.md ─────────────────── */
+
+export const CONCEPTS = [
+  {
+    term: "channel",
+    def: "The encrypted pair between two agents, returned as a `channel_handle` by `open_channel`. Opened once, it can carry more than one deal. The handle itself is not private — see F38.",
+  },
+  {
+    term: "offer",
+    def: "A price put forward with `propose_offer` or answered with `counter_offer`. An offer has no withdrawn state: it is accepted or it expires, so a short deadline is the only way to bound how long a stale price stays acceptable.",
+  },
+  {
+    term: "deal",
+    def: "One accepted offer, identified by a `deal_id`. A channel pair can run several deals; settling one does not close the pair.",
+  },
+  {
+    term: "note",
+    def: "A shielded unit of value inside the STRK20 pool. `accept_and_settle` spends the caller's notes, which is why it is restricted to the payer.",
+  },
+  {
+    term: "operation_id",
+    def: "The idempotency key on every write: `op_` plus 64 lowercase hex characters. Persist it before the call and reuse the same one after a restart — a new ID for a write that looks stuck is the wrong move; call `reconcile` instead.",
+  },
+  {
+    term: "viewing grant",
+    def: "A file produced by `grant_viewing_key` that discloses one deal to one recipient. `reveal` reconstructs the deal from it. The configured pool key has to match the recipient the grant names.",
+  },
+] as const;
+
+/* ── The tool surface, in full · docs/reference.md §The MCP tool surface ─── */
+
+export const TOOL_DETAILS: Record<string, { signature: string; note: string }> = {
+  open_channel: { signature: "(operation_id, counterparty)", note: "Returns channel_handle." },
+  propose_offer: {
+    signature: "(operation_id, channel_handle, amount, token, deadline, memo_hash)",
+    note: "The payee asks. The payer offers.",
+  },
+  counter_offer: {
+    signature: "(operation_id, channel_handle, reply_to, amount, token, deadline, memo_hash)",
+    note: "Does not withdraw the offer it replies to.",
+  },
+  wait_for_offers: {
+    signature: "(channel_handle, expected_count, timeout_seconds=300)",
+    note: "One call instead of a poll loop. A timeout is not an error.",
+  },
+  read_channel_state: {
+    signature: "(channel_handle)",
+    note: "Every visible offer plus the settlement list.",
+  },
+  accept_and_settle: {
+    signature: "(operation_id, channel_handle, offer_id)",
+    note: "Payer only. Settles one deal — the pair can start another.",
+  },
+  get_note_balance: { signature: "()", note: "Payer must call before naming a price." },
+  grant_viewing_key: {
+    signature: "(operation_id, channel_handle, deal_id, grantee, expires_at, output_path)",
+    note: "Writes a new mode-0600 file and returns no secret.",
+  },
+  reveal: { signature: "(grant_path)", note: "Reconstructs the selected deal." },
+  reconcile: { signature: "()", note: "Read-only. Classifies journaled operations, never submits." },
+  resume_operation: {
+    signature: "(operation_id)",
+    note: "Resumes one safe operation, or names the operator action it needs first.",
+  },
+  rebuild_state: {
+    signature: "()",
+    note: "Rebuilds missing channel records from the pool key and chain data.",
+  },
+  doctor: { signature: "()", note: "Read-only. Always safe to call." },
+};
+
+/* ── Responses and errors · docs/reference.md §Errors and retries ────────── */
+
+export const RESPONSE_OK = `{"ok": true, "backend": "seam", "network": "sepolia", "result": {...}}`;
+export const RESPONSE_ERR = `{"ok": false, "backend": "seam", "network": "sepolia", "error": {"code": "...", "message": "...", "retryable": false}}`;
+
+export const ERROR_GROUPS = [
+  {
+    group: "The offer is wrong",
+    codes: [
+      "OFFER_EXPIRED",
+      "OFFER_UNKNOWN",
+      "ALREADY_SETTLED",
+      "NOT_YOUR_OFFER",
+      "AMOUNT_MISMATCH",
+      "INSUFFICIENT_NOTES",
+      "INDEX_CONFLICT",
+    ],
+    action: "Build a different offer. Retrying verbatim will not help.",
+  },
+  {
+    group: "Funding or identity policy",
+    codes: ["INSUFFICIENT_ALLOWANCE", "INSUFFICIENT_BALANCE"],
+    action: "Change the allowance or fund the account before a new attempt.",
+  },
+  {
+    group: "Durable operation state",
+    codes: ["OPERATION_CONFLICT", "RECONCILIATION_REQUIRED"],
+    action: "Keep the original operation_id. Inspect reconcile and follow its operator action.",
+  },
+  {
+    group: "Transient",
+    codes: ["SCREENING_UNAVAILABLE", "PROVER_UNAVAILABLE", "PROOF_EXPIRED", "SUBMIT_FAILED"],
+    action: "Retry with backoff. PROOF_EXPIRED needs a fresh proof, not a resend.",
+  },
+  {
+    group: "Terminal",
+    codes: ["SCREENING_REJECTED"],
+    action: "Stop. Not transient.",
+  },
+  {
+    group: "Opaque",
+    codes: ["PROOF_FAILED"],
+    action: "The prover refused and gave no reason. Report it as unexplained.",
+  },
+  {
+    group: "Before any protocol code ran",
+    codes: ["INVALID_REQUEST", "IDENTITY_UNAVAILABLE"],
+    action: "Fix the request or the key path. Never a chain-state problem.",
+  },
+] as const;
+
+/* ── Version · docs/reference.md, docs/status.md ─────────────────────────── */
+
+export const VERSION_NOTE =
+  "This page documents CLI Protocol 4, published as v0.2.0, exposing the thirteen tools listed above. The older v0.1.0 speaks Protocol 2 and exposes ten. erebus-sdk refuses a mismatched CLI by protocol number rather than failing later on a changed shape.";
+
+export const VERSION_BADGE = "Protocol 4 · v0.2.0";
+
+/* ── Set up an identity · docs/reference.md §Set up an identity ──────────── */
+
+export const IDENTITY_BOOTSTRAP = `scripts/new-identity.sh bootstrap erebus-a ~/.erebus-a <funder-account>`;
+
+export const IDENTITY_KEYS = [
+  {
+    key: "Starknet account key",
+    purpose: "Signs transactions. Custody",
+    seenBy: "Never leaves the Rust process",
+  },
+  {
+    key: "Pool private key",
+    purpose: "The STRK20 identity. Confidentiality",
+    seenBy: "Sent in compile_actions calldata to your prover and preflight RPC — both must be operator-controlled",
+  },
+  {
+    key: "Pool auditor key",
+    purpose: "Pool-wide, set once at registration",
+    seenBy: "StarkWare's, no rotation",
+  },
+] as const;
+
+/* ── The CLI protocol · docs/reference.md §The CLI protocol ──────────────── */
+
+export const CLI_REQUEST = `echo '{"method":"doctor","params":{"config":{...}}}' | erebus-cli`;
+export const CLI_RESPONSE = `{"ok": true, "protocol": 4, "result": {"ready": true, "checks": [...]}}`;
+
+export const CLI_METHODS =
+  "version, generate_pool_key, doctor, balance, allowance, approve, shield, open_channel, propose_offer, counter_offer, read_channel_state, accept_and_settle, reconcile, resume_operation, rebuild_state, grant_viewing_key, reveal";
+
+/* ── Building from source · docs/reference.md §Building from source ──────── */
+
+export const BUILD_CLONE = `git clone https://github.com/PoulavBhowmick03/Erebus && cd Erebus`;
+
+export const BUILD_RUST = `cd sdk/rs && cargo test --all-targets && cd ../.. # 351 passed, 2 ignored`;
+
+export const BUILD_PYTHON = `uv sync --all-packages && uv run pytest          # 154 tests`;
+
+/* ── Docs site nav · one entry per page, in reading order ─────────────────── */
+
+export const DOCS_PAGES = [
+  { n: "01", href: "/docs", label: "Quickstart" },
+  { n: "02", href: "/docs/concepts", label: "Core concepts" },
+  { n: "03", href: "/docs/tools", label: "Call the tools" },
+  { n: "04", href: "/docs/errors", label: "Responses and errors" },
+  { n: "05", href: "/docs/architecture", label: "Architecture" },
+] as const;
+
+/* ── In-page sections per page · only pages with more than one, mirrors
+   the DocSection id/title props actually used on that page ─────────────── */
+
+export const PAGE_SECTIONS: Record<string, { id: string; label: string }[]> = {
+  "/docs": [
+    { id: "install", label: "Install" },
+    { id: "identity", label: "Set up an identity" },
+    { id: "configure", label: "Configure an identity" },
+  ],
+  "/docs/architecture": [
+    { id: "map", label: "System map" },
+    { id: "boundary", label: "Know the boundary" },
+    { id: "cli", label: "The CLI protocol" },
+    { id: "build", label: "Build from source" },
+    { id: "source", label: "Read the source of truth" },
+  ],
+};
+
+/* ── Docs search index · titles and snippets a reader would actually type ── */
+
+export const SEARCH_INDEX = [
+  { title: "Install", href: "/docs#install", snippet: "uv tool install erebus-mcp-server" },
+  {
+    title: "Set up an identity",
+    href: "/docs#identity",
+    snippet: "new-identity.sh bootstrap, pool key, account key, auditor key",
+  },
+  {
+    title: "Configure an identity",
+    href: "/docs#configure",
+    snippet: "mcpServers, EREBUS_BACKEND, env vars",
+  },
+  {
+    title: "EREBUS_SPENDING_LIMITS",
+    href: "/docs#configure",
+    snippet: "per-token cap on what accept_and_settle can spend",
+  },
+  {
+    title: "EREBUS_BACKEND",
+    href: "/docs#configure",
+    snippet: "mock or seam — mock drives the whole surface with no chain",
+  },
+  {
+    title: "channel, offer, deal",
+    href: "/docs/concepts#concepts",
+    snippet: "core concepts — channel_handle, deal_id, note",
+  },
+  {
+    title: "operation_id",
+    href: "/docs/concepts#concepts",
+    snippet: "the idempotency key on every write",
+  },
+  {
+    title: "viewing grant",
+    href: "/docs/concepts#concepts",
+    snippet: "grant_viewing_key, reveal — disclose one deal to one recipient",
+  },
+  {
+    title: "open_channel, propose_offer, counter_offer",
+    href: "/docs/tools#tools",
+    snippet: "negotiate, settle, disclose",
+  },
+  {
+    title: "accept_and_settle",
+    href: "/docs/tools#tools",
+    snippet: "payer only, spends the caller's notes",
+  },
+  {
+    title: "reconcile, resume_operation, rebuild_state, doctor",
+    href: "/docs/tools#tools",
+    snippet: "recovery and ops",
+  },
+  {
+    title: "Responses and errors",
+    href: "/docs/errors#responses",
+    snippet: "the ok/error envelope, retryable, error code groups",
+  },
+  {
+    title: "System map",
+    href: "/docs/architecture#map",
+    snippet: "the stack, the three layers, one deal start to finish, note economics",
+  },
+  {
+    title: "Know the boundary",
+    href: "/docs/architecture#boundary",
+    snippet: "agents → mcp-server → sdk/py → sdk/rs → Starknet",
+  },
+  {
+    title: "The CLI protocol",
+    href: "/docs/architecture#cli",
+    snippet: "erebus-cli, stdin/stdout JSON envelope, protocol 4",
+  },
+  {
+    title: "Build from source",
+    href: "/docs/architecture#build",
+    snippet: "git clone, cargo test, uv sync --all-packages",
+  },
+  {
+    title: "Read the source of truth",
+    href: "/docs/architecture#source",
+    snippet: "runbook.md, reference.md, ARCHITECTURE.md, status.md",
+  },
+] as const;
