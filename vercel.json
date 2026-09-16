@@ -13,6 +13,17 @@
       ],
       "destination": "https://erebusagents.live/:path*",
       "permanent": true
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "docs.erebusagents.live"
+        }
+      ],
+      "destination": "/docs/",
+      "permanent": false
     }
   ]
 }
