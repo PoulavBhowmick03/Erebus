@@ -76,15 +76,10 @@ One static route:
 - `/` — the landing page. Four sections: hero, evidence, the pool band, the replay, the boundary.
 
 The docs are **not** in this package any more. They moved to their own repo,
-`ishitab02/erebus-docs`, on 2026-09-17 and are served at the root of that Vercel project
-(`erebus-docs-ishita02b-3383s-projects.vercel.app`, no `/docs` path). The hero CTA and the
-header nav link straight there.
-
-Root `vercel.json` redirects `/docs`, `/docs/*`, and the `docs.erebusagents.live` host to that
-URL so old links keep working. The `docs.erebusagents.live` alias is still attached to **this**
-project because `erebusagents.live` lives in a different Vercel account and can't be moved from
-here; the host redirect is what keeps it usable in the meantime. When the alias is finally
-moved to the docs project, remove that redirect block and point the links at the custom domain.
+`ishitab02/erebus-docs`, on 2026-09-17 and publish at `https://docs.erebusagents.live` (root,
+not `/docs`). The hero CTA and the header nav link straight there, and root `vercel.json`
+redirects `/docs` and `/docs/*` to the docs domain so old links keep working. The
+`docs.erebusagents.live` domain no longer belongs to this Vercel project.
 
 ## Type
 

@@ -28,7 +28,7 @@ export default function NotFound() {
                   </a>
                 </li>
                 <li>
-                  <a href="https://erebus-docs-ishita02b-3383s-projects.vercel.app" className="link">
+                  <a href="https://docs.erebusagents.live" className="link">
                     Docs ↗
                   </a>
                 </li>
