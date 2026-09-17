@@ -15,14 +15,25 @@
       "permanent": true
     },
     {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "docs.erebusagents.live"
+        }
+      ],
+      "destination": "https://erebus-docs-ishita02b-3383s-projects.vercel.app/:path*",
+      "permanent": false
+    },
+    {
       "source": "/docs",
-      "destination": "https://docs.erebusagents.live/",
-      "permanent": true
+      "destination": "https://erebus-docs-ishita02b-3383s-projects.vercel.app/",
+      "permanent": false
     },
     {
       "source": "/docs/:path*",
-      "destination": "https://docs.erebusagents.live/:path*",
-      "permanent": true
+      "destination": "https://erebus-docs-ishita02b-3383s-projects.vercel.app/:path*",
+      "permanent": false
     }
   ]
 }

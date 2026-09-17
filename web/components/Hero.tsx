@@ -42,7 +42,7 @@ export function Hero() {
             >
               <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
                 <a
-                  href="https://docs.erebusagents.live"
+                  href="https://erebus-docs-ishita02b-3383s-projects.vercel.app"
                   className="btn transition-transform duration-300 hover:-translate-y-0.5"
                 >
                   Get started <span aria-hidden>→</span>

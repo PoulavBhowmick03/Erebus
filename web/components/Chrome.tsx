@@ -28,7 +28,7 @@ const NAV = [
   { href: "#proof", label: "Proof" },
   { href: "#how", label: "How it works" },
   { href: "#limits", label: "Limits" },
-  { href: "https://docs.erebusagents.live", label: "Docs" },
+  { href: "https://erebus-docs-ishita02b-3383s-projects.vercel.app", label: "Docs" },
 ];
 
 const SOURCE_URL = "https://github.com/PoulavBhowmick03/Erebus";
