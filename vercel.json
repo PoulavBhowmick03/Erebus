@@ -13,9 +13,7 @@
       ],
       "destination": "https://erebusagents.live/:path*",
       "permanent": true
-    }
-  ],
-  "rewrites": [
+    },
     {
       "source": "/",
       "has": [
@@ -24,7 +22,8 @@
           "value": "docs.erebusagents.live"
         }
       ],
-      "destination": "/docs/"
+      "destination": "/docs/",
+      "permanent": false
     }
   ]
 }

@@ -29,7 +29,7 @@ const NAV = [
   { href: "#proof", label: "Proof" },
   { href: "#how", label: "How it works" },
   { href: "#limits", label: "Limits" },
-  { href: "https://docs.erebusagents.live", label: "Docs" },
+  { href: "https://docs.erebusagents.live/docs", label: "Docs" },
 ];
 
 const SOURCE_URL = "https://github.com/PoulavBhowmick03/Erebus";
