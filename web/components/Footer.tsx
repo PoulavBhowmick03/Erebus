@@ -1,4 +1,4 @@
-import { SOURCE, doc } from "@/lib/content";
+import { SOURCE, X_HANDLE, doc } from "@/lib/content";
 import { Section } from "./Chrome";
 import { FooterMark } from "./FooterMark";
 
@@ -43,12 +43,20 @@ export function Footer() {
               <li>Poulav Bhowmick, protocol and Cairo</li>
               <li>Ishita, agents and orchestration</li>
             </ul>
-            <a
-              href={SOURCE}
-              className="mono-xs mt-5 inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
-            >
-              github ↗
-            </a>
+            <div className="mt-5 flex gap-5">
+              <a
+                href={SOURCE}
+                className="mono-xs inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
+              >
+                github ↗
+              </a>
+              <a
+                href={X_HANDLE}
+                className="mono-xs inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
+              >
+                x ↗
+              </a>
+            </div>
           </div>
         </div>
 
