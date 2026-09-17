@@ -5,7 +5,7 @@ import { DocSection } from "@/components/DocSection";
 import { ENV_VARS, IDENTITY_BOOTSTRAP, IDENTITY_KEYS, INSTALL, MCP_CONFIG } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus docs — Quickstart",
+  title: "Erebus docs · Quickstart",
   description:
     "Install the Erebus MCP server, configure an identity, and drive a shielded settlement from any agent framework.",
 };
@@ -30,7 +30,7 @@ export default function Docs() {
           </p>
           <p className="prose mt-4 max-w-[62ch]">
             <code>--python 3.12</code> is required, not decoration. Without it, <code>uv</code>{" "}
-            uses whatever interpreter it finds and won&rsquo;t download one — on a machine whose
+            uses whatever interpreter it finds and won&rsquo;t download one. On a machine whose
             only Python is the system 3.9, the install fails with a dependency error that never
             mentions Python. With the flag, <code>uv</code> fetches a managed 3.12 itself.
           </p>
@@ -51,8 +51,8 @@ export default function Docs() {
           </div>
           <p className="prose mt-5 max-w-[62ch]">
             That creates the account, funds it, deploys it, generates the pool key and extracts
-            the account key, approves the pool for the live per-write fee, then shields 1 STRK —
-            which also registers the identity — and runs <code>doctor</code>. It exits non-zero if{" "}
+            the account key, approves the pool for the live per-write fee, then shields 1 STRK,
+            which also registers the identity, and runs <code>doctor</code>. It exits non-zero if{" "}
             <code>doctor</code> is not ready. Without a funded account to pay from, use the faucet
             flow instead: <code>create</code>, fund the printed address by hand, then{" "}
             <code>activate</code>. Both are documented in the script&rsquo;s header.
@@ -104,7 +104,7 @@ export default function Docs() {
             ))}
           </dl>
           <p className="prose mt-5 max-w-[62ch]">
-            <code>doctor</code> checks all of this before a write ever reaches the chain — key
+            <code>doctor</code> checks all of this before a write ever reaches the chain: key
             files and their modes, the state directory, RPC, prover, chain id, registration,
             allowance, and balance, each failing check naming one direct repair. Run it first when
             anything above is in doubt.

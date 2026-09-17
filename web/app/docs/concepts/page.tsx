@@ -5,8 +5,8 @@ import { InlineCode } from "@/components/InlineCode";
 import { CONCEPTS } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus docs — Core concepts",
-  description: "Channel, offer, deal, note, operation_id, viewing grant — the vocabulary the rest of the docs assume.",
+  title: "Erebus docs · Core concepts",
+  description: "Channel, offer, deal, note, operation_id, viewing grant. The vocabulary the rest of the docs assume.",
 };
 
 export default function Concepts() {

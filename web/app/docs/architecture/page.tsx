@@ -16,7 +16,7 @@ import {
 } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus docs — Architecture",
+  title: "Erebus docs · Architecture",
   description: "The call path key material never crosses, and where to read the rest.",
 };
 
@@ -77,7 +77,7 @@ export default function Architecture() {
           </div>
           <p className="prose mt-6 max-w-[62ch]">
             You write <code>agents</code>; everything after it is Erebus infrastructure. Key
-            material never crosses one arrow — an enforced boundary at{" "}
+            material never crosses one arrow. That is an enforced boundary at{" "}
             <code style={{ color: "var(--color-ember)" }}>sdk/rs</code>, not a convention. The
             policy engine decides what to do and never touches keys.
           </p>
@@ -94,7 +94,7 @@ export default function Architecture() {
           </div>
           <p className="prose mt-6 max-w-[62ch]">
             <code>protocol</code> is the contract version. A consumer should refuse a mismatch by
-            name rather than failing on a changed shape later — <code>erebus-sdk</code> does this
+            name rather than failing on a changed shape later. <code>erebus-sdk</code> does this
             on every call, and the MCP server handshakes at startup.
           </p>
           <p className="prose mt-4 max-w-[62ch]">

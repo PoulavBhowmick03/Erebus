@@ -5,7 +5,7 @@ import { DocSection } from "@/components/DocSection";
 import { ERROR_GROUPS, RESPONSE_ERR, RESPONSE_OK } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus docs — Responses and errors",
+  title: "Erebus docs · Responses and errors",
   description: "The result envelope every tool returns, and what each error group means to do next.",
 };
 
@@ -33,7 +33,7 @@ export default function Errors() {
 
           <p className="prose mt-8 max-w-[62ch]">
             Branch on the group below, not the individual code. <code>retryable</code> on the
-            error is the thing to trust — not a guess from the name.
+            error is the thing to trust, not a guess from the name.
           </p>
           <div className="mt-6 border-t border-rule">
             {ERROR_GROUPS.map((e) => (
@@ -60,7 +60,7 @@ export default function Errors() {
           </div>
           <p className="prose mt-6 max-w-[62ch]">
             A write takes one to four minutes. Do not create a new <code>operation_id</code> for
-            one that appears stuck — call <code>reconcile</code>, then{" "}
+            one that appears stuck. Call <code>reconcile</code>, then{" "}
             <code>resume_operation</code> with the original ID once its result permits it.
           </p>
         </DocSection>

@@ -4,7 +4,7 @@ import { DocSection } from "@/components/DocSection";
 import { TOOL_DETAILS, TOOL_GROUPS, VERSION_NOTE } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus docs — Call the tools",
+  title: "Erebus docs · Call the tools",
   description: "The thirteen MCP tools: signatures, notes, and the full negotiation sequence.",
 };
 
@@ -47,7 +47,7 @@ export default function Tools() {
           </p>
           <p className="prose mt-4 max-w-[62ch]">
             Every write takes <code>operation_id</code>. Persist it and the intent before the
-            call, and reuse both after a restart — see <code>operation_id</code> under core
+            call, and reuse both after a restart. See <code>operation_id</code> under core
             concepts.
           </p>
           <p className="prose mt-4 max-w-[62ch]">{VERSION_NOTE}</p>

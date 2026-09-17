@@ -204,7 +204,7 @@ export const CALL_PATH = ["agents", "mcp-server", "sdk/py", "sdk/rs", "Starknet"
 export const CONCEPTS = [
   {
     term: "channel",
-    def: "The encrypted pair between two agents, returned as a `channel_handle` by `open_channel`. Opened once, it can carry more than one deal. The handle itself is not private — see F38.",
+    def: "The encrypted pair between two agents, returned as a `channel_handle` by `open_channel`. Opened once, it can carry more than one deal. The handle itself is not private. See F38.",
   },
   {
     term: "offer",
@@ -220,7 +220,7 @@ export const CONCEPTS = [
   },
   {
     term: "operation_id",
-    def: "The idempotency key on every write: `op_` plus 64 lowercase hex characters. Persist it before the call and reuse the same one after a restart — a new ID for a write that looks stuck is the wrong move; call `reconcile` instead.",
+    def: "The idempotency key on every write: `op_` plus 64 lowercase hex characters. Persist it before the call and reuse the same one after a restart. A new ID for a write that looks stuck is the wrong move. Call `reconcile` instead.",
   },
   {
     term: "viewing grant",
@@ -250,7 +250,7 @@ export const TOOL_DETAILS: Record<string, { signature: string; note: string }> =
   },
   accept_and_settle: {
     signature: "(operation_id, channel_handle, offer_id)",
-    note: "Payer only. Settles one deal — the pair can start another.",
+    note: "Payer only. Settles one deal. The pair can start another.",
   },
   get_note_balance: { signature: "()", note: "Payer must call before naming a price." },
   grant_viewing_key: {
@@ -341,7 +341,7 @@ export const IDENTITY_KEYS = [
   {
     key: "Pool private key",
     purpose: "The STRK20 identity. Confidentiality",
-    seenBy: "Sent in compile_actions calldata to your prover and preflight RPC — both must be operator-controlled",
+    seenBy: "Sent in compile_actions calldata to your prover and preflight RPC, both of which must be operator-controlled",
   },
   {
     key: "Pool auditor key",
@@ -366,14 +366,205 @@ export const BUILD_RUST = `cd sdk/rs && cargo test --all-targets && cd ../.. # 3
 
 export const BUILD_PYTHON = `uv sync --all-packages && uv run pytest          # 154 tests`;
 
+/* ── How it works · sdk/rs/src/wire.rs module docs, docs/status.md ───────── */
+
+/** The 400-bit negotiation plaintext, most-significant-first. From wire.rs. */
+export const WIRE_FIELDS = [
+  { field: "type", bits: "8", note: "offer, counter, or acceptance" },
+  { field: "replyTo", bits: "32", note: "the offer this one answers" },
+  { field: "createdAt", bits: "40", note: "author timestamp" },
+  { field: "amount", bits: "128", note: "the price, in base units" },
+  { field: "deadline", bits: "64", note: "after which the offer expires" },
+  { field: "memoHash", bits: "128", note: "commits to off-chain detail held elsewhere" },
+] as const;
+
+/** The three cryptographic jobs. Only the third requires a proof. */
+export const CRYPTO_JOBS = [
+  {
+    job: "Negotiation confidentiality",
+    mechanism: "Authenticated encryption and key agreement",
+    proof: "No",
+  },
+  {
+    job: "Agreement authorization",
+    mechanism: "Signatures, or a proof when signer identity must stay hidden",
+    proof: "Only to hide the signer",
+  },
+  {
+    job: "Private settlement",
+    mechanism: "The pool's privacy mechanism",
+    proof: "Yes, for the shielded guarantee",
+  },
+] as const;
+
+/* ── Privacy · docs/privacy-model.md, the canonical source ───────────────── */
+
+export const PRIVACY_CLAIM =
+  "Negotiation contents and settlement amounts are confidential. An observer reading public chain data cannot recover the amount, token, deadline, memo hash, message type, or reply structure of a negotiation, and cannot read the amount or recipient of the settlement.";
+
+export const PRIVACY_NONCLAIM =
+  "Erebus does not hide that a negotiation happened, and does not hide who it was with. An observer can identify pool interactions, count them, time them, attribute each to its submitting Starknet account, and at channel-open time read the counterparty's address directly out of public calldata.";
+
+export const PRIVACY_ONE_LINE = "Erebus hides the terms, not the relationship.";
+
+/** What leaks at each step of the workflow. From privacy-model.md. */
+export const LEAK_STEPS = [
+  {
+    step: "0 · fund",
+    hidden: "nothing",
+    open: "depositor account, amount, token, timing. The whole ERC-20 leg.",
+  },
+  {
+    step: "1 · open channel",
+    hidden: "the channel key",
+    open: "the counterparty's address, in the clear, plus the submitting account and timing",
+  },
+  {
+    step: "2-4 · offer, counter, final",
+    hidden: "amount, token, deadline, memo hash, message type, replyTo",
+    open: "submitting account, five salt values per message, note count, timing",
+  },
+  {
+    step: "5 · accept and settle",
+    hidden: "amount paid, recipient, change amount",
+    open: "submitting account, that a settlement occurred, the created note count",
+  },
+  {
+    step: "6-7 · grant and reveal",
+    hidden: "everything. Local only, no transaction.",
+    open: "nothing",
+  },
+] as const;
+
+/** The known leaks, in descending severity. From privacy-model.md. */
+export const KNOWN_LEAKS = [
+  {
+    n: "0",
+    title: "The counterparty address is in public calldata",
+    body: "open_channel compiles to three server actions, and the first carries recipient_addr as a plain ContractAddress. It is the storage map key for the recipient's channel info, so it cannot be hashed, and server actions are serialized directly into public apply_actions calldata. Both directions must be opened for a conversation to work, so the edge is recorded twice. No amount of wire-level encryption touches this.",
+    fix: "Needs a design, not a patch. Tracked as friction F38.",
+  },
+  {
+    n: "1",
+    title: "The historical wire-v2 fifth-salt fingerprint",
+    body: "Wire v2 fills 536 of 595 payload bits and zero-fills the remaining 59, so the fifth salt of every message has bit 119 pinned and bits 60 through 118 clear, whatever the message says. That shape identifies an Erebus message essentially every time.",
+    fix: "Fixed in wire v3, which is the source default. It carries a 64-bit deal id and masks the spare bits with a separately derived keystream. Tracked as F31.",
+  },
+  {
+    n: "2",
+    title: "Submission linkability",
+    body: "Every write is an apply_actions transaction signed by a public Starknet account. The account that opens a channel, writes each offer, and settles is the same visible identity across one deal. An observer who cannot read a single term can still count and time an account's deal flow.",
+    fix: "Unlinkable submission is possible today without a protocol change, because nothing binds the transaction submitter to the pool identity whose actions are applied. Not implemented.",
+  },
+  {
+    n: "3",
+    title: "The public funding leg",
+    body: "Shielding is a real ERC-20 transfer. Depositor, amount, token, and timing are public, and they precede the first private action by a bounded interval.",
+    fix: "None within this design. Funding correlation is an ecosystem-level problem.",
+  },
+  {
+    n: "4",
+    title: "Note count on settlement",
+    body: "A settlement creates six notes when the payer's selected inputs match the price exactly, and seven when they overshoot and a change note is minted. That leaks one bit about the payer's holdings on every deal. Amounts stay private.",
+    fix: "Always mint a change note, zero-valued when unneeded, so the count is constant. Not done.",
+  },
+] as const;
+
+/** Endpoints that see more than the chain does. From privacy-model.md. */
+export const INFRA_VISIBILITY = [
+  { endpoint: "The prover", how: "receives compile_actions calldata", key: "Sees the pool key" },
+  { endpoint: "The write RPC", how: "receives the preflight call", key: "Sees the pool key" },
+  { endpoint: "The submitted transaction", how: "apply_actions on chain", key: "Does not" },
+] as const;
+
+/* ── Limits · docs/status.md, docs/production-gaps.md ────────────────────── */
+
+export const NOT_DOES = [
+  {
+    title: "Hide who you are dealing with",
+    body: "The counterparty's address is written in public calldata at channel-open. This is upstream of our encryption and no wire change fixes it.",
+  },
+  {
+    title: "Hide that a negotiation happened",
+    body: "Wire v3 removes the fixed v2 salt classifier, but the submitting account, transaction timing, action shape, and note count remain public.",
+  },
+  {
+    title: "Prove production readiness from bounded runs",
+    body: "Four bounded mainnet workflows passed. That does not establish capacity, uptime, independent security review, or safe use with real value.",
+  },
+  {
+    title: "Revoke facts already disclosed",
+    body: "An expiry stops a later verification. It cannot make a recipient forget a record opened before expiry.",
+  },
+  {
+    title: "Escrow, or deferred delivery",
+    body: "Settlement is atomic, so there is no agree now, deliver later. The pool has no timelock and no conditional release, so this cannot be added client-side.",
+  },
+] as const;
+
+export const PROD_GAPS = [
+  {
+    area: "Custody and infrastructure",
+    body: "The prover and preflight RPC receive the pool private key, so a hosted provider sits inside the identity's confidentiality boundary. Production needs a written provider policy, endpoint rotation and revocation, a supported self-hosted fallback, tested backup and restore, and a key-loss drill.",
+  },
+  {
+    area: "Transaction safety",
+    body: "Protocol 4 has durable operation ids and reconciliation. Production still needs long-running failure tests against real provider timeouts, journal pruning that preserves recovery evidence, spending limits enforced in Rust across restarts, and operator alerts for ambiguous operations.",
+  },
+  {
+    area: "Security review",
+    body: "No independent cryptographic or security review covers the wire, the settlement binding, the disclosure design, the hosted-prover transport, or the recovery journal.",
+  },
+  {
+    area: "Scale and operations",
+    body: "Suitable only for bounded, low-frequency workflows. Provider latency, RPC load across long channels, pool fees, concurrent negotiations, and restore time are all unmeasured at scale.",
+  },
+  {
+    area: "Product",
+    body: "No delivery-versus-payment, escrow, refunds, deferred execution, or outcome-only proofs. A scoped grant reveals a deal record. It does not prove external delivery.",
+  },
+] as const;
+
+export const DISCLOSURE_PROVES =
+  "That the listed on-chain note values authenticate and decrypt under the supplied deal capability, that an acceptance exists in that record, and what its listed payment note carries. agreed_amount and paid_amount stay separate so a reader can compare the acceptance with the payment.";
+
+export const DISCLOSURE_ASSERTS =
+  "The named participant addresses and the issuer. The capsule is encrypted and authenticated but it is not signed by the grantor. It also asserts all business meaning: memo_hash commits to off-chain detail whose preimage lives outside this wire. There is no separate proof establishing the business meaning to an external verifier.";
+
+/* ── Walkthrough · docs/runbook.md, the reproducible seven steps ─────────── */
+
+export const WALK_OPEN = `# A opens its direction and proposes
+HANDLE_A=$(scripts/agent.sh ~/.erebus-a/env open \\
+  "$(scripts/agent.sh ~/.erebus-b/env whoami)")
+scripts/agent.sh ~/.erebus-a/env balance
+scripts/agent.sh ~/.erebus-a/env offer "$HANDLE_A" 600000000000000000`;
+
+export const WALK_COUNTER = `# B opens its own direction, then sees A's offer there
+HANDLE_B=$(scripts/agent.sh ~/.erebus-b/env open \\
+  "$(scripts/agent.sh ~/.erebus-a/env whoami)")
+scripts/agent.sh ~/.erebus-b/env status "$HANDLE_B"
+scripts/agent.sh ~/.erebus-b/env counter "$HANDLE_B" them:0 1000000000000000000`;
+
+export const WALK_SETTLE = `# A reads B's counter through A's direction and settles
+scripts/agent.sh ~/.erebus-a/env status "$HANDLE_A"
+scripts/agent.sh ~/.erebus-a/env accept "$HANDLE_A" them:0`;
+
+export const WALK_SHIELD = `python3 "$REQ" "$ENV" shield '{"amount":"1000000000000000000"}' | "$CLI"`;
+
+export const SETTLE_RESULT = ["tx_hash", "nullifiers", "proved_at", "selected_input", "change"] as const;
+
 /* ── Docs site nav · one entry per page, in reading order ─────────────────── */
 
 export const DOCS_PAGES = [
   { n: "01", href: "/docs", label: "Quickstart" },
-  { n: "02", href: "/docs/concepts", label: "Core concepts" },
-  { n: "03", href: "/docs/tools", label: "Call the tools" },
-  { n: "04", href: "/docs/errors", label: "Responses and errors" },
-  { n: "05", href: "/docs/architecture", label: "Architecture" },
+  { n: "02", href: "/docs/how-it-works", label: "How it works" },
+  { n: "03", href: "/docs/concepts", label: "Core concepts" },
+  { n: "04", href: "/docs/walkthrough", label: "Walkthrough" },
+  { n: "05", href: "/docs/tools", label: "Call the tools" },
+  { n: "06", href: "/docs/errors", label: "Responses and errors" },
+  { n: "07", href: "/docs/privacy", label: "Privacy model" },
+  { n: "08", href: "/docs/limits", label: "Limits" },
+  { n: "09", href: "/docs/architecture", label: "Architecture" },
 ] as const;
 
 /* ── In-page sections per page · only pages with more than one, mirrors
@@ -384,6 +575,32 @@ export const PAGE_SECTIONS: Record<string, { id: string; label: string }[]> = {
     { id: "install", label: "Install" },
     { id: "identity", label: "Set up an identity" },
     { id: "configure", label: "Configure an identity" },
+  ],
+  "/docs/how-it-works": [
+    { id: "shape", label: "The shape of the problem" },
+    { id: "salts", label: "Where a negotiation lives" },
+    { id: "deal", label: "One deal, end to end" },
+    { id: "settle", label: "What settlement enforces" },
+    { id: "disclose", label: "Disclosure afterwards" },
+  ],
+  "/docs/walkthrough": [
+    { id: "before", label: "Before you start" },
+    { id: "negotiate", label: "Negotiate" },
+    { id: "settle", label: "Settle" },
+    { id: "disclose", label: "Disclose one deal" },
+    { id: "recover", label: "When a write looks stuck" },
+  ],
+  "/docs/privacy": [
+    { id: "claim", label: "The claim and the non-claim" },
+    { id: "steps", label: "What leaks at each step" },
+    { id: "leaks", label: "The known leaks" },
+    { id: "infra", label: "Infrastructure sees more" },
+    { id: "record", label: "What a disclosed record proves" },
+  ],
+  "/docs/limits": [
+    { id: "not", label: "What Erebus does not do" },
+    { id: "production", label: "What is unfinished" },
+    { id: "use", label: "Where that leaves you" },
   ],
   "/docs/architecture": [
     { id: "map", label: "System map" },
@@ -416,12 +633,12 @@ export const SEARCH_INDEX = [
   {
     title: "EREBUS_BACKEND",
     href: "/docs#configure",
-    snippet: "mock or seam — mock drives the whole surface with no chain",
+    snippet: "mock or seam. mock drives the whole surface with no chain",
   },
   {
     title: "channel, offer, deal",
     href: "/docs/concepts#concepts",
-    snippet: "core concepts — channel_handle, deal_id, note",
+    snippet: "core concepts: channel_handle, deal_id, note",
   },
   {
     title: "operation_id",
@@ -431,7 +648,47 @@ export const SEARCH_INDEX = [
   {
     title: "viewing grant",
     href: "/docs/concepts#concepts",
-    snippet: "grant_viewing_key, reveal — disclose one deal to one recipient",
+    snippet: "grant_viewing_key, reveal: disclose one deal to one recipient",
+  },
+  {
+    title: "How it works",
+    href: "/docs/how-it-works#salts",
+    snippet: "negotiation rides in note salts, no contract of our own",
+  },
+  {
+    title: "Note salts, the 400-bit message",
+    href: "/docs/how-it-works#salts",
+    snippet: "type, replyTo, createdAt, amount, deadline, memoHash across five notes",
+  },
+  {
+    title: "What settlement enforces",
+    href: "/docs/how-it-works#settle",
+    snippet: "atomic action set, amount equality is a client check not a proof predicate",
+  },
+  {
+    title: "Walkthrough, a full deal",
+    href: "/docs/walkthrough#negotiate",
+    snippet: "both sides open their own direction, offer, counter, accept",
+  },
+  {
+    title: "Privacy model",
+    href: "/docs/privacy#claim",
+    snippet: "Erebus hides the terms, not the relationship",
+  },
+  {
+    title: "What leaks",
+    href: "/docs/privacy#leaks",
+    snippet: "counterparty address in calldata, submission linkability, funding leg, note count",
+  },
+  {
+    title: "The prover sees the pool key",
+    href: "/docs/privacy#infra",
+    snippet: "prover and write RPC sit inside the confidentiality boundary",
+  },
+  {
+    title: "Limits, what Erebus does not do",
+    href: "/docs/limits#not",
+    snippet: "no escrow, no deferred delivery, no relationship privacy, unaudited",
   },
   {
     title: "open_channel, propose_offer, counter_offer",

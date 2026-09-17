@@ -4,7 +4,7 @@ import { Footer } from "@/components/Footer";
 import { DOCS_PAGES } from "@/lib/content";
 
 export const metadata: Metadata = {
-  title: "Erebus — Not found",
+  title: "Erebus · Not found",
 };
 
 export default function NotFound() {
