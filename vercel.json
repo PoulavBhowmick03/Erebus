@@ -15,15 +15,14 @@
       "permanent": true
     },
     {
-      "source": "/",
-      "has": [
-        {
-          "type": "host",
-          "value": "docs.erebusagents.live"
-        }
-      ],
-      "destination": "/docs/",
-      "permanent": false
+      "source": "/docs",
+      "destination": "https://docs.erebusagents.live/",
+      "permanent": true
+    },
+    {
+      "source": "/docs/:path*",
+      "destination": "https://docs.erebusagents.live/:path*",
+      "permanent": true
     }
   ]
 }

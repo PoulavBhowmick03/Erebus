@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Header, Section } from "@/components/Chrome";
 import { Footer } from "@/components/Footer";
-import { DOCS_PAGES } from "@/lib/content";
 
 export const metadata: Metadata = {
   title: "Erebus · Not found",
@@ -28,13 +27,11 @@ export default function NotFound() {
                     Erebus ↗
                   </a>
                 </li>
-                {DOCS_PAGES.map((p) => (
-                  <li key={p.href}>
-                    <a href={p.href} className="link">
-                      {p.label} ↗
-                    </a>
-                  </li>
-                ))}
+                <li>
+                  <a href="https://docs.erebusagents.live" className="link">
+                    Docs ↗
+                  </a>
+                </li>
               </ul>
             </div>
           </div>
