@@ -11,6 +11,7 @@
  */
 
 export const SOURCE = "https://github.com/PoulavBhowmick03/Erebus";
+export const X_HANDLE = "https://x.com/Erebus_pvt";
 export const doc = (p: string) => `${SOURCE}/blob/main/${p}`;
 export const starkscan = (h: string) => `https://starkscan.co/tx/${h}`;
 

@@ -71,12 +71,15 @@ the logo are the same orange, so the page reads as one material.
 
 ## Routes
 
-Two static routes:
+One static route:
 
 - `/` — the landing page. Four sections: hero, evidence, the pool band, the replay, the boundary.
-- `/docs` — the quickstart. Install, configure, the tool surface, the call path. The install
-  block in the hero is the primary action and it points here; the header nav walks back to the
-  landing anchors from `/docs` via `usePathname`.
+
+The docs are **not** in this package any more. They moved to their own repo,
+`ishitab02/erebus-docs`, on 2026-09-17 and publish at `https://docs.erebusagents.live` (root,
+not `/docs`). The hero CTA and the header nav link straight there, and root `vercel.json`
+redirects `/docs` and `/docs/*` to the docs domain so old links keep working. The
+`docs.erebusagents.live` domain no longer belongs to this Vercel project.
 
 ## Type
 

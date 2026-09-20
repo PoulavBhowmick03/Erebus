@@ -1,7 +1,6 @@
 # Installed onboarding
 
-This flow is implemented in the unreleased **0.3.0 / Protocol 5** packages. It is not
-available from the public 0.2.0 wheels. Release the three matching packages together.
+This flow is implemented in the **0.3.0 / Protocol 5** packages, released and public.
 
 ## User flow
 

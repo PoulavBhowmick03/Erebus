@@ -45,7 +45,7 @@ Full ledger and the observer check: [docs/evidence.md](./docs/evidence.md).
 negotiate and settle 2 STRK on mainnet through MCP. A third party then reconstructs that one
 deal from a scoped viewing grant.
 
-[Public site](https://erebus-private-agents.vercel.app) · [operator guide](./docs/runbook.md)
+[Public site](https://erebusagents.live) · [Docs](https://docs.erebusagents.live) · [operator guide](./docs/runbook.md)
 
 ---
 
@@ -55,7 +55,7 @@ Two commands from nothing to thirteen MCP tools in your client. No Rust toolchai
 chain, no keys, no gas — `mock` runs the whole negotiate-and-settle loop in memory.
 
 ```bash
-uv tool install \
+uv tool install --python 3.12 \
   --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \
   erebus-mcp-server
 
@@ -76,12 +76,13 @@ Then ask your agent to `open_channel`, `propose_offer`, `counter_offer` and
 `accept_and_settle`. When you want a real chain, swap `EREBUS_BACKEND=mock` for a funded
 identity — [Next: an identity](#next-an-identity) — and keep everything else.
 
-### Account onboarding in the next release
+### Account onboarding
 
-The source tree now targets **0.3.0 / Protocol 5 (unreleased)**. The public install above
-still resolves the published release until new wheels are published.
+**0.3.0 / Protocol 5 is the current release.** It adds installed account onboarding;
+settlement requests retain Protocol 4's `operation_id` mechanics unchanged. The public
+install above already pulls it in.
 
-With the 0.3.0 packages installed, run:
+With `erebus-mcp-server` installed, run:
 
 ```bash
 erebus-init
@@ -109,7 +110,7 @@ See [installed onboarding](docs/onboarding.md) for commands, funding, and suppor
 
 ### The thirteen tools
 
-Protocol 4. Every write takes an `operation_id` — `op_` plus 64 lowercase hex characters —
+Protocol 5. Every write takes an `operation_id` — `op_` plus 64 lowercase hex characters —
 so a retry after a crash is the same operation rather than a second one.
 
 | Tool | Writes? | What it does |
@@ -158,8 +159,10 @@ with whom, is still public.
 [privacy-model.md](./docs/privacy-model.md) is the full boundary and the only
 source to quote for privacy claims.
 
-`v0.2.0` is released and installable. It speaks Protocol 4 and exposes thirteen MCP tools.
-The older `v0.1.0` release speaks Protocol 2 and exposes ten MCP tools.
+`v0.3.0` is released and installable. It speaks Protocol 5, adding installed account
+onboarding (`erebus-init`) on top of Protocol 4's unchanged `operation_id` mechanics, and
+exposes the same thirteen MCP tools. The older `v0.2.0` release speaks Protocol 4; `v0.1.0`
+speaks Protocol 2 and exposes ten MCP tools.
 [docs/status.md](./docs/status.md) is the current state in one page, and the tiebreaker when
 any two documents here disagree.
 
@@ -226,9 +229,9 @@ Agent B ─┘                                          │                     
 
 ## Install
 
-> **Release boundary:** The command below installs the latest public Erebus packages.
-> Use `v0.2.0` or newer when you need Protocol 4 operation IDs, reconciliation, resume,
-> or state rebuild.
+> **Release boundary:** The command below installs the latest public Erebus packages
+> (`v0.3.0`, Protocol 5). Use `v0.2.0` or newer when you need Protocol 4 operation IDs,
+> reconciliation, resume, or state rebuild — all unchanged in `v0.3.0`.
 
 **Requirements.** Linux x86-64 or macOS arm64, Python 3.11+. Intel macOS is not built — its
 CI runner is no longer available, and a cross-build would ship a binary that was never
@@ -239,10 +242,15 @@ on GitHub Pages. GitHub has no Python registry, so the index is what makes the w
 resolvable rather than merely downloadable.
 
 ```bash
-uv tool install \
+uv tool install --python 3.12 \
   --extra-index-url https://poulavbhowmick03.github.io/Erebus/simple \
   erebus-mcp-server
 ```
+
+`uv tool install` does not download a managed Python to satisfy `requires-python` — on a
+machine whose only discoverable interpreter doesn't meet it (e.g. macOS system Python 3.9),
+the install fails with an unrelated-looking resolver error rather than fetching one. Passing
+`--python 3.12` makes `uv` fetch a managed interpreter and always succeeds ([F43](./docs/friction.md)).
 
 `--extra-index-url` rather than `--index-url`: PyPI still serves `mcp` and its dependencies,
 and only the three `erebus-*` packages come from this index.
