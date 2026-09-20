@@ -1,5 +1,7 @@
 # Erebus Metropolis Architecture
 
+Implementation order and completion criteria: [Metropolis roadmap](metropolis-roadmap.md).
+
 ## 1. Goal and current boundary
 
 Erebus owns private negotiation and agreement semantics. Each settlement backend enforces its declared guarantees on one chain.
@@ -26,7 +28,7 @@ Three cryptographic jobs are separable and must not be conflated:
 | Agreement authorization | Signatures, or a proof when signer identity must stay hidden | Only to hide the signer |
 | Private settlement | The backend's privacy mechanism | Only for the shielded guarantee |
 
-Only private settlement makes zero-knowledge mandatory, and only for the shielded guarantee.
+The planned shielded EVM backend requires zero-knowledge proofs. Other privacy mechanisms need their own trust and capability declarations.
 The core therefore must not assume that every backend generates a proof. A backend declares the
 guarantees it provides; a TEE attestation or a native private rollup could satisfy the same
 interface without one. Coupling the core to proofs would re-couple Erebus to one privacy
@@ -85,7 +87,8 @@ those deployments differ in backend, not in adapter.
 
 Offchain Eleusis transport is new work. Existing STRK20 note transport cannot become a network transport through a configuration change.
 Start with explicit peer keys and endpoints. Discovery and identity registries remain separate integration decisions.
-Discovery, negotiation, and message transport are chain-independent; only settlement touches a chain.
+The new discovery and negotiation protocol does not require chain transactions. Funding, settlement, receipt verification, and note discovery use chain access.
+The existing STRK20 channel transport remains onchain until a separate migration is implemented.
 
 ## 3. One deal, end to end
 
@@ -186,11 +189,11 @@ They must share constrained payment commitments and transaction context, and exe
 A combined circuit or a supported pool verification hook can provide this binding. The choice is unresolved.
 Binding a ciphertext digest alone does not prove decryptability. Define encryption correctness constraints or a recipient acknowledgment protocol.
 
-For an exact authorized agreement, a deterministic domain-separated hash of `Cdeal` can serve as its replay identifier.
-This openly links the identifier to the commitment. Hiding that link is not required for replay prevention.
-Do not let the prover choose a new nullifier secret for each attempt.
-If multiple signed revisions must be mutually exclusive, derive the nullifier from a fixed deal identity committed in every revision.
-Resolve that rule before freezing the circuit. Pool note nullifiers prevent double spending but do not prevent repeat payment from different notes.
+M0 selects one consumption identity across every signed revision of a deal, as specified in D02 of the decision record.
+Derive it from the deployment domain, buyer identity, and a fixed random settlement nonce authorized in every revision.
+Do not let the prover choose a new nonce for each settlement attempt.
+The first valid revision to settle consumes the deal. A counteroffer does not revoke earlier signed permission.
+Pool note nullifiers prevent double spending but do not prevent repeat payment from different notes.
 
 ## 6. Backend contract and migration
 
@@ -200,7 +203,7 @@ Define behavior before choosing Rust trait syntax:
 |---|---|
 | `capabilities()` | Declare privacy, agreement enforcement, authorization, and finality support |
 | `prepare(agreement, operation_id)` | Persist canonical intent and create a backend-specific prepared settlement |
-| `prove(prepared)` | Optional. Produce proof material when the backend requires it, without sending secrets to the relayer |
+| Backend-internal evidence preparation | Produce signatures or proofs as required. No public `prove` method is mandatory in the common interface |
 | `submit(prepared)` | Submit the same authorized transition and record its transaction identity |
 | `status(operation_id)` | Return unknown, pending, included, finalized, reverted, or expired |
 | `verify(receipt)` | Verify domain, agreement binding, state transition, and chain evidence |
@@ -240,17 +243,19 @@ Record your choice, reasoning, and evidence for each item before building the de
 |---|---|
 | EVM privacy pool and integration hook | Small private transfer with enforceable agreement binding |
 | Circuit, commitment hash, and authorization scheme | Rust/circuit vectors, proof timing, verifier cost, reviewable dependencies |
-| Exact-agreement versus deal-wide replay rule | Tests with two signed revisions and different funding notes |
+| Deal-wide replay rule (M0 D02) | Tests with two signed revisions and different funding notes |
 | Transport and key establishment | Peer authentication, nonce rules, crash recovery, metadata exposure |
 | Output delivery and encryption | Seller recovers spendable payment after buyer disconnects |
 | Disclosure storage and retention | Auditor reconstructs the deal after the relay loses its copy |
 | x402 integration | Defined scheme and receipt verification without a second payment |
 | Chain selection model | Recommended: fixed at session creation before negotiation; negotiating the chain itself is out of scope |
-| EVM milestone | V1 public-bound versus V2 shielded, and which one the demo must demonstrate |
+| EVM milestone (M0 D01) | V1 is intermediate. V2 shielded is required for the final product demo |
 | Backend selection by guarantee | A required guarantee that a backend cannot provide must fail, not silently downgrade |
 
 EIP-712 provides EVM typed signing, but no replay protection. Public signature recovery also reveals the signer.
 Private authorization needs a compatible proof design; EIP-712 alone does not provide it. See [EIP-712](https://eips.ethereum.org/EIPS/eip-712).
 Use established encryption implementations. [HPKE](https://www.rfc-editor.org/rfc/rfc9180) is a candidate building block, not a complete session protocol.
-x402 is a payment and fulfilment mechanism beneath an EVM backend, not the settlement coordinator and not a second settlement.
-Erebus owns the agreement; x402 owns resource access. There must be exactly one payment.
+x402 composition requires an explicitly supported payment scheme and resource-server integration.
+The resource server controls access issuance. There must be exactly one payment, and payment finality does not prove service delivery.
+
+M0 defaults and implementation gates are recorded in the [decision record](metropolis-decisions.md).

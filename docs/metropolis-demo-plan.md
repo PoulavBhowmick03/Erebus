@@ -2,6 +2,7 @@
 
 Status: implementation plan, 2026-09-14. Work belongs on `metropolis`.
 Read the [architecture](metropolis-architecture.md) and [threat model](metropolis-threat-model.md) before implementation.
+Use the [implementation roadmap](metropolis-roadmap.md) for dependencies, sequencing, and progress.
 
 ## 1. What the demo establishes
 
@@ -19,8 +20,8 @@ itself is out of scope for Metropolis. Choosing the chain earlier is deliberate:
 coordinator from deciding on the fly and keeps negotiation chain-independent.
 
 A public-bound EVM settlement (V1) exercises the coordinator and backend boundary but does not
-satisfy this demo's gate. An observable transfer cannot demonstrate amount and recipient
-binding, which is exactly what Stage 1 must show. If V1 is demonstrated, record it as an
+satisfy this demo's gate. A public transfer can demonstrate amount and recipient binding,
+but cannot demonstrate their confidentiality. If V1 is demonstrated, record it as an
 architecture milestone, not as a passing Stage 1.
 
 ```mermaid

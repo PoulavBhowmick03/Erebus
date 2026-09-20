@@ -9,6 +9,22 @@ STRK20 privacy pool.
 **Erebus hides the terms, not the relationship.** Unaudited. Do not put value you care
 about through it.
 
+## Metropolis development
+
+The `metropolis` branch targets a developer/agent product on Monad testnet. This work is planned, not a shipped Monad release.
+The goal is for an external developer or marketplace to integrate agents, negotiate privately, settle, disclose one deal, and recover failures.
+The [Metropolis roadmap](./docs/metropolis-roadmap.md) defines the milestones and acceptance criteria.
+
+The planned operating model keeps keys, payment authorization, and proving on the developer's machine or server.
+Optional Erebus-hosted message relay, transaction relayer, and indexer services will also support self-hosting through the same implementations.
+Hosted services receive ciphertext, public proofs, and public chain data, not spending keys or plaintext proof witnesses.
+They can observe routing, timing, and query metadata, and their availability affects progress. Self-custody does not eliminate those dependencies.
+This model describes the new Monad target, not the existing STRK20 proving infrastructure.
+
+Public-bound settlement is an intermediate milestone. It does not satisfy the shielded-payment completion criteria.
+The release gate requires an independent integration from a fresh environment using documented packages and commands.
+Mainnet activation remains unresolved and requires a separate release decision.
+
 ## Four settlements on mainnet
 
 | Date | Paid | Transaction |

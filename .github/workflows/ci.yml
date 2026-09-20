@@ -12,9 +12,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, metropolis]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,8 +53,8 @@ jobs:
 
       - name: Test
         working-directory: sdk/rs
-        # Ignored tests are live-prover probes and the F31 fingerprint target. They need a
-        # network and a fix respectively, so they stay out of CI.
+        # Explicitly ignored tests need a live prover or mainnet operations.
+        # Fingerprint regression tests run normally in this suite.
         run: cargo test --all-targets
 
       - name: Docs

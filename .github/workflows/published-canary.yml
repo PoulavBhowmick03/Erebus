@@ -20,6 +20,8 @@ permissions:
 jobs:
   publish-index:
     name: Publish the package index
+    # Release publication remains explicit; manual index updates run only from main.
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

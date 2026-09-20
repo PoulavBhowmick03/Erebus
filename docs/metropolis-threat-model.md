@@ -30,8 +30,8 @@ Prover placement is a separate decision from whether a circuit exists. Local pro
 witness on the participant host and is the baseline. A remote prover that receives plaintext
 witnesses becomes a trusted party and must see no more than the guarantee requires. A
 client-side or WASM prover is a later option whose feasibility depends on the proving system,
-not on this interface. A backend that requires no proof — a TEE attestation or a private rollup
-— is compatible with the same guarantees and must not be forced through a prover.
+not on this interface. Alternative backends must declare their trust assumptions and guarantees.
+The common interface does not require a prover or assume that a TEE and a private rollup provide equivalent security.
 
 ## 2. Visibility targets
 
@@ -78,7 +78,7 @@ Failure of one observer attack does not establish anonymity against every observ
 ## 4. Authorization and cancellation
 
 An authorization gives bounded payment permission. It does not reserve funds or force a party to submit.
-Define whether a new counteroffer invalidates an earlier authorization.
+A new counteroffer does not invalidate an earlier signed revision. All revisions share one consumed deal identity under M0 D02.
 An offchain cancellation cannot revoke a proof that the chain still accepts.
 Until a cancellation mechanism exists, treat signed permission as usable until expiry or settlement.
 Do not present local cancellation as onchain revocation.
