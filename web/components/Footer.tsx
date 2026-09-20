@@ -43,18 +43,22 @@ export function Footer() {
               <li>Poulav Bhowmick, protocol and Cairo</li>
               <li>Ishita, agents and orchestration</li>
             </ul>
-            <div className="mt-5 flex gap-5">
-              <a
-                href={SOURCE}
-                className="mono-xs inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
-              >
-                github ↗
+            <div className="mt-5 flex items-center gap-4">
+              <a href={SOURCE} aria-label="GitHub" className="text-fore-2 transition hover:text-fore">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                  <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55 0-.27-.01-1.16-.02-2.1-3.2.7-3.87-1.36-3.87-1.36-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.02 11.02 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.74.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14 0 1.54-.01 2.79-.01 3.17 0 .3.2.66.79.55A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+                </svg>
               </a>
-              <a
-                href={X_HANDLE}
-                className="mono-xs inline-block uppercase tracking-[0.16em] text-fore underline decoration-rule-2 underline-offset-[6px]"
-              >
-                x ↗
+              <a href={X_HANDLE} aria-label="X" className="text-fore-2 transition hover:text-fore">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M18.24 2.5h3.05l-6.67 7.62 7.84 10.38h-6.15l-4.81-6.3-5.5 6.3H2.15l7.14-8.16L1.8 2.5h6.3l4.35 5.76 5.79-5.76Zm-1.07 16.2h1.69L7.12 4.2H5.3l11.87 14.5Z" />
+                </svg>
+              </a>
+              <a href="mailto:erebus.privacy@gmail.com" aria-label="Email" className="text-fore-2 transition hover:text-fore">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+                  <rect x="2.5" y="4.5" width="19" height="15" rx="1.5" />
+                  <path d="m3.5 6 8.5 7 8.5-7" />
+                </svg>
               </a>
             </div>
           </div>
