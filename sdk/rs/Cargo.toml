@@ -6,6 +6,10 @@ description = "Rust client for Erebus: private agent coordination on STRK20"
 license = "Apache-2.0"
 
 [dependencies]
+# Chain-neutral agreement core: canonical encoding, commitments, authorizations, policy,
+# and settlement capability types. It must stay free of Starknet dependencies, so it is a
+# separate crate with its own lockfile rather than a module here.
+erebus-core = { path = "../core" }
 # Felt252 and Stark-curve arithmetic. Published, unlike the software-mansion fork
 # that starknet-privacy's own crates pin by git rev.
 starknet-types-core = { version = "0.2", features = ["curve", "serde"] }

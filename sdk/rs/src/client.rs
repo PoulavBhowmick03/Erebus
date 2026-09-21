@@ -1941,6 +1941,197 @@ impl Client {
     }
 }
 
+impl Client {
+    pub(crate) async fn settle_strk20(
+        &self,
+        operation_id: &OperationId,
+        handle: ChannelHandle,
+        offer_id: OfferId,
+    ) -> Result<SettlementReceipt, ClientError> {
+        let target = parse_offer_id(&handle, &offer_id)?;
+        let request = DurableRequest::AcceptAndSettle {
+            handle: handle.clone(),
+            offer_id: offer_id.clone(),
+        };
+        self.check_keys(KeyScope::Both)?;
+        let start = self
+            .begin_operation(
+                operation_id,
+                WriteOperation::AcceptAndSettle,
+                Some(handle.clone()),
+                &request,
+                |binding| {
+                    binding
+                        .text(handle.as_str())
+                        .text(offer_id.as_str())
+                        .finish()
+                },
+            )
+            .await?;
+        let mut operation = match start {
+            OperationStart::Execute(lease) => lease,
+            OperationStart::Replay(result) => return Self::decode_result(result),
+        };
+        let (identity, pool_key, account_key) = self.identity_keys()?;
+        let mut lease = self.state.lock(&handle)?;
+        validate_owner(lease.state(), identity.address())?;
+        validate_scope(lease.state(), &self.config)?;
+        if lease.state().settled && lease.state().wire_version != WireVersion::V3 {
+            return Err(ClientError::AlreadySettled);
+        }
+        self.attach_reverse_channel(lease.state_mut(), pool_key)
+            .await?;
+        let spend_block = self
+            .executor
+            .wait_until_provable(lease.state().last_write_block)
+            .await?;
+        let (book, _, chain_next) = self.sync_book(lease.state()).await?;
+        let decision_time = now()?;
+        book.check_acceptable(target, decision_time)?;
+        let offer = book
+            .entries()
+            .find(|(id, _)| *id == target)
+            .map(|(_, message)| message)
+            .ok_or(NegotiationError::UnknownOffer {
+                index: target.index,
+            })?;
+
+        let available = self
+            .discover_owned_notes(pool_key, lease.state().token, &spend_block)
+            .await?;
+        let selected = select_notes(&available, offer.amount).ok_or_else(|| {
+            let mut held: Vec<u128> = available.iter().map(|note| note.amount).collect();
+            held.sort_unstable_by(|a, b| b.cmp(a));
+            ClientError::InsufficientNotes {
+                required: offer.amount,
+                total: held
+                    .iter()
+                    .fold(0u128, |total, amount| total.saturating_add(*amount)),
+                held,
+            }
+        })?;
+        let spend: Vec<OwnedNote> = selected.notes.iter().map(|note| note.note).collect();
+        let change = if selected.change == 0 && lease.state().wire_version != WireVersion::V3 {
+            None
+        } else {
+            let self_counterparty = Counterparty {
+                address: identity.address(),
+                public_key: identity.public_key(),
+            };
+            let self_channel = Channel::derive(
+                self.config.chain_id,
+                self.config.pool_address,
+                &identity,
+                self_counterparty,
+            );
+            let self_channel_key = self_channel.key();
+            if self
+                .self_channel_open_at(&identity, self_channel_key, &spend_block)
+                .await?
+            {
+                let change_index = self
+                    .next_free_note_index(self_channel_key, lease.state().token, &spend_block)
+                    .await?;
+                Some(ChangeOutput::existing(
+                    self_channel,
+                    selected.change,
+                    change_index,
+                    random_salt(),
+                ))
+            } else {
+                let channel_index = self
+                    .outgoing_channel_count_at(&identity, pool_key, &spend_block)
+                    .await?;
+                Some(ChangeOutput::opening(
+                    self_channel,
+                    selected.change,
+                    random_salt(),
+                    ChangeChannelSetup {
+                        channel_index,
+                        channel_random: entropy(),
+                        channel_salt: entropy(),
+                        subchannel_index: 0,
+                        subchannel_salt: entropy(),
+                    },
+                ))
+            }
+        };
+
+        let state = lease.state();
+        let channel = Channel::from_key_with_version(
+            self.config.chain_id,
+            self.config.pool_address,
+            state.outgoing_key,
+            Counterparty {
+                address: state.counterparty_address,
+                public_key: state.counterparty_public_key,
+            },
+            state.wire_version,
+        );
+        let mut cursor = SubchannelCursor::resume_at(chain_next);
+        let acceptance = WireMessage {
+            deal_id: offer.deal_id,
+            message_type: MessageType::Accept,
+            reply_to: Some(target.index),
+            created_at: decision_time,
+            amount: offer.amount,
+            deadline: offer.deadline,
+            memo_hash: offer.memo_hash,
+        };
+        let (_, actions) = channel.settle_next_with_change(
+            state.token,
+            &mut cursor,
+            &spend,
+            offer.amount,
+            random_salt(),
+            &acceptance,
+            change,
+        )?;
+        let selected_input = selected
+            .notes
+            .iter()
+            .fold(0u128, |total, note| total.saturating_add(note.amount));
+        self.persist_completion(
+            &mut operation,
+            &DurableCompletion {
+                result: DurableResultPlan::Settlement {
+                    offer_id: Some(offer_id.clone()),
+                    nullifiers: selected
+                        .notes
+                        .iter()
+                        .map(|note| hex(note.nullifier))
+                        .collect(),
+                    selected_input: Some(selected_input.to_string()),
+                    change: Some(selected.change.to_string()),
+                },
+                local_mutation: Some(DurableLocalMutation::AdvanceChannel {
+                    handle: handle.clone(),
+                    outgoing_next_note: cursor.next_index(),
+                    incoming_key: state.incoming_key,
+                    settled: true,
+                }),
+            },
+        )?;
+        // The channel's own token, not the client's configured one: this is the asset
+        // the operation moves, and the two need not be the same channel to channel.
+        let checks = self.prepared_checks(state.token, 0).await?;
+        self.persist_prepared(&mut operation, 0, checks)?;
+        self.executor
+            .execute(
+                &mut operation,
+                checks.proof_validity_blocks,
+                identity.address(),
+                pool_key,
+                account_key,
+                &actions,
+            )
+            .await?;
+        drop(lease);
+        let result = self.complete_operation(&mut operation).await?;
+        Self::decode_result(result)
+    }
+}
+
 /// Negotiation surface. Wire-v3 granting returns a recipient-bound deal capsule.
 #[allow(async_fn_in_trait)]
 pub trait ErebusClient {
@@ -2365,187 +2556,9 @@ impl ErebusClient for Client {
         handle: ChannelHandle,
         offer_id: OfferId,
     ) -> Result<SettlementReceipt, ClientError> {
-        let target = parse_offer_id(&handle, &offer_id)?;
-        let request = DurableRequest::AcceptAndSettle {
-            handle: handle.clone(),
-            offer_id: offer_id.clone(),
-        };
-        self.check_keys(KeyScope::Both)?;
-        let start = self
-            .begin_operation(
-                operation_id,
-                WriteOperation::AcceptAndSettle,
-                Some(handle.clone()),
-                &request,
-                |binding| {
-                    binding
-                        .text(handle.as_str())
-                        .text(offer_id.as_str())
-                        .finish()
-                },
-            )
-            .await?;
-        let mut operation = match start {
-            OperationStart::Execute(lease) => lease,
-            OperationStart::Replay(result) => return Self::decode_result(result),
-        };
-        let (identity, pool_key, account_key) = self.identity_keys()?;
-        let mut lease = self.state.lock(&handle)?;
-        validate_owner(lease.state(), identity.address())?;
-        validate_scope(lease.state(), &self.config)?;
-        if lease.state().settled && lease.state().wire_version != WireVersion::V3 {
-            return Err(ClientError::AlreadySettled);
-        }
-        self.attach_reverse_channel(lease.state_mut(), pool_key)
-            .await?;
-        let spend_block = self
-            .executor
-            .wait_until_provable(lease.state().last_write_block)
-            .await?;
-        let (book, _, chain_next) = self.sync_book(lease.state()).await?;
-        let decision_time = now()?;
-        book.check_acceptable(target, decision_time)?;
-        let offer = book
-            .entries()
-            .find(|(id, _)| *id == target)
-            .map(|(_, message)| message)
-            .ok_or(NegotiationError::UnknownOffer {
-                index: target.index,
-            })?;
-
-        let available = self
-            .discover_owned_notes(pool_key, lease.state().token, &spend_block)
-            .await?;
-        let selected = select_notes(&available, offer.amount).ok_or_else(|| {
-            let mut held: Vec<u128> = available.iter().map(|note| note.amount).collect();
-            held.sort_unstable_by(|a, b| b.cmp(a));
-            ClientError::InsufficientNotes {
-                required: offer.amount,
-                total: held
-                    .iter()
-                    .fold(0u128, |total, amount| total.saturating_add(*amount)),
-                held,
-            }
-        })?;
-        let spend: Vec<OwnedNote> = selected.notes.iter().map(|note| note.note).collect();
-        let change = if selected.change == 0 && lease.state().wire_version != WireVersion::V3 {
-            None
-        } else {
-            let self_counterparty = Counterparty {
-                address: identity.address(),
-                public_key: identity.public_key(),
-            };
-            let self_channel = Channel::derive(
-                self.config.chain_id,
-                self.config.pool_address,
-                &identity,
-                self_counterparty,
-            );
-            let self_channel_key = self_channel.key();
-            if self
-                .self_channel_open_at(&identity, self_channel_key, &spend_block)
-                .await?
-            {
-                let change_index = self
-                    .next_free_note_index(self_channel_key, lease.state().token, &spend_block)
-                    .await?;
-                Some(ChangeOutput::existing(
-                    self_channel,
-                    selected.change,
-                    change_index,
-                    random_salt(),
-                ))
-            } else {
-                let channel_index = self
-                    .outgoing_channel_count_at(&identity, pool_key, &spend_block)
-                    .await?;
-                Some(ChangeOutput::opening(
-                    self_channel,
-                    selected.change,
-                    random_salt(),
-                    ChangeChannelSetup {
-                        channel_index,
-                        channel_random: entropy(),
-                        channel_salt: entropy(),
-                        subchannel_index: 0,
-                        subchannel_salt: entropy(),
-                    },
-                ))
-            }
-        };
-
-        let state = lease.state();
-        let channel = Channel::from_key_with_version(
-            self.config.chain_id,
-            self.config.pool_address,
-            state.outgoing_key,
-            Counterparty {
-                address: state.counterparty_address,
-                public_key: state.counterparty_public_key,
-            },
-            state.wire_version,
-        );
-        let mut cursor = SubchannelCursor::resume_at(chain_next);
-        let acceptance = WireMessage {
-            deal_id: offer.deal_id,
-            message_type: MessageType::Accept,
-            reply_to: Some(target.index),
-            created_at: decision_time,
-            amount: offer.amount,
-            deadline: offer.deadline,
-            memo_hash: offer.memo_hash,
-        };
-        let (_, actions) = channel.settle_next_with_change(
-            state.token,
-            &mut cursor,
-            &spend,
-            offer.amount,
-            random_salt(),
-            &acceptance,
-            change,
-        )?;
-        let selected_input = selected
-            .notes
-            .iter()
-            .fold(0u128, |total, note| total.saturating_add(note.amount));
-        self.persist_completion(
-            &mut operation,
-            &DurableCompletion {
-                result: DurableResultPlan::Settlement {
-                    offer_id: Some(offer_id.clone()),
-                    nullifiers: selected
-                        .notes
-                        .iter()
-                        .map(|note| hex(note.nullifier))
-                        .collect(),
-                    selected_input: Some(selected_input.to_string()),
-                    change: Some(selected.change.to_string()),
-                },
-                local_mutation: Some(DurableLocalMutation::AdvanceChannel {
-                    handle: handle.clone(),
-                    outgoing_next_note: cursor.next_index(),
-                    incoming_key: state.incoming_key,
-                    settled: true,
-                }),
-            },
-        )?;
-        // The channel's own token, not the client's configured one: this is the asset
-        // the operation moves, and the two need not be the same channel to channel.
-        let checks = self.prepared_checks(state.token, 0).await?;
-        self.persist_prepared(&mut operation, 0, checks)?;
-        self.executor
-            .execute(
-                &mut operation,
-                checks.proof_validity_blocks,
-                identity.address(),
-                pool_key,
-                account_key,
-                &actions,
-            )
-            .await?;
-        drop(lease);
-        let result = self.complete_operation(&mut operation).await?;
-        Self::decode_result(result)
+        crate::strk20_settlement::Strk20SettlementBackend::new(self)
+            .settle(Default::default(), operation_id, handle, offer_id)
+            .await
     }
 
     async fn grant_viewing_key(
@@ -3799,6 +3812,9 @@ fn wire_version_tag(version: WireVersion) -> u64 {
 /// High-level client failure.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
+    /// The selected backend cannot provide the requested settlement guarantees.
+    #[error(transparent)]
+    UnsupportedSettlement(#[from] erebus_core::settlement::SelectionError),
     /// Caller input was malformed.
     #[error("invalid request: {0}")]
     InvalidRequest(String),

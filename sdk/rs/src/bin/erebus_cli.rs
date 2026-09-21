@@ -543,6 +543,7 @@ fn u64_value(field: &'static str, value: &str) -> Result<u64, CliError> {
 fn client_error_response(error: &ClientError) -> Response {
     let (code, retryable) = match error {
         ClientError::InvalidRequest(_)
+        | ClientError::UnsupportedSettlement(_)
         | ClientError::TokenMismatch { .. }
         | ClientError::InvalidOfferId(_)
         | ClientError::AmbiguousReverseChannel(_)

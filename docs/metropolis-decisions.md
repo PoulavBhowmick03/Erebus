@@ -122,3 +122,7 @@ M0 defines boundaries and acceptance. It does not certify the feasibility of an 
 | M8 shared service launch | Measured capacity, access quotas, retention controls, incident owner, and verified network configuration |
 
 These gates must produce decision records and evidence. They are not permission to silently weaken the product guarantees.
+
+## M1 decision record
+
+The M1 agreement decisions (canonical encoding, suite registry, core crate boundary, expiry semantics, policy windows, and payment/delivery states) are recorded in [metropolis-agreement.md](metropolis-agreement.md) section 13, with M4 gate notes in [metropolis-m4-feasibility.md](metropolis-m4-feasibility.md). This document remains the M0 record.

@@ -74,6 +74,57 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  rust-core:
+    name: Rust core
+    runs-on: ubuntu-latest
+    # The chain-neutral agreement crate. It is a path dependency of sdk/rs, so the Rust job
+    # compiles it, but `cargo test` in sdk/rs never runs its tests. A separate job keeps the
+    # isolation claim checkable: sdk/core has no Starknet dependency in its manifest, and this
+    # job fails if one is added.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/core
+
+      - name: Format
+        working-directory: sdk/core
+        run: cargo fmt --check
+
+      - name: Check chain-neutral dependencies
+        working-directory: sdk/core
+        run: |
+          cargo metadata --locked --format-version 1 | python3 -c '
+          import json, sys
+          packages = json.load(sys.stdin)["packages"]
+          forbidden = [p["name"] for p in packages if "starknet" in p["name"] or "felt" in p["name"]]
+          if forbidden:
+              sys.exit("Chain-specific dependencies in erebus-core: " + ", ".join(forbidden))
+          '
+
+      - name: Independent agreement encoding vectors
+        run: python3 scripts/check_agreement_vectors.py
+
+      - name: Clippy
+        working-directory: sdk/core
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: sdk/core
+        run: cargo test --all-targets
+
+      - name: Docs
+        working-directory: sdk/core
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
   python:
     name: Python
     runs-on: ubuntu-latest

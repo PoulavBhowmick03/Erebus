@@ -122,20 +122,16 @@ transition directly. This diagram shows the shielded path.
 
 ## 4. Agreement representation
 
-The following fields are conceptual. Freeze the byte encoding and cryptographic suite before implementation.
+Frozen at M1: the v1 field list, canonical encoding, commitment, authorization digest, and deal identity are specified in [metropolis-agreement.md](metropolis-agreement.md) and implemented in [`sdk/core`](../sdk/core). Three differences from the earlier conceptual draft are recorded here:
+
+- `chain_id` is carried inside the CAIP-2 chain namespace, not as a separate field.
+- `recipient_note_key` is named `payment_recipient`: a public-bound backend pays a visible address, a shielded backend pays a note key, and the backend interprets the bytes.
+- `terms_digest` was removed; the blinded commitment is the digest. The service record, settlement mode, and required guarantees are committed fields.
 
 ```text
-Deal D = {
-  protocol_version, suite_id,
-  domain: {chain_namespace, chain_id, settlement_contract, pool, verifier_version},
-  deal_id, revision, transcript_root,
-  buyer_authorization_key, seller_authorization_key,
-  recipient_note_key, asset_identifier, amount_base_units,
-  expiry, terms_digest, fee_policy,
-  settlement_nonce
-}
-Cdeal = Commit("EREBUS_DEAL_V1", Encode(D), random_blinding)
-Authorization = Sign(role_tag, domain, Cdeal)
+Cdeal = Hash_suite("EREBUS_DEAL_COMMITMENT_V1" || Encode(D) || blinding)
+Authorization = Sign_suite(role_tag, domain, Cdeal)
+Ndeal = Hash_suite("EREBUS_DEAL_NULLIFIER_V1" || Encode(domain) || buyer_key || settlement_nonce)
 ```
 
 Use fresh cryptographic randomness for the blinding value. A hash of predictable prices and addresses alone does not hide terms.
@@ -207,6 +203,13 @@ Define behavior before choosing Rust trait syntax:
 | `submit(prepared)` | Submit the same authorized transition and record its transaction identity |
 | `status(operation_id)` | Return unknown, pending, included, finalized, reverted, or expired |
 | `verify(receipt)` | Verify domain, agreement binding, state transition, and chain evidence |
+
+M1 implements the shared capability, prepared-settlement, receipt, and recovery types in `erebus_core::settlement`.
+The canonical backend lifecycle above remains an M3/M6 implementation target.
+The existing public settlement method now delegates through `sdk/rs/src/strk20_settlement.rs`.
+This legacy adapter checks requirements before calling the unchanged STRK20 execution body.
+It declares hidden amount and recipient, but no canonical suite, proof-enforced agreement binding, or local proving.
+Wire-v3 scoped disclosure remains available separately; it is not a guarantee common to historical channels.
 
 Keep funding and withdrawal as explicit wallet operations. Negotiation must not silently authorize either.
 Core types must not assume a Starknet `Felt`, EVM address, proof system, or transaction format.

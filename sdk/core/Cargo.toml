@@ -1,0 +1,29 @@
+[package]
+name = "erebus-core"
+version = "0.1.0"
+edition = "2021"
+description = "Canonical agreement and shared protocol types for Erebus: chain-neutral, no Starknet dependency"
+license = "Apache-2.0"
+
+[dependencies]
+thiserror = "2"
+# Agreement suite 1 uses keccak256, the EVM-native hash. This is protocol-critical
+# because the same digest is recomputed by the settlement contract.
+sha3 = "0.10"
+# secp256k1 verification and public-key recovery for suite 1. Pure Rust, matching the
+# RustCrypto family already used by the SDK.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+# Integration tests sign with the suite-1 algorithms and derive addresses from keys.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha3 = "0.10"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"

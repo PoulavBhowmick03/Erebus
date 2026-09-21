@@ -22,6 +22,7 @@
 pub mod action_set;
 pub mod actions;
 pub mod calldata;
+pub mod capabilities;
 pub mod channel;
 pub mod client;
 pub mod decrypt;
@@ -44,6 +45,7 @@ pub mod rpc;
 pub mod signer;
 pub mod signing;
 pub mod state;
+pub mod strk20_settlement;
 pub mod subchannel;
 pub mod tx;
 pub mod wire;

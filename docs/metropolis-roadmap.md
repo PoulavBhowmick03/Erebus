@@ -2,7 +2,7 @@
 
 Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
-Status: M0 locally complete on 2026-09-20. M1-M9 remain pending.
+Status: M0 and M1 locally complete on 2026-09-20. M4 has feasibility research only. M2-M9 otherwise remain pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -94,7 +94,9 @@ These paths exist in the planning checkout. The extraction column describes prop
 
 | Layer | Current source | Planned treatment |
 |---|---|---|
+| Chain-neutral agreement core | `sdk/core` (added at M1) | Canonical encoding, commitments, authorizations, policy, and settlement capability types; must stay free of chain dependencies |
 | Public API and orchestration | `sdk/rs/src/client.rs` | Separate protocol orchestration from STRK20 operations |
+| Legacy settlement boundary | `sdk/rs/src/strk20_settlement.rs` (M1) | Check requirements before legacy settlement; reject canonical agreements instead of translating them silently |
 | Negotiation state | `sdk/rs/src/negotiation.rs` | Preserve behavior tests, then remove wire-specific dependencies from shared logic |
 | Channels and wire records | `channel.rs`, `subchannel.rs`, `wire.rs` under `sdk/rs/src/` | Retain STRK20 codecs and introduce a separately versioned offchain protocol |
 | Agreement authorization | Currently distributed across client, wire, and transaction signing | Add explicit canonical agreements and bilateral authorization |
@@ -139,21 +141,30 @@ Workflow changes are locally verified but uncommitted and unpushed. Remote CI ha
 
 Dependencies: M0.
 
-- [ ] Define chain namespaces, deployment domains, asset identifiers, integer amounts, and protocol versions.
-- [ ] Specify exact encoding, commitment blinding, role-specific authorizations, expiry, fees, and required guarantees.
-- [ ] Bind the settlement mode and required guarantees into the authorized agreement.
-- [ ] Define a canonical service record: purchased resource, quantity, access recipient, and fulfillment conditions.
-- [ ] Bind the service record to the agreement and distinguish payment status from delivery status.
-- [ ] Specify per-deal and aggregate spending limits, permitted assets, and counterparty restrictions below the agent model.
-- [ ] Define whether signed revisions share one consumed deal identity.
-- [ ] Define authorization expiry and cancellation behavior without implying that local cancellation revokes onchain permission.
-- [ ] Add deterministic encoding vectors, malformed-input tests, and cross-domain replay cases.
-- [ ] Introduce backend capability negotiation, prepared settlement, receipt, and recovery types.
-- [ ] Isolate existing STRK20 code behind its actual guarantees without changing historical state or wire formats.
+- [x] Define chain namespaces, deployment domains, asset identifiers, integer amounts, and protocol versions.
+- [x] Specify exact encoding, commitment blinding, role-specific authorizations, expiry, fees, and required guarantees.
+- [x] Bind the settlement mode and required guarantees into the authorized agreement.
+- [x] Define a canonical service record: purchased resource, quantity, access recipient, and fulfillment conditions.
+- [x] Bind the service record to the agreement and distinguish payment status from delivery status.
+- [x] Specify per-deal and aggregate spending limits, permitted assets, and counterparty restrictions below the agent model.
+- [x] Define whether signed revisions share one consumed deal identity.
+- [x] Define authorization expiry and cancellation behavior without implying that local cancellation revokes onchain permission.
+- [x] Add deterministic encoding vectors, malformed-input tests, and cross-domain replay cases.
+- [x] Check commitment openings during authorization, including mutations that retain the original commitment.
+- [x] Count settlement fees in spending limits and reservations; reject arithmetic overflow.
+- [x] Reject unsupported suite/mode combinations and hosted proving when local proving is required.
+- [x] Cross-check canonical byte encoding with an independent Python implementation.
+- [x] Introduce backend capability negotiation, prepared settlement, receipt, and recovery types.
+- [x] Isolate existing STRK20 code behind its actual guarantees without changing historical state or wire formats.
 
 Done: shared protocol logic has no Starknet `Felt` dependency and no network-name conditionals.
 Existing STRK20 behavior remains covered. Unsupported privacy requirements fail explicitly.
 Service-record mutations invalidate authorization. Policy-denial cases have tests independent of agent prompts.
+
+Completed locally 2026-09-20: [agreement specification](metropolis-agreement.md) and [M1 baseline](metropolis-m1-baseline.md).
+Review corrections include the checked legacy adapter and regression tests for the four reported M1 gaps.
+Suite 1 (keccak256 and secp256k1) is the public-bound path only; the shielded suite remains the joint M1/M4 gate and fails explicitly until selected.
+M1 completion covers the shared core and legacy isolation, not an executable EVM backend or a selected shielded proof system.
 
 ### M2. Private offchain Eleusis
 
@@ -196,8 +207,11 @@ The backend explicitly declares public amounts and recipients. Public binding ne
 
 Dependencies: M1. Begin feasibility research early, alongside M2 and M3.
 
-- [ ] Evaluate reusable privacy primitives against agreement binding, Monad deployment, licensing, and source availability.
+- [x] Evaluate reusable privacy primitives against agreement binding, Monad deployment, licensing, and source availability.
 - [ ] Select the pool integration or document why a custom pool is necessary.
+
+Feasibility research recorded in [M4 feasibility](metropolis-m4-feasibility.md), a research draft for owner review.
+No primitive, proof system, or pool integration is selected, and no prototype has run.
 - [ ] Select the proof system, circuit language, hash suite, authorization scheme, and proving-key lifecycle.
 - [ ] Specify notes, ownership, membership, nullifiers, outputs, change, fees, and per-asset conservation.
 - [ ] Specify the exact shared inputs between agreement verification and payment verification.
@@ -348,5 +362,7 @@ The final module layout follows the inspected dependency graph, not this list al
 |---|---|---|
 | 2026-09-20 | Roadmap and branch isolation for planning | Switched from clean `main` to existing `metropolis` before edits |
 | 2026-09-20 | M0 local completion | [Baseline, enforcement map, workflow audit](metropolis-m0-baseline.md), and [decisions](metropolis-decisions.md) |
+| 2026-09-20 | M1 canonical agreement and shared Rust core | [Agreement specification](metropolis-agreement.md) and [M1 baseline](metropolis-m1-baseline.md) |
+| 2026-09-20 | M4 feasibility research (not a completion) | [M4 feasibility memo](metropolis-m4-feasibility.md) |
 
-M0 is complete locally. No M1-M9 implementation milestone is complete.
+M0 and M1 are complete locally. No M2-M9 implementation milestone is complete; M4 has feasibility research only.
