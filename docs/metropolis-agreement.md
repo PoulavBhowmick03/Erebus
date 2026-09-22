@@ -47,7 +47,7 @@ Fields are encoded in the order listed. "raw" means no length prefix; "bytes" me
 | 3 | `domain` | nested, section 3.1 | |
 | 4 | `deal_id` | raw 16 bytes | shared by every revision of the deal |
 | 5 | `revision` | `u32` | greater than zero; monotonic within a deal; M2 enforces transcript order |
-| 6 | `transcript_root` | raw 32 bytes | the negotiation transcript root; M2 defines its derivation, all-zero until then |
+| 6 | `transcript_root` | raw 32 bytes | the negotiation transcript root; derivation specified in [M2 decisions](metropolis-m2-decisions.md) DM2-4. All-zero only for a deal with no transcript (legacy wire-v1/v2 and the retained vectors); a revision that concludes an M2-negotiated deal carries the computed root. The field is committed but is not yet constrained by a settlement predicate. |
 | 7 | `buyer_authorization_key` | bytes 1..=64 | suite 1 requires exactly 20 |
 | 8 | `seller_authorization_key` | bytes 1..=64 | suite 1 requires exactly 20 |
 | 9 | `payment_recipient` | bytes 1..=64 | backend-interpreted; a shielded backend requires a note key the seller controls |
@@ -210,7 +210,7 @@ Policy enforcement protects a configured operator. It is not a claim that a host
 
 - No shielded suite is selected. Suite 1 is the public-bound path; the shielded suite is an M4 decision fed by `docs/metropolis-m4-feasibility.md`. An agreement naming an unimplemented suite fails explicitly.
 - No proof relation is specified. The settlement statement in `docs/metropolis-architecture.md` section 5 remains the design target for M4/M5.
-- No EVM adapter, contract, coordinator, transport, or disclosure package is implemented at M1. Those are M2, M3, and M6.
+- No EVM adapter, contract, coordinator, or disclosure package is implemented at M1. Those are M3 and M6. The offchain transport is M2 and is specified separately in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); it populates `transcript_root` but does not change this encoding.
 - No service delivery is guaranteed by payment. Payment and delivery are separate states by construction.
 
 ## 13. M1 decisions for owner review

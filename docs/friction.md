@@ -8,6 +8,35 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F44: `transcript_root` was reserved with no rule for when it is populated (2026-09-21)
+
+**What we were trying to do.** Implement M2 offchain Eleusis and bind the negotiation transcript
+to the agreement, which already has a committed `transcript_root` field
+([agreement](metropolis-agreement.md) field 6, `sdk/core/src/terms.rs`).
+
+**What the stack did instead.** Nothing. The field exists and is committed, but neither the spec
+nor the core says who populates it, when all-zero is valid, or whether any rule checks it. The
+decoder accepts any 32 bytes, so an M2 deal that silently carried a zero root, or a legacy deal
+that carried a random one, would both encode and commit without complaint. There is also no Cairo
+vector for a populated root, because the value did not exist at M1.
+
+**Worked around it?** Yes. M2 defines the derivation and the validity rule in
+[M2 decisions](metropolis-m2-decisions.md) DM2-4 (`Hash_suite("EREBUS_TRANSCRIPT_ROOT_V1" ||
+deal_id || head_buyer || head_seller)`, all-zero only when the deal has no messages), so existing
+zero vectors remain valid and no `protocol_version` bump is needed. The transport enforces the
+rule; the agreement crate still treats the field as opaque.
+
+**Why it matters.** This is the protocol's failure mode in miniature: a committed field with no
+predicate is a silent divergence waiting to happen. Two implementations can disagree on what the
+field means while every test passes, because the tests only check that the bytes round-trip.
+
+**What would have made it easier.** Mark field 6 as reserved in the specification, with an
+explicit rule that the decoder accepts any value and that the first milestone to populate it must
+define validity and add vectors. A `TranscriptRoot` newtype with a distinct `none()` constructor
+would make "not yet defined" and "a real root" different types instead of the same 32 bytes.
+
+---
+
 ## F42: `approve` is an operator action, and the MCP surface deliberately cannot fund a run (2026-09-07)
 
 **What we were trying to do.** Drive a full mainnet negotiation from two agent sessions with

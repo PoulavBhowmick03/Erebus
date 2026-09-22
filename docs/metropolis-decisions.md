@@ -126,3 +126,26 @@ These gates must produce decision records and evidence. They are not permission 
 ## M1 decision record
 
 The M1 agreement decisions (canonical encoding, suite registry, core crate boundary, expiry semantics, policy windows, and payment/delivery states) are recorded in [metropolis-agreement.md](metropolis-agreement.md) section 13, with M4 gate notes in [metropolis-m4-feasibility.md](metropolis-m4-feasibility.md). This document remains the M0 record.
+
+## D08. Public-first execution and x402 settlement shape
+
+Added 2026-09-22 after mentor review. Complete the M3 public-bound Monad flow before allowing
+shielded-settlement research to block agent integration. This validates agreement binding,
+submission, reconciliation, and service delivery while stating that amount, recipient, asset,
+signers, and timing remain public. It does not weaken the final shielded-payment gate and must
+not satisfy an agreement that requires hidden settlement fields.
+
+Treat private x402 as a use-case hypothesis, not an implemented compatibility claim. A separate
+private settlement for every API request may be incompatible with the required request rate,
+latency, and cost. Before M8 selects an integration, compare per-request settlement, a prepaid
+service allocation, and batched usage against these properties:
+
+- one authorized economic payment rather than an Erebus payment followed by a second charge;
+- binding between the purchased resource, buyer capability, settled allocation, and usage;
+- replay, overspend, refund, expiry, interruption, and reconciliation behavior;
+- exposed API identity, request frequency, batch size, timing, and settlement counterparties;
+- measured proof, chain, facilitator, and service-delivery costs.
+
+A prepaid balance or batch is not automatically x402-compatible. Name the integration x402 only
+after a pinned scheme and resource server verify the selected receipt or authorization model end
+to end. Until then, call it an HTTP service adapter backed by an Erebus agreement.

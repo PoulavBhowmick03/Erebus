@@ -1,0 +1,46 @@
+[package]
+name = "erebus-transport"
+version = "0.1.0"
+edition = "2021"
+description = "Offchain Eleusis transport for Erebus: Noise sessions, authenticated transcripts, and a ciphertext relay"
+license = "Apache-2.0"
+
+[dependencies]
+# Chain-neutral agreement core: canonical encoding, identifier types, and the suite hash used
+# for the transcript root. The transport must not depend on a chain or proving library, so the
+# shared encoder is reused rather than reimplemented. Two encoders can disagree; one cannot.
+erebus-core = { path = "../core" }
+# Noise XX (X25519 / ChaCha20-Poly1305 / BLAKE2s). A maintained implementation of a documented
+# handshake, chosen over hand-rolling X25519 + HKDF + AEAD. See docs/metropolis-m2-decisions.md DM2-1.
+snow = "0.9"
+# Entropy for transport identity keys and per-deal transcript randoms. Generated in Rust, like
+# the SDK's existing channel randoms, so no binding makes a cryptographic decision.
+rand = "0.8"
+thiserror = "2"
+# Descriptor publication to a configured directory endpoint.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Suite-1 descriptor signatures. The core exposes verification; signing is transport-side.
+# keccak256 derives the suite-1 address from the secp256k1 public key.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha3 = "0.10"
+# Single-writer transcript and relay state across processes, matching sdk/rs's advisory-lock rule.
+fs2 = "0.4"
+# Relay service only. Async HTTP with rustls, matching sdk/rs's TLS choice (no OpenSSL).
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tempfile = "3"
+
+[[bin]]
+name = "erebus-relay"
+path = "src/bin/erebus_relay.rs"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"

@@ -2,7 +2,7 @@
 
 Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
-Status: M0 and M1 locally complete on 2026-09-20. M4 has feasibility research only. M2-M9 otherwise remain pending.
+Status: M0, M1, and M2 locally complete. M4 has feasibility research only. M3 and M5-M9 otherwise remain pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -170,21 +170,29 @@ M1 completion covers the shared core and legacy isolation, not an executable EVM
 
 Dependencies: M1 for stable message context. Transport experiments can start during M1.
 
-- [ ] Select an established key-agreement and authenticated-encryption implementation with a documented session protocol.
-- [ ] Specify peer authentication, key roles, nonce construction, key rotation, and session recovery.
-- [ ] Implement offer, counter, authorization, sequence, parent reference, and final transcript root.
-- [ ] Implement a minimal ciphertext relay or direct transport with acknowledgments and durable storage.
-- [ ] Bound message size, queue growth, retries, and retained transcript data.
-- [ ] Reject duplicate, reordered, cross-session, and conflicting messages according to the protocol specification.
-- [ ] Separate key material and confidential messages from CLI logs and model-visible output.
-- [ ] Add service publication and discovery with authenticated peer identity, endpoints, assets, networks, and supported guarantees.
-- [ ] Exclude private negotiations and reservation prices from public discovery records.
-- [ ] Package the relay for hosted and self-hosted operation with authentication, limits, retention, and health diagnostics.
+- [x] Select an established key-agreement and authenticated-encryption implementation with a documented session protocol.
+- [x] Specify peer authentication, key roles, nonce construction, key rotation, and session recovery.
+- [x] Implement offer, counter, authorization, sequence, parent reference, and final transcript root.
+- [x] Implement a minimal ciphertext relay or direct transport with acknowledgments and durable storage.
+- [x] Bound message size, queue growth, retries, and retained transcript data.
+- [x] Reject duplicate, reordered, cross-session, and conflicting messages according to the protocol specification.
+- [x] Separate key material and confidential messages from CLI logs and model-visible output.
+- [x] Add service publication and discovery with authenticated peer identity, endpoints, assets, networks, and supported guarantees.
+- [x] Exclude private negotiations and reservation prices from public discovery records.
+- [x] Package the relay for hosted and self-hosted operation with authentication, limits, retention, and health diagnostics.
 
 Done: two independent Rust processes agree on one transcript after disconnects and restarts.
 No chain transaction is required for the new offchain negotiation path.
 Transport metadata exposure is documented and measured separately from content privacy.
 An external client discovers a compatible seller without receiving a seller address manually from the Erebus team.
+
+Acceptance evidence uses real subprocesses with reloaded identities and reopened stores, a
+signed JSON directory loaded by the buyer process, and the packaged authenticated HTTP relay.
+
+Completed locally 2026-09-21: [M2 decision record and session protocol](metropolis-m2-decisions.md) and [M2 baseline](metropolis-m2-baseline.md).
+Implementation is [`sdk/transport`](../sdk/transport); the relay binary is `erebus-relay`.
+Discovery is a verified JSON directory document; a hosted HTTP discovery service is not built.
+The `transcript_root` field is populated by M2 but is not yet constrained by a settlement predicate.
 
 ### M3. EVM chain adapter and public-bound settlement
 
@@ -289,6 +297,7 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [ ] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
 - [ ] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
 - [ ] Implement x402 composition only against a specified scheme, with exactly one payment and explicit privacy exposure.
+- [ ] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
 - [ ] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately.
 
 Done: independent buyer, seller, observer, and disclosure processes complete the real Monad workflow.
@@ -364,5 +373,6 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-09-20 | M0 local completion | [Baseline, enforcement map, workflow audit](metropolis-m0-baseline.md), and [decisions](metropolis-decisions.md) |
 | 2026-09-20 | M1 canonical agreement and shared Rust core | [Agreement specification](metropolis-agreement.md) and [M1 baseline](metropolis-m1-baseline.md) |
 | 2026-09-20 | M4 feasibility research (not a completion) | [M4 feasibility memo](metropolis-m4-feasibility.md) |
+| 2026-09-21 | M2 private offchain Eleusis | [M2 decision record](metropolis-m2-decisions.md) and [M2 baseline](metropolis-m2-baseline.md) |
 
-M0 and M1 are complete locally. No M2-M9 implementation milestone is complete; M4 has feasibility research only.
+M0, M1, and M2 are complete locally. No M3-M9 implementation milestone is complete; M4 has feasibility research only.

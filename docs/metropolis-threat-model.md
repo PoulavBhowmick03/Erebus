@@ -50,6 +50,10 @@ These are Architecture C targets, conditional on the selected privacy rail and p
 Token identity can remain public through pool selection. A small anonymity set can make amount and timing correlations strong.
 Removing public channel opening can reduce direct relationship disclosure. Relaying alone does not prove relationship privacy.
 An observer can correlate deposits, withdrawals, endpoints, and timing even when ciphertext remains secure.
+For paid APIs, repeated per-request settlements can reveal which service an agent uses, how often
+it uses it, and activity patterns from which an observer may infer strategy. Prepaid or batched
+settlement can reduce onchain frequency but does not hide requests from the service, transport
+metadata from network operators, or the timing and size of each published batch.
 
 ## 3. Required attack tests
 
@@ -71,6 +75,7 @@ An observer can correlate deposits, withdrawals, endpoints, and timing even when
 | Retry after lost response | Durable operation intent and chain reconciliation | Kill after broadcast; restart without a second payment |
 | Fake indexer receipt | Independent chain evidence and finality verification | Fabricated event or orphaned block cannot mark a deal finalized |
 | Broaden disclosure | Independent deal keys and recipient encryption | Wrong recipient and adjacent deal remain unreadable |
+| Infer agent behavior from paid API traffic | Prepaid or batched settlement where compatible, plus an explicit metadata report | Compare per-request and aggregate public traces; record which service, timing, frequency, and batch information remains inferable |
 
 A dictionary test is a regression check, not a cryptographic proof of commitment hiding.
 Failure of one observer attack does not establish anonymity against every observer.

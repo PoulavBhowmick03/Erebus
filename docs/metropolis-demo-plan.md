@@ -87,6 +87,13 @@ There must be exactly one payment. Do not settle through Erebus and then trigger
 If an ordinary public payment is required, document the amount and recipient exposure.
 Until the integration passes an end-to-end test, describe the demo as private service contracting with an HTTP fulfillment adapter.
 
+Do not assume one shielded transaction per API request. Compare per-request settlement with a
+prepaid service allocation and batched usage after measuring proof time, transaction cost,
+request rate, and recovery behavior. For a prepaid demo, show one agreement-bound allocation,
+multiple authorized resource requests against that allocation, prevention of overspend or replay,
+and the remaining public frequency and timing metadata. This is an Erebus service-access model
+until compatibility with a pinned x402 scheme is demonstrated.
+
 ## 5. Evidence bundle
 
 Store sanitized evidence under a new dated directory in `docs/runs/` when the run occurs.

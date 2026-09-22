@@ -143,6 +143,7 @@ Messages need a session ID, deal ID, revision, author, sequence, parent hash, ty
 The final transcript root commits to the agreed transcript. It does not prove that every unshared message exists or that business claims are true.
 Authenticating a shared encryption key alone cannot establish which participant authored a message to an auditor.
 Choose a signature scheme for independently verifiable authorship where disclosure requires it.
+M2 specifies the envelope, the Noise session protocol, the ordering rules, and the transcript-root derivation in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); the transport is implemented in [`sdk/transport`](../sdk/transport).
 There must be exactly one deterministic encoding: both participants must compute the same
 commitment from the same terms. Any representation ambiguity — decimals, base units, address
 namespace, field order — is a protocol bug that silently forks the agreement.
@@ -250,7 +251,7 @@ Record your choice, reasoning, and evidence for each item before building the de
 | Transport and key establishment | Peer authentication, nonce rules, crash recovery, metadata exposure |
 | Output delivery and encryption | Seller recovers spendable payment after buyer disconnects |
 | Disclosure storage and retention | Auditor reconstructs the deal after the relay loses its copy |
-| x402 integration | Defined scheme and receipt verification without a second payment |
+| x402 integration | Compare per-request, prepaid-allocation, and batched models using measured cost and latency; then define one scheme and receipt verification without a second payment |
 | Chain selection model | Recommended: fixed at session creation before negotiation; negotiating the chain itself is out of scope |
 | EVM milestone (M0 D01) | V1 is intermediate. V2 shielded is required for the final product demo |
 | Backend selection by guarantee | A required guarantee that a backend cannot provide must fail, not silently downgrade |
@@ -260,5 +261,9 @@ Private authorization needs a compatible proof design; EIP-712 alone does not pr
 Use established encryption implementations. [HPKE](https://www.rfc-editor.org/rfc/rfc9180) is a candidate building block, not a complete session protocol.
 x402 composition requires an explicitly supported payment scheme and resource-server integration.
 The resource server controls access issuance. There must be exactly one payment, and payment finality does not prove service delivery.
+A private settlement per API call is not the default architecture. M8 must compare it with a
+prepaid service allocation and batched usage, then document capability binding, accounting,
+replay, overspend, refund, expiry, and recovery. Do not call a prepaid or batched adapter x402
+unless the selected x402 scheme supports that flow and passes an end-to-end test.
 
 M0 defaults and implementation gates are recorded in the [decision record](metropolis-decisions.md).
