@@ -25,6 +25,8 @@ use sha3::{Digest, Keccak256};
 
 /// Suite id for keccak256 commitments with secp256k1 ECDSA authorizations.
 pub const EVM_SECP256K1_KECCAK_SUITE_ID: u16 = 1;
+/// Reserved for the M4 Poseidon/BabyJubJub prototype; the core cannot execute it until M5.
+pub const SHIELDED_POSEIDON_EDDSA_SUITE_ID: u16 = 2;
 
 /// Length of a suite-1 authorization key.
 pub const EVM_SECP256K1_KECCAK_KEY_BYTES: usize = 20;
@@ -205,6 +207,15 @@ mod tests {
     fn hashing_parts_is_concatenation() {
         let suite = suite(EVM_SECP256K1_KECCAK_SUITE_ID).expect("suite 1 exists");
         assert_eq!(suite.hash(&[b"ab", b"c"]), suite.hash(&[b"a", b"bc"]));
+    }
+
+    #[test]
+    fn m4_prototype_suite_is_not_executable_yet() {
+        assert!(!is_supported(SHIELDED_POSEIDON_EDDSA_SUITE_ID));
+        assert!(matches!(
+            suite(SHIELDED_POSEIDON_EDDSA_SUITE_ID),
+            Err(SuiteError::Unsupported(SHIELDED_POSEIDON_EDDSA_SUITE_ID))
+        ));
     }
 
     /// EIP-155's worked example, an external signature vector outside this codebase.

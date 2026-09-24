@@ -156,7 +156,7 @@ The verifier must enforce the following relation, including the pool transition:
 Public inputs:
   domain, Cdeal, Ndeal, accepted_input_root,
   input_note_nullifiers, output_note_commitments,
-  output_ciphertext_digest, expiry, authorized_public_fee_fields
+  output recovery data as required by the backend, expiry, authorized_public_fee_fields
 
 Private witness:
   D, commitment_blinding, both authorizations,
@@ -172,7 +172,7 @@ Constraints:
   payment.recipient == D.recipient_note_key
   inputs == payment + change + authorized fees, per asset
   all amounts satisfy range constraints
-  output commitments and recoverable ciphertexts describe those outputs
+  output commitments describe recoverable notes owned by the intended recipients
   Ndeal derives from the unique authorized settlement identity
 ```
 
@@ -183,8 +183,11 @@ Publishing expiry leaks expiry. A hidden expiry requires an additional proof des
 
 An agreement proof and a pool proof cannot be unrelated valid proofs.
 They must share constrained payment commitments and transaction context, and execute atomically.
-A combined circuit or a supported pool verification hook can provide this binding. The choice is unresolved.
-Binding a ciphertext digest alone does not prove decryptability. Define encryption correctness constraints or a recipient acknowledgment protocol.
+M4 selected a combined Circom/Groth16 relation for the initial EVM pool; see
+[M4 decisions](metropolis-m4-decisions.md). The seller chooses a spend tag and signs only
+after checking that it controls the secret. The payment-note salt derives from the signed
+deal nonce, so the seller can reconstruct its output without ciphertext. The M4 harness proves
+this relation locally but does not yet hold funds or maintain a live tree.
 
 M0 selects one consumption identity across every signed revision of a deal, as specified in D02 of the decision record.
 Derive it from the deployment domain, buyer identity, and a fixed random settlement nonce authorized in every revision.

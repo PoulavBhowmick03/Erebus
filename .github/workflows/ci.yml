@@ -224,6 +224,45 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --no-deps
 
+  m4-proof:
+    name: M4 proof prototype
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pinned Circom compiler
+        run: |
+          git clone --depth 1 --branch v2.2.3 https://github.com/iden3/circom.git /tmp/erebus-circom
+          test "$(git -C /tmp/erebus-circom rev-parse HEAD)" = ad44e915a12bb047b05745c2884aad9cc8326bc6
+          cargo install --path /tmp/erebus-circom/circom --locked
+
+      - name: Install pinned proof dependencies
+        working-directory: circuits/m4
+        run: npm ci
+
+      - name: Prove and enforce a private transfer on Anvil
+        working-directory: circuits/m4
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run prototype
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m4-prototype-metrics
+          path: circuits/m4/build/metrics.json
+          if-no-files-found: error
+          retention-days: 7
+
   python:
     name: Python
     runs-on: ubuntu-latest

@@ -1,9 +1,11 @@
 # Metropolis Agreement Specification v1
 
-Written: 2026-09-20. Status: normative for `erebus-core` at M1. The shielded suite remains an M4 gate.
+Written: 2026-09-20. Status: normative for `erebus-core` at M1. M4 selected a shielded proof
+prototype; suite 2 remains unimplemented in `erebus-core` until M5.
 Roadmap: [metropolis-roadmap.md](metropolis-roadmap.md). Decisions: [metropolis-decisions.md](metropolis-decisions.md), D01-D04.
 Implementation: [`sdk/core`](../sdk/core). Vectors: [`sdk/core/tests/fixtures/agreement-v1-vectors.json`](../sdk/core/tests/fixtures/agreement-v1-vectors.json).
-This document specifies the reviewed M1 encoding, suite 1, and policy semantics. It does not freeze a shielded suite; see section 12.
+This document specifies the reviewed M1 encoding, suite 1, and policy semantics. The selected
+suite-2 field map and proof are in [M4 decisions](metropolis-m4-decisions.md).
 
 ## 1. Scope and versioning
 
@@ -77,7 +79,8 @@ Fields are encoded in the order listed. "raw" means no length prefix; "bytes" me
 - Public-bound settlement must name a settlement contract and must not require `hidden-amount` or `hidden-recipient`.
 - Shielded settlement must name a pool and must require both `hidden-amount` and `hidden-recipient`.
 - Suite 1 supports only public-bound settlement. Encoding, decoding, commitment construction, and backend selection reject suite 1 with shielded mode.
-- No shielded suite is executable until M4 selects and implements one. The shielded tag is reserved, not a working backend.
+- M4 selected and prototyped suite 2, but the Rust core and settlement backend still reject
+  it. M5 must implement the mapping and real pool before it becomes executable.
 
 ## 4. Service record
 
@@ -107,7 +110,7 @@ Payment and delivery are not fields of the service record. They are outcome stat
 ## 6. Commitment and blinding
 
 ```text
-Cdeal = Hash_suite("EREBUS_DEAL_COMMITMENT_V1" || encode(terms) || blinding)
+Cdeal = Hash_suite("EREBUS_DEAL_COMMITMENT_V1" || encode(terms) || blinding)  // suite 1
 ```
 
 `blinding` is 32 fresh random bytes per deal. The blinding is treated as sensitive: it is the only thing that hides predictable terms, and persistence follows key-material rules. The commitment is the only value a participant signs as agreement consent. A verifier recomputes it from the opening (terms plus blinding); without the opening the commitment is meaningless.
@@ -116,15 +119,20 @@ Both authorization APIs require the opening and recompute `Cdeal` before accepti
 `verify_authorization` then checks expiry; `verify_authorization_signature` preserves audit verification after expiry.
 Keeping the original commitment while changing any term fails with `OpeningMismatch`.
 These functions check one role. A settlement backend must require one valid buyer authorization and one valid seller authorization.
+Suite 2 uses the typed Poseidon field map in [M4 decisions](metropolis-m4-decisions.md); it does
+not apply the suite-1 byte-hash formula to the canonical encoding. Rust suite-2 verification
+and independent cross-language vectors are M5 work.
 
 ## 7. Deal identity and revisions
 
 ```text
-Ndeal = Hash_suite("EREBUS_DEAL_NULLIFIER_V1" || encode(domain) || buyer_authorization_key || settlement_nonce)
+Ndeal = Hash_suite("EREBUS_DEAL_NULLIFIER_V1" || encode(domain) || buyer_authorization_key || settlement_nonce)  // suite 1
 ```
 
 - Every signed revision shares `deal_id`, `settlement_nonce`, the buyer key, the domain, and the suite. These inputs produce one `Ndeal`.
-- `revision` and other negotiable terms are not inputs. Switching suites is not a revision; M4 must specify cross-suite replay behavior before adding a suite.
+- `revision` and other negotiable terms are not inputs. Suite 2 uses the separate Poseidon
+  derivation in [M4 decisions](metropolis-m4-decisions.md). Switching suites requires a new
+  authorization and deployment domain; it is not a revision or fallback.
 - The first valid signed revision to settle consumes the deal. A later counteroffer does not revoke earlier signed permission; revisions remain executable until their authorized expiry or deal consumption.
 - Changing the deployment creates a different domain and a different `Ndeal`. This does not promise global cross-chain deal uniqueness.
 - Pool note nullifiers are separate values and do not replace `Ndeal`.
@@ -208,8 +216,8 @@ Policy enforcement protects a configured operator. It is not a claim that a host
 
 ## 12. What this specification does not establish
 
-- No shielded suite is selected. Suite 1 is the public-bound path; the shielded suite is an M4 decision fed by `docs/metropolis-m4-feasibility.md`. An agreement naming an unimplemented suite fails explicitly.
-- No proof relation is specified. The settlement statement in `docs/metropolis-architecture.md` section 5 remains the design target for M4/M5.
+- At M1, no shielded suite or proof relation existed. M4 now specifies and prototypes one
+  in [M4 decisions](metropolis-m4-decisions.md). This M1 crate still rejects suite 2 until M5.
 - No EVM adapter, contract, coordinator, or disclosure package is implemented at M1. Those are M3 and M6. The offchain transport is M2 and is specified separately in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); it populates `transcript_root` but does not change this encoding.
 - No service delivery is guaranteed by payment. Payment and delivery are separate states by construction.
 

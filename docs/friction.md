@@ -8,6 +8,30 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F46: Estimating a boolean Groth16 verifier found the cheap failure path (2026-09-24)
+
+**What we were trying to do.** Measure M4 verifier gas using the generated Solidity
+`verifyProof` function on Anvil.
+
+**What happened.** A direct `eth_estimateGas` returned about 42k gas. A transaction sent with
+that limit succeeded at the EVM transaction level but returned `false`: it ran out of gas inside
+the BN254 scalar-multiplication precompile and the generated assembly converted the failed
+`STATICCALL` to a boolean false. The receipt's success status did not mean the proof verified.
+Tracing the call showed only the first few precompiles and no pairing.
+
+**How we checked it.** We sent the same valid proof with an explicit 5M gas limit and required
+the boolean result through `eth_call`. The direct verifier transaction then used 284,784 gas;
+the trace reached eleven `0x07` multiplications and one `0x08` pairing. The M4 settlement
+harness uses `require(verifier.verifyProof(...))`, so its whole-transaction estimate and receipt
+both represented the valid path, about 403k gas locally.
+
+**Why it matters.** A gas estimator can choose a successful transaction that returns a failed
+verification result when the return type is `bool`. Gas planning must estimate the function
+that requires verification to be true, or simulate the verifier with a deliberate gas limit and
+inspect its return. Monad charges the supplied gas limit, so blind padding is also costly.
+
+---
+
 ## F45: `deal_id` is 16 bytes in a protocol whose settlement target is 32-byte words (2026-09-21)
 
 **What we were trying to do.** Port the canonical agreement decoder to Solidity so the

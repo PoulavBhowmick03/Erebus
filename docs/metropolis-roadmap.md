@@ -2,7 +2,7 @@
 
 Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
-Status: M0-M3 locally complete. M4 has feasibility research only. M5-M9 otherwise remain pending.
+Status: M0-M4 locally complete at their stated scopes. M5-M9 remain pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -163,7 +163,8 @@ Service-record mutations invalidate authorization. Policy-denial cases have test
 
 Completed locally 2026-09-20: [agreement specification](metropolis-agreement.md) and [M1 baseline](metropolis-m1-baseline.md).
 Review corrections include the checked legacy adapter and regression tests for the four reported M1 gaps.
-Suite 1 (keccak256 and secp256k1) is the public-bound path only; the shielded suite remains the joint M1/M4 gate and fails explicitly until selected.
+Suite 1 (keccak256 and secp256k1) is the public-bound path only. M4 selected and prototyped a
+field-native suite 2, which remains rejected by the Rust core until M5 implements its mapping.
 M1 completion covers the shared core and legacy isolation, not an executable EVM backend or a selected shielded proof system.
 
 ### M2. Private offchain Eleusis
@@ -224,25 +225,30 @@ assets are accepted (DM3-7). Payment is public; hidden amount and recipient rema
 Dependencies: M1. Begin feasibility research early, alongside M2 and M3.
 
 - [x] Evaluate reusable privacy primitives against agreement binding, Monad deployment, licensing, and source availability.
-- [ ] Select the pool integration or document why a custom pool is necessary.
-
-Feasibility research recorded in [M4 feasibility](metropolis-m4-feasibility.md), a research draft for owner review.
-No primitive, proof system, or pool integration is selected, and no prototype has run.
-- [ ] Select the proof system, circuit language, hash suite, authorization scheme, and proving-key lifecycle.
-- [ ] Specify notes, ownership, membership, nullifiers, outputs, change, fees, and per-asset conservation.
-- [ ] Specify the exact shared inputs between agreement verification and payment verification.
-- [ ] Resolve output decryptability and seller recovery before accepting a ciphertext-digest-only design.
-- [ ] Prototype one private transfer and measure proof time, memory, proof size, and verifier gas.
-- [ ] Record local proving hardware requirements and reproducible installation of versioned proving artifacts.
-- [ ] Publish the private witness schema and public input schema with negative test vectors.
+- [x] Select the pool integration or document why a custom pool is necessary.
+- [x] Select the proof system, circuit language, hash suite, authorization scheme, and proving-key lifecycle.
+- [x] Specify notes, ownership, membership, nullifiers, outputs, change, fees, and per-asset conservation.
+- [x] Specify the exact shared inputs between agreement verification and payment verification.
+- [x] Resolve output decryptability and seller recovery before accepting a ciphertext-digest-only design.
+- [x] Prototype one private transfer and measure proof time, memory, proof size, and verifier gas.
+- [x] Record local proving hardware requirements and reproducible installation of versioned proving artifacts.
+- [x] Publish the private witness schema and public input schema with negative test vectors.
 
 Done: a runnable prototype demonstrates the required proof relation and a documented path to atomic contract enforcement.
 A specification or two unrelated valid proofs do not pass this milestone.
+
+Completed locally 2026-09-24: [M4 decisions and schemas](metropolis-m4-decisions.md),
+[M4 baseline and measurements](metropolis-m4-baseline.md), and the runnable
+[`circuits/m4`](../circuits/m4) prototype. The local test key is versioned by an artifact
+manifest and regenerated reproducibly from pinned tools, but is not a published production
+key. The harness moves no tokens; actual shielded payment remains M5. Suite 2 is not yet
+available in `erebus-core`, and Monad gas has not been measured.
 
 ### M5. Shielded contracts, prover, and note wallet
 
 Dependencies: M4 and the EVM execution foundation in M3.
 
+- [ ] Implement suite-2 M1-to-field mapping and authorizations in Rust with cross-language vectors.
 - [ ] Implement or integrate deposit, commitment tree, root history, spend nullifiers, private transfer, and withdrawal.
 - [ ] Integrate agreement authorization, payment binding, range constraints, and deal replay protection into verification.
 - [ ] Atomically consume the deal and input notes and create recipient and change outputs.
@@ -383,5 +389,6 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-09-20 | M4 feasibility research (not a completion) | [M4 feasibility memo](metropolis-m4-feasibility.md) |
 | 2026-09-21 | M2 private offchain Eleusis | [M2 decision record](metropolis-m2-decisions.md) and [M2 baseline](metropolis-m2-baseline.md) |
 | 2026-09-21 | M3 EVM public-bound settlement | [M3 decision record](metropolis-m3-decisions.md) and [M3 baseline](metropolis-m3-baseline.md) |
+| 2026-09-24 | M4 private-transfer proof prototype | [M4 decision record](metropolis-m4-decisions.md), [M4 baseline](metropolis-m4-baseline.md), and `circuits/m4` |
 
-M0-M3 are complete locally. No M4-M9 implementation milestone is complete; M4 has feasibility research only.
+M0-M4 are complete locally at their scoped gates. M5-M9 remain incomplete.
