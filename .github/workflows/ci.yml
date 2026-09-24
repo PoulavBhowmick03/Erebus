@@ -173,6 +173,57 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
 
+  evm:
+    name: EVM settlement
+    runs-on: ubuntu-latest
+    # Metropolis M3. The Solidity decoder must reproduce the Rust agreement bytes exactly, so
+    # the Foundry known-answer test runs first; the Rust adapter tests then drive a real anvil
+    # chain. A green Solidity suite without the KAT would prove nothing about agreement binding.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/evm
+
+      - name: Build the contracts
+        working-directory: contracts/evm
+        run: |
+          forge fmt --check
+          forge build
+
+      - name: Solidity tests, including the Rust agreement vectors
+        working-directory: contracts/evm
+        run: forge test
+
+      - name: Format
+        working-directory: sdk/evm
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: sdk/evm
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test the adapter against a local chain
+        working-directory: sdk/evm
+        # The ignored tests spawn anvil, which this job installed above.
+        run: cargo test --locked -- --include-ignored
+
+      - name: Docs
+        working-directory: sdk/evm
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
+
   python:
     name: Python
     runs-on: ubuntu-latest

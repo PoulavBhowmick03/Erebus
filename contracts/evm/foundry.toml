@@ -1,0 +1,11 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+libs = []
+# Pinned so the settlement contract is compiled by one known compiler. forge downloads it.
+solc = "0.8.24"
+optimizer = false
+# The known-answer vectors live in the Rust core so there is exactly one generated copy. Tests
+# read them in place; regenerating the vectors is a change to `sdk/core`, not to a test fixture.
+fs_permissions = [{ access = "read", path = "../../sdk/core/tests/fixtures" }]

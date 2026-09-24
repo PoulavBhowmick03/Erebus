@@ -2,7 +2,7 @@
 
 Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
-Status: M0, M1, and M2 locally complete. M4 has feasibility research only. M3 and M5-M9 otherwise remain pending.
+Status: M0-M3 locally complete. M4 has feasibility research only. M5-M9 otherwise remain pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -198,18 +198,26 @@ The `transcript_root` field is populated by M2 but is not yet constrained by a s
 
 Dependencies: M1. This work can proceed alongside M2.
 
-- [ ] Select and pin the Rust EVM client library and Solidity testing toolchain.
-- [ ] Create the EVM contract project, deployment manifest, and generated Rust bindings.
-- [ ] Implement bilateral authorization verification, domain checks, expiry, replay state, and atomic token payment.
-- [ ] Bind the payment amount, asset, recipient, and fee policy to the same authorized commitment.
-- [ ] Specify which settlement fields become public and which business fields remain committed and hidden.
-- [ ] Define supported token behavior and reject unsupported transfer semantics.
-- [ ] Implement RPC chain verification, signing, gas estimation, nonce management, submission, and receipt verification.
-- [ ] Add direct-contract adversarial tests, including reentrancy and failing token transfers.
-- [ ] Expose payment and network-fee estimates with explicit allowance and balance shortfalls before submission.
+- [x] Select and pin the Rust EVM client library and Solidity testing toolchain.
+- [x] Create the EVM contract project and a versioned Rust ABI boundary.
+- [x] Implement bilateral authorization verification, domain checks, expiry, replay state, and atomic token payment.
+- [x] Bind the payment amount, asset, recipient, and fee policy to the same authorized commitment.
+- [x] Specify which settlement fields become public and which business fields remain committed and hidden.
+- [x] Define supported token behavior and reject unsupported transfer semantics.
+- [x] Implement RPC chain verification, signing, gas estimation, nonce management, submission, and receipt verification.
+- [x] Add direct-contract adversarial tests, including reentrancy and failing token transfers.
+- [x] Expose payment and network-fee estimates with explicit allowance and balance shortfalls before submission.
 
 Done: one authorized deal pays once on a local EVM chain, with no SDK bypass for changed payment fields.
 The backend explicitly declares public amounts and recipients. Public binding never masquerades as shielded settlement.
+
+Completed locally 2026-09-21: [M3 decision record](metropolis-m3-decisions.md) and [M3 baseline](metropolis-m3-baseline.md).
+Contracts are in [`contracts/evm`](../contracts/evm); the adapter is [`sdk/evm`](../sdk/evm).
+The Rust ABI boundary hand-encodes the fixed calls and tests their exact bytes (DM3-2).
+The deployment-manifest item remains open for M8 and is not part of local-chain completion.
+The Solidity decoder is narrower than the M1 asset grammar: only lowercase `eip155:<id>/erc20:0x<40 hex>`
+assets are accepted (DM3-7). Payment is public; hidden amount and recipient remain M4/M5.
+`submit` and `verify` are separate calls with no durable journal or reconciliation loop; that is M6.
 
 ### M4. Shielded payment mechanism and proof specification
 
@@ -374,5 +382,6 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-09-20 | M1 canonical agreement and shared Rust core | [Agreement specification](metropolis-agreement.md) and [M1 baseline](metropolis-m1-baseline.md) |
 | 2026-09-20 | M4 feasibility research (not a completion) | [M4 feasibility memo](metropolis-m4-feasibility.md) |
 | 2026-09-21 | M2 private offchain Eleusis | [M2 decision record](metropolis-m2-decisions.md) and [M2 baseline](metropolis-m2-baseline.md) |
+| 2026-09-21 | M3 EVM public-bound settlement | [M3 decision record](metropolis-m3-decisions.md) and [M3 baseline](metropolis-m3-baseline.md) |
 
-M0, M1, and M2 are complete locally. No M3-M9 implementation milestone is complete; M4 has feasibility research only.
+M0-M3 are complete locally. No M4-M9 implementation milestone is complete; M4 has feasibility research only.

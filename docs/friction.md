@@ -8,6 +8,34 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F45: `deal_id` is 16 bytes in a protocol whose settlement target is 32-byte words (2026-09-21)
+
+**What we were trying to do.** Port the canonical agreement decoder to Solidity so the
+settlement contract could recompute `Cdeal` and `Ndeal` from the terms opening (M3).
+
+**What the stack did instead.** Nothing was wrong with the stack; the mismatch is ours and it
+was silent. Every other fixed-width digest in the terms is 32 bytes, so the first Solidity
+decoder read `deal_id` as a 32-byte word. It is 16 bytes. The decoder consumed 16 bytes too
+many, the next length prefix was read from the middle of the revision field, and the failure
+surfaced as `DecodeError("length out of range")` with no indication of which field was wrong.
+A hand-written Python decoder following the same spec found it in one pass.
+
+**Worked around it?** Yes. `ErebusCodec` reads `deal_id` as 16 raw bytes, and the Foundry
+known-answer test now pins the decoder against the Rust vectors, so a wrong field width fails at
+the first vector rather than on a live chain.
+
+**Why it matters.** This is F12 again in a different language: a one-field width error produces a
+different commitment, and the only reason it was caught in minutes instead of a day is that the
+M1 vectors already existed and could be reused as a cross-language oracle. The same class of bug
+in a decoder with no pinned vectors would have shipped.
+
+**What would have made it easier.** The agreement specification's field table could annotate each
+fixed-width field with its byte width in the table itself (it does: "raw 16 bytes") and the
+generated vectors could include a per-field offset map, so a decoder under construction can be
+diffed field by field instead of byte by byte.
+
+---
+
 ## F44: `transcript_root` was reserved with no rule for when it is populated (2026-09-21)
 
 **What we were trying to do.** Implement M2 offchain Eleusis and bind the negotiation transcript
