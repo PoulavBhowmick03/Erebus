@@ -1,0 +1,46 @@
+{
+  "blindingHex": "08b00e206b3f454cf5212fa51266c91c4fa3b644ea696525cd0b60b57f4ae46b",
+  "terms": {
+    "protocolVersion": 1,
+    "suiteId": 2,
+    "domain": {
+      "namespace": "eip155:10143",
+      "settlementContractHex": "e7f1725e7734ce288f8367e1bb143e90bb3f0512",
+      "poolHex": "e7f1725e7734ce288f8367e1bb143e90bb3f0512",
+      "verifierVersion": 2
+    },
+    "dealIdHex": "4290222ee8a64ac4220e4667f77728b3",
+    "revision": 1,
+    "transcriptRootHex": "d9129eb7b0c66d54295ca39a52b9a64c5a16fd83709c848280af1bbd19011c31",
+    "buyerAuthorizationKeyHex": "2916856d03fb633711e9d95cd3d29bb278477c7559d3900b6769ff92cc9c25b60507e5d9d2b212d986792446d5d6e8f8621fa825976dd48ac3e63f3af5e3c03d",
+    "sellerAuthorizationKeyHex": "0102a186805b989cdb194f91c7e3c821dd640bc6978f07d44d2272e3f50d20f62dbe16d435dec4dd231de98c0bbb69b681c6f36b32549dc2cf65c35174ea1f98",
+    "paymentRecipientHex": "1b02e8cc28b1defc048dc6a4b7e534bc397f2c06f90b5bb0771a46efe7852cec",
+    "asset": "eip155:10143/erc20:0x1234567890123456789012345678901234567890",
+    "amount": "70",
+    "expiry": 4102444800,
+    "fee": "0",
+    "feeRecipientHex": null,
+    "settlementMode": "shielded",
+    "requiredGuarantees": [
+      "hidden-amount",
+      "hidden-recipient",
+      "agreement-bound-settlement"
+    ],
+    "settlementNonceHex": "d0f876103112672e5ee7d9e5146a2fee3ae2fcf19ed9b318c9bed956e912a47c",
+    "service": {
+      "accessRecipientHex": "1a642f0e3c3af545e7acbd38b07251b3990914f1",
+      "deliveryDeadline": 1800000000,
+      "fulfillmentDigestHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "fulfillmentMethod": "http-access",
+      "quantity": "500",
+      "resource": "gpu.h100.hour",
+      "unit": "gpu-hour"
+    }
+  },
+  "expected": {
+    "commitmentHex": "0eee8a301251bed5614df076d20a7c9bc59ec99e62f927caf9fbb17ce8363be7",
+    "dealNullifierHex": "0be08df0122ba873963a5f707eea993a00813cc783d6750a66bb8438ce1c8d6b",
+    "buyerMessageHex": "022f742903d95f1036cdc2736a0ff9d1f0c1d716d254f49a6d3fb707b58fe6a8",
+    "sellerMessageHex": "1ec80d976635def6fa576dac9d1f6d48999c5ca467e631ec0947e0c008f9136a"
+  }
+}

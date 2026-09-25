@@ -120,6 +120,14 @@ Both authorizations permit settlement. They do not guarantee submission or servi
 A backend that requires no proof omits the prover step; the coordinator submits the authorized
 transition directly. This diagram shows the shielded path.
 
+For the shielded developer product, the local prover is an implementation detail of the
+installed Erebus client/MCP package, not a separately operated service. The package must
+obtain the shared, versioned circuit/proving artifacts, verify their published hashes and
+deployed verifier identity, and fail closed on a mismatch. Operators keep spend secrets and
+witnesses locally; they do not run a setup ceremony. Artifact download availability and local
+CPU/RAM requirements remain explicit operational dependencies. The M5 local runner does not
+yet provide this installed experience.
+
 ## 4. Agreement representation
 
 Frozen at M1: the v1 field list, canonical encoding, commitment, authorization digest, and deal identity are specified in [metropolis-agreement.md](metropolis-agreement.md) and implemented in [`sdk/core`](../sdk/core). Three differences from the earlier conceptual draft are recorded here:

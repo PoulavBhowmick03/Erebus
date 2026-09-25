@@ -73,6 +73,10 @@ function asDecimalStrings(value) {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item));
 }
 
+function fixedHex(value, bytes) {
+  return BigInt(value).toString(16).padStart(bytes * 2, "0");
+}
+
 async function setupIfNeeded() {
   mkdirSync(buildDir, { recursive: true });
   run("circom", ["transfer.circom", "--r1cs", "--wasm", "--sym", "-l", "node_modules", "-o", "build"]);
@@ -191,6 +195,35 @@ function makeInput(eddsa, contractAddress, expiry) {
     inputAmount, inputSalt, inputSpendSecret, pathElements, pathIndices,
     changeAmount, changeSpendTag, changeSalt,
   };
+  const service = JSON.parse(readFileSync(resolve(workDir, "../../sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8")).vectors[0].terms.service;
+  const suite2Vector = {
+    blindingHex: fixedHex(blinding, 32),
+    terms: {
+      protocolVersion: 1, suiteId: 2,
+      domain: {
+        namespace: "eip155:10143",
+        settlementContractHex: fixedHex(contractAddress, 20),
+        poolHex: fixedHex(contractAddress, 20), verifierVersion: 2,
+      },
+      dealIdHex: fixedHex(dealId, 16), revision: 1,
+      transcriptRootHex: fixedHex(transcriptRootLo, 16) + fixedHex(transcriptRootHi, 16),
+      buyerAuthorizationKeyHex: fixedHex(buyer[0], 32) + fixedHex(buyer[1], 32),
+      sellerAuthorizationKeyHex: fixedHex(seller[0], 32) + fixedHex(seller[1], 32),
+      paymentRecipientHex: fixedHex(recipientSpendTag, 32),
+      asset: `eip155:10143/erc20:0x${fixedHex(asset, 20)}`,
+      amount: String(amount), expiry: Number(expiry),
+      fee: "0", feeRecipientHex: null, settlementMode: "shielded",
+      requiredGuarantees: ["hidden-amount", "hidden-recipient", "agreement-bound-settlement"],
+      settlementNonceHex: fixedHex(settlementNonceLo, 16) + fixedHex(settlementNonceHi, 16),
+      service,
+    },
+    expected: {
+      commitmentHex: fixedHex(dealCommitment, 32),
+      dealNullifierHex: fixedHex(dealNullifier, 32),
+      buyerMessageHex: fixedHex(F.toObject(buyerMessage), 32),
+      sellerMessageHex: fixedHex(F.toObject(sellerMessage), 32),
+    },
+  };
   return {
     input: asDecimalStrings(input),
     publicSignals: [chainId, contractAddress, verifierVersion, asset, dealCommitment,
@@ -199,6 +232,7 @@ function makeInput(eddsa, contractAddress, expiry) {
       asset, amount, sellerAx: seller[0], sellerAy: seller[1],
       spendSecret: recipientSpendSecret, domain, settlementNonceLo, settlementNonceHi,
     }),
+    suite2Vector,
   };
 }
 
@@ -260,9 +294,14 @@ async function main() {
     const predictedSettlementAddress = getCreateAddress({ from: await signer.getAddress(), nonce: await signer.getNonce() });
     const expiry = 4102444800n;
     const eddsa = await buildEddsa();
-    const { input, publicSignals: expectedSignals, sellerRecovery } = makeInput(
+    const { input, publicSignals: expectedSignals, sellerRecovery, suite2Vector } = makeInput(
       eddsa, BigInt(predictedSettlementAddress), expiry,
     );
+    writeFileSync(resolve(buildDir, "suite2-vector.json"), `${JSON.stringify(suite2Vector, null, 2)}\n`);
+    const pinnedSuite2 = JSON.parse(readFileSync(resolve(workDir, "../../sdk/core/tests/fixtures/agreement-suite2-vector.json"), "utf8"));
+    if (JSON.stringify(suite2Vector) !== JSON.stringify(pinnedSuite2)) {
+      throw new Error("computed suite-2 agreement differs from pinned Rust vector");
+    }
     const pinnedSignals = JSON.parse(readFileSync(resolve(workDir, "fixtures/public.json"), "utf8"));
     if (JSON.stringify(expectedSignals) !== JSON.stringify(pinnedSignals)) {
       throw new Error(`computed public inputs differ from the pinned M4 vector: ${JSON.stringify(expectedSignals)}`);

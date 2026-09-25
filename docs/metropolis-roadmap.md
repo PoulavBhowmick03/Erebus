@@ -263,6 +263,11 @@ Done: deposit -> private negotiated payment -> recipient discovery -> recipient 
 Wrong amount, asset, recipient, domain, proof, or replay cannot change contract state.
 The recipient can restore state and withdraw test funds using documented commands and locally held secrets.
 
+Local progress 2026-09-25: a [funded Anvil prototype](metropolis-m5-progress.md) now performs
+deposit, agreement-bound private transfer, output reconstruction, and withdrawal. This is not
+M5 completion: it has test-only keys, a JavaScript test witness, and no installed Rust backend
+or durable wallet/indexer.
+
 ### M6. Coordinator, relayer, and recovery
 
 Dependencies: M1 and M3. Extend the same lifecycle to M5.
@@ -304,6 +309,7 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [ ] Deploy to testnet with reproducible artifacts, configuration, and verified contract identities.
 - [ ] Add CLI onboarding, funding diagnostics, backend selection, and receipt output.
 - [ ] Publish versioned testnet packages and a fresh-install guide covering identity, discovery, funding, settlement, disclosure, recovery, and withdrawal.
+- [ ] Make local proving work from the installed Erebus MCP/SDK package, with automatic hash-checked shared artifact installation; require no source checkout, Circom installation, separate prover service, or operator setup ceremony.
 - [ ] Deploy optional shared testnet services and document their metadata exposure, retention, access limits, and availability behavior.
 - [ ] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
 - [ ] Update the Python boundary, MCP configuration, and deterministic two-agent harness.
@@ -328,6 +334,7 @@ Dependencies: M0-M8 for the complete target.
 - [ ] Audit public calldata, logs, RPC payloads, relay metadata, and output shape for the stated privacy claims.
 - [ ] Rehearse from a fresh environment and archive sanitized, reproducible evidence.
 - [ ] Have an external developer integrate their agents using only versioned packages and public documentation, without undocumented team intervention.
+- [ ] In the independent run, generate a private settlement proof locally from a fresh MCP installation without separate prover setup; record artifact download size, RAM, proof time, and failure behavior.
 - [ ] Require discovery, shielded settlement, scoped disclosure, interrupted-operation recovery, and withdrawal in that external run.
 - [ ] Rehearse self-hosting, backup restoration, and endpoint switching from a separate fresh environment.
 - [ ] Record installation friction, policy-denial tests, metadata exposure, and service-failure diagnostics with the release evidence.
@@ -390,5 +397,6 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-09-21 | M2 private offchain Eleusis | [M2 decision record](metropolis-m2-decisions.md) and [M2 baseline](metropolis-m2-baseline.md) |
 | 2026-09-21 | M3 EVM public-bound settlement | [M3 decision record](metropolis-m3-decisions.md) and [M3 baseline](metropolis-m3-baseline.md) |
 | 2026-09-24 | M4 private-transfer proof prototype | [M4 decision record](metropolis-m4-decisions.md), [M4 baseline](metropolis-m4-baseline.md), and `circuits/m4` |
+| 2026-09-25 | M5 funded local prototype, not milestone completion | [M5 progress and open gates](metropolis-m5-progress.md) and `circuits/m5` |
 
 M0-M4 are complete locally at their scoped gates. M5-M9 remain incomplete.

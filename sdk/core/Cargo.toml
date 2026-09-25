@@ -13,6 +13,12 @@ sha3 = "0.10"
 # secp256k1 verification and public-key recovery for suite 1. Pure Rust, matching the
 # RustCrypto family already used by the SDK.
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+# Suite-2 agreement mapping must use the exact circomlib Poseidon parameters.
+light-poseidon = "0.4"
+ark-bn254 = "0.5"
+ark-ff = "0.5"
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

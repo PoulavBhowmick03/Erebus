@@ -1,0 +1,15 @@
+{
+  "name": "erebus-m5-pool-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prototype": "node scripts/pool.mjs"
+  },
+  "dependencies": {
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "ethers": "6.15.0",
+    "snarkjs": "0.7.6",
+    "solc": "0.8.24"
+  }
+}

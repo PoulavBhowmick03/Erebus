@@ -27,6 +27,7 @@ contracts/target/
 contracts/evm/out/
 contracts/evm/cache/
 circuits/m4/build/
+circuits/m5/build/
 
 # Editor / local agent tooling. Skills are reproducible from skills-lock.json.
 .vscode/

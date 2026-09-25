@@ -263,6 +263,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  m5-proof:
+    name: M5 funded local proof prototype
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pinned Circom compiler
+        run: |
+          git clone --depth 1 --branch v2.2.3 https://github.com/iden3/circom.git /tmp/erebus-circom
+          test "$(git -C /tmp/erebus-circom rev-parse HEAD)" = ad44e915a12bb047b05745c2884aad9cc8326bc6
+          cargo install --path /tmp/erebus-circom/circom --locked
+
+      - name: Install proof dependencies
+        working-directory: circuits/m5
+        run: npm ci
+
+      - name: Lock tokens, prove private transfer, and withdraw on Anvil
+        working-directory: circuits/m5
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run prototype
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m5-local-prototype-run
+          path: |
+            circuits/m5/build/run.json
+            circuits/m5/build/artifact-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
   python:
     name: Python
     runs-on: ubuntu-latest

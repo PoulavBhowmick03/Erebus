@@ -23,5 +23,6 @@ pub mod ids;
 pub mod policy;
 pub mod service;
 pub mod settlement;
+pub mod shielded;
 pub mod suite;
 pub mod terms;
