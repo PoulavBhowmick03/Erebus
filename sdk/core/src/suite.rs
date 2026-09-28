@@ -1,10 +1,9 @@
 //! Agreement suites: the hash and authorization algorithms an agreement selects.
 //!
 //! A suite is named by id inside the agreement, so the canonical encoding stays stable when
-//! algorithms change. Suite selection is deliberately open: the public-bound EVM suite is
-//! implemented now, and the shielded suite is an M4 gate (see
-//! `docs/metropolis-m4-feasibility.md`). Any id that names no implemented suite fails
-//! explicitly rather than falling back.
+//! algorithms change. Suite 2 uses the fixed Poseidon field mapping in `shielded`
+//! and BabyJubJub authorizations. Transport hashes are versioned independently.
+//! Unknown ids fail explicitly rather than falling back.
 //!
 //! Suite 1 is keccak256 commitments with secp256k1 ECDSA authorizations:
 //!
@@ -14,8 +13,7 @@
 //! - Signature: 65 bytes `r || s || v` with `v` in `{0, 1}` and low-`s` enforced.
 //!
 //! This suite is the one an EVM settlement contract can verify with `ecrecover` and the
-//! KECCAK256 opcode, which is why it is the public-bound choice. The shielded backend will
-//! select its own suite once M4 measures in-circuit verification costs.
+//! KECCAK256 opcode, which is why it is the public-bound choice.
 
 use core::fmt;
 
@@ -25,7 +23,7 @@ use sha3::{Digest, Keccak256};
 
 /// Suite id for keccak256 commitments with secp256k1 ECDSA authorizations.
 pub const EVM_SECP256K1_KECCAK_SUITE_ID: u16 = 1;
-/// Reserved for the M4 Poseidon/BabyJubJub prototype; the core cannot execute it until M5.
+/// Suite id for the fixed M5 Poseidon mapping and BabyJubJub EdDSA.
 pub const SHIELDED_POSEIDON_EDDSA_SUITE_ID: u16 = 2;
 
 /// Length of a suite-1 authorization key.
@@ -74,16 +72,13 @@ pub enum SuiteError {
     SignerMismatch,
 }
 
-/// Hash and authorization behavior selected by an agreement.
+/// Authorization behavior selected by an agreement.
+///
+/// Commitments and authorization messages use their suite-specific field mappings.
+/// They cannot be expressed as one interchangeable byte-hash function.
 pub trait Suite: fmt::Debug + Send + Sync {
     /// The suite id bound into the agreement.
     fn id(&self) -> u16;
-
-    /// Hashes the concatenation of `parts`.
-    ///
-    /// Domain separation comes from the caller's first part; implementations must hash parts
-    /// in order with no separators added.
-    fn hash(&self, parts: &[&[u8]]) -> [u8; 32];
 
     /// The authorization key length the suite accepts.
     fn authorization_key_length(&self) -> usize;
@@ -106,14 +101,6 @@ static EVM_SECP256K1_KECCAK: EvmSecp256k1Keccak = EvmSecp256k1Keccak;
 impl Suite for EvmSecp256k1Keccak {
     fn id(&self) -> u16 {
         EVM_SECP256K1_KECCAK_SUITE_ID
-    }
-
-    fn hash(&self, parts: &[&[u8]]) -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        for part in parts {
-            hasher.update(part);
-        }
-        hasher.finalize().into()
     }
 
     fn authorization_key_length(&self) -> usize {
@@ -162,25 +149,76 @@ impl Suite for EvmSecp256k1Keccak {
     }
 }
 
+/// Keccak256 over ordered byte slices, with no added separators.
+/// Callers supply their own domain tag and canonical encoding.
+pub fn keccak256(parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+/// BabyJubJub authorization verification for the fixed shielded agreement suite.
+#[derive(Debug)]
+pub struct ShieldedPoseidonEddsa;
+
+static SHIELDED_POSEIDON_EDDSA: ShieldedPoseidonEddsa = ShieldedPoseidonEddsa;
+
+impl Suite for ShieldedPoseidonEddsa {
+    fn id(&self) -> u16 {
+        SHIELDED_POSEIDON_EDDSA_SUITE_ID
+    }
+
+    fn authorization_key_length(&self) -> usize {
+        crate::shielded_auth::SHIELDED_KEY_BYTES
+    }
+
+    fn verify_authorization(
+        &self,
+        key: &[u8],
+        digest: &[u8; 32],
+        signature: &[u8],
+    ) -> Result<(), SuiteError> {
+        if key.len() != self.authorization_key_length() {
+            return Err(SuiteError::KeyLength {
+                expected: self.authorization_key_length(),
+                actual: key.len(),
+            });
+        }
+        if signature.len() != crate::shielded_auth::SHIELDED_SIGNATURE_BYTES {
+            return Err(SuiteError::SignatureLength {
+                expected: crate::shielded_auth::SHIELDED_SIGNATURE_BYTES,
+                actual: signature.len(),
+            });
+        }
+        crate::shielded_auth::verify_message(key, digest, signature)
+            .map_err(|_| SuiteError::InvalidSignature)
+    }
+}
+
 /// Resolves a suite id to its implementation.
 pub fn suite(id: u16) -> Result<&'static dyn Suite, SuiteError> {
-    if id == EVM_SECP256K1_KECCAK_SUITE_ID {
-        Ok(&EVM_SECP256K1_KECCAK)
-    } else {
-        Err(SuiteError::Unsupported(id))
+    match id {
+        EVM_SECP256K1_KECCAK_SUITE_ID => Ok(&EVM_SECP256K1_KECCAK),
+        SHIELDED_POSEIDON_EDDSA_SUITE_ID => Ok(&SHIELDED_POSEIDON_EDDSA),
+        _ => Err(SuiteError::Unsupported(id)),
     }
 }
 
 /// Reports whether a suite id is implemented.
 #[must_use]
 pub fn is_supported(id: u16) -> bool {
-    id == EVM_SECP256K1_KECCAK_SUITE_ID
+    matches!(id, EVM_SECP256K1_KECCAK_SUITE_ID | SHIELDED_POSEIDON_EDDSA_SUITE_ID)
 }
 
 /// Rejects suite/mode combinations without an implemented settlement specification.
 pub fn check_mode(suite_id: u16, mode: SettlementMode) -> Result<(), SuiteError> {
     suite(suite_id)?;
-    if mode != SettlementMode::PublicBound {
+    let supported = matches!((suite_id, mode),
+        (EVM_SECP256K1_KECCAK_SUITE_ID, SettlementMode::PublicBound)
+        | (SHIELDED_POSEIDON_EDDSA_SUITE_ID, SettlementMode::Shielded));
+    if !supported {
         return Err(SuiteError::UnsupportedMode { suite_id, mode });
     }
     Ok(())
@@ -192,30 +230,27 @@ mod tests {
 
     #[test]
     fn keccak_matches_published_vectors() {
-        let suite = suite(EVM_SECP256K1_KECCAK_SUITE_ID).expect("suite 1 exists");
         assert_eq!(
-            hex::encode(suite.hash(&[b""])),
+            hex::encode(keccak256(&[b""])),
             "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
         );
         assert_eq!(
-            hex::encode(suite.hash(&[b"abc"])),
+            hex::encode(keccak256(&[b"abc"])),
             "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
         );
     }
 
     #[test]
     fn hashing_parts_is_concatenation() {
-        let suite = suite(EVM_SECP256K1_KECCAK_SUITE_ID).expect("suite 1 exists");
-        assert_eq!(suite.hash(&[b"ab", b"c"]), suite.hash(&[b"a", b"bc"]));
+        assert_eq!(keccak256(&[b"ab", b"c"]), keccak256(&[b"a", b"bc"]));
     }
 
     #[test]
-    fn m4_prototype_suite_is_not_executable_yet() {
-        assert!(!is_supported(SHIELDED_POSEIDON_EDDSA_SUITE_ID));
-        assert!(matches!(
-            suite(SHIELDED_POSEIDON_EDDSA_SUITE_ID),
-            Err(SuiteError::Unsupported(SHIELDED_POSEIDON_EDDSA_SUITE_ID))
-        ));
+    fn shielded_suite_only_supports_shielded_mode() {
+        assert!(is_supported(SHIELDED_POSEIDON_EDDSA_SUITE_ID));
+        assert!(check_mode(2, SettlementMode::Shielded).is_ok());
+        assert!(check_mode(2, SettlementMode::PublicBound).is_err());
+        assert!(check_mode(1, SettlementMode::Shielded).is_err());
     }
 
     /// EIP-155's worked example, an external signature vector outside this codebase.
@@ -275,7 +310,7 @@ mod tests {
 
     #[test]
     fn unknown_suites_fail_explicitly() {
-        assert!(matches!(suite(2), Err(SuiteError::Unsupported(2))));
-        assert!(!is_supported(2));
+        assert!(matches!(suite(3), Err(SuiteError::Unsupported(3))));
+        assert!(!is_supported(3));
     }
 }

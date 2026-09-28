@@ -114,9 +114,12 @@ pub fn authorization_digest(
     commitment: &DealCommitment,
     suite_id: u16,
 ) -> Result<[u8; 32], AuthError> {
-    let suite = suite::suite(suite_id)?;
+    suite::suite(suite_id)?;
+    if suite_id == suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
+        return Ok(crate::shielded::authorization_message(domain, role, commitment)?);
+    }
     let domain = domain.encode()?;
-    Ok(suite.hash(&[
+    Ok(suite::keccak256(&[
         AUTHORIZATION_DOMAIN,
         &domain,
         &[role.tag()],
@@ -185,6 +188,9 @@ pub fn verify_authorization(
 /// An authorization could not be encoded or verified.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AuthError {
+    /// The suite-2 domain or message could not be mapped into circuit fields.
+    #[error(transparent)]
+    Shielded(#[from] crate::shielded::ShieldedMapError),
     /// The authorization's suite is not the agreement's suite.
     #[error("authorization suite {authorization} does not match agreement suite {terms}")]
     SuiteMismatch {

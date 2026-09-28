@@ -6,10 +6,10 @@
 //! order:
 //!
 //! ```text
-//! message_digest_i = Hash_suite("EREBUS_MESSAGE_V1" || encode(body_i))
+//! message_digest_i = Keccak256("EREBUS_MESSAGE_V1" || encode(body_i))
 //! link_0           = 0x00..00
-//! link_i           = Hash_suite("EREBUS_TRANSCRIPT_LINK_V1" || author_tag || link_{i-1} || message_digest_i)
-//! transcript_root  = Hash_suite("EREBUS_TRANSCRIPT_ROOT_V1" || deal_id || head_buyer || head_seller)
+//! link_i           = Keccak256("EREBUS_TRANSCRIPT_LINK_V1" || author_tag || link_{i-1} || message_digest_i)
+//! transcript_root  = Keccak256("EREBUS_TRANSCRIPT_ROOT_V1" || deal_id || head_buyer || head_seller)
 //! ```
 //!
 //! The chain shape is what makes the ordering attacks unrepresentable rather than remembered. A
@@ -21,7 +21,7 @@
 //! ([metropolis-agreement.md](../../docs/metropolis-agreement.md) field 6).
 
 use erebus_core::auth::Role;
-use erebus_core::suite::{self, SuiteError};
+use crate::hashing::{self, HashVersionError};
 
 use crate::limits::MAX_MESSAGES_PER_DEAL;
 use crate::message::{Message, MessageError};
@@ -74,9 +74,9 @@ pub enum TranscriptError {
     /// The transcript reached its per-deal bound.
     #[error("transcript has reached the {0} message limit")]
     TranscriptFull(usize),
-    /// The agreement suite is not implemented.
+    /// The transcript hash version is not implemented.
     #[error(transparent)]
-    Suite(#[from] SuiteError),
+    HashVersion(#[from] HashVersionError),
     /// The message could not be digested.
     #[error(transparent)]
     Message(#[from] MessageError),
@@ -86,18 +86,18 @@ pub enum TranscriptError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     deal_id: [u8; 16],
-    suite_id: u16,
+    hash_version: u16,
     buyer: AuthorChain,
     seller: AuthorChain,
 }
 
 impl Transcript {
-    /// Creates an empty transcript for a deal under an agreement suite.
-    pub fn new(deal_id: [u8; 16], suite_id: u16) -> Result<Self, TranscriptError> {
-        suite::suite(suite_id)?;
+    /// Creates a transcript with an explicit hash version, independent of settlement.
+    pub fn new(deal_id: [u8; 16], hash_version: u16) -> Result<Self, TranscriptError> {
+        hashing::check_version(hash_version)?;
         Ok(Self {
             deal_id,
-            suite_id,
+            hash_version,
             buyer: AuthorChain::new(),
             seller: AuthorChain::new(),
         })
@@ -109,10 +109,10 @@ impl Transcript {
         self.deal_id
     }
 
-    /// The agreement suite that hashes this transcript.
+    /// The independent transcript hash version.
     #[must_use]
-    pub fn suite_id(&self) -> u16 {
-        self.suite_id
+    pub fn hash_version(&self) -> u16 {
+        self.hash_version
     }
 
     /// The next sequence expected from an author.
@@ -155,8 +155,7 @@ impl Transcript {
         if self.total() >= MAX_MESSAGES_PER_DEAL {
             return Err(TranscriptError::TranscriptFull(MAX_MESSAGES_PER_DEAL));
         }
-        let suite = suite::suite(self.suite_id)?;
-        let digest = message.digest(self.suite_id)?;
+        let digest = message.digest(self.hash_version)?;
         let author = message.author;
         let chain = self.chain_mut(author);
         if message.sequence != chain.next_sequence {
@@ -171,7 +170,7 @@ impl Transcript {
                 author: author.name(),
             });
         }
-        let link = suite.hash(&[
+        let link = hashing::hash(&[
             TRANSCRIPT_LINK_DOMAIN,
             &[author.tag()],
             &chain.head,
@@ -197,8 +196,7 @@ impl Transcript {
         if self.is_empty() {
             return Ok([0u8; 32]);
         }
-        let suite = suite::suite(self.suite_id)?;
-        Ok(suite.hash(&[
+        Ok(hashing::hash(&[
             TRANSCRIPT_ROOT_DOMAIN,
             &self.deal_id,
             &self.buyer.head,
@@ -212,10 +210,10 @@ impl Transcript {
     /// the same root after a restart.
     pub fn replay(
         deal_id: [u8; 16],
-        suite_id: u16,
+        hash_version: u16,
         messages: &[Message],
     ) -> Result<Self, TranscriptError> {
-        let mut transcript = Self::new(deal_id, suite_id)?;
+        let mut transcript = Self::new(deal_id, hash_version)?;
         for message in messages {
             transcript.append(message)?;
         }
@@ -272,6 +270,21 @@ mod tests {
         assert_eq!(transcript.count(Role::Buyer), 1);
         assert_eq!(transcript.count(Role::Seller), 1);
         assert_ne!(transcript.root().expect("root"), [0u8; 32]);
+    }
+
+    #[test]
+    fn keccak_root_is_stable_when_the_shielded_agreement_suite_is_enabled() {
+        assert!(erebus_core::suite::is_supported(2));
+        assert!(matches!(Transcript::new(DEAL, 2), Err(TranscriptError::HashVersion(_))));
+        let messages = [
+            message(Role::Buyer, 1, [0; 32], b"offer"),
+            message(Role::Seller, 1, [0; 32], b"counter"),
+        ];
+        let transcript = Transcript::replay(DEAL, 1, &messages).expect("version-1 transcript");
+        // Independently encoded with ethers Keccak256; preserves the original byte preimages.
+        assert_eq!(hex::encode(transcript.root().unwrap()),
+            "cd876d461564e797f05314ea8c58dc9a1c7ece6357c15b7a9580d6692da617ff");
+        assert_eq!(transcript.hash_version(), 1);
     }
 
     #[test]

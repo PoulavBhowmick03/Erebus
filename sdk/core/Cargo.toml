@@ -19,6 +19,11 @@ ark-bn254 = "0.5"
 ark-ff = "0.5"
 sha2 = "0.10"
 hex = "0.4"
+# Circomlib-compatible BabyJubJub EdDSA. Kept behind explicit suite-2 APIs until the
+# full agreement/settlement boundary is implemented and cross-language tested.
+affinidi-zkp-crypto = "=0.1.0"
+serde_json = "1"
+zeroize = "1"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -1,7 +1,7 @@
 //! Exact field mapping for the M4/M5 shielded agreement statement.
 //!
-//! This module does not enable suite 2 for settlement. It lets the Rust side independently
-//! reproduce the circuit's commitment and authorization messages before that boundary opens.
+//! Suite 2 uses this fixed mapping for commitments and role messages. Transcript roots
+//! retain the independent transport hash and enter the circuit as two 128-bit limbs.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
@@ -10,11 +10,14 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::Role;
 use crate::commitment::{CommitmentBlinding, DealCommitment, DealNullifier};
+use crate::domain::DeploymentDomain;
 use crate::suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID;
 use crate::terms::{AgreementTerms, SettlementMode, CURRENT_PROTOCOL_VERSION};
 
 /// The first shielded circuit's exact required guarantee bits.
 pub const SHIELDED_GUARANTEES: u32 = 0x7;
+/// The fixed Merkle depth used by the M5 pool and its circuits.
+pub const NOTE_TREE_DEPTH: usize = 20;
 
 /// A value cannot be represented by, or is outside, the first shielded circuit.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -33,6 +36,9 @@ pub enum ShieldedMapError {
 /// Validated fields shared by the Rust agreement and the shielded circuit.
 #[derive(Debug, Clone)]
 pub struct ShieldedDeal {
+    chain_id: Fr,
+    contract_address: Fr,
+    verifier_version: Fr,
     domain: Fr,
     deal_id: Fr,
     revision: Fr,
@@ -52,14 +58,14 @@ pub struct ShieldedDeal {
     expiry: Fr,
 }
 
-fn field_bytes(value: Fr) -> [u8; 32] {
+pub(crate) fn field_bytes(value: Fr) -> [u8; 32] {
     let bytes = value.into_bigint().to_bytes_be();
     let mut result = [0u8; 32];
     result[32 - bytes.len()..].copy_from_slice(&bytes);
     result
 }
 
-fn canonical_field(bytes: &[u8], label: &'static str) -> Result<Fr, ShieldedMapError> {
+pub(crate) fn canonical_field(bytes: &[u8], label: &'static str) -> Result<Fr, ShieldedMapError> {
     if bytes.len() != 32 {
         return Err(ShieldedMapError::Shape(label));
     }
@@ -91,6 +97,121 @@ fn hash(inputs: &[Fr]) -> Result<Fr, ShieldedMapError> {
     poseidon.hash(inputs).map_err(|_| ShieldedMapError::Hash)
 }
 
+fn domain_fields(domain: &DeploymentDomain) -> Result<[Fr; 4], ShieldedMapError> {
+    if domain.namespace.family() != "eip155" || domain.verifier_version == 0 {
+        return Err(ShieldedMapError::Shape("EVM domain or verifier version"));
+    }
+    let reference = domain.namespace.reference();
+    let chain = reference.parse::<u64>()
+        .map_err(|_| ShieldedMapError::Shape("chain id"))?;
+    if chain == 0 || chain.to_string() != reference {
+        return Err(ShieldedMapError::Shape("canonical chain id"));
+    }
+    let contract = domain.settlement_contract.as_ref()
+        .ok_or(ShieldedMapError::Shape("settlement contract"))?;
+    if domain.pool.as_ref() != Some(contract)
+        || contract.as_bytes().len() != 20
+        || contract.as_bytes().iter().all(|byte| *byte == 0)
+    {
+        return Err(ShieldedMapError::Shape("pool and contract must be one EVM address"));
+    }
+    let chain = Fr::from(chain);
+    let contract = Fr::from_be_bytes_mod_order(contract.as_bytes());
+    let version = Fr::from(domain.verifier_version);
+    Ok([chain, contract, version, hash(&[chain, contract, version])?])
+}
+
+/// Checks that a deployment is representable by the fixed shielded circuit.
+pub fn validate_domain(domain: &DeploymentDomain) -> Result<(), ShieldedMapError> {
+    domain_fields(domain).map(|_| ())
+}
+
+/// Computes the suite-2 role message with the exact circuit deployment mapping.
+pub fn authorization_message(
+    domain: &DeploymentDomain,
+    role: Role,
+    commitment: &DealCommitment,
+) -> Result<[u8; 32], ShieldedMapError> {
+    let [_, _, _, domain] = domain_fields(domain)?;
+    role_message(domain, role, commitment)
+}
+
+fn role_message(domain: Fr, role: Role, commitment: &DealCommitment) -> Result<[u8; 32], ShieldedMapError> {
+    let field = canonical_field(commitment.as_bytes(), "deal commitment")?;
+    let tag = match role { Role::Buyer => 2004u64, Role::Seller => 2005u64 };
+    Ok(field_bytes(hash(&[Fr::from(tag), domain, field])?))
+}
+
+/// Computes the owner-specific tag committed into an M5 note.
+pub fn note_spend_tag(spend_secret: &[u8; 32]) -> Result<[u8; 32], ShieldedMapError> {
+    let secret = nonzero_field(spend_secret, "spend secret")?;
+    Ok(field_bytes(hash(&[Fr::from(2006u64), secret])?))
+}
+
+/// Computes an M5 note commitment. `amount` may be zero for a change output.
+pub fn note_commitment(
+    asset: &[u8; 20],
+    amount: u128,
+    owner: &[u8; 64],
+    spend_tag: &[u8; 32],
+    salt: &[u8; 32],
+) -> Result<[u8; 32], ShieldedMapError> {
+    if asset.iter().all(|byte| *byte == 0) {
+        return Err(ShieldedMapError::Shape("zero note asset"));
+    }
+    let ax = canonical_field(&owner[..32], "owner Ax")?;
+    let ay = canonical_field(&owner[32..], "owner Ay")?;
+    let tag = nonzero_field(spend_tag, "spend tag")?;
+    let salt = canonical_field(salt, "note salt")?;
+    Ok(field_bytes(hash(&[
+        Fr::from(2007u64),
+        Fr::from_be_bytes_mod_order(asset),
+        Fr::from(amount),
+        ax,
+        ay,
+        tag,
+        salt,
+    ])?))
+}
+
+/// Computes the one-time spend identity for a note opening.
+pub fn note_nullifier(
+    spend_secret: &[u8; 32],
+    commitment: &[u8; 32],
+) -> Result<[u8; 32], ShieldedMapError> {
+    let secret = nonzero_field(spend_secret, "spend secret")?;
+    let note = canonical_field(commitment, "note commitment")?;
+    Ok(field_bytes(hash(&[Fr::from(2008u64), secret, note])?))
+}
+
+/// Hashes two canonical M5 tree nodes in left-to-right order.
+pub fn note_tree_parent(left: &[u8; 32], right: &[u8; 32]) -> Result<[u8; 32], ShieldedMapError> {
+    let left = canonical_field(left, "left tree node")?;
+    let right = canonical_field(right, "right tree node")?;
+    Ok(field_bytes(hash(&[left, right])?))
+}
+
+/// Recomputes the M5 tree root for a leaf at `index` and its 20 siblings.
+pub fn note_root_from_path(
+    commitment: &[u8; 32],
+    index: u32,
+    siblings: &[[u8; 32]; NOTE_TREE_DEPTH],
+) -> Result<[u8; 32], ShieldedMapError> {
+    if index >= 1 << NOTE_TREE_DEPTH {
+        return Err(ShieldedMapError::Shape("note index outside tree"));
+    }
+    let mut node = *commitment;
+    canonical_field(&node, "note commitment")?;
+    for (level, sibling) in siblings.iter().enumerate() {
+        node = if index & (1 << level) == 0 {
+            note_tree_parent(&node, sibling)?
+        } else {
+            note_tree_parent(sibling, &node)?
+        };
+    }
+    Ok(node)
+}
+
 impl ShieldedDeal {
     /// Maps only the fixed, zero-fee, one-asset suite-2 agreement shape into field inputs.
     pub fn from_terms(terms: &AgreementTerms) -> Result<Self, ShieldedMapError> {
@@ -115,31 +236,7 @@ impl ShieldedDeal {
         {
             return Err(ShieldedMapError::Shape("EVM chain or ERC-20 asset"));
         }
-        let chain_reference = terms.domain.namespace.reference();
-        let chain_id = chain_reference
-            .parse::<u64>()
-            .map_err(|_| ShieldedMapError::Shape("chain id"))?;
-        if chain_id == 0 || chain_id.to_string() != chain_reference {
-            return Err(ShieldedMapError::Shape("canonical chain id"));
-        }
-        let contract = terms
-            .domain
-            .settlement_contract
-            .as_ref()
-            .ok_or(ShieldedMapError::Shape("settlement contract"))?;
-        let pool = terms
-            .domain
-            .pool
-            .as_ref()
-            .ok_or(ShieldedMapError::Shape("pool"))?;
-        if contract.as_bytes().len() != 20
-            || contract != pool
-            || contract.as_bytes().iter().all(|byte| *byte == 0)
-        {
-            return Err(ShieldedMapError::Shape(
-                "pool and contract must be one EVM address",
-            ));
-        }
+        let [chain_id, contract_address, verifier_version, domain] = domain_fields(&terms.domain)?;
         let asset_ref = terms.asset.asset_reference();
         if asset_ref.len() != 42
             || !asset_ref.starts_with("0x")
@@ -165,11 +262,6 @@ impl ShieldedDeal {
         let seller_ay = canonical_field(&seller[32..], "seller Ay")?;
         let recipient_spend_tag =
             nonzero_field(terms.payment_recipient.as_bytes(), "recipient spend tag")?;
-        let domain = hash(&[
-            Fr::from(chain_id),
-            Fr::from_be_bytes_mod_order(contract.as_bytes()),
-            Fr::from(terms.domain.verifier_version),
-        ])?;
         let (transcript_lo, transcript_hi) = limbs(&terms.transcript_root);
         let service_digest: [u8; 32] = Sha256::digest(
             terms
@@ -181,6 +273,9 @@ impl ShieldedDeal {
         let (service_lo, service_hi) = limbs(&service_digest);
         let (nonce_lo, nonce_hi) = limbs(&terms.settlement_nonce);
         Ok(Self {
+            chain_id,
+            contract_address,
+            verifier_version,
             domain,
             deal_id: Fr::from_be_bytes_mod_order(&terms.deal_id),
             revision: Fr::from(terms.revision),
@@ -207,7 +302,7 @@ impl ShieldedDeal {
         blinding: &CommitmentBlinding,
     ) -> Result<DealCommitment, ShieldedMapError> {
         let blind = nonzero_field(blinding.as_bytes(), "blinding")?;
-        let payment_salt = hash(&[Fr::from(2009u64), self.domain, self.nonce_lo, self.nonce_hi])?;
+        let payment_salt = canonical_field(&self.payment_salt()?, "payment salt")?;
         let a = hash(&[
             Fr::from(2001u64),
             self.domain,
@@ -260,11 +355,70 @@ impl ShieldedDeal {
         role: Role,
         commitment: &DealCommitment,
     ) -> Result<[u8; 32], ShieldedMapError> {
-        let field = canonical_field(commitment.as_bytes(), "deal commitment")?;
-        let tag = match role {
-            Role::Buyer => 2004u64,
-            Role::Seller => 2005u64,
-        };
-        Ok(field_bytes(hash(&[Fr::from(tag), self.domain, field])?))
+        role_message(self.domain, role, commitment)
+    }
+
+    /// Predicts the recipient note bound to this deal's seller, amount, and nonce.
+    ///
+    /// The recipient still needs its private spend secret to recognize and spend the note.
+    pub fn payment_note_commitment(&self) -> Result<[u8; 32], ShieldedMapError> {
+        let salt = canonical_field(&self.payment_salt()?, "payment salt")?;
+        Ok(field_bytes(hash(&[
+            Fr::from(2007u64),
+            self.asset,
+            self.amount,
+            self.seller_ax,
+            self.seller_ay,
+            self.recipient_spend_tag,
+            salt,
+        ])?))
+    }
+
+    /// Derives the seller's deterministic note salt from the private agreement context.
+    pub fn payment_salt(&self) -> Result<[u8; 32], ShieldedMapError> {
+        Ok(field_bytes(hash(&[
+            Fr::from(2009u64),
+            self.domain,
+            self.nonce_lo,
+            self.nonce_hi,
+        ])?))
+    }
+
+    /// Field elements expected by the fixed M5 transfer circuit for this agreement.
+    ///
+    /// The caller must still verify both authorizations and construct the note witness.
+    pub fn transfer_circuit_fields(
+        &self,
+        blinding: &CommitmentBlinding,
+    ) -> Result<Vec<(&'static str, [u8; 32])>, ShieldedMapError> {
+        let blind = nonzero_field(blinding.as_bytes(), "blinding")?;
+        let commitment = self.commitment(blinding)?;
+        let nullifier = self.deal_nullifier()?;
+        let payment = self.payment_note_commitment()?;
+        Ok(vec![
+            ("chainId", field_bytes(self.chain_id)),
+            ("contractAddress", field_bytes(self.contract_address)),
+            ("verifierVersion", field_bytes(self.verifier_version)),
+            ("asset", field_bytes(self.asset)),
+            ("dealCommitment", *commitment.as_bytes()),
+            ("dealNullifier", *nullifier.as_bytes()),
+            ("paymentCommitment", payment),
+            ("expiry", field_bytes(self.expiry)),
+            ("dealId", field_bytes(self.deal_id)),
+            ("revision", field_bytes(self.revision)),
+            ("transcriptRootLo", field_bytes(self.transcript_lo)),
+            ("transcriptRootHi", field_bytes(self.transcript_hi)),
+            ("serviceDigestLo", field_bytes(self.service_lo)),
+            ("serviceDigestHi", field_bytes(self.service_hi)),
+            ("settlementNonceLo", field_bytes(self.nonce_lo)),
+            ("settlementNonceHi", field_bytes(self.nonce_hi)),
+            ("amount", field_bytes(self.amount)),
+            ("blinding", field_bytes(blind)),
+            ("buyerAx", field_bytes(self.buyer_ax)),
+            ("buyerAy", field_bytes(self.buyer_ay)),
+            ("sellerAx", field_bytes(self.seller_ax)),
+            ("sellerAy", field_bytes(self.seller_ay)),
+            ("recipientSpendTag", field_bytes(self.recipient_spend_tag)),
+        ])
     }
 }

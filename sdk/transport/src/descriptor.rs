@@ -243,8 +243,7 @@ impl ServiceDescriptor {
 
     /// The digest the seller signs.
     pub fn digest(&self) -> Result<[u8; 32], DescriptorError> {
-        let suite = suite::suite(DESCRIPTOR_SUITE_ID)?;
-        Ok(suite.hash(&[DESCRIPTOR_DOMAIN, &self.encode_unsigned()]))
+        Ok(suite::keccak256(&[DESCRIPTOR_DOMAIN, &self.encode_unsigned()]))
     }
 
     /// Canonical encoding of every field except the signature.

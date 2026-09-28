@@ -198,6 +198,10 @@ function makeInput(eddsa, contractAddress, expiry) {
   const service = JSON.parse(readFileSync(resolve(workDir, "../../sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8")).vectors[0].terms.service;
   const suite2Vector = {
     blindingHex: fixedHex(blinding, 32),
+    testOnlySeeds: {
+      buyerHex: buyerPrivate.toString("hex"),
+      sellerHex: sellerPrivate.toString("hex"),
+    },
     terms: {
       protocolVersion: 1, suiteId: 2,
       domain: {
@@ -222,6 +226,11 @@ function makeInput(eddsa, contractAddress, expiry) {
       dealNullifierHex: fixedHex(dealNullifier, 32),
       buyerMessageHex: fixedHex(F.toObject(buyerMessage), 32),
       sellerMessageHex: fixedHex(F.toObject(sellerMessage), 32),
+      paymentCommitmentHex: fixedHex(paymentCommitment, 32),
+      buyerSignatureHex: fixedHex(F.toObject(buyerSignature.R8[0]), 32)
+        + fixedHex(F.toObject(buyerSignature.R8[1]), 32) + fixedHex(buyerSignature.S, 32),
+      sellerSignatureHex: fixedHex(F.toObject(sellerSignature.R8[0]), 32)
+        + fixedHex(F.toObject(sellerSignature.R8[1]), 32) + fixedHex(sellerSignature.S, 32),
     },
   };
   return {

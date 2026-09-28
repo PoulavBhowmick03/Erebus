@@ -68,6 +68,9 @@ pub struct SettlementContext {
 /// A backend cannot serve the session's requirements.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SelectionError {
+    /// The selected deployment cannot be represented by the shielded circuit.
+    #[error(transparent)]
+    ShieldedDomain(#[from] crate::shielded::ShieldedMapError),
     /// The backend cannot execute this canonical agreement suite.
     #[error("backend does not support agreement suite {suite_id}")]
     SuiteUnsupported {
@@ -127,6 +130,9 @@ pub fn check_capabilities(
     }
     crate::suite::check_mode(context.suite_id, context.mode)?;
     context.domain.validate()?;
+    if context.suite_id == crate::suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
+        crate::shielded::validate_domain(&context.domain)?;
+    }
     if context.mode == SettlementMode::PublicBound && context.domain.settlement_contract.is_none() {
         return Err(SelectionError::MissingSettlementContract);
     }

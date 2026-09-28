@@ -268,6 +268,9 @@ pub enum TermsError {
     /// The suite id names no implemented suite.
     #[error("agreement suite {0} is not supported")]
     UnsupportedSuite(u16),
+    /// Terms fall outside the fixed shielded circuit shape.
+    #[error(transparent)]
+    Shielded(#[from] crate::shielded::ShieldedMapError),
     /// The amount was zero.
     #[error("agreement amount must be greater than zero")]
     ZeroAmount,
@@ -391,6 +394,9 @@ impl AgreementTerms {
         }
         self.service.validate()?;
         crate::suite::check_mode(self.suite_id, self.settlement_mode)?;
+        if self.suite_id == crate::suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
+            crate::shielded::ShieldedDeal::from_terms(self)?;
+        }
         Ok(())
     }
 

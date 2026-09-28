@@ -17,7 +17,7 @@ use core::fmt;
 
 use erebus_core::auth::Role;
 use erebus_core::encoding::{EncodingError, Reader, Writer};
-use erebus_core::suite::{self, SuiteError};
+use crate::hashing::{self, HashVersionError};
 
 use crate::limits::MAX_BODY_BYTES;
 use crate::session::TRANSPORT_PROTOCOL_VERSION;
@@ -97,9 +97,9 @@ pub enum MessageError {
     /// A canonical field could not be read, including an unknown author role tag.
     #[error(transparent)]
     Encoding(#[from] EncodingError),
-    /// The agreement suite is not implemented.
+    /// The transcript hash version is not implemented.
     #[error(transparent)]
-    Suite(#[from] SuiteError),
+    HashVersion(#[from] HashVersionError),
 }
 
 /// One negotiation message.
@@ -268,14 +268,14 @@ impl Message {
         Ok(message)
     }
 
-    /// The digest of the transcript-relevant body under the agreement suite.
+    /// The digest of the transcript body under its independent hash version.
     ///
     /// This is the leaf that the transcript chains and the agreement's `transcript_root`
     /// ultimately commit to.
-    pub fn digest(&self, suite_id: u16) -> Result<[u8; 32], MessageError> {
+    pub fn digest(&self, hash_version: u16) -> Result<[u8; 32], MessageError> {
         self.validate()?;
-        let suite = suite::suite(suite_id)?;
-        Ok(suite.hash(&[MESSAGE_DOMAIN, &self.encode_body()]))
+        hashing::check_version(hash_version)?;
+        Ok(hashing::hash(&[MESSAGE_DOMAIN, &self.encode_body()]))
     }
 }
 

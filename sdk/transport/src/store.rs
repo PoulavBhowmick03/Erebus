@@ -56,7 +56,7 @@ pub trait TranscriptStore {
         &self,
         namespace: &str,
         deal_id: [u8; 16],
-        suite_id: u16,
+        hash_version: u16,
         message: &Message,
     ) -> Result<Transcript, StoreError>;
 
@@ -65,7 +65,7 @@ pub trait TranscriptStore {
         &self,
         namespace: &str,
         deal_id: [u8; 16],
-        suite_id: u16,
+        hash_version: u16,
     ) -> Result<Transcript, StoreError>;
 
     /// Loads the stored messages for a deal in append order.
@@ -181,7 +181,7 @@ impl TranscriptStore for FileTranscriptStore {
         &self,
         namespace: &str,
         deal_id: [u8; 16],
-        suite_id: u16,
+        hash_version: u16,
         message: &Message,
     ) -> Result<Transcript, StoreError> {
         let directory = self.deal_directory(namespace, deal_id)?;
@@ -190,7 +190,7 @@ impl TranscriptStore for FileTranscriptStore {
         lock.lock_exclusive().map_err(io_error)?;
 
         let stored = self.recover_messages(&directory)?;
-        let mut transcript = Transcript::replay(deal_id, suite_id, &stored)?;
+        let mut transcript = Transcript::replay(deal_id, hash_version, &stored)?;
         transcript.append(message)?;
 
         let mut options = OpenOptions::new();
@@ -211,16 +211,16 @@ impl TranscriptStore for FileTranscriptStore {
         &self,
         namespace: &str,
         deal_id: [u8; 16],
-        suite_id: u16,
+        hash_version: u16,
     ) -> Result<Transcript, StoreError> {
         let directory = self.deal_directory(namespace, deal_id)?;
         if !directory.exists() {
-            return Transcript::new(deal_id, suite_id).map_err(StoreError::Transcript);
+            return Transcript::new(deal_id, hash_version).map_err(StoreError::Transcript);
         }
         let lock = open_lock(&directory)?;
         lock.lock_exclusive().map_err(io_error)?;
         let stored = self.recover_messages(&directory)?;
-        Transcript::replay(deal_id, suite_id, &stored).map_err(StoreError::Transcript)
+        Transcript::replay(deal_id, hash_version, &stored).map_err(StoreError::Transcript)
     }
 
     fn messages(&self, namespace: &str, deal_id: [u8; 16]) -> Result<Vec<Message>, StoreError> {

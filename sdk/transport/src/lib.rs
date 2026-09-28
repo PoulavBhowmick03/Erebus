@@ -13,16 +13,17 @@
 //! - [`descriptor`]: signed service publication and discovery.
 //!
 //! The design and its decisions are specified in `docs/metropolis-m2-decisions.md`. The crate is
-//! chain-neutral: it depends on `erebus-core` for canonical encoding and the agreement suite
-//! hash, and on no chain or proving library.
+//! chain-neutral: it depends on `erebus-core` for canonical encoding. Transcript hash
+//! version 1 uses Keccak independently of the selected settlement agreement suite.
 //!
 //! ```text
-//! Cdeal = Hash_suite("EREBUS_DEAL_COMMITMENT_V1" || terms || blinding)
-//! transcript_root = Hash_suite("EREBUS_TRANSCRIPT_ROOT_V1" || deal_id || head_buyer || head_seller)
+//! Cdeal = suite-specific commitment(terms, blinding)
+//! transcript_root = Keccak256("EREBUS_TRANSCRIPT_ROOT_V1" || deal_id || head_buyer || head_seller)
 //! ```
 #![forbid(unsafe_code)]
 
 pub mod descriptor;
+pub mod hashing;
 pub mod identity;
 pub mod limits;
 pub mod message;

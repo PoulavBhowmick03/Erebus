@@ -1,5 +1,9 @@
 {
   "blindingHex": "08b00e206b3f454cf5212fa51266c91c4fa3b644ea696525cd0b60b57f4ae46b",
+  "testOnlySeeds": {
+    "buyerHex": "f4185a279c2cee8d2bd111b8078bc585780e43693c68b28ff242ec7fc2230e0a",
+    "sellerHex": "d701d962b980a1fcaaceb80749df83242de519c45e9e563bc7835559f88535c4"
+  },
   "terms": {
     "protocolVersion": 1,
     "suiteId": 2,
@@ -41,6 +45,9 @@
     "commitmentHex": "0eee8a301251bed5614df076d20a7c9bc59ec99e62f927caf9fbb17ce8363be7",
     "dealNullifierHex": "0be08df0122ba873963a5f707eea993a00813cc783d6750a66bb8438ce1c8d6b",
     "buyerMessageHex": "022f742903d95f1036cdc2736a0ff9d1f0c1d716d254f49a6d3fb707b58fe6a8",
-    "sellerMessageHex": "1ec80d976635def6fa576dac9d1f6d48999c5ca467e631ec0947e0c008f9136a"
+    "sellerMessageHex": "1ec80d976635def6fa576dac9d1f6d48999c5ca467e631ec0947e0c008f9136a",
+    "paymentCommitmentHex": "1eb308f3b4286821d63db8d008c1068e92b8d32625867ea6a8b8b0166d11a5bd",
+    "buyerSignatureHex": "26f456c5b590b15f287c34d171a3a37f0a2350387381b1d69ce7abf108d1141e2010869727620612699cdac9028b28f0c056fc55b27d38d5a704a1206e45bbfb03f3f26f3cc39a0ebd93e93a89ad1818e2094972c2709b59f0cdbdee09d5fbe0",
+    "sellerSignatureHex": "24b4b017ed1ff85852a58c6e7abf869f9da83477d67aeb9ac191ac79674defb41feab58bdd1cc93603cc216ede1d4cabc7def7df282ec7d7dcbc19747916489504aa81c2c37c2572a97ca79c017d527ef2d56b8820edb4e800055d667243993b"
   }
 }

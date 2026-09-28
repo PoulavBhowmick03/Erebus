@@ -119,6 +119,9 @@ impl DealNullifier {
 /// A commitment or deal identity could not be derived.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CommitmentError {
+    /// The suite-2 field mapping or commitment opening was invalid.
+    #[error(transparent)]
+    Shielded(#[from] crate::shielded::ShieldedMapError),
     /// The agreement terms were invalid.
     #[error(transparent)]
     Terms(#[from] TermsError),
@@ -130,8 +133,8 @@ pub enum CommitmentError {
     Domain(#[from] DomainError),
 }
 
-/// Computes `keccak256(COMMITMENT_DOMAIN || canonical_terms || blinding)` under the terms'
-/// suite.
+/// Computes the suite-specific blinded commitment: canonical byte hashing for suite 1,
+/// or the fixed circuit field mapping for suite 2.
 ///
 /// This is the value both roles authorize. It is not meaningful without the opening.
 pub fn commit_agreement(
@@ -139,8 +142,10 @@ pub fn commit_agreement(
     blinding: &CommitmentBlinding,
 ) -> Result<DealCommitment, CommitmentError> {
     let encoded = terms.encode()?;
-    let suite = suite::suite(terms.suite_id)?;
-    let digest = suite.hash(&[COMMITMENT_DOMAIN, &encoded, blinding.as_bytes()]);
+    if terms.suite_id == suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
+        return Ok(crate::shielded::ShieldedDeal::from_terms(terms)?.commitment(blinding)?);
+    }
+    let digest = suite::keccak256(&[COMMITMENT_DOMAIN, &encoded, blinding.as_bytes()]);
     Ok(DealCommitment(digest))
 }
 
@@ -151,9 +156,11 @@ pub fn commit_agreement(
 /// signed revisions of a deal collide on one identity. The terms' suite defines the hash.
 pub fn deal_nullifier(terms: &AgreementTerms) -> Result<DealNullifier, CommitmentError> {
     terms.validate()?;
+    if terms.suite_id == suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
+        return Ok(crate::shielded::ShieldedDeal::from_terms(terms)?.deal_nullifier()?);
+    }
     let domain = terms.domain.encode()?;
-    let suite = suite::suite(terms.suite_id)?;
-    let digest = suite.hash(&[
+    let digest = suite::keccak256(&[
         DEAL_NULLIFIER_DOMAIN,
         &domain,
         terms.buyer_authorization_key.as_bytes(),

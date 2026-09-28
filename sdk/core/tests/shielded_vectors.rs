@@ -1,11 +1,14 @@
 //! The independent M4 Circom/JS runner pins these suite-2 agreement hashes.
 
-use erebus_core::auth::Role;
+use erebus_core::auth::{Authorization, Role};
 use erebus_core::commitment::CommitmentBlinding;
 use erebus_core::domain::DeploymentDomain;
-use erebus_core::ids::{AddressBytes, AssetId, BaseUnits, ChainNamespace, KeyBytes};
+use erebus_core::ids::{
+    AddressBytes, AssetId, BaseUnits, ChainNamespace, KeyBytes, SignatureBytes,
+};
 use erebus_core::service::ServiceRecord;
 use erebus_core::shielded::ShieldedDeal;
+use erebus_core::shielded_auth::{derive_key, sign_message, verify_agreement, verify_message};
 use erebus_core::terms::{AgreementTerms, FeePolicy, Guarantee, GuaranteeSet, SettlementMode};
 use serde_json::Value;
 
@@ -103,6 +106,61 @@ fn rust_matches_circomlib_commitment_and_messages() {
         ),
         field(expected, "sellerMessageHex")
     );
+    assert_eq!(
+        hex::encode(deal.payment_note_commitment().expect("payment note")),
+        field(expected, "paymentCommitmentHex")
+    );
+}
+
+#[test]
+fn shared_agreement_api_matches_the_shielded_circuit() {
+    use erebus_core::auth::{authorization_digest, verify_authorization, verify_authorization_signature};
+    use erebus_core::commitment::{commit_agreement, deal_nullifier};
+    let (terms, blinding, vector) = fixture_terms();
+    let encoded = terms.encode().expect("suite-2 terms encode");
+    assert_eq!(AgreementTerms::decode(&encoded).unwrap(), terms);
+    use erebus_core::settlement::{check_capabilities, BackendCapabilities, SettlementContext};
+    let capabilities = BackendCapabilities {
+        suites: [2].into_iter().collect(),
+        modes: [SettlementMode::Shielded].into_iter().collect(),
+        guarantees: terms.required_guarantees,
+        local_proving: true,
+    };
+    let context = SettlementContext {
+        require_local_proving: true,
+        mode: terms.settlement_mode,
+        domain: terms.domain.clone(),
+        suite_id: 2,
+        asset: terms.asset.clone(),
+        required_guarantees: terms.required_guarantees,
+    };
+    check_capabilities(&context, &capabilities).expect("shielded selection");
+    let mut invalid_context = context.clone();
+    invalid_context.domain.pool = None;
+    assert!(check_capabilities(&invalid_context, &capabilities).is_err());
+    let commitment = commit_agreement(&terms, &blinding).expect("shared commitment");
+    assert_eq!(commitment.to_hex(), field(&vector["expected"], "commitmentHex"));
+    assert_eq!(deal_nullifier(&terms).unwrap().to_hex(), field(&vector["expected"], "dealNullifierHex"));
+    for (role, name) in [(Role::Buyer, "buyer"), (Role::Seller, "seller")] {
+        let message = authorization_digest(&terms.domain, role, &commitment, 2).unwrap();
+        assert_eq!(hex::encode(message), field(&vector["expected"], &format!("{name}MessageHex")));
+        let auth = Authorization {
+            role, suite_id: 2, commitment,
+            signature: SignatureBytes::new(bytes(field(&vector["expected"], &format!("{name}SignatureHex")))).unwrap(),
+        };
+        verify_authorization(&terms, &commitment, &blinding, &auth, terms.expiry - 1).unwrap();
+        assert!(verify_authorization(&terms, &commitment, &blinding, &auth, terms.expiry).is_err());
+        verify_authorization_signature(&terms, &commitment, &blinding, &auth).unwrap();
+        let mut changed = terms.clone();
+        changed.transcript_root[31] ^= 1;
+        assert!(verify_authorization_signature(&changed, &commitment, &blinding, &auth).is_err());
+        let mut changed = terms.clone();
+        changed.domain.verifier_version += 1;
+        assert!(verify_authorization_signature(&changed, &commitment, &blinding, &auth).is_err());
+    }
+    let mut invalid = terms;
+    invalid.domain.verifier_version = 0;
+    assert!(invalid.validate().is_err());
 }
 
 #[test]
@@ -116,6 +174,10 @@ fn shielded_shape_and_opening_reject_mutations() {
     assert_ne!(
         revised.commitment(&blinding).expect("commitment"),
         original_commitment
+    );
+    assert_ne!(
+        revised.payment_note_commitment().expect("other payment"),
+        original.payment_note_commitment().expect("payment")
     );
     assert_eq!(
         revised.deal_nullifier().expect("nullifier"),
@@ -137,7 +199,92 @@ fn shielded_shape_and_opening_reject_mutations() {
             .expect("commitment"),
         original_commitment
     );
+    assert_ne!(
+        ShieldedDeal::from_terms(&changed)
+            .expect("shape")
+            .payment_note_commitment()
+            .expect("other payment"),
+        original.payment_note_commitment().expect("payment")
+    );
     assert!(original
         .commitment(&CommitmentBlinding::from_bytes([0; 32]))
         .is_err());
+}
+
+#[test]
+fn rust_signatures_match_circomlib_for_both_roles() {
+    let (terms, blinding, vector) = fixture_terms();
+    let deal = ShieldedDeal::from_terms(&terms).expect("shape");
+    let commitment = deal.commitment(&blinding).expect("commitment");
+    for (role, label) in [(Role::Buyer, "buyer"), (Role::Seller, "seller")] {
+        let seed = fixed(
+            vector["testOnlySeeds"][format!("{label}Hex")]
+                .as_str()
+                .expect("seed"),
+        );
+        let key = derive_key(&seed).expect("derive key");
+        let agreed_key = match role {
+            Role::Buyer => terms.buyer_authorization_key.as_bytes(),
+            Role::Seller => terms.seller_authorization_key.as_bytes(),
+        };
+        assert_eq!(key.as_slice(), agreed_key);
+        let message = deal
+            .authorization_message(role, &commitment)
+            .expect("message");
+        let (signed_key, signature) = sign_message(&seed, &message).expect("sign");
+        assert_eq!(signed_key, key);
+        assert_eq!(
+            hex::encode(signature),
+            field(&vector["expected"], &format!("{label}SignatureHex"))
+        );
+        verify_message(&key, &message, &signature).expect("matching signature");
+        let wrong_role = if role == Role::Buyer {
+            Role::Seller
+        } else {
+            Role::Buyer
+        };
+        let other_message = deal
+            .authorization_message(wrong_role, &commitment)
+            .expect("message");
+        assert!(verify_message(&key, &other_message, &signature).is_err());
+        let mut changed = signature;
+        changed[95] ^= 1;
+        assert!(verify_message(&key, &message, &changed).is_err());
+    }
+}
+
+#[test]
+fn shielded_agreement_requires_both_roles_and_the_exact_opening() {
+    let (terms, blinding, vector) = fixture_terms();
+    let commitment = ShieldedDeal::from_terms(&terms)
+        .expect("shape")
+        .commitment(&blinding)
+        .expect("commitment");
+    let make_auth = |role, name: &str| Authorization {
+        role,
+        suite_id: 2,
+        commitment,
+        signature: SignatureBytes::new(bytes(field(
+            &vector["expected"],
+            &format!("{name}SignatureHex"),
+        )))
+        .expect("signature"),
+    };
+    let buyer = make_auth(Role::Buyer, "buyer");
+    let seller = make_auth(Role::Seller, "seller");
+    let verified = verify_agreement(&terms, &blinding, &buyer, &seller, terms.expiry - 1)
+        .expect("agreed and unexpired");
+    assert_eq!(verified.commitment, commitment);
+    assert_eq!(
+        hex::encode(verified.payment_note),
+        field(&vector["expected"], "paymentCommitmentHex")
+    );
+    assert!(verify_agreement(&terms, &blinding, &buyer, &seller, terms.expiry).is_err());
+    assert!(verify_agreement(&terms, &blinding, &seller, &buyer, 1).is_err());
+    let mut altered = terms.clone();
+    altered.amount = BaseUnits::new(71);
+    assert!(verify_agreement(&altered, &blinding, &buyer, &seller, 1).is_err());
+    let mut bad = seller.clone();
+    bad.signature = SignatureBytes::new(vec![0; 96]).expect("length");
+    assert!(verify_agreement(&terms, &blinding, &buyer, &bad, 1).is_err());
 }
