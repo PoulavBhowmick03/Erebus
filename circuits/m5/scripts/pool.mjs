@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -64,6 +64,10 @@ function stringify(value) {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item));
 }
 
+function fieldHex(value, bytes = 32) {
+  return BigInt(value).toString(16).padStart(bytes * 2, "0");
+}
+
 async function setup() {
   mkdirSync(build, { recursive: true });
   const tau = resolve(build, "pot16_final.ptau");
@@ -81,6 +85,7 @@ async function setup() {
   for (const name of ["deposit", "transfer", "withdraw"]) {
     run("circom", [`${name}.circom`, "--r1cs", "--wasm", "-l", "node_modules", "-o", "build"]);
     const r1cs = resolve(build, `${name}.r1cs`);
+    const wasm = resolve(build, `${name}_js/${name}.wasm`);
     const zkey = resolve(build, `${name}.zkey`);
     const vkey = resolve(build, `${name}-verification-key.json`);
     const verifierSource = resolve(build, `${name}-verifier.sol`);
@@ -88,6 +93,7 @@ async function setup() {
     const previous = oldManifest.circuits?.[name];
     const reuse = previous?.r1csSha256 === r1csHash
       && [zkey, vkey, verifierSource].every((file) => existsSync(file))
+      && (previous.wasmSha256 === undefined || previous.wasmSha256 === sha256(readFileSync(wasm)))
       && previous.zkeySha256 === sha256(readFileSync(zkey))
       && previous.verificationKeySha256 === sha256(readFileSync(vkey))
       && previous.verifierSourceSha256 === sha256(readFileSync(verifierSource));
@@ -102,6 +108,7 @@ async function setup() {
     }
     manifest.circuits[name] = {
       r1csSha256: r1csHash,
+      wasmSha256: sha256(readFileSync(wasm)),
       zkeySha256: sha256(readFileSync(zkey)),
       verificationKeySha256: sha256(readFileSync(vkey)),
       verifierSourceSha256: sha256(readFileSync(verifierSource)),
@@ -184,6 +191,9 @@ async function main() {
   const port = await freePort();
   const anvil = spawn("anvil", ["--port", String(port), "--chain-id", "10143", "--silent"], { stdio: "ignore" });
   const provider = new JsonRpcProvider(`http://127.0.0.1:${port}`, 10143, { staticNetwork: true });
+  let forkAnvil = null;
+  let forkProvider = null;
+  let indexerProcess = null;
   try {
     let ready = false;
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -238,6 +248,7 @@ async function main() {
       spendTag: inputSpendTag, salt: inputSalt,
       privateChainId: chainId, privateContractAddress: contractAddress, privateVerifierVersion: version,
     };
+    writeFileSync(resolve(build, "deposit-input.json"), `${JSON.stringify(stringify(depositInput), null, 2)}\n`);
     const depositProof = await prove("deposit", depositInput,
       [chainId, contractAddress, version, asset, inputAmount, inputNote]);
     await (await token.mint(await signer.getAddress(), inputAmount)).wait();
@@ -248,7 +259,7 @@ async function main() {
     await (await token.setFeeOnTransfer(true)).wait();
     await reject("fee-on-transfer deposit", async () => pool.deposit.staticCall(...depositProof));
     await (await token.setFeeOnTransfer(false)).wait();
-    await (await pool.deposit(...depositProof)).wait();
+    const depositReceipt = await (await pool.deposit(...depositProof)).wait();
     await reject("duplicate funded note", async () => pool.deposit.staticCall(...depositProof));
     if (!await pool.insertedCommitments(inputNote)) throw new Error("funded note was not registered");
     const firstTree = tree(poseidon, [inputNote], 0);
@@ -278,6 +289,35 @@ async function main() {
     const sellerMessage = eddsa.poseidon([2005n, domain, dealCommitment]);
     const buyerSignature = eddsa.signPoseidon(buyerPrivate, buyerMessage);
     const sellerSignature = eddsa.signPoseidon(sellerPrivate, sellerMessage);
+    const service = JSON.parse(readFileSync(resolve(root, "sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8")).vectors[0].terms.service;
+    const signatureHex = (signature) => [F.toObject(signature.R8[0]), F.toObject(signature.R8[1]), signature.S]
+      .map((part) => fieldHex(part)).join("");
+    const agreementInput = {
+      blindingHex: fieldHex(blinding),
+      buyerSignatureHex: signatureHex(buyerSignature),
+      sellerSignatureHex: signatureHex(sellerSignature),
+      terms: {
+        protocolVersion: 1, suiteId: 2,
+        domain: {
+          namespace: `eip155:${chainId}`,
+          settlementContractHex: fieldHex(contractAddress, 20),
+          poolHex: fieldHex(contractAddress, 20),
+          verifierVersion: Number(version),
+        },
+        dealIdHex: fieldHex(dealId, 16), revision: 1,
+        transcriptRootHex: fieldHex(transcriptRootLo, 16) + fieldHex(transcriptRootHi, 16),
+        buyerAuthorizationKeyHex: fieldHex(buyer[0]) + fieldHex(buyer[1]),
+        sellerAuthorizationKeyHex: fieldHex(seller[0]) + fieldHex(seller[1]),
+        paymentRecipientHex: fieldHex(recipientSpendTag),
+        asset: `eip155:${chainId}/erc20:0x${fieldHex(asset, 20)}`,
+        amount: String(amount), expiry: Number(expiry), fee: "0", feeRecipientHex: null,
+        settlementMode: "shielded",
+        requiredGuarantees: ["hidden-amount", "hidden-recipient", "agreement-bound-settlement"],
+        settlementNonceHex: fieldHex(settlementNonceLo, 16) + fieldHex(settlementNonceHi, 16),
+        service,
+      },
+    };
+    writeFileSync(resolve(build, "agreement-input.json"), `${JSON.stringify(agreementInput, null, 2)}\n`);
     const transferInput = {
       chainId, contractAddress, verifierVersion: version, asset, dealCommitment, dealNullifier,
       root: firstTree.root, inputNullifier, paymentCommitment: paymentNote,
@@ -291,29 +331,57 @@ async function main() {
       pathElements: firstTree.pathElements, pathIndices: firstTree.pathIndices,
       changeAmount, changeSpendTag, changeSalt,
     };
-    const transferProof = await prove("transfer", transferInput, [
+    writeFileSync(resolve(build, "transfer-input.json"), `${JSON.stringify(stringify(transferInput), null, 2)}\n`);
+    const transferPublic = [
       chainId, contractAddress, version, asset, dealCommitment, dealNullifier, firstTree.root,
       inputNullifier, paymentNote, changeNote, expiry,
-    ]);
+    ];
+    const transferProof = await prove("transfer", transferInput, transferPublic);
+    let settlementProof = transferProof;
+    if (process.env.EREBUS_M5_NATIVE_PROOF === "1") {
+      const prepared = JSON.parse(readFileSync(resolve(build, "rust-prepared-transfer-calldata.json"), "utf8"));
+      const native = stringify(pool.interface.decodeFunctionData("transferPrivate", prepared));
+      if (!Array.isArray(native[3]) || native[3].length !== transferProof[3].length
+        || native[3].some((value, index) => BigInt(value) !== BigInt(transferProof[3][index]))) {
+        throw new Error("native proof public inputs differ from the JS agreement transition");
+      }
+      if (!await verifier.transfer.verifyProof(...native)) {
+        throw new Error("native Rust proof failed the deployed Solidity verifier");
+      }
+      await pool.transferPrivate.staticCall(...native);
+      settlementProof = native;
+    }
     await reject("service mutation in witness", async () => prove("transfer", {
       ...transferInput, serviceDigestLo: serviceDigestLo + 1n,
-    }, [
-      chainId, contractAddress, version, asset, dealCommitment, dealNullifier, firstTree.root,
-      inputNullifier, paymentNote, changeNote, expiry,
-    ]));
+    }, transferPublic));
     await reject("seller authorization mutation in witness", async () => prove("transfer", {
       ...transferInput, sellerS: sellerSignature.S + 1n,
-    }, [
-      chainId, contractAddress, version, asset, dealCommitment, dealNullifier, firstTree.root,
-      inputNullifier, paymentNote, changeNote, expiry,
-    ]));
-    const redirectedTransfer = structuredClone(transferProof);
-    redirectedTransfer[3][8] = "1";
-    await reject("payment output mutation", async () => pool.transferPrivate.staticCall(...redirectedTransfer));
-    const wrongTransferRoot = structuredClone(transferProof);
-    wrongTransferRoot[3][6] = "1";
-    await reject("transfer root mutation", async () => pool.transferPrivate.staticCall(...wrongTransferRoot));
-    await (await pool.transferPrivate(...transferProof)).wait();
+    }, transferPublic));
+    for (const [label, mutation] of [
+      ["buyer authorization", { buyerS: buyerSignature.S + 1n }],
+      ["agreed amount", { amount: amount + 1n }],
+      ["recipient spend tag", { recipientSpendTag: recipientSpendTag + 1n }],
+      ["input spend secret", { inputSpendSecret: inputSpendSecret + 1n }],
+      ["change conservation", { changeAmount: changeAmount + 1n }],
+      ["membership sibling", { pathElements: [firstTree.pathElements[0] + 1n, ...firstTree.pathElements.slice(1)] }],
+    ]) {
+      await reject(`${label} mutation in witness`, async () => prove("transfer", {
+        ...transferInput, ...mutation,
+      }, transferPublic));
+    }
+    for (const [label, index] of [
+      ["chain", 0], ["pool", 1], ["verifier version", 2], ["asset", 3],
+      ["deal commitment", 4], ["deal nullifier", 5], ["root", 6],
+      ["input nullifier", 7], ["payment output", 8], ["change output", 9], ["expiry", 10],
+    ]) {
+      const changed = structuredClone(transferProof);
+      changed[3][index] = String(BigInt(changed[3][index]) + 1n);
+      await reject(`${label} public-input mutation`, async () => pool.transferPrivate.staticCall(...changed));
+      if (label === "asset") {
+        await reject("asset-changing transaction", async () => pool.transferPrivate(...changed));
+      }
+    }
+    await (await pool.transferPrivate(...settlementProof)).wait();
     if (!await pool.insertedCommitments(paymentNote) || !await pool.insertedCommitments(changeNote)) {
       throw new Error("transfer outputs were not registered");
     }
@@ -323,6 +391,46 @@ async function main() {
     await reject("deal replay", async () => pool.transferPrivate.staticCall(...transferProof));
     const finalTree = tree(poseidon, [inputNote, paymentNote, changeNote], 1);
     if (await pool.currentRoot() !== finalTree.root) throw new Error("transfer tree root differs");
+    const noteVector = {
+      assetHex: fieldHex(asset, 20),
+      input: {
+        amount: String(inputAmount), ownerHex: fieldHex(buyer[0]) + fieldHex(buyer[1]),
+        spendSecretHex: fieldHex(inputSpendSecret), spendTagHex: fieldHex(inputSpendTag),
+        saltHex: fieldHex(inputSalt), commitmentHex: fieldHex(inputNote),
+        nullifierHex: fieldHex(inputNullifier), index: 0,
+        rootHex: fieldHex(firstTree.root),
+      },
+      payment: {
+        amount: String(amount), ownerHex: fieldHex(seller[0]) + fieldHex(seller[1]),
+        spendSecretHex: fieldHex(recipientSpendSecret), spendTagHex: fieldHex(recipientSpendTag),
+        saltHex: fieldHex(paymentSalt), commitmentHex: fieldHex(paymentNote),
+        nullifierHex: fieldHex(poseidon([2008n, recipientSpendSecret, paymentNote])), index: 1,
+        rootHex: fieldHex(finalTree.root),
+      },
+      changeCommitmentHex: fieldHex(changeNote),
+    };
+    writeFileSync(resolve(build, "note-vector.json"), `${JSON.stringify(noteVector, null, 2)}\n`);
+    const pinnedNote = JSON.parse(readFileSync(resolve(root, "sdk/core/tests/fixtures/m5-note-vector.json"), "utf8"));
+    if (JSON.stringify(noteVector) !== JSON.stringify(pinnedNote)) {
+      throw new Error("computed M5 note vector differs from pinned Rust fixture");
+    }
+    let recoverRecipient = () => {};
+    if (process.env.EREBUS_M5_RUST_SCAN === "1") {
+      const deploymentReceipt = await pool.deploymentTransaction().wait();
+      const recoveryDir = mkdtempSync(resolve(build, "recovery-"));
+      const args = [
+        "run", "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"),
+        "--example", "recover_test_note", "--", `http://127.0.0.1:${port}`, String(chainId), poolAddress,
+        String(deploymentReceipt.blockNumber), deploymentReceipt.blockHash,
+        resolve(recoveryDir, "public/index.json"), resolve(recoveryDir, "private/wallet.enc"),
+      ];
+      recoverRecipient = (expected, rpcUrl = `http://127.0.0.1:${port}`) => {
+        const command = [...args, expected];
+        command[8] = rpcUrl;
+        run("cargo", command);
+      };
+      recoverRecipient("1");
+    }
 
     // A recipient restarting with its own secret and the agreement can find this output.
     const recoveredTag = poseidon([2006n, recipientSpendSecret]);
@@ -339,6 +447,7 @@ async function main() {
       privateChainId: chainId, privateContractAddress: contractAddress,
       privateVerifierVersion: version, privateRecipient: recipient,
     };
+    writeFileSync(resolve(build, "withdraw-input.json"), `${JSON.stringify(stringify(withdrawInput), null, 2)}\n`);
     const withdrawalProof = await prove("withdraw", withdrawInput, [
       chainId, contractAddress, version, asset, finalTree.root, paymentNullifier, recipient, amount,
     ]);
@@ -348,11 +457,109 @@ async function main() {
     const changedAmount = structuredClone(withdrawalProof);
     changedAmount[3][7] = "71";
     await reject("withdraw amount mutation", async () => pool.withdraw.staticCall(...changedAmount));
+    await (await token.setFeeOnTransfer(true)).wait();
+    await reject("fee-on-transfer withdrawal", async () => pool.withdraw.staticCall(...withdrawalProof));
+    await (await token.setFeeOnTransfer(false)).wait();
+    const beforeWithdrawalSnapshot = process.env.EREBUS_M5_RUST_SCAN === "1"
+      ? await provider.send("evm_snapshot", []) : null;
     const before = await token.balanceOf(await signer.getAddress());
-    await (await pool.withdraw(...withdrawalProof)).wait();
+    const withdrawalReceipt = await (await pool.withdraw(...withdrawalProof)).wait();
     if (await token.balanceOf(await signer.getAddress()) !== before + amount) throw new Error("seller payout mismatch");
     if (await token.balanceOf(poolAddress) !== changeAmount) throw new Error("pool liability mismatch");
     await reject("withdraw replay", async () => pool.withdraw.staticCall(...withdrawalProof));
+    recoverRecipient("0");
+    if (process.env.EREBUS_M5_RUST_SCAN === "1") {
+      const deploymentReceipt = await pool.deploymentTransaction().wait();
+      const cache = resolve(mkdtempSync(resolve(build, "index-")), "pool.json");
+      const scanner = [
+        "run", "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"),
+        "--example", "scan_pool", "--", `http://127.0.0.1:${port}`, String(chainId), poolAddress,
+        String(deploymentReceipt.blockNumber),
+      ];
+      run("cargo", [
+        ...scanner, String(depositReceipt.blockNumber), `0x${fieldHex(firstTree.root)}`, "1",
+        cache, deploymentReceipt.blockHash,
+      ]);
+      run("cargo", [
+        ...scanner, String(withdrawalReceipt.blockNumber), `0x${fieldHex(finalTree.root)}`, "3",
+        cache, deploymentReceipt.blockHash,
+      ]);
+      if (!await provider.send("evm_revert", [beforeWithdrawalSnapshot])) {
+        throw new Error("Anvil did not revert the withdrawal block");
+      }
+      recoverRecipient("1");
+      await provider.send("evm_mine", []);
+      recoverRecipient("1");
+      await (await pool.withdraw(...withdrawalProof)).wait();
+      recoverRecipient("0");
+      if (await token.balanceOf(poolAddress) !== changeAmount) {
+        throw new Error("reorg rehearsal left the wrong pool liability");
+      }
+      const forkPort = await freePort();
+      const forkUrl = `http://127.0.0.1:${forkPort}`;
+      forkAnvil = spawn("anvil", [
+        "--port", String(forkPort), "--chain-id", String(chainId),
+        "--fork-url", `http://127.0.0.1:${port}`,
+        "--fork-block-number", String(await provider.getBlockNumber()), "--silent",
+      ], { stdio: "ignore" });
+      forkProvider = new JsonRpcProvider(forkUrl, 10143, { staticNetwork: true });
+      let forkReady = false;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try { await forkProvider.getBlockNumber(); forkReady = true; break; } catch { await delay(100); }
+      }
+      if (!forkReady) throw new Error("second Anvil RPC did not start");
+      recoverRecipient("0", forkUrl);
+
+      run("cargo", [
+        "build", "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"),
+        "--bin", "erebus_pool_indexer",
+      ]);
+      const indexerPort = await freePort();
+      const indexerUrl = `http://127.0.0.1:${indexerPort}`;
+      const indexerToken = "m5-local-indexer-test-only";
+      indexerProcess = spawn(resolve(root, "sdk/shielded/target/debug/erebus_pool_indexer"), [], {
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          EREBUS_INDEXER_RPC: forkUrl,
+          EREBUS_INDEXER_CHAIN_ID: String(chainId),
+          EREBUS_INDEXER_POOL: poolAddress,
+          EREBUS_INDEXER_DEPLOYMENT_BLOCK: String(deploymentReceipt.blockNumber),
+          EREBUS_INDEXER_DEPLOYMENT_HASH: deploymentReceipt.blockHash,
+          EREBUS_INDEXER_ROOT: mkdtempSync(resolve(build, "service-")),
+          EREBUS_INDEXER_CONFIRMATIONS: "0",
+          EREBUS_INDEXER_PORT: String(indexerPort),
+          EREBUS_INDEXER_TOKEN: indexerToken,
+        },
+      });
+      const headers = { Authorization: `Bearer ${indexerToken}` };
+      let indexerReady = false;
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        if (indexerProcess.exitCode !== null) throw new Error("Rust public indexer exited before readiness");
+        try {
+          const response = await fetch(`${indexerUrl}/healthz`, { headers });
+          if (response.ok && (await response.json()).status === "ok") {
+            indexerReady = true;
+            break;
+          }
+        } catch { /* wait for the local server */ }
+        await delay(100);
+      }
+      if (!indexerReady) throw new Error("Rust public indexer did not reach healthy state");
+      if ((await fetch(`${indexerUrl}/healthz`)).status !== 401) {
+        throw new Error("public indexer accepted an unauthenticated request");
+      }
+      const blocksResponse = await fetch(
+        `${indexerUrl}/v1/blocks?after=${deploymentReceipt.blockNumber - 1}&limit=128`,
+        { headers },
+      );
+      if (!blocksResponse.ok) throw new Error("public indexer block read failed");
+      const indexed = await blocksResponse.json();
+      if (indexed.root !== `0x${fieldHex(finalTree.root)}`
+        || indexed.blocks?.flatMap((block) => block.events).filter((event) => event.Inserted).length !== 3) {
+        throw new Error("hosted public index differs from verified pool history");
+      }
+    }
     writeFileSync(resolve(build, "run.json"), `${JSON.stringify({
       chainId: Number(chainId), pool: poolAddress, asset: await token.getAddress(),
       deposit: inputAmount.toString(), privatePayment: amount.toString(),
@@ -361,6 +568,15 @@ async function main() {
     }, null, 2)}\n`);
     console.log("M5 local prototype: funded deposit, private transfer, output recovery, withdrawal, replay checks passed");
   } finally {
+    if (indexerProcess?.exitCode === null) {
+      indexerProcess.kill("SIGTERM");
+      await Promise.race([once(indexerProcess, "exit"), delay(1000)]);
+    }
+    if (forkProvider) await forkProvider.destroy();
+    if (forkAnvil?.exitCode === null) {
+      forkAnvil.kill("SIGTERM");
+      await Promise.race([once(forkAnvil, "exit"), delay(1000)]);
+    }
     await provider.destroy();
     if (anvil.exitCode === null) {
       anvil.kill("SIGTERM");
