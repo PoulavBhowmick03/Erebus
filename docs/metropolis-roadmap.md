@@ -263,10 +263,15 @@ Done: deposit -> private negotiated payment -> recipient discovery -> recipient 
 Wrong amount, asset, recipient, domain, proof, or replay cannot change contract state.
 The recipient can restore state and withdraw test funds using documented commands and locally held secrets.
 
-Local progress 2026-09-25: a [funded Anvil prototype](metropolis-m5-progress.md) now performs
-deposit, agreement-bound private transfer, output reconstruction, and withdrawal. This is not
-M5 completion: it has test-only keys, a JavaScript test witness, and no installed Rust backend
-or durable wallet/indexer.
+Local progress through 2026-09-27: a [funded Anvil prototype](metropolis-m5-progress.md) performs
+deposit, agreement-bound private transfer, output reconstruction, and withdrawal. Rust now
+matches the suite-2 signature vectors, reconstructs all three witnesses from typed note and
+agreement inputs, and locally proves all three test transitions using hash-checked artifacts.
+The transfer proof settles on Anvil. An encrypted local wallet and public RPC index now have
+an integrated restart/reorg/endpoint-switch rehearsal. A public indexer service uses the
+same verified cache and runs in the funded Anvil test. This is not M5 completion: it has
+test-only keys, no installed shielded backend or independently operated service, and no
+Monad testnet evidence.
 
 ### M6. Coordinator, relayer, and recovery
 

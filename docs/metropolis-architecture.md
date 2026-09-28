@@ -137,10 +137,22 @@ Frozen at M1: the v1 field list, canonical encoding, commitment, authorization d
 - `terms_digest` was removed; the blinded commitment is the digest. The service record, settlement mode, and required guarantees are committed fields.
 
 ```text
-Cdeal = Hash_suite("EREBUS_DEAL_COMMITMENT_V1" || Encode(D) || blinding)
+Cdeal = Commit_suite(D, blinding)
 Authorization = Sign_suite(role_tag, domain, Cdeal)
-Ndeal = Hash_suite("EREBUS_DEAL_NULLIFIER_V1" || Encode(domain) || buyer_key || settlement_nonce)
+Ndeal = Nullify_suite(domain, buyer_key, settlement_nonce)
+transcript_root = Keccak256_v1(...)   // transport hash version 1, independent of the suite
 ```
+
+There are two hash families, and they are versioned separately:
+
+- **Agreement suite.** Suite 1 hashes canonical bytes with keccak256
+  (`"EREBUS_DEAL_COMMITMENT_V1" || Encode(D) || blinding`). Suite 2 uses the typed Poseidon
+  field map in [M4 decisions](metropolis-m4-decisions.md). A suite is not a byte-hash
+  function, so `sdk/core` has no shared `Suite::hash`.
+- **Transport transcript.** Message digests, author chain links, and `transcript_root` use
+  keccak256 under `TRANSCRIPT_HASH_VERSION = 1` (`sdk/transport/src/hashing.rs`), whatever
+  suite the agreement selects. The suite-2 circuit carries the root as two opaque 128-bit
+  halves. Changing the transcript hash or its encoding requires a new transport hash version.
 
 Use fresh cryptographic randomness for the blinding value. A hash of predictable prices and addresses alone does not hide terms.
 Specify lengths, field order, integer bounds, endianness, and address namespaces. Reject ambiguous encodings and field reductions.

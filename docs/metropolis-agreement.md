@@ -120,8 +120,10 @@ Both authorization APIs require the opening and recompute `Cdeal` before accepti
 Keeping the original commitment while changing any term fails with `OpeningMismatch`.
 These functions check one role. A settlement backend must require one valid buyer authorization and one valid seller authorization.
 Suite 2 uses the typed Poseidon field map in [M4 decisions](metropolis-m4-decisions.md); it does
-not apply the suite-1 byte-hash formula to the canonical encoding. Rust suite-2 verification
-and independent cross-language vectors are M5 work.
+not apply the suite-1 byte-hash formula to the canonical encoding. `sdk/core` computes the
+suite-2 commitment, nullifier, and BabyJubJub role authorizations and checks them against pinned
+JS/Circom vectors ([M5 progress](metropolis-m5-progress.md)). The `transcript_root` field is not
+hashed by the suite: it is produced by the transport's own versioned keccak256 derivation.
 
 ## 7. Deal identity and revisions
 

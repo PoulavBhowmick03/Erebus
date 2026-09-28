@@ -36,6 +36,9 @@ dominate the private transfer circuit. The canonical M1 terms remain the offchai
 disclosure format. An M5 Rust encoder must validate them, map them to the fields below exactly,
 and compute the same suite-2 commitment as the circuit before either party signs. Until that
 encoder and its cross-language vectors exist, suite 2 is reserved, not selectable in the SDK.
+(M5 status: the encoder and vectors now exist and `sdk/core` validates suite-2 terms. Only the
+experimental `sdk/shielded` backend advertises suite 2; the installed EVM and `sdk/rs`
+backends do not, so their selection still fails with `SuiteUnsupported`.)
 
 The current proof shape fixes protocol version 1, suite 2, shielded mode, guarantees
 `hidden-amount | hidden-recipient | agreement-bound-settlement` (`0x7`), and a zero fee. An M1

@@ -137,6 +137,14 @@ clock.
 `Hash_suite` is the agreement suite hash (keccak256 for suite 1), so the root is recomputable by
 anything that can verify the agreement.
 
+> **Amended during M5 (2026-09).** Suite 2 has no byte-hash function: its commitment is a
+> typed Poseidon field map. `Hash_suite` above is therefore replaced by keccak256 under
+> transport hash version 1 (`sdk/transport/src/hashing.rs`, `TRANSCRIPT_HASH_VERSION`),
+> selected independently of the agreement suite. The preimages and domain tags are
+> unchanged, so every suite-1 root and stored transcript is byte-identical. The root is
+> recomputable by anything with keccak256 and the messages. The suite-2 circuit binds it as
+> two opaque 128-bit halves and does not recompute it.
+
 **Rule for the reserved agreement field.** A revision that concludes an M2-negotiated deal MUST
 carry the computed `transcript_root`. It is all-zero only for a deal with no transcript, which
 covers legacy wire-v1/v2 revisions and the existing zero vectors. There is no
@@ -225,7 +233,8 @@ record identified during locked crash recovery; complete records with bad checks
 ## DM2-8. Module boundary
 
 New crate `sdk/transport`, chain-neutral, depending only on `erebus-core` for encoding and the
-agreement suite hash. It has no Starknet, EVM, or proving dependency, matching the core's
+agreement suite hash (amended in M5: the transcript hash is now transport-versioned keccak256,
+see DM2-4). It has no Starknet, EVM, or proving dependency, matching the core's
 isolation rule. Future `sdk/rs` wiring remains a thin adapter in M8; M2 does not add CLI or MCP
 wiring. This is the "transport" boundary named in roadmap section 6.
 
