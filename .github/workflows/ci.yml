@@ -266,7 +266,7 @@ jobs:
   m5-proof:
     name: M5 funded local proof prototype
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -280,6 +280,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/shielded
+
       - name: Install pinned Circom compiler
         run: |
           git clone --depth 1 --branch v2.2.3 https://github.com/iden3/circom.git /tmp/erebus-circom
@@ -290,9 +294,29 @@ jobs:
         working-directory: circuits/m5
         run: npm ci
 
+      - name: Check shielded wallet and indexer
+        working-directory: sdk/shielded
+        run: cargo test --locked --all-targets
+
       - name: Lock tokens, prove private transfer, and withdraw on Anvil
         working-directory: circuits/m5
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run prototype
+
+      - name: Prove all three M5 transitions locally in Rust
+        working-directory: sdk/shielded
+        run: cargo test --locked --test local_proof -- --ignored
+
+      - name: Compare Rust agreement-to-witness construction with the JS flow
+        working-directory: sdk/shielded
+        run: cargo test --locked --test witness -- --ignored
+
+      - name: Settle the local funded flow with the Rust-generated proof
+        working-directory: circuits/m5
+        env:
+          EREBUS_M5_NATIVE_PROOF: "1"
+          EREBUS_M5_RUST_SCAN: "1"
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run prototype
 
