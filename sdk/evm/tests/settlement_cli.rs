@@ -100,3 +100,54 @@ fn malformed_evidence_and_deployments_fail_before_any_connection() {
     assert!(!output.status.success());
     assert_eq!(response["error"], "invalid signer address");
 }
+
+#[test]
+fn capabilities_reports_the_public_bound_backend_without_a_network() {
+    let dir = tempfile::tempdir().unwrap();
+    let (output, response) = request(dir.path(), json!({"method": "capabilities"}));
+    assert!(output.status.success());
+    assert_eq!(response["backend"], "evm-public-bound");
+    assert_eq!(response["suites"], json!([1]));
+    assert_eq!(response["modes"], json!(["public-bound"]));
+    assert_eq!(response["local_proving"], true);
+    assert!(response["guarantees"]
+        .as_array()
+        .expect("guarantees")
+        .iter()
+        .any(|guarantee| guarantee == "agreement-bound-settlement"));
+}
+
+#[test]
+fn receipt_requires_durable_state_and_a_valid_operation_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let deployment = json!({
+        "namespace": "eip155:10143",
+        "settlement_contract": "0x1111111111111111111111111111111111111111",
+        "verifier_version": 1,
+        "rpc_url": "http://127.0.0.1:1",
+    });
+
+    let (output, response) = request(
+        dir.path(),
+        json!({
+            "method": "receipt",
+            "deployment": deployment,
+            "state_root": dir.path().join("missing"),
+            "operation_ref": "01".repeat(32),
+        }),
+    );
+    assert!(!output.status.success());
+    assert_eq!(response["error"], "cannot read durable agreement opening");
+
+    let (output, response) = request(
+        dir.path(),
+        json!({
+            "method": "receipt",
+            "deployment": deployment,
+            "state_root": dir.path(),
+            "operation_ref": "not-hex",
+        }),
+    );
+    assert!(!output.status.success());
+    assert_eq!(response["error"], "invalid operation reference");
+}

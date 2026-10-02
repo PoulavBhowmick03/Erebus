@@ -14,12 +14,18 @@
 //! ```
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use erebus_core::auth::{Authorization, Role};
-use erebus_core::commitment::{commit_agreement, CommitmentBlinding};
+use erebus_core::commitment::{commit_agreement, deal_nullifier, CommitmentBlinding};
+use erebus_core::deal_state::{
+    assess_deal, DealEvidence, DealState, RevisionState, SignedRevision,
+};
 use erebus_core::ids::{ChainNamespace, SignatureBytes};
 use erebus_core::terms::AgreementTerms;
-use erebus_evm::backend::EvmSettlementBackend;
+use erebus_evm::backend::{public_bound_capabilities, EvmSettlementBackend};
+use erebus_evm::chain::{EvmChain, ObservationLimits};
 use erebus_evm::deployment::{parse_lowercase_address, EvmDeployment};
 use erebus_evm::evidence::SettlementEvidence;
 use serde::Deserialize;
@@ -30,10 +36,18 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
+    Capabilities,
     Funding {
         deployment: Deployment,
         signer_address: String,
         evidence: String,
+    },
+    Receipt {
+        deployment: Deployment,
+        state_root: PathBuf,
+        operation_ref: String,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
 }
 
@@ -46,10 +60,13 @@ struct Deployment {
     rpc_url: String,
 }
 
-const HELP: &str = "erebus-settle: buyer-side public-bound onboarding as JSON on stdin.
-Methods: funding.
+const HELP: &str = "erebus-settle: buyer-side public-bound settlement as JSON on stdin.
+Methods: capabilities, funding, receipt.
+capabilities reports the public-bound backend's declared suites, modes, and guarantees.
 funding is read-only: it reports the buyer's token allowance and balance against the signed
 amount plus fee, and the gas payer's native shortfall, before any authorization is signed.
+receipt reads one durable agreement opening and its finalized chain evidence, then reports the
+deal and revision state. It never signs or submits.
 Output excludes the RPC URL, terms, signatures, and keys.
 See docs/metropolis-m8-runbook.md.";
 
@@ -91,6 +108,85 @@ fn finish(result: Result<Value, &'static str>) -> ! {
 
 async fn handle(request: Request) -> Result<Value, &'static str> {
     match request {
+        Request::Capabilities => {
+            let capabilities = public_bound_capabilities();
+            Ok(json!({
+                "status": "ok",
+                "backend": "evm-public-bound",
+                "suites": capabilities.suites.iter().copied().collect::<Vec<_>>(),
+                "modes": capabilities.modes.iter().map(|mode| mode.name()).collect::<Vec<_>>(),
+                "guarantees": capabilities.guarantees.iter().map(|guarantee| guarantee.name()).collect::<Vec<_>>(),
+                "local_proving": capabilities.local_proving,
+            }))
+        }
+        Request::Receipt {
+            deployment,
+            state_root,
+            operation_ref,
+            timeout_ms,
+        } => {
+            let namespace = ChainNamespace::parse(&deployment.namespace)
+                .map_err(|_| "invalid deployment namespace")?;
+            let contract = parse_lowercase_address(&deployment.settlement_contract)
+                .ok_or("invalid deployment contract")?;
+            let deployment = EvmDeployment::new(
+                namespace,
+                contract,
+                deployment.verifier_version,
+                deployment.rpc_url,
+            )
+            .map_err(|_| "invalid deployment")?;
+            let operation_ref = parse_operation_ref(&operation_ref)?;
+            let timeout = timeout_ms.unwrap_or(15_000);
+            if !(100..=30_000).contains(&timeout) {
+                return Err("invalid timeout");
+            }
+            let (terms, blinding, _buyer, _seller) =
+                erebus_coordinator::read_disclosure_opening(&state_root, operation_ref)
+                    .map_err(|_| "cannot read durable agreement opening")?;
+            let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreement")?;
+            let chain = EvmChain::connect(deployment, Duration::from_millis(timeout))
+                .await
+                .map_err(|_| "chain unavailable")?;
+            let evidence = chain
+                .finalized_deal_evidence(&nullifier, ObservationLimits::default())
+                .await
+                .map_err(|_| "finalized evidence unavailable")?;
+            let revision =
+                SignedRevision::from_opening(&terms, &blinding).map_err(|_| "invalid agreement")?;
+            let assessment = assess_deal(std::slice::from_ref(&revision), &evidence);
+            let revision_state = assessment
+                .revisions
+                .first()
+                .map(|entry| entry.state)
+                .ok_or("missing revision assessment")?;
+
+            let mut result = json!({
+                "status": "ok",
+                "deal_id": hex::encode(terms.deal_id),
+                "revision": terms.revision,
+                "deal_commitment": revision.commitment().to_hex(),
+                "deal_nullifier": nullifier.to_hex(),
+                "deal_state": deal_state_name(assessment.state),
+                "revision_state": revision_state_name(revision_state),
+                "payment_finalized": matches!(assessment.state, DealState::PaidFinalized { .. }),
+            });
+            if let DealEvidence::Observed(reads) = &evidence {
+                result["final_anchor_timestamp"] = json!(reads.final_anchor_timestamp);
+                result["consumed_at_final"] = json!(reads.consumed_at_final);
+                result["consumed_at_head"] = json!(reads.consumed_at_head);
+                result["winner"] = match &reads.winner {
+                    Some(winner) => json!({
+                        "commitment": winner.commitment.to_hex(),
+                        "amount": winner.amount.get().to_string(),
+                        "fee": winner.fee.get().to_string(),
+                        "is_final": winner.is_final,
+                    }),
+                    None => Value::Null,
+                };
+            }
+            Ok(result)
+        }
         Request::Funding {
             deployment,
             signer_address,
@@ -157,5 +253,45 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                     && gas.is_funded(),
             }))
         }
+    }
+}
+
+fn parse_operation_ref(text: &str) -> Result<[u8; 32], &'static str> {
+    let digits = text.strip_prefix("0x").unwrap_or(text);
+    if digits.len() != 64
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid operation reference");
+    }
+    hex::decode(digits)
+        .map_err(|_| "invalid operation reference")?
+        .try_into()
+        .map_err(|_| "invalid operation reference")
+}
+
+fn deal_state_name(state: DealState) -> &'static str {
+    match state {
+        DealState::Open => "open",
+        DealState::PaidIncluded { .. } => "paid_included",
+        DealState::PaidFinalized { .. } => "paid_finalized",
+        DealState::ConsumedUnresolved => "consumed_unresolved",
+        DealState::ClosedUnpaid => "closed_unpaid",
+        DealState::UnexplainedConsumption => "unexplained_consumption",
+        DealState::Unknown => "unknown",
+    }
+}
+
+fn revision_state_name(state: RevisionState) -> &'static str {
+    match state {
+        RevisionState::Open => "open",
+        RevisionState::PaidIncluded => "paid_included",
+        RevisionState::PaidFinalized => "paid_finalized",
+        RevisionState::SupersededIncluded => "superseded_included",
+        RevisionState::SupersededFinal => "superseded_final",
+        RevisionState::ConsumedUnresolved => "consumed_unresolved",
+        RevisionState::ExpiredUnpaid => "expired_unpaid",
+        RevisionState::Unknown => "unknown",
     }
 }

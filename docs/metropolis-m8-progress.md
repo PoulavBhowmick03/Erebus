@@ -43,14 +43,23 @@ local deployment: the correct version passes, a wrong version fails. The manifes
 `contracts/evm/deployments.example.json`, and the procedure is
 [M8 runbook](metropolis-m8-runbook.md).
 
-**Buyer onboarding starts (checklist item 3).** `erebus-settle funding` is a read-only,
-one-request-per-process command. Given a deployment, a gas payer address, and signed evidence,
-it reports the buyer's token allowance and balance against the signed amount plus fee and the
-gas payer's native shortfall, before anything is authorized. It signs nothing, submits nothing,
-and never prints the endpoint, terms, or signatures. The read-only backend constructor
-(`EvmSettlementBackend::read_only`) cannot submit. Tests: three CLI failure-path tests and a
-funded Anvil test that reports `funded: true` with zero shortfalls for a funded buyer. Backend
-selection, receipt output, and the rest of the installed workflow are not built.
+**Buyer onboarding and receipt output (checklist item 3).** `erebus-settle` is a read-only,
+one-request-per-process command:
+
+- `capabilities` reports the public-bound backend's declared suites, modes, guarantees, and
+  local-proving flag, so a caller can select it without a connection.
+- `funding` reports the buyer's token allowance and balance against the signed amount plus fee
+  and the gas payer's native shortfall, before anything is authorized.
+- `receipt` reads one durable agreement opening from the coordinator state, observes finalized
+  chain evidence, classifies the deal and revision, and reports the commitment, nullifier,
+  anchor, winner, and payment-finalized state.
+
+It signs nothing, submits nothing, and never prints the endpoint, terms, or signatures. The
+read-only backend constructor (`EvmSettlementBackend::read_only`) cannot submit. Tests: five CLI
+tests (help, malformed input, capabilities, receipt failure paths, funding failure paths) and a
+funded Anvil test that reports `funded: true` with zero shortfalls for a funded buyer. A funded
+Anvil `receipt` happy path and the rest of the installed workflow (packages, fresh-install
+guide, Python/MCP) are not built.
 
 ## Not done
 

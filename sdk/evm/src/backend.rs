@@ -386,7 +386,13 @@ impl EvmSettlementBackend {
 /// Public-bound settlement hides neither amount nor recipient, so neither privacy guarantee is
 /// declared. Agreement-bound settlement is declared because the contract recomputes the
 /// commitment and verifies both authorizations before moving funds.
-pub(crate) fn public_bound_capabilities() -> BackendCapabilities {
+/// What the public-bound EVM backend provides, without a connection.
+///
+/// Public-bound settlement hides neither amount nor recipient, so neither privacy guarantee
+/// is declared. Agreement-bound settlement is declared because the contract recomputes the
+/// commitment and verifies both authorizations before moving funds.
+#[must_use]
+pub fn public_bound_capabilities() -> BackendCapabilities {
     let mut modes = std::collections::BTreeSet::new();
     modes.insert(SettlementMode::PublicBound);
     BackendCapabilities {
