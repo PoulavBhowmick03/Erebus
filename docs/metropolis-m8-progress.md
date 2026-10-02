@@ -56,10 +56,11 @@ one-request-per-process command:
 
 It signs nothing, submits nothing, and never prints the endpoint, terms, or signatures. The
 read-only backend constructor (`EvmSettlementBackend::read_only`) cannot submit. Tests: five CLI
-tests (help, malformed input, capabilities, receipt failure paths, funding failure paths) and a
-funded Anvil test that reports `funded: true` with zero shortfalls for a funded buyer. A funded
-Anvil `receipt` happy path and the rest of the installed workflow (packages, fresh-install
-guide, Python/MCP) are not built.
+tests (help, malformed input, capabilities, receipt failure paths, funding failure paths) and
+two funded Anvil tests: `funding` reports `funded: true` with zero shortfalls for a funded
+buyer, and `receipt` reports `paid_finalized` with the winner's amount and fee after a real
+settlement. The rest of the installed workflow (packages, fresh-install guide, Python/MCP) is
+not built.
 
 ## Not done
 

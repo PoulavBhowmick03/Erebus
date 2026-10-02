@@ -3313,3 +3313,78 @@ async fn the_settle_cli_reports_funding_for_a_funded_buyer() {
     assert_eq!(response["balance_shortfall"], "0");
     assert_eq!(response["signer_shortfall"], "0");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn the_settle_cli_reports_a_finalized_receipt_after_settlement() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let fixture = fixture().await;
+    let state_root = tempfile::tempdir().expect("state dir");
+    let (coordinator, _journal, prepared, _plan) =
+        coordinated_setup(&fixture, state_root.path()).await;
+    let operation_ref = prepared.operation_ref;
+    let now = now();
+
+    let chain = EvmChain::connect(deployment(&fixture), Duration::from_secs(5))
+        .await
+        .expect("chain");
+    chain
+        .broadcast_journaled(&coordinator, operation_ref, now)
+        .await
+        .expect("broadcast");
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 3).await;
+    let evidence = chain
+        .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+        .await
+        .expect("deal evidence");
+    coordinator
+        .reconcile(operation_ref, &evidence, now + 1)
+        .expect("reconcile");
+
+    let request = serde_json::json!({
+        "method": "receipt",
+        "deployment": {
+            "namespace": "eip155:31337",
+            "settlement_contract": format!("0x{}", hex::encode(address_bytes(fixture.settlement))),
+            "verifier_version": 1,
+            "rpc_url": fixture.rpc_url,
+        },
+        "state_root": state_root.path().join("coordinator"),
+        "operation_ref": hex::encode(operation_ref),
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_erebus-settle"))
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn erebus-settle");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&serde_json::to_vec(&request).expect("request"))
+        .expect("write request");
+    let output = child.wait_with_output().expect("wait");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["payment_finalized"], true);
+    assert_eq!(response["deal_state"], "paid_finalized");
+    assert_eq!(response["revision_state"], "paid_finalized");
+    assert_eq!(response["consumed_at_final"], true);
+    assert_eq!(
+        response["winner"]["amount"].as_str().expect("amount"),
+        AMOUNT.to_string()
+    );
+    assert_eq!(
+        response["winner"]["fee"].as_str().expect("fee"),
+        FEE.to_string()
+    );
+}
