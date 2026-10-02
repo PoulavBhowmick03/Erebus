@@ -42,6 +42,36 @@ deployment block and checkpoints it; the caller must pass a block at or before t
 possible settlement. The example waits for the winner to reach `finalized` before reporting a
 receipt, which is why Monad's trailing finalized anchor is exercised.
 
+### Independent processes on the live deployment
+
+The M8 workflow now runs as separate processes against the deployed contract:
+
+1. **Buyer proposes** (`settle_public_bound`, `EREBUS_EVM_PROPOSAL_OUT`): writes canonical terms
+   and the blinding. It holds the buyer key but no seller key.
+2. **Seller signs** (`seller_sign`): a separate process with only its own key reads the
+   proposal, checks that the terms name its key, and returns the seller authorization. It never
+   sees the buyer key and never contacts a chain.
+3. **Buyer settles** (`settle_public_bound`, `EREBUS_EVM_PROPOSAL_IN` +
+   `EREBUS_EVM_SELLER_AUTHORIZATION_FILE` + `EREBUS_EVM_EVIDENCE_OUT`): verifies the seller
+   authorization against the proposal, runs the coordinated lifecycle, and writes disclosure
+   evidence.
+4. **Independent auditor** (`erebus-disclosure export` then `verify_payment`): a separate
+   process with only the encrypted grant, its own auditor key, and an RPC configuration.
+
+Recorded live result (2026-10-02):
+
+| Field | Value |
+|---|---|
+| Settlement transaction | `0x6169b70f2efc1aa83b75f92b7b05074414cf24dcc83c3509133c707a0fdd1fda` |
+| Deal commitment | `ca7d4cb1c3752b48812d5e8bb6804f636d5e84f096cc573fad1da8960f03f3a1` |
+| Deal nullifier | `e96d5a7c337202528a422d83fd5cc86f2a1408441cfb3ae58cf0bd0ab0bc091c` |
+| Auditor result | `agreement_verified: true`, `payment_verified: true`, `delivery_verified: false` |
+
+**Known performance gap.** The disclosure verifier uses the one-shot observer, whose ancestry
+walk requests every parent block from the head down to the winner. That is cheap when the
+auditor verifies promptly (the run above) but takes thousands of requests for an old deal. The
+resumable observer checkpoints this work; the disclosure CLI does not use it yet.
+
 ## Verified
 
 **Monad network parameters and verifier support (checklist item 1).** Official Monad sources

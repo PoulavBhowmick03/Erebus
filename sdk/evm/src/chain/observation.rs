@@ -299,7 +299,28 @@ impl EvmChain {
         nullifier: &DealNullifier,
         limits: ObservationLimits,
     ) -> Result<DealEvidence, EvmError> {
-        Ok(self.anchored_deal_evidence(nullifier, limits).await?.2)
+        Ok(self
+            .anchored_deal_evidence_from(nullifier, 0, limits)
+            .await?
+            .2)
+    }
+
+    /// As [`Self::finalized_deal_evidence`], but begins the log scan at `start_block`.
+    ///
+    /// Live chains are far taller than a public RPC's `eth_getLogs` range cap, so a genesis
+    /// scan is not possible. `start_block` must be at or before the earliest block in which
+    /// the deployment could settle the deal (use the deployment block); a larger value would
+    /// omit settlement logs.
+    pub async fn finalized_deal_evidence_from(
+        &self,
+        nullifier: &DealNullifier,
+        start_block: u64,
+        limits: ObservationLimits,
+    ) -> Result<DealEvidence, EvmError> {
+        Ok(self
+            .anchored_deal_evidence_from(nullifier, start_block, limits)
+            .await?
+            .2)
     }
 
     /// Requires two separately configured RPC endpoints to agree on both anchors and deal reads.
@@ -314,8 +335,8 @@ impl EvmChain {
     ) -> Result<DealEvidence, EvmError> {
         self.check_peer(peer)?;
         let (first, second) = tokio::join!(
-            self.anchored_deal_evidence(nullifier, limits),
-            peer.anchored_deal_evidence(nullifier, limits)
+            self.anchored_deal_evidence_from(nullifier, 0, limits),
+            peer.anchored_deal_evidence_from(nullifier, 0, limits)
         );
         let first = first?;
         let second = second?;
@@ -372,9 +393,10 @@ impl EvmChain {
         Ok(())
     }
 
-    async fn anchored_deal_evidence(
+    async fn anchored_deal_evidence_from(
         &self,
         nullifier: &DealNullifier,
+        start_block: u64,
         limits: ObservationLimits,
     ) -> Result<(BlockRef, BlockRef, DealEvidence), EvmError> {
         if limits.log_block_range == 0 || limits.max_log_queries == 0 {
@@ -396,7 +418,9 @@ impl EvmChain {
         self.recheck_block(&head).await?;
         let consumed_at_final = self.consumed(nullifier, &final_block).await?;
         let consumed_at_head = self.consumed(nullifier, &head).await?;
-        let logs = self.deal_logs(nullifier, head.number.to(), limits).await?;
+        let logs = self
+            .deal_logs(nullifier, head.number.to(), start_block, limits)
+            .await?;
         if (consumed_at_final && !consumed_at_head)
             || logs.len() > 1
             || consumed_at_head == logs.is_empty()
@@ -494,12 +518,14 @@ impl EvmChain {
         &self,
         nullifier: &DealNullifier,
         head: u64,
+        start_block: u64,
         limits: ObservationLimits,
     ) -> Result<Vec<Log>, EvmError> {
-        if head / limits.log_block_range >= limits.max_log_queries {
+        let first = start_block.min(head);
+        if (head - first) / limits.log_block_range >= limits.max_log_queries {
             return Err(EvmError::ObservationLimit);
         }
-        let mut from = 0u64;
+        let mut from = first;
         let mut logs = Vec::new();
         loop {
             let to = from.saturating_add(limits.log_block_range - 1).min(head);

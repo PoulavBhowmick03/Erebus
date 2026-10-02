@@ -72,11 +72,29 @@ pub async fn verify_public_bound_disclosure(
     chain: &EvmChain,
     limits: ObservationLimits,
 ) -> Result<FinalizedDisclosure, DisclosureVerificationError> {
+    verify_public_bound_disclosure_from(grant, recipient, expected_issuer, now, chain, 0, limits)
+        .await
+}
+
+/// As [`verify_public_bound_disclosure`], but begins the log scan at `start_block`.
+///
+/// Live chains are far taller than a public RPC's `eth_getLogs` range cap. Pass a block at
+/// or before the deployment's first possible settlement (the deployment block).
+#[allow(clippy::too_many_arguments)]
+pub async fn verify_public_bound_disclosure_from(
+    grant: &DisclosureGrant,
+    recipient: &DisclosureIdentity,
+    expected_issuer: [u8; 20],
+    now: u64,
+    chain: &EvmChain,
+    start_block: u64,
+    limits: ObservationLimits,
+) -> Result<FinalizedDisclosure, DisclosureVerificationError> {
     let (evidence, agreement) =
         open_public_bound_disclosure(grant, recipient, expected_issuer, now)?;
     chain.deployment().matches_domain(&evidence.terms.domain)?;
     let DealEvidence::Observed(reads) = chain
-        .finalized_deal_evidence(&agreement.nullifier, limits)
+        .finalized_deal_evidence_from(&agreement.nullifier, start_block, limits)
         .await?
     else {
         return Err(DisclosureVerificationError::Payment);

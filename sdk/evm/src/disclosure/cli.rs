@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::chain::{EvmChain, ObservationLimits};
 use crate::deployment::{parse_lowercase_address, EvmDeployment};
-use crate::disclosure::{open_public_bound_disclosure, verify_public_bound_disclosure};
+use crate::disclosure::{open_public_bound_disclosure, verify_public_bound_disclosure_from};
 use erebus_core::ids::ChainNamespace;
 use erebus_core::terms::SettlementMode;
 use erebus_transport::disclosure::{
@@ -69,6 +69,19 @@ struct Deployment {
     settlement_contract: String,
     verifier_version: u32,
     rpc_url: String,
+    /// First block of the settlement contract's history. Live chains are far taller than a
+    /// public RPC's `eth_getLogs` range cap, so a genesis scan is not possible; pass the
+    /// deployment block. Zero preserves the legacy genesis scan for local chains.
+    #[serde(default)]
+    from_block: u64,
+    /// Blocks per `eth_getLogs` query. Some public RPCs cap the range (Monad's public
+    /// endpoint allows 100); lower it when the provider rejects wider ranges.
+    #[serde(default = "default_log_block_range")]
+    log_block_range: u64,
+}
+
+fn default_log_block_range() -> u64 {
+    2_000
 }
 
 const HELP: &str = "erebus-disclosure: one public-bound disclosure request as JSON on stdin.
@@ -353,13 +366,18 @@ pub async fn verify_public_payment(
     let chain = EvmChain::connect(configured, Duration::from_secs(15))
         .await
         .map_err(|_| "payment verification unavailable")?;
-    let verified = verify_public_bound_disclosure(
+    let limits = ObservationLimits {
+        log_block_range: deployment.log_block_range,
+        ..ObservationLimits::default()
+    };
+    let verified = verify_public_bound_disclosure_from(
         &grant,
         &recipient,
         issuer,
         now,
         &chain,
-        ObservationLimits::default(),
+        deployment.from_block,
+        limits,
     )
     .await
     .map_err(|_| "payment not independently verified")?;

@@ -14,8 +14,12 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use erebus_core::auth::{authorization_digest, Authorization, Role};
+use erebus_coordinator::Coordinator;
+use erebus_core::auth::{
+    authorization_digest, verify_authorization_signature, Authorization, Role,
+};
 use erebus_core::commitment::{commit_agreement, CommitmentBlinding};
+use erebus_core::deal_state::DealState;
 use erebus_core::domain::DeploymentDomain;
 use erebus_core::ids::{
     AddressBytes, AssetId, BaseUnits, ChainNamespace, KeyBytes, SignatureBytes,
@@ -26,14 +30,14 @@ use erebus_core::settlement::{BackendCapabilities, SettlementContext};
 use erebus_core::terms::{
     AgreementTerms, FeePolicy, Guarantee, GuaranteeSet, SettlementMode, CURRENT_PROTOCOL_VERSION,
 };
-use erebus_core::deal_state::DealState;
-use erebus_coordinator::Coordinator;
 use erebus_evm::backend::EvmSettlementBackend;
 use erebus_evm::chain::{
     Eip1559Fees, EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits,
     SignerJournal, SigningPlan, TransactionKey,
 };
 use erebus_evm::deployment::{parse_lowercase_address, EvmDeployment};
+use erebus_transport::disclosure::SelectedAgreement;
+use erebus_transport::hashing::TRANSCRIPT_HASH_VERSION;
 use k256::ecdsa::SigningKey;
 use serde_json::json;
 
@@ -94,10 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seller_key = SigningKey::from_slice(&[0x5e; 32])?;
     // A fresh seed gives a fresh deal identity; the same seed is a different signed revision
     // of an already-consumed deal.
-    let seed: u8 = std::env::var("EREBUS_EVM_DEAL_SEED")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0x42);
     let buyer_address = address_of(&buyer_key);
     let seller_address = address_of(&seller_key);
     let now = unix_now()?;
@@ -105,42 +105,99 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let namespace = ChainNamespace::parse("eip155:10143")?;
     let deployment = EvmDeployment::new(namespace.clone(), settlement, 1, rpc_url.clone())?;
     let asset = AssetId::new(namespace, "erc20", &format!("0x{}", hex::encode(token)))?;
-    let terms = AgreementTerms {
-        protocol_version: CURRENT_PROTOCOL_VERSION,
-        suite_id: 1,
-        domain: DeploymentDomain {
-            namespace: ChainNamespace::parse("eip155:10143")?,
-            settlement_contract: Some(AddressBytes::new(settlement.to_vec())?),
-            pool: None,
-            verifier_version: 1,
-        },
-        deal_id: [seed; 16],
-        revision: 1,
-        transcript_root: [0; 32],
-        buyer_authorization_key: KeyBytes::new(buyer_address.to_vec())?,
-        seller_authorization_key: KeyBytes::new(seller_address.to_vec())?,
-        payment_recipient: KeyBytes::new(seller_address.to_vec())?,
-        asset: asset.clone(),
-        amount: BaseUnits::new(amount),
-        expiry: now + 3_600,
-        fee_policy: FeePolicy::none(),
-        settlement_mode: SettlementMode::PublicBound,
-        required_guarantees: GuaranteeSet::from_guarantee(Guarantee::AgreementBoundSettlement),
-        settlement_nonce: [seed; 32],
-        service: ServiceRecord {
-            resource: "gpu.h100.hour".to_owned(),
-            quantity: BaseUnits::new(1),
-            unit: "gpu-hour".to_owned(),
-            access_recipient: KeyBytes::new(buyer_address.to_vec())?,
-            delivery_deadline: now + 7_200,
-            fulfillment_method: "http-access".to_owned(),
-            fulfillment_digest: [0; 32],
-        },
+
+    // The buyer proposes terms and a blinding. A separate seller process signs the same
+    // proposal; this process can also load that proposal instead of rebuilding it.
+    let (terms, blinding) = if let Ok(path) = std::env::var("EREBUS_EVM_PROPOSAL_IN") {
+        let proposal: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        let terms = AgreementTerms::decode(&hex::decode(
+            proposal["terms"].as_str().ok_or("proposal has no terms")?,
+        )?)?;
+        let bytes: [u8; 32] = hex::decode(
+            proposal["blinding"]
+                .as_str()
+                .ok_or("proposal has no blinding")?,
+        )?
+        .try_into()
+        .map_err(|_| "proposal blinding must be 32 bytes")?;
+        (terms, CommitmentBlinding::from_bytes(bytes))
+    } else {
+        let seed: u8 = std::env::var("EREBUS_EVM_DEAL_SEED")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0x42);
+        let terms = AgreementTerms {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            suite_id: 1,
+            domain: DeploymentDomain {
+                namespace: ChainNamespace::parse("eip155:10143")?,
+                settlement_contract: Some(AddressBytes::new(settlement.to_vec())?),
+                pool: None,
+                verifier_version: 1,
+            },
+            deal_id: [seed; 16],
+            revision: 1,
+            transcript_root: [0; 32],
+            buyer_authorization_key: KeyBytes::new(buyer_address.to_vec())?,
+            seller_authorization_key: KeyBytes::new(seller_address.to_vec())?,
+            payment_recipient: KeyBytes::new(seller_address.to_vec())?,
+            asset: asset.clone(),
+            amount: BaseUnits::new(amount),
+            expiry: now + 3_600,
+            fee_policy: FeePolicy::none(),
+            settlement_mode: SettlementMode::PublicBound,
+            required_guarantees: GuaranteeSet::from_guarantee(Guarantee::AgreementBoundSettlement),
+            settlement_nonce: [seed; 32],
+            service: ServiceRecord {
+                resource: "gpu.h100.hour".to_owned(),
+                quantity: BaseUnits::new(1),
+                unit: "gpu-hour".to_owned(),
+                access_recipient: KeyBytes::new(buyer_address.to_vec())?,
+                delivery_deadline: now + 7_200,
+                fulfillment_method: "http-access".to_owned(),
+                fulfillment_digest: [0; 32],
+            },
+        };
+        (terms, CommitmentBlinding::from_bytes([0x0a; 32]))
     };
-    let blinding = CommitmentBlinding::from_bytes([0x0a; 32]);
     let commitment = commit_agreement(&terms, &blinding)?;
     let buyer = authorization(Role::Buyer, &terms, commitment, &buyer_key)?;
-    let seller = authorization(Role::Seller, &terms, commitment, &seller_key)?;
+    let seller = if let Ok(path) = std::env::var("EREBUS_EVM_SELLER_AUTHORIZATION_FILE") {
+        let seller = Authorization::decode(&hex::decode(std::fs::read_to_string(path)?.trim())?)?;
+        if seller.role != Role::Seller || seller.commitment != commitment {
+            return Err("seller authorization does not match the proposal".into());
+        }
+        verify_authorization_signature(&terms, &commitment, &blinding, &seller)?;
+        seller
+    } else {
+        authorization(Role::Seller, &terms, commitment, &seller_key)?
+    };
+
+    if let Ok(path) = std::env::var("EREBUS_EVM_PROPOSAL_OUT") {
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "terms": hex::encode(terms.encode()?),
+                "blinding": hex::encode(blinding.as_bytes()),
+            }))?,
+        )?;
+        println!(
+            "{}",
+            json!({"status": "ok", "proposal": path, "deal_commitment": commitment.to_hex()})
+        );
+        return Ok(());
+    }
+    if let Ok(path) = std::env::var("EREBUS_EVM_EVIDENCE_OUT") {
+        let evidence = SelectedAgreement {
+            terms: terms.clone(),
+            blinding: blinding.clone(),
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            transcript_hash_version: TRANSCRIPT_HASH_VERSION,
+            messages: Vec::new(),
+        };
+        std::fs::write(&path, evidence.encode()?)?;
+    }
 
     let context = SettlementContext {
         require_local_proving: true,
@@ -150,11 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asset: asset.clone(),
         required_guarantees: terms.required_guarantees,
     };
-    let capabilities: BackendCapabilities = EvmSettlementBackend::connect(
-        deployment.clone(),
-        &buyer_bytes,
-    )?
-    .capabilities();
+    let capabilities: BackendCapabilities =
+        EvmSettlementBackend::connect(deployment.clone(), &buyer_bytes)?.capabilities();
     let policy = SpendingPolicy {
         per_deal_max: BaseUnits::new(amount),
         allowed_assets: [asset].into_iter().collect(),
@@ -181,7 +235,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let journal = SignerJournal::open(state_root.join("signer"), 10_143, buyer_address)?;
     let fees = Eip1559Fees::new(200_000_000_000, 1_000_000_000)?;
     let plan = chain
-        .reserve_nonce(&journal, &coordinator.prepared_settlement(operation_ref)?, fees, 1_000_000)
+        .reserve_nonce(
+            &journal,
+            &coordinator.prepared_settlement(operation_ref)?,
+            fees,
+            1_000_000,
+        )
         .await?;
     let transaction_key = TransactionKey::from_bytes(&buyer_bytes)?;
     coordinator.sign_transaction(
