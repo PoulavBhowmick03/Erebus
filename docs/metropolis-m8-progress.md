@@ -1,7 +1,23 @@
 # Metropolis M8 Progress
 
-Updated: 2026-10-02. Branch: `metropolis`. M8 is **not complete**. Network readiness is
-verified; deployment and the installed developer workflow are not.
+Updated: 2026-10-02. Branch: `metropolis`. M8 is **not complete**. Network readiness and a
+verified Monad testnet deployment are done; the installed developer workflow and the access
+service are not.
+
+## Deployed
+
+`ErebusSettlement` is live on Monad testnet at
+`0xa5f0c864f434331bef9a7fc5e05450d598d24da4` (chain 10143, verifier version 1), deployed in
+block 67495473 by transaction
+`0x6c7b810c837c038753815df985c3b9ce210be3b40df6fab4ec0682e1a271ca65`. The manifest is
+`contracts/evm/deployments/monad-testnet.json`.
+
+Identity was verified before the address was trusted:
+`scripts/check-evm-deployment.py` pinned the finalized block
+(`0x1b01c4fac8ce92fa33496b80752a0bdfbed65eb2aeaec6c21aac878b551e2aa6`), read the runtime code
+by block hash, masked the four immutable slots, matched the artifact byte-for-byte (15,652
+bytes), and read `verifierVersion()` = 1. The deployer key is dedicated testnet material kept
+outside the repository in a mode-`0600` file.
 
 ## Verified
 
@@ -64,9 +80,10 @@ not built.
 
 ## Not done
 
-**Deploy to Monad testnet (item 2).** Everything is ready except the funded key and the
-operator's broadcast decision. No transaction has been signed or submitted. This is the gate:
-deploying spends testnet funds and is irreversible.
+**Deploy to Monad testnet (item 2) is done** (see Deployed above). What is not done is the
+funded end-to-end workflow on that deployment: a real buyer/seller settlement, observer
+verification, and disclosure against the live contract. That needs a buyer token and
+allowances on testnet, which the installed workflow does not yet provide.
 
 The remaining items are not started or only partially present:
 
@@ -92,12 +109,13 @@ The remaining items are not started or only partially present:
 
 ## What is needed
 
-1. A funded Monad testnet key and explicit authorization to broadcast, for item 2. The key must
-   be dedicated testnet material and must not be committed.
-2. A decision on the remaining M8 scope: the installed workflow (items 3-5, 8) and the access
-   service (items 9-11) are each substantial. They can proceed in parallel with deployment, but
-   the milestone's Done criterion needs the deployed contract first.
+1. The installed workflow (items 3-5, 8): a buyer-side CLI that drives the journaled
+   settlement on the deployed contract, test-token funding, the fresh-install guide, and the
+   Python/MCP boundary. `erebus-settle` currently covers capabilities, funding, and receipt.
+2. The access service (items 9-11) and x402 composition, now unblocked by the canonical
+   testnet addresses in the [M8 runbook](metropolis-m8-runbook.md).
+3. Stage measurements on the live run.
 
 M8's Done criterion — independent buyer, seller, observer, and disclosure processes completing
 the real Monad workflow, with hosted and self-hosted support and recoverable access issuance —
-is unmet. Nothing here is mainnet evidence.
+is unmet. The deployment is testnet evidence only, not mainnet.

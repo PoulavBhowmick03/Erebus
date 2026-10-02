@@ -4,8 +4,8 @@ Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
 Status: M0-M4 locally complete at their stated scopes. M5 has a funded local prototype and is
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
-M7 is complete at its local scoped gate. M8 has verified network readiness and is otherwise
-incomplete; M9 is pending.
+M7 is complete at its local scoped gate. M8 has verified network readiness and a verified
+testnet deployment; the installed workflow and access service remain. M9 is pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -387,7 +387,7 @@ See [M7 decisions](metropolis-m7-decisions.md) for signature domains and public 
 Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 
 - [x] Verify current Monad network parameters and chosen verifier support against official sources and live RPC behavior.
-- [ ] Deploy to testnet with reproducible artifacts, configuration, and verified contract identities.
+- [x] Deploy to testnet with reproducible artifacts, configuration, and verified contract identities.
 - [ ] Add CLI onboarding, funding diagnostics, backend selection, and receipt output.
 - [ ] Publish versioned testnet packages and a fresh-install guide covering identity, discovery, funding, settlement, disclosure, recovery, and withdrawal.
 - [ ] Make local proving work from the installed Erebus MCP/SDK package, with automatic hash-checked shared artifact installation; require no source checkout, Circom installation, separate prover service, or operator setup ceremony.
@@ -406,14 +406,17 @@ Both hosted endpoints and the self-hosting package support the documented workfl
 An interrupted service response can recover access without a second charge.
 Mainnet deployment is a separate release decision after review and testnet evidence.
 
-M8 status 2026-10-02: **network readiness verified; deployment not done.**
+M8 status 2026-10-02: **network readiness verified and testnet deployment done; installed
+workflow and access service not done.**
 `erebus-network-check` passed all 16 live checks against `testnet-rpc.monad.xyz` (chain ID
 10143, explicit `finalized`, hash-pinned reads, and the BN254 add/mul/pairing precompiles).
-Deployment tooling and an independent bytecode/verifier check
-(`scripts/check-evm-deployment.py`, manifest shape in `contracts/evm/deployments.example.json`)
-are ready and locally tested. Nothing has been broadcast: item 2 needs a funded Monad testnet
-key and an explicit operator decision. The installed workflow (items 3-5, 8) and the access
-service (items 9-11) are not started. See [M8 progress](metropolis-m8-progress.md) and the
+`ErebusSettlement` is live at `0xa5f0c864f434331bef9a7fc5e05450d598d24da4` (block 67495473,
+transaction `0x6c7b810c…`), and its identity was verified against the reviewed artifact on
+finalized state (`scripts/check-evm-deployment.py`), including `verifierVersion()` = 1. The
+manifest is `contracts/evm/deployments/monad-testnet.json`. `erebus-settle` now covers
+capabilities, funding, and receipt. Still open: the funded end-to-end workflow on the live
+contract, packages and the fresh-install guide, the Python/MCP boundary, the access service,
+x402, and stage measurements. See [M8 progress](metropolis-m8-progress.md) and the
 [M8 runbook](metropolis-m8-runbook.md).
 
 ### M9. Hardening and submission
@@ -497,6 +500,7 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-10-01 | M6 exhaustive sweep rerun in both settlement modes | [M6 progress](metropolis-m6-progress.md); coordinator `--ignored` test |
 | 2026-10-02 | M7 direct suite-2 grants and independent funded CLI/MCP auditor | [M7 decisions](metropolis-m7-decisions.md) and [M7 progress](metropolis-m7-progress.md) |
 | 2026-10-02 | M8 live Monad network and verifier-readiness verification | [M8 progress](metropolis-m8-progress.md) and `sdk/evm/src/readiness.rs` |
+| 2026-10-02 | M8 verified ErebusSettlement deployment on Monad testnet | [Manifest](../contracts/evm/deployments/monad-testnet.json) and [M8 progress](metropolis-m8-progress.md) |
 
 M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.

@@ -1,0 +1,18 @@
+{
+  "network": "monad-testnet",
+  "chainId": 10143,
+  "namespace": "eip155:10143",
+  "settlementContract": "0xa5f0c864f434331bef9a7fc5e05450d598d24da4",
+  "deploymentTransaction": "0x6c7b810c837c038753815df985c3b9ce210be3b40df6fab4ec0682e1a271ca65",
+  "deploymentBlock": 67495473,
+  "verifierVersion": 1,
+  "artifact": "contracts/evm/out/ErebusSettlement.sol/ErebusSettlement.json",
+  "sourceCommit": "b20123a34df3ea990bbc7bf21bb700dc7c2ee55a",
+  "verified": {
+    "checker": "scripts/check-evm-deployment.py",
+    "finalizedBlockHash": "0x1b01c4fac8ce92fa33496b80752a0bdfbed65eb2aeaec6c21aac878b551e2aa6",
+    "codeLength": 15652,
+    "verifierVersionOnChain": 1,
+    "verifiedAt": "2026-10-02"
+  }
+}
