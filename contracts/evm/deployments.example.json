@@ -1,0 +1,10 @@
+{
+  "network": "monad-testnet",
+  "chainId": 10143,
+  "settlementContract": "0x0000000000000000000000000000000000000000",
+  "deploymentTransaction": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "verifierVersion": 1,
+  "artifact": "contracts/evm/out/ErebusSettlement.sol/ErebusSettlement.json",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "notes": "Copy to deployments/<network>.json after a verified deployment. Never commit a private key. Verify with scripts/check-evm-deployment.py before recording an address."
+}

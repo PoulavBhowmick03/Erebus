@@ -9,3 +9,13 @@ optimizer = false
 # The known-answer vectors live in the Rust core so there is exactly one generated copy. Tests
 # read them in place; regenerating the vectors is a change to `sdk/core`, not to a test fixture.
 fs_permissions = [{ access = "read", path = "../../sdk/core/tests/fixtures" }]
+
+# Monad execution profile. Requires Foundry v1.8 or later: the official release includes Monad
+# execution (gas model, opcode pricing, precompiles, size limits); earlier releases do not.
+# Use `FOUNDRY_PROFILE=monad forge test` on a v1.8+ toolchain. The default profile keeps the
+# pinned EVM semantics this repository tests locally.
+# Monad testnet runs the MonadNine revision (docs.monad.xyz network information, 2026-10-02).
+[profile.monad]
+inherits = "default"
+network = "monad"
+hardfork = "monad:MonadNine"

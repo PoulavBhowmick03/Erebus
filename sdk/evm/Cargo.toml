@@ -40,6 +40,10 @@ path = "src/bin/erebus_tx_relayer.rs"
 name = "erebus-disclosure"
 path = "src/bin/erebus_disclosure.rs"
 
+[[bin]]
+name = "erebus-network-check"
+path = "src/bin/erebus_network_check.rs"
+
 [dev-dependencies]
 tempfile = "3"
 # The RPC fault proxy needs a TCP listener and async read/write in tests only.
