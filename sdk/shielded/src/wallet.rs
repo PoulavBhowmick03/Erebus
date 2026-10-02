@@ -8,12 +8,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
     XChaCha20Poly1305,
 };
+use erebus_journal::{Boundary, FaultHook, NoFaults, Step};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
@@ -269,6 +271,17 @@ impl OwnedNote {
 pub struct WalletSnapshot {
     version: u32,
     notes: Vec<OwnedNote>,
+    #[serde(default)]
+    transfers: Vec<TransferReservation>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TransferReservation {
+    operation: [u8; 32],
+    input: [u8; 32],
+    binding: [u8; 32],
+    change: Option<[u8; 32]>,
+    released: bool,
 }
 
 impl Default for WalletSnapshot {
@@ -276,11 +289,67 @@ impl Default for WalletSnapshot {
         Self {
             version: 1,
             notes: Vec::new(),
+            transfers: Vec::new(),
         }
     }
 }
 
 impl WalletSnapshot {
+    /// Finds an explicit input available to this operation, including its own reservation.
+    pub fn spendable_for(&self, commitment: &[u8; 32], operation: [u8; 32]) -> Option<&OwnedNote> {
+        if operation == [0; 32] {
+            return None;
+        }
+        self.notes.iter().find(|note| {
+            &note.commitment == commitment
+                && note.inclusion.is_some()
+                && note.consumption.is_none()
+                && note
+                    .reserved_operation
+                    .is_none_or(|owner| owner == operation)
+        })
+    }
+
+    /// Binds an operation to its input, agreement binding, and change opening.
+    /// Call through `WalletStore::update` to make the transition durable before proving.
+    pub fn reserve_transfer(
+        &mut self,
+        operation: [u8; 32],
+        input: [u8; 32],
+        binding: [u8; 32],
+        change: Option<OwnedNote>,
+    ) -> Result<(), WalletError> {
+        if binding == [0; 32]
+            || self.spendable_for(&input, operation).is_none()
+            || self
+                .notes
+                .iter()
+                .any(|note| note.reserved_operation == Some(operation) && note.commitment != input)
+        {
+            return Err(WalletError::Note("transfer input unavailable"));
+        }
+        let reservation = TransferReservation {
+            operation,
+            input,
+            binding,
+            change: change.as_ref().map(OwnedNote::commitment),
+            released: false,
+        };
+        if let Some(existing) = self.transfers.iter().find(|r| r.operation == operation) {
+            return if existing == &reservation {
+                Ok(())
+            } else {
+                Err(WalletError::Note("operation binding mismatch"))
+            };
+        }
+        if let Some(change) = change {
+            self.add(change)?;
+        }
+        self.reserve(&input, operation)?;
+        self.transfers.push(reservation);
+        Ok(())
+    }
+
     /// Read-only note inventory. Each note's secret remains private to this process.
     pub fn notes(&self) -> &[OwnedNote] {
         &self.notes
@@ -331,6 +400,15 @@ impl WalletSnapshot {
         if operation == [0; 32] {
             return Err(WalletError::Note("zero operation identity"));
         }
+        if self.notes.iter().any(|note| {
+            note.reserved_operation == Some(operation) && &note.commitment != commitment
+        }) || self
+            .transfers
+            .iter()
+            .any(|r| r.operation == operation && (r.released || &r.input != commitment))
+        {
+            return Err(WalletError::Note("operation binding mismatch"));
+        }
         let note = self
             .notes
             .iter_mut()
@@ -362,6 +440,9 @@ impl WalletSnapshot {
             return Err(WalletError::Note("reservation mismatch"));
         }
         note.reserved_operation = None;
+        if let Some(reservation) = self.transfers.iter_mut().find(|r| r.operation == operation) {
+            reservation.released = true;
+        }
         Ok(())
     }
 
@@ -449,6 +530,23 @@ impl WalletSnapshot {
                 return Err(WalletError::Note("duplicate stored note"));
             }
         }
+        let mut operations = HashSet::new();
+        for transfer in &self.transfers {
+            if transfer.operation == [0; 32]
+                || transfer.binding == [0; 32]
+                || !operations.insert(transfer.operation)
+                || !self.notes.iter().any(|note| {
+                    note.commitment == transfer.input
+                        && (transfer.released
+                            || note.reserved_operation == Some(transfer.operation))
+                })
+                || transfer.change.is_some_and(|change| {
+                    change == transfer.input || !commitments.contains(&change)
+                })
+            {
+                return Err(WalletError::Note("invalid transfer reservation"));
+            }
+        }
         Ok(())
     }
 }
@@ -459,6 +557,7 @@ pub struct WalletStore {
     lock_path: PathBuf,
     domain: WalletDomain,
     key: Zeroizing<[u8; 32]>,
+    faults: Arc<dyn FaultHook>,
 }
 
 impl WalletStore {
@@ -473,6 +572,16 @@ impl WalletStore {
         domain: WalletDomain,
         key: [u8; 32],
     ) -> Result<Self, WalletError> {
+        Self::with_faults(path, domain, key, Arc::new(NoFaults))
+    }
+
+    /// Opens the same encrypted store with a hook after each durable filesystem step.
+    pub fn with_faults(
+        path: impl Into<PathBuf>,
+        domain: WalletDomain,
+        key: [u8; 32],
+        faults: Arc<dyn FaultHook>,
+    ) -> Result<Self, WalletError> {
         domain.validate()?;
         let path = path.into();
         let parent = path.parent().ok_or(WalletError::UnsafePath)?;
@@ -486,6 +595,7 @@ impl WalletStore {
             lock_path,
             domain,
             key: Zeroizing::new(key),
+            faults,
         })
     }
 
@@ -590,8 +700,20 @@ impl WalletStore {
             file.write_all(&nonce)?;
             file.write_all(&ciphertext)?;
             file.sync_all()?;
+            self.faults.after(Boundary {
+                step: Step::FileSynced,
+                path: &temp,
+            })?;
             fs::rename(&temp, &self.path)?;
+            self.faults.after(Boundary {
+                step: Step::Renamed,
+                path: &self.path,
+            })?;
             File::open(self.path.parent().ok_or(WalletError::UnsafePath)?)?.sync_all()?;
+            self.faults.after(Boundary {
+                step: Step::DirectorySynced,
+                path: self.path.parent().ok_or(WalletError::UnsafePath)?,
+            })?;
             Ok::<(), WalletError>(())
         })();
         if result.is_err() {

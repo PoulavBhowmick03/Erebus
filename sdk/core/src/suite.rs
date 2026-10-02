@@ -209,15 +209,20 @@ pub fn suite(id: u16) -> Result<&'static dyn Suite, SuiteError> {
 /// Reports whether a suite id is implemented.
 #[must_use]
 pub fn is_supported(id: u16) -> bool {
-    matches!(id, EVM_SECP256K1_KECCAK_SUITE_ID | SHIELDED_POSEIDON_EDDSA_SUITE_ID)
+    matches!(
+        id,
+        EVM_SECP256K1_KECCAK_SUITE_ID | SHIELDED_POSEIDON_EDDSA_SUITE_ID
+    )
 }
 
 /// Rejects suite/mode combinations without an implemented settlement specification.
 pub fn check_mode(suite_id: u16, mode: SettlementMode) -> Result<(), SuiteError> {
     suite(suite_id)?;
-    let supported = matches!((suite_id, mode),
+    let supported = matches!(
+        (suite_id, mode),
         (EVM_SECP256K1_KECCAK_SUITE_ID, SettlementMode::PublicBound)
-        | (SHIELDED_POSEIDON_EDDSA_SUITE_ID, SettlementMode::Shielded));
+            | (SHIELDED_POSEIDON_EDDSA_SUITE_ID, SettlementMode::Shielded)
+    );
     if !supported {
         return Err(SuiteError::UnsupportedMode { suite_id, mode });
     }

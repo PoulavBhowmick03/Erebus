@@ -109,6 +109,186 @@ pub fn encode_allowance_call(owner: &[u8; 20], spender: &[u8; 20]) -> Vec<u8> {
     out
 }
 
+/// The `consumedDeals(bytes32)` selector: the public getter for the contract's replay map.
+#[must_use]
+pub fn consumed_deals_selector() -> [u8; 4] {
+    selector("consumedDeals(bytes32)")
+}
+
+/// Encodes the `consumedDeals(bytes32)` calldata for an `eth_call`.
+#[must_use]
+pub fn encode_consumed_deals_call(deal_nullifier: &[u8; 32]) -> Vec<u8> {
+    let mut out = consumed_deals_selector().to_vec();
+    out.extend_from_slice(deal_nullifier);
+    out
+}
+
+/// Decodes one ABI `bool` return word.
+///
+/// Exactly 32 bytes whose value is 0 or 1; anything else is not a `bool` the contract returned.
+#[must_use]
+pub fn decode_bool_word(data: &[u8]) -> Option<bool> {
+    let word: &[u8; 32] = data.try_into().ok()?;
+    if word[..31] != [0u8; 31] {
+        return None;
+    }
+    match word[31] {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
+}
+
+/// ABI data could not be decoded into the expected shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("ABI decode error: {0}")]
+pub struct AbiDecodeError(pub &'static str);
+
+/// The arguments of one `settle(bytes,bytes32,bytes,bytes,address)` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettleCall {
+    /// Canonical agreement terms bytes.
+    pub terms: Vec<u8>,
+    /// Commitment blinding.
+    pub blinding: [u8; 32],
+    /// Buyer authorization signature as submitted.
+    pub buyer_signature: Vec<u8>,
+    /// Seller authorization signature as submitted.
+    pub seller_signature: Vec<u8>,
+    /// ERC-20 token argument.
+    pub token: [u8; 20],
+}
+
+/// Decodes `settle` calldata the way the Solidity ABI decoder accepts it.
+///
+/// A foreign submitter may use any encoder, so this does not require the canonical layout
+/// [`encode_settle_call`] produces: dynamic offsets are followed with bounds checks, as solc
+/// does. It does require what solc enforces before the function body runs: the selector, a
+/// complete head, in-bounds dynamic data, and a clean address word. Trailing calldata is
+/// ignored, as it is on chain.
+pub fn decode_settle_call(calldata: &[u8]) -> Result<SettleCall, AbiDecodeError> {
+    let selector_bytes = calldata
+        .get(..4)
+        .ok_or(AbiDecodeError("calldata shorter than a selector"))?;
+    if selector_bytes != settle_selector() {
+        return Err(AbiDecodeError("not a settle call"));
+    }
+    let arguments = &calldata[4..];
+    let terms = dynamic_argument(arguments, 0)?.to_vec();
+    let blinding = *word(arguments, 1)?;
+    let buyer_signature = dynamic_argument(arguments, 2)?.to_vec();
+    let seller_signature = dynamic_argument(arguments, 3)?.to_vec();
+    let token = address_word(word(arguments, 4)?)?;
+    Ok(SettleCall {
+        terms,
+        blinding,
+        buyer_signature,
+        seller_signature,
+        token,
+    })
+}
+
+/// The decoded fields of one `DealSettled` log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DealSettledFields {
+    /// Indexed deal commitment (topic 1).
+    pub commitment: [u8; 32],
+    /// Indexed deal nullifier (topic 2).
+    pub deal_nullifier: [u8; 32],
+    /// Indexed buyer, the payer (topic 3).
+    pub buyer: [u8; 20],
+    /// Payment recipient.
+    pub payment_recipient: [u8; 20],
+    /// ERC-20 token.
+    pub token: [u8; 20],
+    /// Amount paid to the recipient.
+    pub amount: u128,
+    /// Fee paid to the fee recipient.
+    pub fee: u128,
+}
+
+/// Decodes a `DealSettled` log from its topics and data.
+///
+/// The amounts are `uint256` in the event but `u128` in the agreement, so a value that does not
+/// fit is rejected rather than truncated.
+pub fn decode_deal_settled(
+    topics: &[[u8; 32]],
+    data: &[u8],
+) -> Result<DealSettledFields, AbiDecodeError> {
+    let [topic0, commitment, deal_nullifier, buyer] = topics else {
+        return Err(AbiDecodeError("DealSettled has four topics"));
+    };
+    if *topic0 != deal_settled_topic() {
+        return Err(AbiDecodeError("not a DealSettled log"));
+    }
+    if data.len() != 128 {
+        return Err(AbiDecodeError("DealSettled data is four words"));
+    }
+    Ok(DealSettledFields {
+        commitment: *commitment,
+        deal_nullifier: *deal_nullifier,
+        buyer: address_word(buyer)?,
+        payment_recipient: address_word(word(data, 0)?)?,
+        token: address_word(word(data, 1)?)?,
+        amount: u128_word(word(data, 2)?)?,
+        fee: u128_word(word(data, 3)?)?,
+    })
+}
+
+fn word(data: &[u8], index: usize) -> Result<&[u8; 32], AbiDecodeError> {
+    let start = index
+        .checked_mul(32)
+        .ok_or(AbiDecodeError("word index overflow"))?;
+    data.get(start..start + 32)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(AbiDecodeError("truncated head"))
+}
+
+fn usize_word(word: &[u8; 32]) -> Result<usize, AbiDecodeError> {
+    if word[..24] != [0u8; 24] {
+        return Err(AbiDecodeError("offset or length out of range"));
+    }
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&word[24..]);
+    usize::try_from(u64::from_be_bytes(low)).map_err(|_| AbiDecodeError("offset out of range"))
+}
+
+fn dynamic_argument(arguments: &[u8], index: usize) -> Result<&[u8], AbiDecodeError> {
+    let offset = usize_word(word(arguments, index)?)?;
+    let length_end = offset
+        .checked_add(32)
+        .ok_or(AbiDecodeError("offset overflow"))?;
+    let length_word: &[u8; 32] = arguments
+        .get(offset..length_end)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(AbiDecodeError("dynamic offset out of bounds"))?;
+    let length = usize_word(length_word)?;
+    let end = length_end
+        .checked_add(length)
+        .ok_or(AbiDecodeError("length overflow"))?;
+    arguments
+        .get(length_end..end)
+        .ok_or(AbiDecodeError("dynamic data out of bounds"))
+}
+
+fn address_word(word: &[u8; 32]) -> Result<[u8; 20], AbiDecodeError> {
+    if word[..12] != [0u8; 12] {
+        return Err(AbiDecodeError("address word has dirty high bytes"));
+    }
+    let mut address = [0u8; 20];
+    address.copy_from_slice(&word[12..]);
+    Ok(address)
+}
+
+fn u128_word(word: &[u8; 32]) -> Result<u128, AbiDecodeError> {
+    if word[..16] != [0u8; 16] {
+        return Err(AbiDecodeError("amount exceeds u128"));
+    }
+    let mut low = [0u8; 16];
+    low.copy_from_slice(&word[16..]);
+    Ok(u128::from_be_bytes(low))
+}
+
 struct Encoder {
     head: Vec<[u8; 32]>,
     tail: Vec<u8>,

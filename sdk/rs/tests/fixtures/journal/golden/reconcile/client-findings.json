@@ -1,0 +1,1061 @@
+[
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1a01000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1a02000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1a03000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1a04000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1a0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "signed",
+    "transaction_hash": "0x1a0400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1a05000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1a0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1a0500beef"
+  },
+  {
+    "accepted_at": 1700000120,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_1a06000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "accepted",
+    "transaction_hash": "0x1a0600beef"
+  },
+  {
+    "accepted_at": 1700000121,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1a07000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "committed",
+    "transaction_hash": "0x1a0700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1a08000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": null,
+    "stage": "reverted",
+    "transaction_hash": "0x1a0800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1a09000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": null,
+    "stage": "needs_attention",
+    "transaction_hash": "0x1a0900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1a0a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1a0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1a0a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1a0b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1b01000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1b02000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1b03000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1b04000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1b0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "signed",
+    "transaction_hash": "0x1b0400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1b05000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1b0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1b0500beef"
+  },
+  {
+    "accepted_at": 1700000120,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_1b06000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "accepted",
+    "transaction_hash": "0x1b0600beef"
+  },
+  {
+    "accepted_at": 1700000121,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1b07000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "committed",
+    "transaction_hash": "0x1b0700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1b08000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": null,
+    "stage": "reverted",
+    "transaction_hash": "0x1b0800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1b09000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": null,
+    "stage": "needs_attention",
+    "transaction_hash": "0x1b0900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1b0a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "transaction 0x1b0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1b0a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1b0b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c01000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c02000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c03000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c04000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x1c0400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": null,
+    "stage": "signed",
+    "transaction_hash": "0x1c0400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c05000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x1c0500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1c0500beef"
+  },
+  {
+    "accepted_at": 1700000120,
+    "channel": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_1c06000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "accepted",
+    "transaction_hash": "0x1c0600beef"
+  },
+  {
+    "accepted_at": 1700000121,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1c07000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the attempt has no durable completion plan",
+    "request": null,
+    "stage": "committed",
+    "transaction_hash": "0x1c0700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c08000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": null,
+    "stage": "reverted",
+    "transaction_hash": "0x1c0800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_1c09000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": null,
+    "stage": "needs_attention",
+    "transaction_hash": "0x1c0900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "wait",
+    "operation": "shield",
+    "operation_id": "op_1c0a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "pending",
+    "reason": "transaction 0x1c0a01beef is absent but nonce 0x6 is still current, so it may yet be included",
+    "request": null,
+    "stage": "submitted",
+    "transaction_hash": "0x1c0a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_1c0b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2001000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1001",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2002000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1002",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2003000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1003",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2004000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x200400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1004",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "signed",
+    "transaction_hash": "0x200400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2005000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x200500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1005",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x200500beef"
+  },
+  {
+    "accepted_at": 1700000120,
+    "channel": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_2006000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "channel ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is missing, so a cursor-only mutation cannot rebuild it",
+    "request": {
+      "handle": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      "method": "propose_offer",
+      "terms": {
+        "amount": "1006",
+        "deadline": 1790000000,
+        "memo_hash": "0x0",
+        "token": "0x53545f"
+      }
+    },
+    "stage": "accepted",
+    "transaction_hash": "0x200600beef"
+  },
+  {
+    "accepted_at": 1700000121,
+    "channel": null,
+    "next_action": "none",
+    "operation": "shield",
+    "operation_id": "op_2007000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "amount": "1007",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": "0x200700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_2008000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": {
+      "amount": "1008",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "reverted",
+    "transaction_hash": "0x200800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_2009000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": {
+      "amount": "1009",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "needs_attention",
+    "transaction_hash": "0x200900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "wait",
+    "operation": "shield",
+    "operation_id": "op_200a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "pending",
+    "reason": "transaction 0x200a01beef is absent but nonce 0x6 is still current, so it may yet be included",
+    "request": {
+      "amount": "1010",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x200a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_200b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1011",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "none",
+    "operation": "open_channel",
+    "operation_id": "op_200c000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "counterparty": "0x55",
+      "method": "open_channel",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_200d000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_200e000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3001000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1001",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3002000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1002",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3003000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1003",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3004000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x300400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1004",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "signed",
+    "transaction_hash": "0x300400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3005000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x300500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1005",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x300500beef"
+  },
+  {
+    "accepted_at": 1787000120,
+    "channel": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_3006000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "channel ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is missing, so a cursor-only mutation cannot rebuild it",
+    "request": {
+      "handle": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      "method": "propose_offer",
+      "terms": {
+        "amount": "1006",
+        "deadline": 1790000000,
+        "memo_hash": "0x0",
+        "token": "0x53545f"
+      }
+    },
+    "stage": "accepted",
+    "transaction_hash": "0x300600beef"
+  },
+  {
+    "accepted_at": 1787000121,
+    "channel": null,
+    "next_action": "none",
+    "operation": "shield",
+    "operation_id": "op_3007000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "amount": "1007",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": "0x300700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_3008000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": {
+      "amount": "1008",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "reverted",
+    "transaction_hash": "0x300800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_3009000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": {
+      "amount": "1009",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "needs_attention",
+    "transaction_hash": "0x300900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "wait",
+    "operation": "shield",
+    "operation_id": "op_300a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "pending",
+    "reason": "transaction 0x300a01beef is absent but nonce 0x6 is still current, so it may yet be included",
+    "request": {
+      "amount": "1010",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x300a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_300b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1011",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "none",
+    "operation": "open_channel",
+    "operation_id": "op_300c000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "counterparty": "0x55",
+      "method": "open_channel",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_300d000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_300e000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4001000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1001",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4002000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1002",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "prepared",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4003000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1003",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "proven",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4004000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x400400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1004",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "signed",
+    "transaction_hash": "0x400400beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4005000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "transaction 0x400500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+    "request": {
+      "amount": "1005",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x400500beef"
+  },
+  {
+    "accepted_at": 1787000120,
+    "channel": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+    "next_action": "operator_attention",
+    "operation": "propose_offer",
+    "operation_id": "op_4006000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "channel ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4 is missing, so a cursor-only mutation cannot rebuild it",
+    "request": {
+      "handle": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+      "method": "propose_offer",
+      "terms": {
+        "amount": "1006",
+        "deadline": 1790000000,
+        "memo_hash": "0x0",
+        "token": "0x53545f"
+      }
+    },
+    "stage": "accepted",
+    "transaction_hash": "0x400600beef"
+  },
+  {
+    "accepted_at": 1787000121,
+    "channel": null,
+    "next_action": "none",
+    "operation": "shield",
+    "operation_id": "op_4007000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "amount": "1007",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": "0x400700beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_4008000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "reverted",
+    "reason": "the transaction was included and reverted, so no effect exists",
+    "request": {
+      "amount": "1008",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "reverted",
+    "transaction_hash": "0x400800beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "operator_attention",
+    "operation": "shield",
+    "operation_id": "op_4009000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "unknown",
+    "reason": "a previous run could not classify this attempt",
+    "request": {
+      "amount": "1009",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "needs_attention",
+    "transaction_hash": "0x400900beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "wait",
+    "operation": "shield",
+    "operation_id": "op_400a000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "pending",
+    "reason": "transaction 0x400a01beef is absent but nonce 0x6 is still current, so it may yet be included",
+    "request": {
+      "amount": "1010",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "submitted",
+    "transaction_hash": "0x400a01beef"
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_400b000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": {
+      "amount": "1011",
+      "method": "shield",
+      "wire_version": "v3"
+    },
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "none",
+    "operation": "open_channel",
+    "operation_id": "op_400c000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "effect",
+    "reason": "the chain effect, local state, and result agree",
+    "request": {
+      "counterparty": "0x55",
+      "method": "open_channel",
+      "wire_version": "v3"
+    },
+    "stage": "committed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_400d000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "claimed",
+    "transaction_hash": null
+  },
+  {
+    "accepted_at": null,
+    "channel": null,
+    "next_action": "safe_to_retry",
+    "operation": "shield",
+    "operation_id": "op_400e000000000000000000000000000000000000000000000000000000000000",
+    "outcome": "no_effect",
+    "reason": "no transaction was ever signed, so nothing reached the chain",
+    "request": null,
+    "stage": "prepared",
+    "transaction_hash": null
+  }
+]

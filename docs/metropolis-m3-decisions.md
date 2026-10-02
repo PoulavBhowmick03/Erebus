@@ -112,6 +112,12 @@ guarantee bit except `agreement-bound-settlement`, so a direct caller cannot byp
 
 ## DM3-9. Finality and the receipt
 
+**Superseded by M6 on 2026-10-01.** The owner chose removal of the legacy backend submission
+and receipt APIs. Supported recovery now requires paired explicit `finalized` evidence;
+confirmation counts are not finality. See [DM6-4](metropolis-m6-decisions.md#dm6-4-evm-operation-record-and-stages)
+and [DM6-5](metropolis-m6-decisions.md#dm6-5-finality-source-and-evidence-quorum).
+The following records the original M3 behavior.
+
 `verify` requires the exact transaction destination and calldata that the prepared evidence
 produces. A successful transaction must also contain one matching `DealSettled` event from the
 configured contract. The event must match the commitment, nullifier, buyer, recipient, token,

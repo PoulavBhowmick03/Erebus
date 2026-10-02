@@ -4,22 +4,23 @@
 //! on-chain effect. Nothing here decides *what* to do about a half-finished operation —
 //! that is reconciliation's job. This module records facts and refuses to lose them.
 //!
-//! Storage mirrors [`crate::state`]: one file per record under a `0700` directory, `0600`
-//! on the files, an advisory lock per record, and replacement by atomic rename. It adds one
-//! thing `state` does not do: the parent directory is synced after the rename, because a
+//! Storage is the chain-neutral [`erebus_journal`] engine, shared with the EVM backends:
+//! one file per record under a `0700` directory, `0600` on the files, an advisory lock per
+//! record, replacement by atomic rename, and a directory sync after the rename, because a
 //! rename that survives only in the page cache is exactly the durability this module exists
-//! to provide.
+//! to provide. What stays here is Starknet's: the record types and their serde layout, the
+//! stage table, and the lease that walks a record through it.
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use erebus_journal::{
+    IdentityLock, JournalRecord, PruneDecision, RecordId, RecordLock, Store, StoreError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use starknet_types_core::felt::Felt;
+
+pub use erebus_journal::PruneReport;
 
 use crate::operation::{OperationId, RequestBinding, WriteOperation};
 use crate::rpc::Receipt;
@@ -257,49 +258,55 @@ impl OperationRecord {
     }
 }
 
-/// Locked, on-disk store of operation records.
-/// What a [`OperationJournal::prune`] sweep did, and what it deliberately left alone.
-///
-/// The retained counts are the useful half. A prune that silently kept things would be
-/// indistinguishable from one that had nothing to do, and "the journal is not growing" is
-/// exactly the belief an operator should not hold on faith.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct PruneReport {
-    /// Records removed, with their lock files and stored transactions.
-    pub pruned: usize,
-    /// Kept because they are not terminal, so they may still need an explicit resume.
-    /// `NeedsAttention` is counted here: it is not terminal precisely because a person still
-    /// has to look at it.
-    pub retained_unfinished: usize,
-    /// Kept because they finished more recently than the retention window.
-    pub retained_recent: usize,
-    /// Kept because another process holds the record's lock. Pruning never waits.
-    pub retained_locked: usize,
+impl JournalRecord for OperationRecord {
+    type Id = OperationId;
+
+    const CURRENT_VERSION: u32 = JOURNAL_VERSION;
+    const OLDEST_READABLE_VERSION: u32 = MIN_READABLE_JOURNAL_VERSION;
+
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    fn record_id(&self) -> &OperationId {
+        &self.operation_id
+    }
+
+    fn attempt_count(&self) -> usize {
+        self.attempts.len()
+    }
 }
 
-impl PruneReport {
-    /// Total records the sweep looked at.
-    pub fn examined(&self) -> usize {
-        self.pruned + self.retained_unfinished + self.retained_recent + self.retained_locked
+impl RecordId for OperationId {
+    fn as_file_stem(&self) -> &str {
+        self.as_str()
+    }
+
+    fn from_file_stem(stem: &str) -> Option<Self> {
+        Self::parse(stem.to_owned()).ok()
     }
 }
 
 /// Locked, on-disk store of operation records.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OperationJournal {
-    root: PathBuf,
+    store: Store<OperationRecord>,
+}
+
+impl core::fmt::Debug for OperationJournal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OperationJournal")
+            .field("root", &self.store.root())
+            .finish()
+    }
 }
 
 impl OperationJournal {
     /// Opens or creates the journal below an identity state directory.
     pub fn new(state_dir: impl AsRef<Path>) -> Result<Self, JournalError> {
-        let root = state_dir.as_ref().join(JOURNAL_DIR);
-        std::fs::create_dir_all(&root).map_err(|source| JournalError::Io {
-            path: root.clone(),
-            source,
-        })?;
-        set_mode(&root, 0o700)?;
-        Ok(Self { root })
+        let store = Store::open(state_dir.as_ref().join(JOURNAL_DIR))?;
+        Ok(Self { store })
     }
 
     /// Claims an operation id for a request, or reopens the record already under it.
@@ -347,11 +354,10 @@ impl OperationJournal {
         request: Option<Value>,
         now: u64,
     ) -> Result<OperationLease, JournalError> {
-        let identity_lock = self.identity_lock()?;
-        let lock = self.lock_file(operation_id)?;
-        let path = self.record_path(operation_id);
+        let identity_lock = self.store.lock_identity()?;
+        let lock = self.store.lock_record(operation_id)?;
 
-        let record = match self.read(&path)? {
+        let record = match self.store.read(operation_id)? {
             Some(mut record) => {
                 if record.binding != binding {
                     return Err(JournalError::BindingConflict {
@@ -400,12 +406,11 @@ impl OperationJournal {
             },
         };
         if record.version == JOURNAL_VERSION {
-            write_atomic(&self.root, &path, &record)?;
+            self.store.write(&record)?;
         }
 
         Ok(OperationLease {
-            root: self.root.clone(),
-            path,
+            store: self.store.clone(),
             _identity_lock: identity_lock,
             _lock: lock,
             record,
@@ -414,52 +419,26 @@ impl OperationJournal {
 
     /// Locks and loads an existing record, or `None` if the id was never claimed.
     pub fn lock(&self, operation_id: &OperationId) -> Result<Option<OperationLease>, JournalError> {
-        let path = self.record_path(operation_id);
-        if !path.exists() {
+        if !self.store.contains(operation_id) {
             return Ok(None);
         }
-        let identity_lock = self.identity_lock()?;
-        let lock = self.lock_file(operation_id)?;
-        let Some(record) = self.read(&path)? else {
+        let identity_lock = self.store.lock_identity()?;
+        let lock = self.store.lock_record(operation_id)?;
+        let Some(record) = self.store.read(operation_id)? else {
             return Ok(None);
         };
         Ok(Some(OperationLease {
-            root: self.root.clone(),
-            path,
+            store: self.store.clone(),
             _identity_lock: identity_lock,
             _lock: lock,
             record,
         }))
     }
 
-    fn identity_lock(&self) -> Result<File, JournalError> {
-        let path = self.root.join(".identity.lock");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|source| JournalError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        set_file_mode(&lock, &path, 0o600)?;
-        lock.lock_exclusive()
-            .map_err(|source| JournalError::Io { path, source })?;
-        Ok(lock)
-    }
-
-    /// What a prune did, and what it deliberately left alone.
-    ///
-    /// The retained counts are the useful half. A prune that silently kept things would be
-    /// indistinguishable from one that had nothing to do, and "the journal is not growing"
-    /// is exactly the belief an operator should not hold on faith.
+    /// Deletes finished records older than `older_than_seconds`, and reports what it kept.
     ///
     /// Removing a record removes its lock file and every stored transaction with it, so the
-    /// counts below describe whole operations rather than files.
-    ///
-    /// Deletes finished records older than `older_than_seconds`.
+    /// counts in the [`PruneReport`] describe whole operations rather than files.
     ///
     /// Nothing here is a judgement call about disk space. The rule is narrow on purpose:
     ///
@@ -478,65 +457,18 @@ impl OperationJournal {
     /// another process is skipped rather than waited for: pruning is maintenance and must
     /// never block, or stall, a real operation.
     pub fn prune(&self, older_than_seconds: u64, now: u64) -> Result<PruneReport, JournalError> {
-        let _identity_lock = self.identity_lock()?;
-        let mut report = PruneReport::default();
-
-        for record in self.records()? {
+        Ok(self.store.prune(|record| {
             if !record.stage().is_terminal() {
-                report.retained_unfinished += 1;
-                continue;
+                return PruneDecision::RetainUnfinished;
             }
             // Saturating: a clock that moved backwards must not underflow into "infinitely
             // old" and delete a record that was written seconds ago.
             let age = now.saturating_sub(record.attempt().updated_at);
             if age < older_than_seconds {
-                report.retained_recent += 1;
-                continue;
+                return PruneDecision::RetainRecent;
             }
-            if self.remove(&record)? {
-                report.pruned += 1;
-            } else {
-                report.retained_locked += 1;
-            }
-        }
-        Ok(report)
-    }
-
-    /// Removes one record and everything filed under its id. `false` if it is locked.
-    ///
-    /// The record goes last. If the process dies mid-removal, what is left is a record whose
-    /// stored transaction is missing, and the journal already treats that as a distinct,
-    /// loud condition rather than as "never submitted". Removing the record first would
-    /// instead leave orphan blobs that nothing knows the id of.
-    fn remove(&self, record: &OperationRecord) -> Result<bool, JournalError> {
-        let lock_path = self
-            .root
-            .join(format!("{}.lock", record.operation_id.as_str()));
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| JournalError::Io {
-                path: lock_path.clone(),
-                source,
-            })?;
-        if lock.try_lock_exclusive().is_err() {
-            return Ok(false);
-        }
-
-        for index in 0..record.attempts.len() {
-            let path = self
-                .root
-                .join(format!("{}.{index}.tx", record.operation_id.as_str()));
-            remove_if_present(&path)?;
-        }
-        remove_if_present(&self.record_path(&record.operation_id))?;
-        drop(lock);
-        remove_if_present(&lock_path)?;
-        sync_dir(&self.root)?;
-        Ok(true)
+            PruneDecision::Remove
+        })?)
     }
 
     /// Every record in the journal, in unspecified order.
@@ -545,25 +477,7 @@ impl OperationJournal {
     /// skipped a record it could not parse would report "nothing pending" for an operation
     /// that may have landed, which is the one answer that must never be guessed.
     pub fn records(&self) -> Result<Vec<OperationRecord>, JournalError> {
-        let mut records = Vec::new();
-        let entries = std::fs::read_dir(&self.root).map_err(|source| JournalError::Io {
-            path: self.root.clone(),
-            source,
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|source| JournalError::Io {
-                path: self.root.clone(),
-                source,
-            })?;
-            let path = entry.path();
-            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-                continue;
-            }
-            if let Some(record) = self.read(&path)? {
-                records.push(record);
-            }
-        }
-        Ok(records)
+        Ok(self.store.records()?)
     }
 
     /// Takes an identity-wide read snapshot while excluding every write operation.
@@ -571,88 +485,19 @@ impl OperationJournal {
     /// A successful snapshot proves that no older process still holds the identity write
     /// lock. Keep the returned value alive while chain reconciliation uses its records.
     pub fn exclusive_snapshot(&self) -> Result<JournalSnapshot, JournalError> {
-        let identity_lock = self.identity_lock()?;
+        let identity_lock = self.store.lock_identity()?;
         let records = self.records()?;
         Ok(JournalSnapshot {
             records,
             _identity_lock: identity_lock,
         })
     }
-
-    fn read(&self, path: &Path) -> Result<Option<OperationRecord>, JournalError> {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => {
-                return Err(JournalError::Io {
-                    path: path.to_path_buf(),
-                    source,
-                })
-            }
-        };
-        let record: OperationRecord =
-            serde_json::from_reader(BufReader::new(file)).map_err(|source| JournalError::Json {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        if !(MIN_READABLE_JOURNAL_VERSION..=JOURNAL_VERSION).contains(&record.version) {
-            return Err(JournalError::UnsupportedVersion(record.version));
-        }
-        if record.attempts.is_empty() {
-            return Err(JournalError::Corrupt {
-                path: path.to_path_buf(),
-                reason: "record has no attempts",
-            });
-        }
-        let stem = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| JournalError::Corrupt {
-                path: path.to_path_buf(),
-                reason: "record filename is not a valid operation id",
-            })?;
-        let expected = OperationId::parse(stem.to_owned()).map_err(|_| JournalError::Corrupt {
-            path: path.to_path_buf(),
-            reason: "record filename is not a valid operation id",
-        })?;
-        if record.operation_id != expected {
-            return Err(JournalError::IdMismatch {
-                expected,
-                found: record.operation_id,
-            });
-        }
-        Ok(Some(record))
-    }
-
-    fn lock_file(&self, operation_id: &OperationId) -> Result<File, JournalError> {
-        let lock_path = self.root.join(format!("{}.lock", operation_id.as_str()));
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| JournalError::Io {
-                path: lock_path.clone(),
-                source,
-            })?;
-        set_file_mode(&lock, &lock_path, 0o600)?;
-        lock.lock_exclusive().map_err(|source| JournalError::Io {
-            path: lock_path,
-            source,
-        })?;
-        Ok(lock)
-    }
-
-    fn record_path(&self, operation_id: &OperationId) -> PathBuf {
-        self.root.join(format!("{}.json", operation_id.as_str()))
-    }
 }
 
 /// Immutable journal records protected by the identity-wide write lock.
 pub struct JournalSnapshot {
     records: Vec<OperationRecord>,
-    _identity_lock: File,
+    _identity_lock: IdentityLock,
 }
 
 impl JournalSnapshot {
@@ -668,10 +513,11 @@ impl JournalSnapshot {
 /// a stage change that lived only in memory until some later commit would be lost by exactly
 /// the crash it is meant to survive.
 pub struct OperationLease {
-    root: PathBuf,
-    path: PathBuf,
-    _identity_lock: File,
-    _lock: File,
+    store: Store<OperationRecord>,
+    // Field order is drop order: the identity lock is released before the record lock, as it
+    // always has been.
+    _identity_lock: IdentityLock,
+    _lock: RecordLock,
     record: OperationRecord,
 }
 
@@ -683,20 +529,7 @@ impl OperationLease {
 
     /// Advances the latest attempt and persists it before returning.
     pub fn advance(&mut self, stage: OperationStage, now: u64) -> Result<(), JournalError> {
-        let current = self.record.stage();
-        if !current.can_advance_to(stage) {
-            return Err(JournalError::IllegalTransition {
-                from: current,
-                to: stage,
-            });
-        }
-        let attempt = self
-            .record
-            .attempts
-            .last_mut()
-            .expect("attempts are never empty");
-        attempt.stage = stage;
-        attempt.updated_at = now;
+        advance_latest(&mut self.record, stage, now)?;
         self.flush()
     }
 
@@ -809,27 +642,39 @@ impl OperationLease {
     /// point can still discover that a transaction with this hash may be on the chain, and
     /// recovery can resubmit these exact bytes without changing the hash.
     ///
-    /// The order is deliberate: the transaction file is written and synced first, and only
-    /// then does the record claim a hash. A crash between the two leaves an orphan file and
-    /// a record that still reads as unsubmitted, which is the safe direction to fail. The
-    /// reverse order would leave a hash that nothing can resubmit.
+    /// The order is deliberate, and the storage engine owns it: the transaction file is
+    /// written and synced first, and only then does the record claim a hash. A crash between
+    /// the two leaves an orphan file and a record that still reads as unsubmitted, which is
+    /// the safe direction to fail. The reverse order would leave a hash that nothing can
+    /// resubmit.
     pub fn persist_signed(
         &mut self,
         transaction_hash: Felt,
         transaction: &str,
         now: u64,
     ) -> Result<(), JournalError> {
-        let path = self.transaction_path(self.record.attempts.len() - 1);
-        write_bytes_atomic(&self.root, &path, transaction.as_bytes())?;
-
-        let attempt = self
-            .record
-            .attempts
-            .last_mut()
-            .expect("attempts are never empty");
-        attempt.transaction_hash = Some(transaction_hash);
-        attempt.transaction_stored = true;
-        self.advance(OperationStage::Signed, now)
+        let current = self.record.stage();
+        if !current.can_advance_to(OperationStage::Signed) {
+            return Err(JournalError::IllegalTransition {
+                from: current,
+                to: OperationStage::Signed,
+            });
+        }
+        let attempt_index = self.record.attempts.len() - 1;
+        self.store.write_blob_then_record(
+            &mut self.record,
+            attempt_index,
+            transaction.as_bytes(),
+            |record| {
+                let attempt = record
+                    .attempts
+                    .last_mut()
+                    .expect("attempts are never empty");
+                attempt.transaction_hash = Some(transaction_hash);
+                attempt.transaction_stored = true;
+                advance_latest(record, OperationStage::Signed, now)
+            },
+        )
     }
 
     /// Reads back the exact signed transaction stored for one attempt.
@@ -840,33 +685,40 @@ impl OperationLease {
         if !attempt.transaction_stored {
             return Ok(None);
         }
-        let path = self.transaction_path(attempt_index);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(Some(text)),
-            // The record says a transaction was stored and it is not there. Reconciliation
-            // must not read that as "nothing was submitted".
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Err(JournalError::Corrupt {
-                    path,
-                    reason: "record claims a stored transaction that is missing",
-                })
-            }
-            Err(source) => Err(JournalError::Io { path, source }),
-        }
-    }
-
-    fn transaction_path(&self, attempt_index: usize) -> PathBuf {
-        // Deliberately not `.json`: `records()` parses every `.json` file in the directory
-        // as an operation record, and a transaction blob is not one.
-        self.root.join(format!(
-            "{}.{attempt_index}.tx",
-            self.record.operation_id.as_str()
-        ))
+        Ok(Some(self.store.read_blob_to_string(
+            &self.record.operation_id,
+            attempt_index,
+        )?))
     }
 
     fn flush(&mut self) -> Result<(), JournalError> {
-        write_atomic(&self.root, &self.path, &self.record)
+        Ok(self.store.write(&self.record)?)
     }
+}
+
+/// Moves the latest attempt to `stage` in memory, if the stage table allows it.
+///
+/// Shared by [`OperationLease::advance`] and [`OperationLease::persist_signed`], which persist
+/// the result differently. An illegal edge changes nothing.
+fn advance_latest(
+    record: &mut OperationRecord,
+    stage: OperationStage,
+    now: u64,
+) -> Result<(), JournalError> {
+    let current = record.stage();
+    if !current.can_advance_to(stage) {
+        return Err(JournalError::IllegalTransition {
+            from: current,
+            to: stage,
+        });
+    }
+    let attempt = record
+        .attempts
+        .last_mut()
+        .expect("attempts are never empty");
+    attempt.stage = stage;
+    attempt.updated_at = now;
+    Ok(())
 }
 
 impl core::fmt::Debug for OperationLease {
@@ -878,118 +730,21 @@ impl core::fmt::Debug for OperationLease {
     }
 }
 
-fn write_atomic(root: &Path, path: &Path, record: &OperationRecord) -> Result<(), JournalError> {
-    let encoded = serde_json::to_vec(record).map_err(|source| JournalError::Json {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    write_bytes_atomic(root, path, &encoded)
-}
-
-fn write_bytes_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
-    let temporary = root.join(format!(
-        ".{}.{:016x}.tmp",
-        std::process::id(),
-        OsRng.next_u64(),
-    ));
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|source| JournalError::Io {
-            path: temporary.clone(),
-            source,
-        })?;
-    set_file_mode(&file, &temporary, 0o600)?;
-    let mut writer = BufWriter::new(file);
-    writer.write_all(bytes).map_err(|source| JournalError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    writer.flush().map_err(|source| JournalError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    writer
-        .get_ref()
-        .sync_all()
-        .map_err(|source| JournalError::Io {
-            path: temporary.clone(),
-            source,
-        })?;
-    std::fs::rename(&temporary, path).map_err(|source| JournalError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    sync_dir(root)
-}
-
-/// Flushes the directory entry created by the rename.
-///
-/// Without this the file contents are durable but the name is not, so a crash can leave the
-/// record at its previous version while the caller believes it advanced.
-#[cfg(unix)]
-/// Removes a path, treating "already gone" as success.
-///
-/// A prune interrupted partway through leaves some of an operation's files removed. Rerunning
-/// it must finish the job rather than fail on the ones it already deleted.
-fn remove_if_present(path: &Path) -> Result<(), JournalError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(JournalError::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-#[cfg(unix)]
-fn sync_dir(path: &Path) -> Result<(), JournalError> {
-    File::open(path)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|source| JournalError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-#[cfg(not(unix))]
-fn sync_dir(_path: &Path) -> Result<(), JournalError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> Result<(), JournalError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|source| {
-        JournalError::Io {
-            path: path.to_path_buf(),
-            source,
+impl From<StoreError<OperationId>> for JournalError {
+    /// One to one: the storage engine's variants and their text are this enum's, so a record
+    /// that failed to load reads exactly as it did before the engine was shared.
+    fn from(error: StoreError<OperationId>) -> Self {
+        match error {
+            StoreError::Io { path, source } => Self::Io { path, source },
+            StoreError::Json { path, source } => Self::Json { path, source },
+            StoreError::UnsupportedVersion(version) => Self::UnsupportedVersion(version),
+            StoreError::Corrupt { path, reason } => Self::Corrupt {
+                path,
+                reason: reason.as_str(),
+            },
+            StoreError::IdMismatch { expected, found } => Self::IdMismatch { expected, found },
         }
-    })
-}
-
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> Result<(), JournalError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_file_mode(file: &File, path: &Path, mode: u32) -> Result<(), JournalError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    file.set_permissions(std::fs::Permissions::from_mode(mode))
-        .map_err(|source| JournalError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
-}
-
-#[cfg(not(unix))]
-fn set_file_mode(_file: &File, _path: &Path, _mode: u32) -> Result<(), JournalError> {
-    Ok(())
+    }
 }
 
 /// Journal failure. Every variant fails closed: none of them may be read as "no effect".

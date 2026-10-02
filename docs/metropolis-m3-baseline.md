@@ -3,6 +3,11 @@
 Recorded: 2026-09-22. Branch: `metropolis`. Scope: roadmap M3.
 Decisions are in [metropolis-m3-decisions.md](metropolis-m3-decisions.md).
 
+This is the historical M3 baseline, not the current API. On 2026-10-01 M6 removed backend
+`submit`, `settle`, `verify`, and `with_confirmations`. The payment tests now use coordinated
+submission and paired explicit finality. See [M6 decisions](metropolis-m6-decisions.md#dm6-4-evm-operation-record-and-stages)
+and the [migration procedure](metropolis-m6-runbook.md).
+
 ## What shipped
 
 **Contracts** (`contracts/evm`, Foundry 1.5.1, solc 0.8.24):

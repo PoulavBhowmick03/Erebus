@@ -116,7 +116,9 @@ pub fn authorization_digest(
 ) -> Result<[u8; 32], AuthError> {
     suite::suite(suite_id)?;
     if suite_id == suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID {
-        return Ok(crate::shielded::authorization_message(domain, role, commitment)?);
+        return Ok(crate::shielded::authorization_message(
+            domain, role, commitment,
+        )?);
     }
     let domain = domain.encode()?;
     Ok(suite::keccak256(&[

@@ -17,6 +17,7 @@
 
 pub mod auth;
 pub mod commitment;
+pub mod deal_state;
 pub mod domain;
 pub mod encoding;
 pub mod ids;

@@ -3,8 +3,10 @@
 //! This crate reads only caller-supplied, hash-pinned artifacts. It does not publish
 //! proving keys, choose a deployment, upload witnesses, or declare M5 release readiness.
 
+pub mod chain;
 pub mod index_store;
 pub mod indexer;
+pub mod observation;
 pub mod preparation;
 pub mod recovery;
 pub mod rpc;
@@ -423,8 +425,44 @@ pub fn build_transfer_witness_from_wallet(
         .map_err(|_| ProverError::Transfer("asset"))?;
     let note = request
         .wallet
-        .select(&asset, request.terms.amount.get())
+        .notes()
+        .iter()
+        .filter(|note| {
+            note.asset() == asset
+                && note.owner().as_slice() == request.terms.buyer_authorization_key.as_bytes()
+                && note.amount() >= request.terms.amount.get()
+                && request.wallet.spendable(&note.commitment()).is_some()
+        })
+        .min_by_key(|note| (note.amount(), note.commitment()))
         .ok_or(ProverError::Transfer("no spendable note"))?;
+    build_transfer_witness_with_note(request, note)
+}
+
+/// Builds a witness for one explicit input owned by the reserving operation.
+pub fn build_transfer_witness_for_operation(
+    request: &WalletTransferRequest<'_>,
+    input: &[u8; 32],
+    operation: [u8; 32],
+) -> Result<TransferWitness, ProverError> {
+    let note = request
+        .wallet
+        .spendable_for(input, operation)
+        .ok_or(ProverError::Transfer("operation input unavailable"))?;
+    build_transfer_witness_with_note(request, note)
+}
+
+fn build_transfer_witness_with_note(
+    request: &WalletTransferRequest<'_>,
+    note: &OwnedNote,
+) -> Result<TransferWitness, ProverError> {
+    if note.owner().as_slice() != request.terms.buyer_authorization_key.as_bytes()
+        || format!("0x{}", hex::encode(note.asset())) != request.terms.asset.asset_reference()
+    {
+        return Err(ProverError::Transfer("input owner or asset mismatch"));
+    }
+    if request.index.is_consumed(&note.nullifier()) {
+        return Err(ProverError::Transfer("input consumed in verified index"));
+    }
     let inclusion = note
         .inclusion()
         .ok_or(ProverError::Transfer("note not included"))?;

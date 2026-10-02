@@ -85,10 +85,12 @@ impl Writer {
     /// Panics on a value longer than [`MAX_FIELD_BYTES`]: fixed-width fields are protocol
     /// constants and an over-long one is a programming error, not input.
     pub fn fixed(&mut self, value: &[u8]) {
-        assert!(
-            value.len() <= MAX_FIELD_BYTES,
-            "fixed field exceeds MAX_FIELD_BYTES"
-        );
+        self.fixed_bounded(value, MAX_FIELD_BYTES);
+    }
+
+    /// Writes a fixed-width field whose caller owns a larger explicit bound.
+    pub fn fixed_bounded(&mut self, value: &[u8], max: usize) {
+        assert!(value.len() <= max, "fixed field exceeds its bound");
         self.buffer.extend_from_slice(value);
     }
 
@@ -96,11 +98,17 @@ impl Writer {
     ///
     /// Panics on a value longer than [`MAX_FIELD_BYTES`]; see [`Self::fixed`].
     pub fn bytes(&mut self, value: &[u8]) {
+        self.bytes_bounded(value, MAX_FIELD_BYTES);
+    }
+
+    /// Writes a length-prefixed field whose caller owns a larger explicit bound.
+    /// Its on-wire format is the same two-byte length used by [`Self::bytes`].
+    pub fn bytes_bounded(&mut self, value: &[u8], max: usize) {
         assert!(
-            value.len() <= MAX_FIELD_BYTES,
-            "length-prefixed field exceeds MAX_FIELD_BYTES"
+            value.len() <= max,
+            "length-prefixed field exceeds its bound"
         );
-        let length = u16::try_from(value.len()).expect("MAX_FIELD_BYTES fits in u16");
+        let length = u16::try_from(value.len()).expect("field length fits in u16");
         self.u16(length);
         self.buffer.extend_from_slice(value);
     }

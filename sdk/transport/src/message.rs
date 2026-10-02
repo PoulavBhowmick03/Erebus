@@ -15,9 +15,9 @@
 
 use core::fmt;
 
+use crate::hashing::{self, HashVersionError};
 use erebus_core::auth::Role;
 use erebus_core::encoding::{EncodingError, Reader, Writer};
-use crate::hashing::{self, HashVersionError};
 
 use crate::limits::MAX_BODY_BYTES;
 use crate::session::TRANSPORT_PROTOCOL_VERSION;
@@ -205,7 +205,7 @@ impl Message {
         writer.u64(self.sequence);
         writer.fixed(&self.parent_hash);
         writer.u8(self.message_type.tag());
-        writer.bytes(&self.body);
+        writer.bytes_bounded(&self.body, MAX_BODY_BYTES);
         writer.finish()
     }
 
@@ -214,7 +214,7 @@ impl Message {
     pub fn encode(&self) -> Vec<u8> {
         let mut writer = Writer::new();
         writer.fixed(&self.session_id);
-        writer.fixed(&self.encode_body());
+        writer.fixed_bounded(&self.encode_body(), crate::limits::MAX_MESSAGE_BYTES);
         writer.finish()
     }
 

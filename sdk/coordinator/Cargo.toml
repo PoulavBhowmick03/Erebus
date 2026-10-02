@@ -1,0 +1,25 @@
+[package]
+name = "erebus-coordinator"
+version = "0.1.0"
+edition = "2021"
+description = "Durable agreement intent and spending-policy coordination for Erebus"
+license = "Apache-2.0"
+
+[dependencies]
+erebus-core = { path = "../core" }
+erebus-journal = { path = "../journal" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zeroize = "1"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+hex = "0.4"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"

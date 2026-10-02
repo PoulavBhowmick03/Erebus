@@ -39,6 +39,27 @@ struct BlockHeader {
     number: String,
     hash: String,
     parent_hash: String,
+    timestamp: String,
+}
+
+/// Explicit RPC-finalized pool-chain anchor. This is not proof that a payment occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolFinalizedBlock {
+    /// Block number returned for the `finalized` tag.
+    pub number: u64,
+    /// Hash rechecked against the canonical numeric block lookup.
+    pub hash: [u8; 32],
+    /// Timestamp used to decide whether an agreement has expired at finality.
+    pub timestamp: u64,
+}
+
+/// Pool asset and verifier version read at one pinned block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolIdentity {
+    /// ERC-20 asset owned by this pool.
+    pub asset: [u8; 20],
+    /// Deployment-specific verifier version.
+    pub verifier_version: u32,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +84,18 @@ pub struct PoolRpc {
 }
 
 impl PoolRpc {
+    /// Endpoint identity for configuration checks. It may contain credentials; do not log it.
+    pub(crate) fn endpoint(&self) -> &str {
+        self.url.as_str()
+    }
+
+    pub(crate) fn matches_endpoint(&self, endpoint: &str) -> bool {
+        let Ok(mut endpoint) = Url::parse(endpoint) else {
+            return false;
+        };
+        endpoint.set_fragment(None);
+        endpoint == self.url
+    }
     /// EVM chain ID this source expects.
     pub fn chain_id(&self) -> u64 {
         self.chain_id
@@ -75,15 +108,26 @@ impl PoolRpc {
 
     /// Connects to one RPC and rejects zero-chain or zero-pool configurations.
     pub fn new(url: &str, chain_id: u64, pool: [u8; 20]) -> Result<Self, RpcError> {
-        if chain_id == 0 || pool == [0; 20] {
+        Self::with_timeout(url, chain_id, pool, std::time::Duration::from_secs(15))
+    }
+
+    /// Connects with an operator-selected request deadline. A timeout is never absence evidence.
+    pub fn with_timeout(
+        url: &str,
+        chain_id: u64,
+        pool: [u8; 20],
+        timeout: std::time::Duration,
+    ) -> Result<Self, RpcError> {
+        if chain_id == 0 || pool == [0; 20] || timeout.is_zero() {
             return Err(RpcError::Configuration);
         }
-        let url = Url::parse(url).map_err(|_| RpcError::Configuration)?;
+        let mut url = Url::parse(url).map_err(|_| RpcError::Configuration)?;
         if !matches!(url.scheme(), "https" | "http") {
             return Err(RpcError::Configuration);
         }
+        url.set_fragment(None);
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
+            .timeout(timeout)
             .build()
             .map_err(|_| RpcError::Configuration)?;
         Ok(Self {
@@ -133,6 +177,119 @@ impl PoolRpc {
         self.check_chain().await?;
         let value: String = self.call("eth_blockNumber", serde_json::json!([])).await?;
         quantity(&value)
+    }
+
+    /// Reads the RPC's explicit finalized anchor with no confirmation-depth fallback.
+    /// The caller must recheck this anchor after any dependent settlement reads.
+    pub async fn finalized_head(&self) -> Result<PoolFinalizedBlock, RpcError> {
+        self.check_chain().await?;
+        let finalized: BlockHeader = self
+            .call(
+                "eth_getBlockByNumber",
+                serde_json::json!(["finalized", false]),
+            )
+            .await?;
+        let number = quantity(&finalized.number)?;
+        if number > self.head().await? {
+            return Err(RpcError::Evidence("finalized block is ahead of head"));
+        }
+        let canonical = self.header(number).await?;
+        if canonical.hash != finalized.hash
+            || canonical.parent_hash != finalized.parent_hash
+            || canonical.timestamp != finalized.timestamp
+        {
+            return Err(RpcError::Evidence("finalized block is not canonical"));
+        }
+        self.check_chain().await?;
+        Ok(PoolFinalizedBlock {
+            number,
+            hash: fixed_hex::<32>(&finalized.hash)?,
+            timestamp: quantity(&finalized.timestamp)?,
+        })
+    }
+
+    /// Rechecks one block hash by its number after dependent reads.
+    pub async fn canonical_block_hash(&self, number: u64) -> Result<[u8; 32], RpcError> {
+        self.check_chain().await?;
+        fixed_hex::<32>(&self.header(number).await?.hash)
+    }
+
+    /// Reads the pool's one-time deal state at an explicitly pinned canonical block.
+    /// A local timeout or missing RPC support is an error, never an unpaid result.
+    pub async fn consumed_deal_at(
+        &self,
+        nullifier: [u8; 32],
+        block_hash: [u8; 32],
+    ) -> Result<bool, RpcError> {
+        self.check_chain().await?;
+        let mut data = Vec::with_capacity(36);
+        data.extend_from_slice(&Keccak256::digest(b"consumedDeals(uint256)")[..4]);
+        data.extend_from_slice(&nullifier);
+        let value: String = self
+            .call(
+                "eth_call",
+                serde_json::json!([
+                    {
+                        "to": format!("0x{}", hex::encode(self.pool)),
+                        "data": format!("0x{}", hex::encode(data)),
+                    },
+                    {
+                        "blockHash": format!("0x{}", hex::encode(block_hash)),
+                        "requireCanonical": true,
+                    }
+                ]),
+            )
+            .await?;
+        let word = fixed_hex::<32>(&value)?;
+        if word[..31].iter().any(|byte| *byte != 0) || word[31] > 1 {
+            return Err(RpcError::Evidence(
+                "pool deal consumption is not an ABI bool",
+            ));
+        }
+        Ok(word[31] == 1)
+    }
+
+    /// Reads immutable pool identity at a pinned canonical block.
+    pub async fn pool_identity_at(&self, block_hash: [u8; 32]) -> Result<PoolIdentity, RpcError> {
+        self.check_chain().await?;
+        let asset = self.pool_word_at_hash("asset", block_hash).await?;
+        if asset[..12].iter().any(|byte| *byte != 0) {
+            return Err(RpcError::Evidence("pool asset is not an ABI address"));
+        }
+        let version = self
+            .pool_word_at_hash("verifierVersion", block_hash)
+            .await?;
+        if version[..28].iter().any(|byte| *byte != 0) {
+            return Err(RpcError::Evidence("pool verifier version overflow"));
+        }
+        Ok(PoolIdentity {
+            asset: asset[12..].try_into().expect("fixed ABI address"),
+            verifier_version: u32::from_be_bytes(version[28..].try_into().expect("fixed ABI word")),
+        })
+    }
+
+    async fn pool_word_at_hash(
+        &self,
+        function: &'static str,
+        block_hash: [u8; 32],
+    ) -> Result<[u8; 32], RpcError> {
+        let selector = &Keccak256::digest(format!("{function}()").as_bytes())[..4];
+        let value: String = self
+            .call(
+                "eth_call",
+                serde_json::json!([
+                    {
+                        "to": format!("0x{}", hex::encode(self.pool)),
+                        "data": format!("0x{}", hex::encode(selector)),
+                    },
+                    {
+                        "blockHash": format!("0x{}", hex::encode(block_hash)),
+                        "requireCanonical": true,
+                    }
+                ]),
+            )
+            .await?;
+        fixed_hex::<32>(&value)
     }
 
     async fn header(&self, number: u64) -> Result<BlockHeader, RpcError> {
@@ -240,13 +397,30 @@ impl PoolRpc {
         }
         self.check_chain().await?;
         let mut staged = index.clone();
-        while let Some(tip) = staged.tip() {
+        if let Some(tip) = staged.tip() {
             let canonical = self.header(tip.number).await?;
-            if fixed_hex::<32>(&canonical.hash)? == tip.hash {
-                break;
+            if fixed_hex::<32>(&canonical.hash)? != tip.hash {
+                // Canonical branches share one prefix. Find its boundary without one
+                // RPC per orphaned block; u64 heights need at most 64 search steps.
+                let mut low = 0;
+                let mut high = staged.blocks().len();
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    let cached = &staged.blocks()[middle];
+                    let canonical = self.header(cached.number).await?;
+                    if fixed_hex::<32>(&canonical.hash)? == cached.hash {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                let height = staged
+                    .blocks()
+                    .get(low)
+                    .ok_or(RpcError::Evidence("chain changed during prefix search"))?
+                    .number;
+                staged.rewind_from(height)?;
             }
-            let height = tip.number;
-            staged.rewind_from(height)?;
         }
         let start = staged
             .tip()
@@ -330,8 +504,10 @@ fn decode_log(log: &RpcLog, topics: &[[u8; 32]; 3]) -> Result<PoolEvent, RpcErro
         if log.topics.len() != 4 || log.data != "0x" {
             return Err(RpcError::Evidence("transfer event shape"));
         }
-        Ok(PoolEvent::Consumed {
-            nullifier: fixed_hex::<32>(&log.topics[3])?,
+        Ok(PoolEvent::Transferred {
+            deal_commitment: fixed_hex::<32>(&log.topics[1])?,
+            deal_nullifier: fixed_hex::<32>(&log.topics[2])?,
+            input_nullifier: fixed_hex::<32>(&log.topics[3])?,
             tx_hash,
             log_index,
         })
@@ -353,6 +529,16 @@ fn decode_log(log: &RpcLog, topics: &[[u8; 32]; 3]) -> Result<PoolEvent, RpcErro
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn endpoint_identity_ignores_fragments_and_normalizes_the_root_path() {
+        let first = super::PoolRpc::new("http://127.0.0.1:9", 31_337, [3; 20]).unwrap();
+        let peer =
+            super::PoolRpc::new("http://127.0.0.1:9/#not-a-second-provider", 31_337, [3; 20])
+                .unwrap();
+        assert_eq!(first.endpoint(), peer.endpoint());
+        assert!(first.matches_endpoint("http://127.0.0.1:9/#ignored"));
+    }
+
     use super::*;
 
     #[test]
@@ -387,7 +573,11 @@ mod tests {
         log.data = "0x".to_owned();
         assert!(matches!(
             decode_log(&log, &topics),
-            Ok(PoolEvent::Consumed { .. })
+            Ok(PoolEvent::Transferred {
+                deal_nullifier,
+                input_nullifier,
+                ..
+            }) if deal_nullifier == [5; 32] && input_nullifier == [7; 32]
         ));
     }
 

@@ -1,0 +1,36 @@
+[
+  {
+    "result": "already_complete",
+    "transaction_hash": "0x400a01beef"
+  },
+  {
+    "result": "already_complete",
+    "transaction_hash": null
+  },
+  {
+    "result": "local_state_behind",
+    "transaction_hash": "0x400a01beef"
+  },
+  {
+    "result": "resubmitted",
+    "transaction_hash": "0x400a01beef"
+  },
+  {
+    "operation_result": {
+      "tx_hash": "0x400a01beef"
+    },
+    "result": "recovered_proof"
+  },
+  {
+    "operation_result": "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+    "result": "rebuilt"
+  },
+  {
+    "reason": "why",
+    "result": "rebuild_required"
+  },
+  {
+    "reason": "why",
+    "result": "reconciliation_required"
+  }
+]

@@ -1,0 +1,24 @@
+[package]
+name = "erebus-journal"
+version = "0.1.0"
+edition = "2021"
+description = "Durable operation-journal storage for Erebus settlement backends: chain-neutral, no chain dependency"
+license = "Apache-2.0"
+
+[dependencies]
+# Identity-wide and per-record advisory locks, the same primitive sdk/rs uses for channel
+# state. A one-shot CLI can have concurrent callers.
+fs2 = "0.4"
+# Records are JSON. The engine never names a field: each backend owns its record types and
+# their serde layout, and the engine only moves bytes and checks the version window and id.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Unpredictable temporary-file names, so two writers can never meet on one.
+rand = "0.8"
+thiserror = "2"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "deny"

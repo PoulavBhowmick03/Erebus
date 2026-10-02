@@ -3,7 +3,7 @@
 //! A caller must supply canonical blocks from its chosen endpoint and reconcile their hashes.
 //! This module checks event order and each emitted Poseidon root before updating wallet state.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use erebus_core::shielded::{note_root_from_path, note_tree_parent, NOTE_TREE_DEPTH};
 use serde::{Deserialize, Serialize};
@@ -38,14 +38,48 @@ pub enum PoolEvent {
         /// Log position in the block.
         log_index: u32,
     },
+    /// A shielded deal consumed one input note and produced private payment notes.
+    Transferred {
+        /// Agreement commitment bound to the private payment by the pool proof.
+        deal_commitment: [u8; 32],
+        /// One-time agreement identity consumed by the pool.
+        deal_nullifier: [u8; 32],
+        /// Input note nullifier consumed by this transfer.
+        input_nullifier: [u8; 32],
+        /// Transaction that emitted the event.
+        tx_hash: [u8; 32],
+        /// Log position in the block.
+        log_index: u32,
+    },
 }
 
 impl PoolEvent {
     fn log_index(&self) -> u32 {
         match self {
-            Self::Inserted { log_index, .. } | Self::Consumed { log_index, .. } => *log_index,
+            Self::Inserted { log_index, .. }
+            | Self::Consumed { log_index, .. }
+            | Self::Transferred { log_index, .. } => *log_index,
         }
     }
+}
+
+/// Public identity and location of one pool transfer; it reveals no payment amount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DealTransfer {
+    /// Agreement commitment bound to the proof's private payment amount.
+    pub deal_commitment: [u8; 32],
+    /// One-time deal identity.
+    pub deal_nullifier: [u8; 32],
+    /// Spent input note identity.
+    pub input_nullifier: [u8; 32],
+    /// Transaction containing the verified pool event.
+    pub tx_hash: [u8; 32],
+    /// Canonical block number.
+    pub block_number: u64,
+    /// Canonical block hash.
+    pub block_hash: [u8; 32],
+    /// Log position in the block.
+    pub log_index: u32,
 }
 
 /// One canonical block. Include empty blocks to make parent-hash continuity checkable.
@@ -88,6 +122,7 @@ pub struct PoolIndex {
     leaves: Vec<[u8; 32]>,
     commitments: HashSet<[u8; 32]>,
     nullifiers: HashSet<[u8; 32]>,
+    deals: HashMap<[u8; 32], DealTransfer>,
     root: [u8; 32],
 }
 
@@ -108,6 +143,7 @@ impl PoolIndex {
             leaves: Vec::new(),
             commitments: HashSet::new(),
             nullifiers: HashSet::new(),
+            deals: HashMap::new(),
             root: zero,
         })
     }
@@ -135,6 +171,16 @@ impl PoolIndex {
     /// All verified leaves in insertion order.
     pub fn leaves(&self) -> &[[u8; 32]] {
         &self.leaves
+    }
+
+    /// Whether the verified prefix contains this note's consumption event.
+    pub fn is_consumed(&self, nullifier: &[u8; 32]) -> bool {
+        self.nullifiers.contains(nullifier)
+    }
+
+    /// Indexed transfer for a deal, if it occurred in this verified prefix.
+    pub fn deal_transfer(&self, nullifier: &[u8; 32]) -> Option<&DealTransfer> {
+        self.deals.get(nullifier)
     }
 
     /// Constructs an inclusion path against the current verified root.
@@ -195,6 +241,7 @@ impl PoolIndex {
         let mut additions = Vec::new();
         let mut new_commitments = HashSet::new();
         let mut new_nullifiers = HashSet::new();
+        let mut new_deals = HashMap::new();
         for event in &block.events {
             if last_log.is_some_and(|last| event.log_index() <= last) {
                 return Err(IndexError::EventOrder);
@@ -246,6 +293,37 @@ impl PoolIndex {
                         return Err(IndexError::EventOrder);
                     }
                 }
+                PoolEvent::Transferred {
+                    deal_commitment,
+                    deal_nullifier,
+                    input_nullifier,
+                    tx_hash,
+                    log_index,
+                } => {
+                    if *deal_nullifier == [0; 32]
+                        || *input_nullifier == [0; 32]
+                        || *tx_hash == [0; 32]
+                        || self.nullifiers.contains(input_nullifier)
+                        || !new_nullifiers.insert(*input_nullifier)
+                        || self.deals.contains_key(deal_nullifier)
+                        || new_deals
+                            .insert(
+                                *deal_nullifier,
+                                DealTransfer {
+                                    deal_commitment: *deal_commitment,
+                                    deal_nullifier: *deal_nullifier,
+                                    input_nullifier: *input_nullifier,
+                                    tx_hash: *tx_hash,
+                                    block_number: block.number,
+                                    block_hash: block.hash,
+                                    log_index: *log_index,
+                                },
+                            )
+                            .is_some()
+                    {
+                        return Err(IndexError::EventOrder);
+                    }
+                }
             }
         }
         self.filled_subtrees = filled;
@@ -253,6 +331,7 @@ impl PoolIndex {
         self.leaves.extend(additions);
         self.commitments.extend(new_commitments);
         self.nullifiers.extend(new_nullifiers);
+        self.deals.extend(new_deals);
         self.blocks.push(block);
         Ok(())
     }
@@ -304,6 +383,20 @@ impl PoolIndex {
                     } => {
                         staged.observe_consumption(
                             nullifier,
+                            NoteConsumption {
+                                block_number: block.number,
+                                block_hash: block.hash,
+                                tx_hash: *tx_hash,
+                            },
+                        )?;
+                    }
+                    PoolEvent::Transferred {
+                        input_nullifier,
+                        tx_hash,
+                        ..
+                    } => {
+                        staged.observe_consumption(
+                            input_nullifier,
                             NoteConsumption {
                                 block_number: block.number,
                                 block_hash: block.hash,

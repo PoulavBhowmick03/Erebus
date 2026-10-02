@@ -46,6 +46,49 @@ fn temporary_journal() -> (PathBuf, OperationJournal) {
 }
 
 #[test]
+fn rejected_signing_preserves_the_original_transaction_and_record() {
+    let (_root, journal) = temporary_journal();
+    let operation_id = id(91);
+    let mut lease = journal
+        .claim(
+            &operation_id,
+            WriteOperation::Shield,
+            binding(500),
+            None,
+            1_000,
+        )
+        .unwrap();
+    assert!(matches!(
+        lease.persist_signed(Felt::from(1u64), "forbidden", 1_001),
+        Err(JournalError::IllegalTransition { .. })
+    ));
+    assert_eq!(lease.stored_transaction(0).unwrap(), None);
+    assert_eq!(lease.record().attempt().transaction_hash, None);
+    lease.advance(OperationStage::Prepared, 1_002).unwrap();
+    lease
+        .persist_signed(Felt::from(2u64), "original", 1_003)
+        .unwrap();
+    lease.advance(OperationStage::Submitted, 1_004).unwrap();
+    let before = serde_json::to_value(lease.record()).unwrap();
+    assert!(matches!(
+        lease.persist_signed(Felt::from(3u64), "replacement", 1_005),
+        Err(JournalError::IllegalTransition { .. })
+    ));
+    assert_eq!(serde_json::to_value(lease.record()).unwrap(), before);
+    assert_eq!(
+        lease.stored_transaction(0).unwrap().as_deref(),
+        Some("original")
+    );
+    drop(lease);
+    let reopened = journal.lock(&operation_id).unwrap().unwrap();
+    assert_eq!(serde_json::to_value(reopened.record()).unwrap(), before);
+    assert_eq!(
+        reopened.stored_transaction(0).unwrap().as_deref(),
+        Some("original")
+    );
+}
+
+#[test]
 fn a_claim_survives_the_process_that_wrote_it() {
     let (root, journal) = temporary_journal();
 

@@ -14,9 +14,24 @@
 //!
 //! Durable persistence of the ledger is coordinator work. This module is the accounting rule
 //! the coordinator must implement, not the store.
+//!
+//! A store restores a trusted local snapshot through [`ReservationLedger::restore`]. It does
+//! not re-evaluate old reservations against a changed policy: uncertain payments still hold
+//! capacity. Restoration checks identities and state/timestamp consistency. It does not
+//! authenticate a snapshot; the durable store must protect its integrity.
+//!
+//! Live decisions for signed revisions go through [`ReservationLedger::reconcile_deal`].
+//! It applies the whole assessment atomically, so a losing revision cannot be released
+//! while the winner's reservation is missing or invalid. Backend facts remain a trust
+//! boundary: type privacy is not independent chain verification.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::commitment::DealCommitment;
+use crate::deal_state::{
+    assess_deal, DealAssessment, DealEvidence, FinalPayment, NoEffectProof, ReservationDecision,
+    SignedRevision,
+};
 use crate::ids::{AssetId, BaseUnits, KeyBytes};
 use crate::terms::AgreementTerms;
 
@@ -187,6 +202,16 @@ impl ReservationId {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// The reservation for one signed revision, keyed by its commitment.
+    ///
+    /// Each signed revision reserves its own amount plus fee (M6 decisions DM6-7). Keying by
+    /// commitment is what lets payment and no-effect evidence find the one reservation they
+    /// are about.
+    #[must_use]
+    pub const fn for_revision(commitment: &DealCommitment) -> Self {
+        Self(*commitment.as_bytes())
+    }
 }
 
 /// Where a reservation stands.
@@ -242,6 +267,19 @@ pub enum PolicyError {
     /// Summing the amounts overflowed 128 bits.
     #[error("reservation totals overflowed 128 bits")]
     ArithmeticOverflow,
+    /// A persisted snapshot has an impossible state or timestamp combination.
+    #[error("reservation snapshot has invalid state or timestamps")]
+    InvalidSnapshot,
+    /// Final payment evidence disagrees with the amount the revision reserved.
+    #[error("reservation {id:?} holds {reserved} but the revision paid {paid}")]
+    PaymentMismatch {
+        /// The reservation.
+        id: ReservationId,
+        /// Reserved amount plus fee.
+        reserved: u128,
+        /// Paid amount plus fee.
+        paid: u128,
+    },
 }
 
 /// In-memory reservation accounting for one policy.
@@ -317,9 +355,12 @@ impl ReservationLedger {
         Ok(())
     }
 
-    /// Converts a reservation into committed spend.
-    pub fn commit(&mut self, id: ReservationId, now: u64) -> Result<(), PolicyError> {
+    /// Converts a reservation into committed spend after classification or trusted replay.
+    fn commit(&mut self, id: ReservationId, now: u64) -> Result<(), PolicyError> {
         let reservation = self.find_mut(id)?;
+        if now < reservation.created_at {
+            return Err(PolicyError::InvalidSnapshot);
+        }
         if reservation.state != ReservationState::Reserved {
             return Err(PolicyError::InvalidTransition {
                 id,
@@ -333,7 +374,7 @@ impl ReservationLedger {
     }
 
     /// Releases a reservation after proving the operation had no effect.
-    pub fn release(&mut self, id: ReservationId) -> Result<(), PolicyError> {
+    fn release(&mut self, id: ReservationId) -> Result<(), PolicyError> {
         let reservation = self.find_mut(id)?;
         if reservation.state != ReservationState::Reserved {
             return Err(PolicyError::InvalidTransition {
@@ -344,6 +385,119 @@ impl ReservationLedger {
         }
         reservation.state = ReservationState::Released;
         Ok(())
+    }
+
+    /// Commits a signed revision's reservation on final evidence that the revision paid.
+    ///
+    /// The commitment binds amount and fee, so a paid total that differs from the reserved
+    /// one means the reservation was made from different terms; that fails and changes
+    /// nothing.
+    pub(crate) fn commit_payment(
+        &mut self,
+        payment: &FinalPayment,
+        now: u64,
+    ) -> Result<(), PolicyError> {
+        let id = payment.reservation_id();
+        let reservation = self.find_mut(id)?;
+        if reservation.amount != payment.total() {
+            return Err(PolicyError::PaymentMismatch {
+                id,
+                reserved: reservation.amount.get(),
+                paid: payment.total().get(),
+            });
+        }
+        self.commit(id, now)
+    }
+
+    /// Releases a signed revision's reservation on evidence that it never paid and never can.
+    ///
+    /// A timeout, revert, advanced nonce, or local cancellation cannot produce the proof.
+    pub(crate) fn release_unpaid(&mut self, proof: &NoEffectProof) -> Result<(), PolicyError> {
+        self.release(proof.reservation_id())
+    }
+
+    /// Restores a trusted local snapshot without changing the current policy's history.
+    ///
+    /// A snapshot is not payment evidence. Only the local durable store may supply it;
+    /// never restore snapshots received from an agent, relay, or RPC provider.
+    pub fn restore(snapshot: &[Reservation]) -> Result<Self, PolicyError> {
+        let mut ledger = Self::new();
+        for entry in snapshot {
+            ledger.reserve(
+                entry.id,
+                entry.asset.clone(),
+                entry.amount,
+                entry.created_at,
+            )?;
+            match (entry.state, entry.settled_at) {
+                (ReservationState::Reserved, None) => {}
+                (ReservationState::Released, None) => ledger.release(entry.id)?,
+                (ReservationState::Committed, Some(at)) if at >= entry.created_at => {
+                    ledger.commit(entry.id, at)?;
+                }
+                _ => return Err(PolicyError::InvalidSnapshot),
+            }
+        }
+        Ok(ledger)
+    }
+
+    /// Applies verified backend facts to the complete possibly-signed revision set.
+    ///
+    /// Commit and release updates are all-or-nothing in memory. The caller must persist
+    /// the resulting ledger atomically under its identity lock before returning success.
+    /// Repeating the same final assessment is idempotent and retains settlement timestamps.
+    /// Backend evidence must be independently anchored; caller-created facts are not proof.
+    ///
+    /// There is no proof-free live release method:
+    /// ```compile_fail
+    /// use erebus_core::policy::{ReservationId, ReservationLedger};
+    /// ReservationLedger::new().release(ReservationId::from_bytes([1; 32]));
+    /// ```
+    /// Nor a proof-free live commit method:
+    /// ```compile_fail
+    /// use erebus_core::policy::{ReservationId, ReservationLedger};
+    /// ReservationLedger::new().commit(ReservationId::from_bytes([1; 32]), 10);
+    /// ```
+    pub fn reconcile_deal(
+        &mut self,
+        revisions: &[SignedRevision],
+        evidence: &DealEvidence,
+        now: u64,
+    ) -> Result<DealAssessment, PolicyError> {
+        let assessment = assess_deal(revisions, evidence);
+        let mut next = self.clone();
+        // Check and commit the winner before releasing any superseded reservation.
+        for revision in &assessment.revisions {
+            if let ReservationDecision::Commit(payment) = &revision.reservation {
+                let entry = next.find_mut(payment.reservation_id())?;
+                if entry.amount != payment.total() {
+                    return Err(PolicyError::PaymentMismatch {
+                        id: entry.id,
+                        reserved: entry.amount.get(),
+                        paid: payment.total().get(),
+                    });
+                }
+                if entry.state != ReservationState::Committed {
+                    next.commit_payment(payment, now)?;
+                }
+            }
+        }
+        for revision in &assessment.revisions {
+            if let ReservationDecision::Release(proof) = &revision.reservation {
+                if next.state(proof.reservation_id()) != Some(ReservationState::Released) {
+                    next.release_unpaid(proof)?;
+                }
+            }
+        }
+        *self = next;
+        Ok(assessment)
+    }
+
+    /// Returns every reservation in the order it was reserved, for persistence and
+    /// diagnostics.
+    #[must_use]
+    pub fn reservations(&self) -> &[Reservation] {
+        &self.reservations
     }
 
     /// Returns a reservation's state, when it exists.
@@ -705,5 +859,114 @@ mod tests {
             ledger.reserved_total(&asset()).expect("sums"),
             BaseUnits::new(0)
         );
+    }
+
+    /// A store's view of one recorded transition.
+    #[derive(Clone)]
+    enum Recorded {
+        Reserve(ReservationId, BaseUnits, u64),
+        Commit(ReservationId, u64),
+        Release(ReservationId),
+    }
+
+    fn replay(log: &[Recorded]) -> Result<ReservationLedger, PolicyError> {
+        let mut ledger = ReservationLedger::new();
+        for entry in log {
+            match entry {
+                Recorded::Reserve(id, amount, at) => ledger.reserve(*id, asset(), *amount, *at)?,
+                Recorded::Commit(id, at) => ledger.commit(*id, *at)?,
+                Recorded::Release(id) => ledger.release(*id)?,
+            }
+        }
+        Ok(ledger)
+    }
+
+    #[test]
+    fn restore_rejects_impossible_states_and_duplicate_ids() {
+        let id = ReservationId::from_bytes([8; 32]);
+        let valid = Reservation {
+            id,
+            asset: asset(),
+            amount: BaseUnits::new(9),
+            state: ReservationState::Reserved,
+            created_at: 10,
+            settled_at: None,
+        };
+        assert_eq!(
+            ReservationLedger::restore(std::slice::from_ref(&valid))
+                .unwrap()
+                .reservations(),
+            std::slice::from_ref(&valid)
+        );
+        assert!(matches!(
+            ReservationLedger::restore(&[valid.clone(), valid.clone()]),
+            Err(PolicyError::DuplicateReservation(_))
+        ));
+        for (state, settled_at) in [
+            (ReservationState::Committed, None),
+            (ReservationState::Committed, Some(9)),
+            (ReservationState::Reserved, Some(10)),
+            (ReservationState::Released, Some(10)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.state = state;
+            invalid.settled_at = settled_at;
+            assert!(matches!(
+                ReservationLedger::restore(&[invalid]),
+                Err(PolicyError::InvalidSnapshot)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_ledger_rebuilds_by_replaying_its_transitions() {
+        let [a, b, c] = [1, 2, 3].map(|byte| ReservationId::from_bytes([byte; 32]));
+        let log = [
+            Recorded::Reserve(a, BaseUnits::new(100), 10),
+            Recorded::Reserve(b, BaseUnits::new(200), 11),
+            Recorded::Reserve(c, BaseUnits::new(300), 12),
+            Recorded::Commit(a, 20),
+            Recorded::Release(b),
+        ];
+        let ledger = replay(&log).expect("replays");
+        assert_eq!(ledger.state(a), Some(ReservationState::Committed));
+        assert_eq!(ledger.state(b), Some(ReservationState::Released));
+        assert_eq!(ledger.state(c), Some(ReservationState::Reserved));
+
+        // A snapshot replays to the same reservations, timestamps included.
+        let snapshot: Vec<Recorded> = ledger
+            .reservations()
+            .iter()
+            .flat_map(|reservation| {
+                let reserve =
+                    Recorded::Reserve(reservation.id, reservation.amount, reservation.created_at);
+                let settle = match (reservation.state, reservation.settled_at) {
+                    (ReservationState::Committed, Some(at)) => {
+                        Some(Recorded::Commit(reservation.id, at))
+                    }
+                    (ReservationState::Released, _) => Some(Recorded::Release(reservation.id)),
+                    _ => None,
+                };
+                [Some(reserve), settle].into_iter().flatten()
+            })
+            .collect();
+        assert_eq!(
+            replay(&snapshot).expect("replays").reservations(),
+            ledger.reservations()
+        );
+
+        // A corrupt log fails to load rather than loading a different ledger.
+        let mut duplicated = log.to_vec();
+        duplicated.push(Recorded::Reserve(a, BaseUnits::new(100), 10));
+        assert_eq!(
+            replay(&duplicated).err(),
+            Some(PolicyError::DuplicateReservation(a))
+        );
+        let mut reordered = log.to_vec();
+        reordered.push(Recorded::Commit(b, 30));
+        assert!(matches!(
+            replay(&reordered),
+            Err(PolicyError::InvalidTransition { id, .. }) if id == b
+        ));
     }
 }

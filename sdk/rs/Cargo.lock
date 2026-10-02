@@ -764,11 +764,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "erebus-journal"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "erebus-sdk"
 version = "0.3.0"
 dependencies = [
  "aes-gcm-siv",
  "erebus-core",
+ "erebus-journal",
  "fs2",
  "hkdf",
  "rand 0.8.7",

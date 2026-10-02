@@ -20,8 +20,8 @@
 //! The root is all-zero only when the deal has no messages, which is the legacy and pre-M2 case
 //! ([metropolis-agreement.md](../../docs/metropolis-agreement.md) field 6).
 
-use erebus_core::auth::Role;
 use crate::hashing::{self, HashVersionError};
+use erebus_core::auth::Role;
 
 use crate::limits::MAX_MESSAGES_PER_DEAL;
 use crate::message::{Message, MessageError};
@@ -275,15 +275,20 @@ mod tests {
     #[test]
     fn keccak_root_is_stable_when_the_shielded_agreement_suite_is_enabled() {
         assert!(erebus_core::suite::is_supported(2));
-        assert!(matches!(Transcript::new(DEAL, 2), Err(TranscriptError::HashVersion(_))));
+        assert!(matches!(
+            Transcript::new(DEAL, 2),
+            Err(TranscriptError::HashVersion(_))
+        ));
         let messages = [
             message(Role::Buyer, 1, [0; 32], b"offer"),
             message(Role::Seller, 1, [0; 32], b"counter"),
         ];
         let transcript = Transcript::replay(DEAL, 1, &messages).expect("version-1 transcript");
         // Independently encoded with ethers Keccak256; preserves the original byte preimages.
-        assert_eq!(hex::encode(transcript.root().unwrap()),
-            "cd876d461564e797f05314ea8c58dc9a1c7ece6357c15b7a9580d6692da617ff");
+        assert_eq!(
+            hex::encode(transcript.root().unwrap()),
+            "cd876d461564e797f05314ea8c58dc9a1c7ece6357c15b7a9580d6692da617ff"
+        );
         assert_eq!(transcript.hash_version(), 1);
     }
 

@@ -14,6 +14,21 @@ use crate::evidence::EvidenceError;
 /// The adapter could not prepare, submit, or verify a settlement.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EvmError {
+    /// RPC answers disagree or omit evidence required for a safe observation.
+    #[error("inconsistent observation: {0}")]
+    InconsistentObservation(&'static str),
+    /// A pinned block changed during the observation.
+    #[error("observation anchor is no longer canonical")]
+    AnchorNotCanonical,
+    /// The endpoint did not supply an explicit finalized block.
+    #[error("explicit RPC finalized block unavailable")]
+    FinalityUnavailable,
+    /// A bounded history scan or ancestry walk could not complete.
+    #[error("observation history limit exceeded")]
+    ObservationLimit,
+    /// Settlement calldata or event data was malformed.
+    #[error(transparent)]
+    Abi(#[from] crate::abi::AbiDecodeError),
     /// The agreement terms were invalid.
     #[error(transparent)]
     Terms(#[from] TermsError),
@@ -99,4 +114,13 @@ pub enum EvmError {
     /// The system clock was before the Unix epoch.
     #[error("system time is before the Unix epoch")]
     Clock,
+    /// EIP-1559 fee parameters were unusable.
+    #[error("invalid EIP-1559 fees: {0}")]
+    InvalidFees(&'static str),
+    /// Raw bytes do not represent a supported canonical signed transaction.
+    #[error("invalid signed transaction: {0}")]
+    TransactionEncoding(String),
+    /// Persisted transaction fields differ from the expected operation.
+    #[error("signed transaction does not match the expected settlement intent")]
+    SignedIntentMismatch,
 }

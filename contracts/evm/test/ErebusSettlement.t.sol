@@ -165,6 +165,32 @@ contract ErebusSettlementTest is TestBase {
         assertEq(token.balanceOf(paymentRecipient), AMOUNT);
     }
 
+    function test_copied_submission_cannot_redirect_signed_relayer_fee() public {
+        bytes memory terms = baseTerms(AMOUNT, FEE);
+        fund(uint256(AMOUNT) + FEE);
+        bytes memory buyerSignature = authorize(terms, BUYER_PK, 1);
+        bytes memory sellerSignature = authorize(terms, SELLER_PK, 2);
+        address copier = address(0xBAD);
+        vm.prank(copier);
+        settlement.settle(terms, blinding, buyerSignature, sellerSignature, address(token));
+        assertEq(token.balanceOf(feeRecipient), FEE);
+        assertEq(token.balanceOf(paymentRecipient), AMOUNT);
+        assertEq(token.balanceOf(copier), 0);
+    }
+
+    function test_changed_relayer_fee_recipient_invalidates_authorizations() public {
+        bytes memory terms = baseTerms(AMOUNT, FEE);
+        fund(uint256(AMOUNT) + FEE);
+        bytes memory buyerSignature = authorize(terms, BUYER_PK, 1);
+        bytes memory sellerSignature = authorize(terms, SELLER_PK, 2);
+        TermsLib.Data memory changed = defaultData(AMOUNT, FEE, paymentRecipient, false);
+        changed.feeRecipient = address(0xBAD);
+        vm.expectRevert();
+        settlement.settle(TermsLib.encode(changed), blinding, buyerSignature, sellerSignature, address(token));
+        assertEq(token.balanceOf(buyer), uint256(AMOUNT) + FEE);
+        assertFalse(settlement.consumedDeals(harness.dealNullifier(terms)));
+    }
+
     function test_constructor_rejects_a_different_live_chain() public {
         vm.expectRevert(ErebusSettlement.ChainIdMismatch.selector);
         new ErebusSettlement(block.chainid + 1, 1);

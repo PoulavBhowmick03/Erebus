@@ -13,6 +13,17 @@ use crate::error::EvmError;
 /// Length of an EVM address.
 pub const ADDRESS_BYTES: usize = 20;
 
+pub(crate) fn normalized_rpc_url(value: &str) -> Result<String, EvmError> {
+    let mut url: alloy::transports::http::reqwest::Url = value
+        .parse()
+        .map_err(|_| EvmError::InconsistentObservation("invalid RPC endpoint"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(EvmError::InconsistentObservation("invalid RPC endpoint"));
+    }
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
 /// One configured public-bound EVM deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmDeployment {

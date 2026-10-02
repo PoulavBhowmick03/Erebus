@@ -1,0 +1,187 @@
+
+// ---- Fixture generator: regenerate.sh appends this to a scratch copy of a historical ----
+// ---- sdk/rs/src/journal.rs. It is never compiled in this repository.                ----
+#[cfg(test)]
+mod fixture_gen {
+    use super::*;
+    use serde_json::json;
+
+    const COMMIT: &str = "@COMMIT@";
+    const ERA: u8 = @ERA@;
+    const T0: u64 = @T0@;
+    /// v3+ records carry the accepted block's timestamp; v2 carried the local wall clock.
+    const BLOCK_TS_ACCEPTED: bool = @BLOCK_TS@;
+    const CHAIN: Felt = Felt::from_hex_unchecked("0x534e5f5345504f4c4941");
+    const POOL: Felt = Felt::from_hex_unchecked("0x4e4f");
+    const TOKEN: Felt = Felt::from_hex_unchecked("0x53545f");
+    const HANDLE: &str = "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4";
+
+    struct Clock(u64);
+    impl Clock {
+        fn tick(&mut self) -> u64 {
+            self.0 += 1;
+            T0 + self.0
+        }
+    }
+
+    fn id(code: u8) -> OperationId {
+        OperationId::parse(format!("op_{ERA:02x}{code:02x}{}", "00".repeat(30))).unwrap()
+    }
+    fn tx(code: u8, attempt: u8) -> Felt {
+        Felt::from_hex(&format!("0x{ERA:02x}{code:02x}{attempt:02x}beef")).unwrap()
+    }
+    fn tx_bytes(code: u8, attempt: u8) -> String {
+        format!(
+            r#"{{"type":"INVOKE","version":"0x3","sender_address":"0xacc","nonce":"{}","calldata":[],"signature":["0x1","0x2"],"proof":"fixture-{COMMIT}-{code:02x}-{attempt}"}}"#,
+            if attempt == 0 { "0x5" } else { "0x6" }
+        )
+    }
+    fn op_for(code: u8) -> WriteOperation {
+        match code {
+            0x06 => WriteOperation::ProposeOffer,
+            0x0c => WriteOperation::OpenChannel,
+            _ => WriteOperation::Shield,
+        }
+    }
+    fn binding(code: u8) -> RequestBinding {
+        RequestBinding::builder(op_for(code), CHAIN, POOL, TOKEN)
+            .u128_be(1_000 + u128::from(code))
+            .finish()
+    }
+    fn channel(code: u8) -> Option<ChannelHandle> {
+        (op_for(code) == WriteOperation::ProposeOffer).then(|| ChannelHandle::parse(HANDLE).unwrap())
+    }
+    fn request(code: u8) -> Value {
+        match op_for(code) {
+            WriteOperation::ProposeOffer => json!({"method":"propose_offer","handle":HANDLE,
+                "terms":{"amount":"1006","token":"0x53545f","deadline":1790000000,"memo_hash":"0x0"}}),
+            WriteOperation::OpenChannel => json!({"method":"open_channel","counterparty":"0x55","wire_version":"v3"}),
+            _ => json!({"method":"shield","amount":(1_000 + u128::from(code)).to_string(),"wire_version":"v3"}),
+        }
+    }
+    fn completion(code: u8) -> Value {
+        match op_for(code) {
+            WriteOperation::ProposeOffer => json!({
+                "result":{"kind":"offer","offer_id":format!("{HANDLE}:us:0")},
+                "local_mutation":{"kind":"advance_channel","handle":HANDLE,"outgoing_next_note":1,
+                                  "incoming_key":null,"settled":false}}),
+            _ => json!({"result":{"kind":"settlement","offer_id":null,"nullifiers":[],
+                                  "selected_input":null,"change":null},"local_mutation":null}),
+        }
+    }
+    fn receipt(code: u8, attempt: u8, block: u64, status: &str) -> Receipt {
+        Receipt {
+            transaction_hash: format!("{:#x}", tx(code, attempt)),
+            block_number: Some(block),
+            finality_status: Some("ACCEPTED_ON_L2".to_owned()),
+            execution_status: Some(status.to_owned()),
+            revert_reason: (status == "REVERTED").then(|| "fixture revert".to_owned()),
+        }
+    }
+
+    fn claim(journal: &OperationJournal, code: u8, clock: &mut Clock) -> OperationLease {
+        journal
+            .claim_with_request(&id(code), op_for(code), binding(code), channel(code), request(code), clock.tick())
+            .unwrap()
+    }
+
+    /// The client's order: completion, prepared snapshot, proof anchor, Prepared, Proven.
+    fn to_prepared(lease: &mut OperationLease, code: u8, clock: &mut Clock, anchor: u64) {
+        lease.record_completion(completion(code), clock.tick()).unwrap();
+        lease
+            .record_prepared(
+                PreparedSnapshot {
+                    deposit: (1_000 + u64::from(code)).to_string(),
+                    proof_validity_blocks: 450,
+                    fee_per_write: "2".to_owned(),
+                    allowance: "5000".to_owned(),
+                    public_balance: "9000".to_owned(),
+                },
+                clock.tick(),
+            )
+            .unwrap();
+        lease
+            .amend(clock.tick(), |attempt| {
+                attempt.proving_block = Some(anchor);
+                attempt.valid_until_block = Some(anchor + 450);
+                /*SIM*/attempt.simulation_hash = Some(format!("{:064x}", u64::from(code) + 0x51_u64 * u64::from(anchor)));
+            })
+            .unwrap();
+        lease.advance(OperationStage::Prepared, clock.tick()).unwrap();
+    }
+    fn to_signed(lease: &mut OperationLease, code: u8, attempt: u8, clock: &mut Clock) {
+        lease.advance(OperationStage::Proven, clock.tick()).unwrap();
+        lease
+            .amend(clock.tick(), |a| a.account_nonce = Some(Felt::from(5u8 + attempt)))
+            .unwrap();
+        lease
+            .persist_signed(tx(code, attempt), &tx_bytes(code, attempt), clock.tick())
+            .unwrap();
+    }
+    fn to_submitted(lease: &mut OperationLease, code: u8, attempt: u8, clock: &mut Clock, anchor: u64) {
+        to_prepared(lease, code, clock, anchor);
+        to_signed(lease, code, attempt, clock);
+        lease.advance(OperationStage::Submitted, clock.tick()).unwrap();
+    }
+    fn to_accepted(lease: &mut OperationLease, code: u8, clock: &mut Clock, block: u64) {
+        to_submitted(lease, code, 0, clock, 100);
+        lease.record_receipt(receipt(code, 0, block, "SUCCEEDED"), clock.tick()).unwrap();
+        let now = clock.tick();
+        let accepted_at = if BLOCK_TS_ACCEPTED { 1_787_000_000 + block } else { now };
+        lease.amend(now, |a| a.accepted_at = Some(accepted_at)).unwrap();
+        lease.advance(OperationStage::Accepted, clock.tick()).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn generate() {
+        let out = std::env::var("FIXTURE_OUT").unwrap();
+        let journal = OperationJournal::new(&out).unwrap();
+        let mut clock = Clock(0);
+        let c = &mut clock;
+
+        // 01 claimed
+        drop(claim(&journal, 0x01, c));
+        // 02 prepared
+        { let mut l = claim(&journal, 0x02, c); to_prepared(&mut l, 0x02, c, 100); }
+        // 03 proven
+        { let mut l = claim(&journal, 0x03, c); to_prepared(&mut l, 0x03, c, 100);
+          l.advance(OperationStage::Proven, c.tick()).unwrap(); }
+        // 04 signed (stored transaction)
+        { let mut l = claim(&journal, 0x04, c); to_prepared(&mut l, 0x04, c, 100);
+          to_signed(&mut l, 0x04, 0, c); }
+        // 05 submitted
+        { let mut l = claim(&journal, 0x05, c); to_submitted(&mut l, 0x05, 0, c, 100); }
+        // 06 accepted (propose_offer on a channel)
+        { let mut l = claim(&journal, 0x06, c); to_accepted(&mut l, 0x06, c, 120); }
+        // 07 committed
+        { let mut l = claim(&journal, 0x07, c); to_accepted(&mut l, 0x07, c, 121);
+          l.record_result(json!({"offer_id":null,"tx_hash":format!("{:#x}", tx(0x07, 0)),
+              "nullifiers":[],"proved_at":100,"selected_input":null,"change":null}), c.tick()).unwrap();
+          l.advance(OperationStage::Committed, c.tick()).unwrap(); }
+        // 08 reverted
+        { let mut l = claim(&journal, 0x08, c); to_submitted(&mut l, 0x08, 0, c, 100);
+          l.record_receipt(receipt(0x08, 0, 122, "REVERTED"), c.tick()).unwrap();
+          l.advance(OperationStage::Reverted, c.tick()).unwrap(); }
+        // 09 needs_attention (the node returned a different hash after submission)
+        { let mut l = claim(&journal, 0x09, c); to_submitted(&mut l, 0x09, 0, c, 100);
+          l.advance(OperationStage::NeedsAttention, c.tick()).unwrap(); }
+        // 0a restarted, second attempt in flight
+        { let mut l = claim(&journal, 0x0a, c); to_submitted(&mut l, 0x0a, 0, c, 100);
+          l.restart(c.tick()).unwrap();
+          to_submitted(&mut l, 0x0a, 1, c, 200); }
+        // 0b restarted, second attempt only just opened
+        { let mut l = claim(&journal, 0x0b, c); to_submitted(&mut l, 0x0b, 0, c, 100);
+          l.restart(c.tick()).unwrap(); }
+        // 0c idempotent no-chain result: Claimed -> Committed
+        { let mut l = claim(&journal, 0x0c, c);
+          l.record_completion(json!({"result":{"kind":"channel","handle":HANDLE},"local_mutation":null}), c.tick()).unwrap();
+          l.record_result(json!(HANDLE), c.tick()).unwrap();
+          l.advance(OperationStage::Committed, c.tick()).unwrap(); }
+        // 0d claimed through the request-less `claim`
+        drop(journal.claim(&id(0x0d), op_for(0x0d), binding(0x0d), None, c.tick()).unwrap());
+        // 0e prepared, claimed through the request-less `claim`
+        { let mut l = journal.claim(&id(0x0e), op_for(0x0e), binding(0x0e), None, c.tick()).unwrap();
+          l.advance(OperationStage::Prepared, c.tick()).unwrap(); }
+    }
+}

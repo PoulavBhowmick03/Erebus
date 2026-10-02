@@ -1,0 +1,906 @@
+{
+  "500": {
+    "op_1a01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1a0600beef"
+      }
+    },
+    "op_1a07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1a0700beef"
+      }
+    },
+    "op_1a08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a0a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1b0600beef"
+      }
+    },
+    "op_1b07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1b0700beef"
+      }
+    },
+    "op_1b08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b0a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1c0400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1c0500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1c0600beef"
+      }
+    },
+    "op_1c07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1c0700beef"
+      }
+    },
+    "op_1c08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1c0a000000000000000000000000000000000000000000000000000000000000": {
+      "resubmit": {
+        "attempt_index": 1,
+        "transaction_hash": "0x1c0a01beef"
+      }
+    },
+    "op_1c0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x200400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x200500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x200600beef"
+      }
+    },
+    "op_2007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x200700beef"
+      }
+    },
+    "op_2008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_200a000000000000000000000000000000000000000000000000000000000000": {
+      "resubmit": {
+        "attempt_index": 1,
+        "transaction_hash": "0x200a01beef"
+      }
+    },
+    "op_200b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_200c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_200d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_200e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x300400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x300500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x300600beef"
+      }
+    },
+    "op_3007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x300700beef"
+      }
+    },
+    "op_3008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_300a000000000000000000000000000000000000000000000000000000000000": {
+      "resubmit": {
+        "attempt_index": 1,
+        "transaction_hash": "0x300a01beef"
+      }
+    },
+    "op_300b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_300c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_300d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_300e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x400400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x400500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x400600beef"
+      }
+    },
+    "op_4007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x400700beef"
+      }
+    },
+    "op_4008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_400a000000000000000000000000000000000000000000000000000000000000": {
+      "resubmit": {
+        "attempt_index": 1,
+        "transaction_hash": "0x400a01beef"
+      }
+    },
+    "op_400b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_400c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_400d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_400e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    }
+  },
+  "700": {
+    "op_1a01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1a0600beef"
+      }
+    },
+    "op_1a07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1a0700beef"
+      }
+    },
+    "op_1a08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1a09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a0a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1a0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1a0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0400beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0500beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1b0600beef"
+      }
+    },
+    "op_1b07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1b0700beef"
+      }
+    },
+    "op_1b08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1b09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b0a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1b0a01beef is not on the chain and no nonce was recorded, so it cannot be ruled out",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1b0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c01000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c02000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c03000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c04000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1c0400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c05000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x1c0500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c06000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x1c0600beef"
+      }
+    },
+    "op_1c07000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x1c0700beef"
+      }
+    },
+    "op_1c08000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c09000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_1c0a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the proof for transaction 0x1c0a01beef was valid to block 650 and the head is 700, so it can no longer be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_1c0b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x200400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x200500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x200600beef"
+      }
+    },
+    "op_2007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x200700beef"
+      }
+    },
+    "op_2008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_2009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_200a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the proof for transaction 0x200a01beef was valid to block 650 and the head is 700, so it can no longer be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_200b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_200c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_200d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_200e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x300400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x300500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x300600beef"
+      }
+    },
+    "op_3007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x300700beef"
+      }
+    },
+    "op_3008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_3009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_300a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the proof for transaction 0x300a01beef was valid to block 650 and the head is 700, so it can no longer be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_300b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_300c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_300d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_300e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4001000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4002000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4003000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4004000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x400400beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4005000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "transaction 0x400500beef is absent and the account has moved past nonce 0x5, so it can never be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4006000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "local_state_behind",
+        "transaction_hash": "0x400600beef"
+      }
+    },
+    "op_4007000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": "0x400700beef"
+      }
+    },
+    "op_4008000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the transaction was included and reverted, so no effect exists",
+        "result": "rebuild_required"
+      }
+    },
+    "op_4009000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "a previous run could not classify this attempt",
+        "result": "reconciliation_required"
+      }
+    },
+    "op_400a000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "the proof for transaction 0x400a01beef was valid to block 650 and the head is 700, so it can no longer be included",
+        "result": "rebuild_required"
+      }
+    },
+    "op_400b000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_400c000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "result": "already_complete",
+        "transaction_hash": null
+      }
+    },
+    "op_400d000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    },
+    "op_400e000000000000000000000000000000000000000000000000000000000000": {
+      "report": {
+        "reason": "no transaction was ever signed for this operation",
+        "result": "rebuild_required"
+      }
+    }
+  }
+}

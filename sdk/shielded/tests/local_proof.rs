@@ -93,8 +93,12 @@ fn native_rust_proves_the_same_pool_transitions() {
             .expect("native local proof");
         assert_eq!(proof.public_inputs.len(), expected.len());
         if *name == "transfer" {
-            let output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../circuits/m5/build/rust-transfer-calldata.json");
+            let output = std::env::var_os("EREBUS_M5_TEST_OUTPUT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../circuits/m5/build")
+                })
+                .join("rust-transfer-calldata.json");
             fs::write(
                 output,
                 serde_json::to_vec(&proof.solidity_calldata()).expect("proof JSON"),

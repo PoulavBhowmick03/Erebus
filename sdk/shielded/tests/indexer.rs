@@ -74,18 +74,25 @@ fn verifies_roots_and_replays_a_wallet_across_a_reorg() {
             number: 101,
             hash: [4; 32],
             parent_hash: [1; 32],
-            events: vec![PoolEvent::Consumed {
-                nullifier,
+            events: vec![PoolEvent::Transferred {
+                deal_commitment: [7; 32],
+                deal_nullifier: [8; 32],
+                input_nullifier: nullifier,
                 tx_hash: [5; 32],
                 log_index: 2,
             }],
         })
         .expect("verified spend block");
+    let transfer = index.deal_transfer(&[8; 32]).expect("deal transfer");
+    assert_eq!(transfer.deal_commitment, [7; 32]);
+    assert_eq!(transfer.input_nullifier, nullifier);
+    assert_eq!(transfer.block_hash, [4; 32]);
     index.replay_wallet(&mut wallet).expect("spent state");
     let asset = bytes::<20>("5fbdb2315678afecb367f032d93f642f64180aa3");
     assert!(wallet.select(&asset, 70).is_none());
 
     index.rewind_from(101).expect("reorg");
+    assert!(index.deal_transfer(&[8; 32]).is_none());
     index
         .apply_block(PoolBlock {
             number: 101,
@@ -222,4 +229,37 @@ fn rejects_duplicate_public_identities_and_builds_a_second_leaf_path() {
         }),
         Err(IndexError::EventOrder)
     ));
+
+    index
+        .apply_block(PoolBlock {
+            number: 102,
+            hash: [7; 32],
+            parent_hash: [4; 32],
+            events: vec![PoolEvent::Transferred {
+                deal_commitment: [8; 32],
+                deal_nullifier: [9; 32],
+                input_nullifier: note.nullifier(),
+                tx_hash: [6; 32],
+                log_index: 0,
+            }],
+        })
+        .expect("transfer");
+    for (deal_nullifier, input_nullifier) in [([9; 32], [10; 32]), ([11; 32], note.nullifier())] {
+        assert!(matches!(
+            index.apply_block(PoolBlock {
+                number: 103,
+                hash: [12; 32],
+                parent_hash: [7; 32],
+                events: vec![PoolEvent::Transferred {
+                    deal_commitment: [13; 32],
+                    deal_nullifier,
+                    input_nullifier,
+                    tx_hash: [14; 32],
+                    log_index: 0,
+                }],
+            }),
+            Err(IndexError::EventOrder)
+        ));
+        assert_eq!(index.tip().expect("unchanged tip").number, 102);
+    }
 }

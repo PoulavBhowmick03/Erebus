@@ -1,0 +1,124 @@
+
+// ---- Fixture generator: regenerate.sh appends this to a scratch copy of a historical ----
+// ---- sdk/rs/src/journal.rs. It is never compiled in this repository.                ----
+// One template for the three schema-v1 shapes. Lines tagged with a level marker are kept
+// or deleted by sed before the file is appended:
+//   /*A*/  b784f3f only     (no persist_signed, no transaction_stored)
+//   /*BC*/ 7b7b4c8, 448146e (persist_signed + stored transaction)
+//   /*AB*/ b784f3f, 7b7b4c8 (claim without channel; restart re-opens at Prepared)
+//   /*C*/  448146e only     (account_nonce, channel, restart re-opens at Claimed)
+#[cfg(test)]
+mod fixture_gen {
+    use super::*;
+
+    const COMMIT: &str = "@COMMIT@";
+    const ERA: u8 = @ERA@;
+    const T0: u64 = @T0@;
+    const CHAIN: Felt = Felt::from_hex_unchecked("0x534e5f5345504f4c4941");
+    const POOL: Felt = Felt::from_hex_unchecked("0x4e4f");
+    const TOKEN: Felt = Felt::from_hex_unchecked("0x53545f");
+    /*C*/const HANDLE: &str = "ch_c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4";
+
+    struct Clock(u64);
+    impl Clock {
+        fn tick(&mut self) -> u64 {
+            self.0 += 1;
+            T0 + self.0
+        }
+    }
+
+    fn id(code: u8) -> OperationId {
+        OperationId::parse(format!("op_{ERA:02x}{code:02x}{}", "00".repeat(30))).unwrap()
+    }
+    fn tx(code: u8, attempt: u8) -> Felt {
+        Felt::from_hex(&format!("0x{ERA:02x}{code:02x}{attempt:02x}beef")).unwrap()
+    }
+    /*BC*/fn tx_bytes(code: u8, attempt: u8) -> String {
+    /*BC*/    format!(
+    /*BC*/        r#"{{"type":"INVOKE","version":"0x3","sender_address":"0xacc","nonce":"{}","calldata":[],"signature":["0x1","0x2"],"proof":"fixture-{COMMIT}-{code:02x}-{attempt}"}}"#,
+    /*BC*/        if attempt == 0 { "0x5" } else { "0x6" }
+    /*BC*/    )
+    /*BC*/}
+    fn op_for(code: u8) -> WriteOperation {
+        match code {
+            0x06 => WriteOperation::ProposeOffer,
+            _ => WriteOperation::Shield,
+        }
+    }
+    fn binding(code: u8) -> RequestBinding {
+        RequestBinding::builder(op_for(code), CHAIN, POOL, TOKEN)
+            .u128_be(1_000 + u128::from(code))
+            .finish()
+    }
+
+    fn claim(journal: &OperationJournal, code: u8, clock: &mut Clock) -> OperationLease {
+        let _ = COMMIT;
+        /*AB*/journal.claim(&id(code), op_for(code), binding(code), clock.tick()).unwrap()
+        /*C*/let channel = (op_for(code) == WriteOperation::ProposeOffer).then(|| crate::state::ChannelHandle::parse(HANDLE).unwrap());
+        /*C*/journal.claim(&id(code), op_for(code), binding(code), channel, clock.tick()).unwrap()
+    }
+    fn anchor(lease: &mut OperationLease, clock: &mut Clock, at: u64) {
+        lease
+            .amend(clock.tick(), |attempt| {
+                attempt.proving_block = Some(at);
+                attempt.valid_until_block = Some(at + 450);
+            })
+            .unwrap();
+    }
+    fn to_prepared(lease: &mut OperationLease, clock: &mut Clock, at: u64) {
+        anchor(lease, clock, at);
+        lease.advance(OperationStage::Prepared, clock.tick()).unwrap();
+    }
+    fn to_signed(lease: &mut OperationLease, code: u8, attempt: u8, clock: &mut Clock) {
+        lease.advance(OperationStage::Proven, clock.tick()).unwrap();
+        let _ = attempt;
+        /*C*/lease.amend(clock.tick(), |a| a.account_nonce = Some(Felt::from(5u8 + attempt))).unwrap();
+        /*BC*/lease.persist_signed(tx(code, attempt), &tx_bytes(code, attempt), clock.tick()).unwrap();
+        /*A*/lease.amend(clock.tick(), |a| a.transaction_hash = Some(tx(code, attempt))).unwrap();
+        /*A*/lease.advance(OperationStage::Signed, clock.tick()).unwrap();
+    }
+    fn to_submitted(lease: &mut OperationLease, code: u8, clock: &mut Clock) {
+        to_prepared(lease, clock, 100);
+        to_signed(lease, code, 0, clock);
+        lease.advance(OperationStage::Submitted, clock.tick()).unwrap();
+    }
+    fn to_accepted(lease: &mut OperationLease, code: u8, clock: &mut Clock) {
+        to_submitted(lease, code, clock);
+        // Schema v1 wrote the local wall clock here.
+        let now = clock.tick();
+        lease.amend(now, |a| a.accepted_at = Some(now)).unwrap();
+        lease.advance(OperationStage::Accepted, clock.tick()).unwrap();
+    }
+    fn second_attempt(lease: &mut OperationLease, code: u8, clock: &mut Clock) {
+        lease.restart(clock.tick()).unwrap();
+        /*AB*/anchor(lease, clock, 200);
+        /*C*/to_prepared(lease, clock, 200);
+        to_signed(lease, code, 1, clock);
+        lease.advance(OperationStage::Submitted, clock.tick()).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn generate() {
+        let out = std::env::var("FIXTURE_OUT").unwrap();
+        let journal = OperationJournal::new(&out).unwrap();
+        let mut clock = Clock(0);
+        let c = &mut clock;
+
+        drop(claim(&journal, 0x01, c));
+        { let mut l = claim(&journal, 0x02, c); to_prepared(&mut l, c, 100); }
+        { let mut l = claim(&journal, 0x03, c); to_prepared(&mut l, c, 100);
+          l.advance(OperationStage::Proven, c.tick()).unwrap(); }
+        { let mut l = claim(&journal, 0x04, c); to_prepared(&mut l, c, 100); to_signed(&mut l, 0x04, 0, c); }
+        { let mut l = claim(&journal, 0x05, c); to_submitted(&mut l, 0x05, c); }
+        { let mut l = claim(&journal, 0x06, c); to_accepted(&mut l, 0x06, c); }
+        { let mut l = claim(&journal, 0x07, c); to_accepted(&mut l, 0x07, c);
+          l.advance(OperationStage::Committed, c.tick()).unwrap(); }
+        { let mut l = claim(&journal, 0x08, c); to_submitted(&mut l, 0x08, c);
+          l.advance(OperationStage::Reverted, c.tick()).unwrap(); }
+        { let mut l = claim(&journal, 0x09, c); to_submitted(&mut l, 0x09, c);
+          l.advance(OperationStage::NeedsAttention, c.tick()).unwrap(); }
+        { let mut l = claim(&journal, 0x0a, c); to_submitted(&mut l, 0x0a, c); second_attempt(&mut l, 0x0a, c); }
+        { let mut l = claim(&journal, 0x0b, c); to_submitted(&mut l, 0x0b, c); l.restart(c.tick()).unwrap(); }
+    }
+}

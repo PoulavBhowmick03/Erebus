@@ -55,16 +55,7 @@ fn text<'a>(value: &'a Value, name: &str) -> &'a str {
     value[name].as_str().expect("fixture string")
 }
 
-#[test]
-#[ignore = "requires M5 local artifact generation"]
-fn rust_builds_the_exact_m5_transfer_witness() {
-    let build = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../circuits/m5/build");
-    let agreement: Value =
-        serde_json::from_slice(&fs::read(build.join("agreement-input.json")).expect("agreement"))
-            .expect("agreement JSON");
-    let expected: Value =
-        serde_json::from_slice(&fs::read(build.join("transfer-input.json")).expect("transfer"))
-            .expect("transfer JSON");
+fn fixture_terms(agreement: &Value) -> AgreementTerms {
     let data = &agreement["terms"];
     let domain = &data["domain"];
     let service = &data["service"];
@@ -76,7 +67,7 @@ fn rust_builds_the_exact_m5_transfer_witness() {
     ] {
         guarantees.insert(guarantee);
     }
-    let terms = AgreementTerms {
+    AgreementTerms {
         protocol_version: data["protocolVersion"].as_u64().expect("version") as u16,
         suite_id: data["suiteId"].as_u64().expect("suite") as u16,
         domain: DeploymentDomain {
@@ -129,7 +120,277 @@ fn rust_builds_the_exact_m5_transfer_witness() {
             fulfillment_method: text(service, "fulfillmentMethod").to_owned(),
             fulfillment_digest: hex_bytes(text(service, "fulfillmentDigestHex")),
         },
+    }
+}
+
+#[test]
+fn durable_preparation_isolates_inputs_and_survives_failure_and_recovery() {
+    use erebus_coordinator::{Coordinator, Error as CoordinatorError, Stage};
+    use erebus_core::policy::{ReservationState, SpendingPolicy};
+    use erebus_shielded_prover::preparation::{
+        prepare_coordinated_transfer, prepare_transfer_witness,
     };
+    use erebus_shielded_prover::ProvingArtifacts;
+
+    let agreement: Value = serde_json::from_str(include_str!(
+        "../../core/tests/fixtures/agreement-suite2-vector.json"
+    ))
+    .unwrap();
+    let terms = fixture_terms(&agreement);
+    let blinding = CommitmentBlinding::from_bytes(hex_bytes(text(&agreement, "blindingHex")));
+    let commitment = ShieldedDeal::from_terms(&terms)
+        .unwrap()
+        .commitment(&blinding)
+        .unwrap();
+    let auth = |role, name| Authorization {
+        role,
+        suite_id: 2,
+        commitment,
+        signature: SignatureBytes::new(hex::decode(text(&agreement["expected"], name)).unwrap())
+            .unwrap(),
+    };
+    let buyer = auth(Role::Buyer, "buyerSignatureHex");
+    let seller = auth(Role::Seller, "sellerSignatureHex");
+    let context = erebus_core::settlement::SettlementContext {
+        require_local_proving: true,
+        mode: terms.settlement_mode,
+        domain: terms.domain.clone(),
+        suite_id: terms.suite_id,
+        asset: terms.asset.clone(),
+        required_guarantees: terms.required_guarantees,
+    };
+    let domain = WalletDomain {
+        chain_id: 10143,
+        pool: terms
+            .domain
+            .pool
+            .as_ref()
+            .unwrap()
+            .as_bytes()
+            .try_into()
+            .unwrap(),
+    };
+    for amount in [70, 150] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private/wallet.enc");
+        let store = WalletStore::new(&path, domain, [7; 32]).unwrap();
+        let note = OwnedNote::new(
+            hex_bytes(&terms.asset.asset_reference()[2..]),
+            amount,
+            terms.buyer_authorization_key.as_bytes().try_into().unwrap(),
+            test_field("reservation-input"),
+            test_field("reservation-salt"),
+        )
+        .unwrap();
+        let input = note.commitment();
+        let mut root = input;
+        let mut zero = [0; 32];
+        for _ in 0..NOTE_TREE_DEPTH {
+            root = note_tree_parent(&root, &zero).unwrap();
+            zero = note_tree_parent(&zero, &zero).unwrap();
+        }
+        let mut index = PoolIndex::new(100).unwrap();
+        index
+            .apply_block(PoolBlock {
+                number: 100,
+                hash: [1; 32],
+                parent_hash: [2; 32],
+                events: vec![PoolEvent::Inserted {
+                    index: 0,
+                    commitment: input,
+                    root,
+                    tx_hash: [3; 32],
+                    log_index: 0,
+                }],
+            })
+            .unwrap();
+        store
+            .update(|wallet| {
+                wallet.add(note)?;
+                index.replay_wallet(wallet).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let change = ChangeNote {
+            spend_secret: test_field("reservation-change"),
+            salt: test_field("reservation-change-salt"),
+        };
+        let request = WalletTransferRequest {
+            terms: &terms,
+            blinding: &blinding,
+            buyer: &buyer,
+            seller: &seller,
+            wallet: &snapshot,
+            index: &index,
+            change: &change,
+            now: 1,
+        };
+        let before = fs::read(&path).unwrap();
+        assert!(prepare_transfer_witness(&context, &store, &request, input, [0; 32]).is_err());
+        let invalid = WalletTransferRequest {
+            now: terms.expiry + 1,
+            ..request
+        };
+        assert!(prepare_transfer_witness(&context, &store, &invalid, input, [4; 32]).is_err());
+        let wrong_domain = WalletStore::new(
+            dir.path().join("other/wallet.enc"),
+            WalletDomain {
+                chain_id: 1,
+                ..domain
+            },
+            [7; 32],
+        )
+        .unwrap();
+        assert!(
+            prepare_transfer_witness(&context, &wrong_domain, &request, input, [4; 32]).is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        // Missing artifacts fail only after the input and change have become durable.
+        let artifacts = ProvingArtifacts {
+            wasm: dir.path().join("missing.wasm"),
+            r1cs: dir.path().join("missing.r1cs"),
+            zkey: dir.path().join("missing.zkey"),
+            wasm_sha256: "00".repeat(32),
+            r1cs_sha256: "00".repeat(32),
+            zkey_sha256: "00".repeat(32),
+        };
+        let mut policy = SpendingPolicy {
+            per_deal_max: terms.amount,
+            ..SpendingPolicy::default()
+        };
+        policy.allowed_assets.insert(terms.asset.clone());
+        let coordinator_root = dir.path().join("coordinator");
+        let coordinator = Coordinator::open(
+            &coordinator_root,
+            terms.buyer_authorization_key.clone(),
+            context.clone(),
+            &context,
+            &erebus_shielded_prover::preparation::capabilities(),
+            policy.clone(),
+        )
+        .unwrap();
+        let operation_ref = [4; 32];
+        coordinator
+            .record_intent(operation_ref, &terms, &blinding, 1)
+            .unwrap();
+        coordinator
+            .authorize_buyer(operation_ref, 1, |_, _| {
+                Ok::<_, std::convert::Infallible>(buyer.clone())
+            })
+            .unwrap();
+        coordinator.accept_seller(operation_ref, &seller).unwrap();
+        assert!(matches!(
+            prepare_coordinated_transfer(
+                &coordinator,
+                &context,
+                &artifacts,
+                &store,
+                &request,
+                input,
+                operation_ref,
+                1,
+            ),
+            Err(CoordinatorError::Backend)
+        ));
+        drop(coordinator);
+        let coordinator = Coordinator::open(
+            &coordinator_root,
+            terms.buyer_authorization_key.clone(),
+            context.clone(),
+            &context,
+            &erebus_shielded_prover::preparation::capabilities(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(
+            coordinator.diagnostics().unwrap()[0].stage,
+            Stage::Authorized
+        );
+        assert_eq!(
+            coordinator.ledger().unwrap().reservations()[0].state,
+            ReservationState::Reserved
+        );
+        drop(store);
+        let store = WalletStore::new(&path, domain, [7; 32]).unwrap();
+        let saved = store.snapshot().unwrap();
+        assert!(saved.spendable(&input).is_none());
+        assert!(saved.spendable_for(&input, [4; 32]).is_some());
+        assert_eq!(saved.notes().len(), if amount == 70 { 1 } else { 2 });
+        if let Some(expected) = change.owned_note(&terms, amount).unwrap() {
+            assert!(saved
+                .notes()
+                .iter()
+                .any(|n| n.commitment() == expected.commitment()));
+        }
+        assert!(prepare_transfer_witness(&context, &store, &request, input, [5; 32]).is_err());
+        let changed = ChangeNote {
+            spend_secret: test_field("different-change"),
+            salt: change.salt,
+        };
+        let changed_request = WalletTransferRequest {
+            change: &changed,
+            ..request
+        };
+        assert!(
+            prepare_transfer_witness(&context, &store, &changed_request, input, [4; 32]).is_err()
+        );
+        let witness = prepare_transfer_witness(&context, &store, &request, input, [4; 32]).unwrap();
+        assert_eq!(
+            witness.input,
+            build_transfer_witness_from_wallet(&request).unwrap().input
+        );
+
+        let mut spent_index = index.clone();
+        spent_index
+            .apply_block(PoolBlock {
+                number: 101,
+                hash: [8; 32],
+                parent_hash: [1; 32],
+                events: vec![PoolEvent::Consumed {
+                    nullifier: saved.notes()[0].nullifier(),
+                    tx_hash: [9; 32],
+                    log_index: 0,
+                }],
+            })
+            .unwrap();
+        store
+            .update(|wallet| {
+                spent_index.replay_wallet(wallet).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        // A stale caller snapshot cannot authorize an already consumed input.
+        assert!(prepare_transfer_witness(&context, &store, &request, input, [4; 32]).is_err());
+        store
+            .update(|wallet| {
+                index.replay_wallet(wallet).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        assert!(store.snapshot().unwrap().spendable(&input).is_none());
+        prepare_transfer_witness(&context, &store, &request, input, [4; 32]).unwrap();
+        assert_eq!(store.snapshot().unwrap().notes().len(), saved.notes().len());
+        store
+            .update(|wallet| wallet.release(&input, [4; 32]))
+            .unwrap();
+        assert!(store.snapshot().unwrap().spendable(&input).is_some());
+        assert!(prepare_transfer_witness(&context, &store, &request, input, [4; 32]).is_err());
+    }
+}
+
+#[test]
+#[ignore = "requires M5 local artifact generation"]
+fn rust_builds_the_exact_m5_transfer_witness() {
+    let build = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../circuits/m5/build");
+    let agreement: Value =
+        serde_json::from_slice(&fs::read(build.join("agreement-input.json")).expect("agreement"))
+            .expect("agreement JSON");
+    let expected: Value =
+        serde_json::from_slice(&fs::read(build.join("transfer-input.json")).expect("transfer"))
+            .expect("transfer JSON");
+    let terms = fixture_terms(&agreement);
     let blinding = CommitmentBlinding::from_bytes(hex_bytes(text(&agreement, "blindingHex")));
     let commitment = ShieldedDeal::from_terms(&terms)
         .expect("deal")
@@ -299,10 +560,11 @@ fn rust_builds_the_exact_m5_transfer_witness() {
         change: &change,
         now: 1,
     };
-    let restored_witness = build_transfer_witness_from_wallet(&wallet_request)
-        .expect("wallet-derived witness");
+    let restored_witness =
+        build_transfer_witness_from_wallet(&wallet_request).expect("wallet-derived witness");
     assert_eq!(restored_witness.input, expected);
-    let manifest: Value = serde_json::from_slice(&fs::read(build.join("artifact-manifest.json")).unwrap()).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(build.join("artifact-manifest.json")).unwrap()).unwrap();
     let artifact = &manifest["circuits"]["transfer"];
     let artifacts = erebus_shielded_prover::ProvingArtifacts {
         wasm: build.join("transfer_js/transfer.wasm"),
@@ -320,17 +582,67 @@ fn rust_builds_the_exact_m5_transfer_witness() {
         asset: terms.asset.clone(),
         required_guarantees: terms.required_guarantees,
     };
-    use erebus_shielded_prover::preparation::{prepare_transfer, validate_prepared, PreparationError};
+    use erebus_shielded_prover::preparation::{
+        prepare_transfer, validate_prepared, PreparationError,
+    };
     let mut wrong_context = context.clone();
     wrong_context.domain.verifier_version += 1;
-    assert!(matches!(prepare_transfer(&wrong_context, &artifacts, &wallet_request, [4; 32]),
-        Err(PreparationError::Context)));
-    let prepared = prepare_transfer(&context, &artifacts, &wallet_request, [4; 32])
-        .expect("wallet to locally proved prepared settlement");
+    let preparation_dir = tempfile::tempdir().unwrap();
+    let preparation_store = WalletStore::new(
+        preparation_dir.path().join("private/wallet.enc"),
+        WalletDomain {
+            chain_id: terms.domain.namespace.reference().parse().unwrap(),
+            pool: terms
+                .domain
+                .pool
+                .as_ref()
+                .unwrap()
+                .as_bytes()
+                .try_into()
+                .unwrap(),
+        },
+        [7; 32],
+    )
+    .unwrap();
+    preparation_store
+        .update(|stored| {
+            *stored = wallet.clone();
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(
+        prepare_transfer(
+            &wrong_context,
+            &artifacts,
+            &preparation_store,
+            &wallet_request,
+            owned.commitment(),
+            [4; 32]
+        ),
+        Err(PreparationError::Context)
+    ));
+    let prepared = prepare_transfer(
+        &context,
+        &artifacts,
+        &preparation_store,
+        &wallet_request,
+        owned.commitment(),
+        [4; 32],
+    )
+    .expect("wallet to locally proved prepared settlement");
     validate_prepared(&context, &prepared).unwrap();
     assert_eq!(prepared.backend_evidence.len(), 4 + 19 * 32);
-    for secret in [note.spend_secret.as_slice(), change.spend_secret.as_slice(), blinding.as_bytes().as_slice(), buyer.signature.as_bytes(), seller.signature.as_bytes()] {
-        assert!(!prepared.backend_evidence.windows(secret.len()).any(|part| part == secret));
+    for secret in [
+        note.spend_secret.as_slice(),
+        change.spend_secret.as_slice(),
+        blinding.as_bytes().as_slice(),
+        buyer.signature.as_bytes(),
+        seller.signature.as_bytes(),
+    ] {
+        assert!(!prepared
+            .backend_evidence
+            .windows(secret.len())
+            .any(|part| part == secret));
     }
     let mut altered = prepared.clone();
     altered.deal_commitment = erebus_core::commitment::DealCommitment::from_bytes([1; 32]);
@@ -341,8 +653,14 @@ fn rust_builds_the_exact_m5_transfer_witness() {
     let mut altered = prepared.clone();
     altered.backend_evidence.push(0);
     assert!(validate_prepared(&context, &altered).is_err());
-    fs::write(build.join("rust-prepared-transfer-calldata.json"),
-        serde_json::to_vec(&format!("0x{}", hex::encode(&prepared.backend_evidence))).unwrap()).unwrap();
+    fs::write(
+        std::env::var_os("EREBUS_M5_TEST_OUTPUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| build.clone())
+            .join("rust-prepared-transfer-calldata.json"),
+        serde_json::to_vec(&format!("0x{}", hex::encode(&prepared.backend_evidence))).unwrap(),
+    )
+    .unwrap();
     wallet
         .reserve(&owned.commitment(), [4; 32])
         .expect("reservation");

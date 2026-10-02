@@ -4,15 +4,17 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use ark_std::rand::{rngs::OsRng, RngCore};
+use erebus_journal::{Boundary, FaultHook, NoFaults, Step};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::indexer::{IndexError, PoolBlock, PoolIndex};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Deployment anchor for one public pool event history.
@@ -69,9 +71,19 @@ pub struct IndexStore {
     path: PathBuf,
     lock_path: PathBuf,
     domain: IndexDomain,
+    faults: Arc<dyn FaultHook>,
 }
 
 impl IndexStore {
+    pub(crate) fn shares_cache(&self, other: &Self) -> Result<bool, IndexStoreError> {
+        let identity = |path: &Path| -> Result<PathBuf, IndexStoreError> {
+            let parent = path.parent().ok_or(IndexStoreError::Cache)?;
+            let name = path.file_name().ok_or(IndexStoreError::Cache)?;
+            Ok(fs::canonicalize(parent)?.join(name))
+        };
+        Ok(identity(&self.path)? == identity(&other.path)?)
+    }
+
     /// Deployment identity this cache accepts.
     pub fn domain(&self) -> IndexDomain {
         self.domain
@@ -79,6 +91,15 @@ impl IndexStore {
 
     /// Creates a cache handle. Existing bytes are validated only when `load` is called.
     pub fn new(path: impl Into<PathBuf>, domain: IndexDomain) -> Result<Self, IndexStoreError> {
+        Self::with_faults(path, domain, Arc::new(NoFaults))
+    }
+
+    /// Opens the same public cache with a hook after each durable filesystem step.
+    pub fn with_faults(
+        path: impl Into<PathBuf>,
+        domain: IndexDomain,
+        faults: Arc<dyn FaultHook>,
+    ) -> Result<Self, IndexStoreError> {
         domain.validate()?;
         let path = path.into();
         let parent = path.parent().ok_or(IndexStoreError::Cache)?;
@@ -93,6 +114,7 @@ impl IndexStore {
             path,
             lock_path,
             domain,
+            faults,
         })
     }
 
@@ -172,7 +194,15 @@ impl IndexStore {
         }
         let stored: StoredIndex =
             serde_json::from_slice(&data).map_err(|_| IndexStoreError::Cache)?;
-        if stored.version != VERSION || stored.domain != self.domain {
+        if stored.domain != self.domain {
+            return Err(IndexStoreError::Cache);
+        }
+        if stored.version == 1 {
+            // Version 1 discarded deal identities from transfer events. This public cache
+            // must be rescanned before it can support settlement observation.
+            return PoolIndex::new(self.domain.first_block).map_err(Into::into);
+        }
+        if stored.version != VERSION {
             return Err(IndexStoreError::Cache);
         }
         let mut index = PoolIndex::new(self.domain.first_block)?;
@@ -208,8 +238,20 @@ impl IndexStore {
         let result = (|| {
             file.write_all(data)?;
             file.sync_all()?;
+            self.faults.after(Boundary {
+                step: Step::FileSynced,
+                path: &temp,
+            })?;
             fs::rename(&temp, &self.path)?;
+            self.faults.after(Boundary {
+                step: Step::Renamed,
+                path: &self.path,
+            })?;
             File::open(self.path.parent().ok_or(IndexStoreError::Cache)?)?.sync_all()?;
+            self.faults.after(Boundary {
+                step: Step::DirectorySynced,
+                path: self.path.parent().ok_or(IndexStoreError::Cache)?,
+            })?;
             Ok::<(), IndexStoreError>(())
         })();
         if result.is_err() {
