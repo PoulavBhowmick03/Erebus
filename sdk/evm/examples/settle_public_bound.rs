@@ -1,0 +1,261 @@
+//! Drives one coordinated public-bound settlement against a live EVM deployment.
+//!
+//! Test tooling for the M8 funded workflow: it uses deterministic test-only seller, blinding,
+//! nonce, and deal values. The buyer key is read from an owner-only file and never printed.
+//!
+//! Environment:
+//! - `EREBUS_EVM_RPC_URL`, `EREBUS_EVM_SETTLEMENT`, `EREBUS_EVM_TOKEN`
+//! - `EREBUS_EVM_BUYER_KEY_FILE` (a 32-byte hex key, owner-only)
+//! - `EREBUS_EVM_STATE_ROOT` (coordinator and signer-journal directory)
+//! - `EREBUS_EVM_AMOUNT` (base units, default 1000000)
+//!
+//! Flow: durable intent, both authorizations, preparation, nonce claim, local signing,
+//! journaled broadcast, finalized observation, and reconciliation.
+
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use erebus_core::auth::{authorization_digest, Authorization, Role};
+use erebus_core::commitment::{commit_agreement, CommitmentBlinding};
+use erebus_core::domain::DeploymentDomain;
+use erebus_core::ids::{
+    AddressBytes, AssetId, BaseUnits, ChainNamespace, KeyBytes, SignatureBytes,
+};
+use erebus_core::policy::SpendingPolicy;
+use erebus_core::service::ServiceRecord;
+use erebus_core::settlement::{BackendCapabilities, SettlementContext};
+use erebus_core::terms::{
+    AgreementTerms, FeePolicy, Guarantee, GuaranteeSet, SettlementMode, CURRENT_PROTOCOL_VERSION,
+};
+use erebus_core::deal_state::DealState;
+use erebus_coordinator::Coordinator;
+use erebus_evm::backend::EvmSettlementBackend;
+use erebus_evm::chain::{
+    Eip1559Fees, EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits,
+    SignerJournal, SigningPlan, TransactionKey,
+};
+use erebus_evm::deployment::{parse_lowercase_address, EvmDeployment};
+use k256::ecdsa::SigningKey;
+use serde_json::json;
+
+fn env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    std::env::var(name).map_err(|_| format!("{name} is not set").into())
+}
+
+fn unix_now() -> Result<u64, Box<dyn std::error::Error>> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+}
+
+fn address_of(key: &SigningKey) -> [u8; 20] {
+    use sha3::Digest;
+    let point = key.verifying_key().to_encoded_point(false);
+    let digest: [u8; 32] = sha3::Keccak256::digest(&point.as_bytes()[1..]).into();
+    let mut address = [0u8; 20];
+    address.copy_from_slice(&digest[12..]);
+    address
+}
+
+fn authorization(
+    role: Role,
+    terms: &AgreementTerms,
+    commitment: erebus_core::commitment::DealCommitment,
+    key: &SigningKey,
+) -> Result<Authorization, Box<dyn std::error::Error>> {
+    let digest = authorization_digest(&terms.domain, role, &commitment, terms.suite_id)?;
+    let (signature, recovery_id) = key.sign_prehash_recoverable(&digest)?;
+    let mut bytes = [0u8; 65];
+    bytes[..64].copy_from_slice(&signature.to_bytes());
+    bytes[64] = recovery_id.to_byte();
+    Ok(Authorization {
+        role,
+        suite_id: terms.suite_id,
+        commitment,
+        signature: SignatureBytes::new(bytes.to_vec())?,
+    })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rpc_url = env("EREBUS_EVM_RPC_URL")?;
+    let settlement = parse_lowercase_address(&env("EREBUS_EVM_SETTLEMENT")?)
+        .ok_or("EREBUS_EVM_SETTLEMENT must be a lowercase 0x address")?;
+    let token = parse_lowercase_address(&env("EREBUS_EVM_TOKEN")?)
+        .ok_or("EREBUS_EVM_TOKEN must be a lowercase 0x address")?;
+    let state_root = std::path::PathBuf::from(env("EREBUS_EVM_STATE_ROOT")?);
+    let amount: u128 = std::env::var("EREBUS_EVM_AMOUNT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000_000);
+    let buyer_bytes: [u8; 32] = {
+        let text = std::fs::read_to_string(env("EREBUS_EVM_BUYER_KEY_FILE")?)?;
+        let bytes = hex::decode(text.trim().trim_start_matches("0x"))?;
+        bytes.try_into().map_err(|_| "buyer key must be 32 bytes")?
+    };
+    let buyer_key = SigningKey::from_slice(&buyer_bytes)?;
+    let seller_key = SigningKey::from_slice(&[0x5e; 32])?;
+    // A fresh seed gives a fresh deal identity; the same seed is a different signed revision
+    // of an already-consumed deal.
+    let seed: u8 = std::env::var("EREBUS_EVM_DEAL_SEED")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0x42);
+    let buyer_address = address_of(&buyer_key);
+    let seller_address = address_of(&seller_key);
+    let now = unix_now()?;
+
+    let namespace = ChainNamespace::parse("eip155:10143")?;
+    let deployment = EvmDeployment::new(namespace.clone(), settlement, 1, rpc_url.clone())?;
+    let asset = AssetId::new(namespace, "erc20", &format!("0x{}", hex::encode(token)))?;
+    let terms = AgreementTerms {
+        protocol_version: CURRENT_PROTOCOL_VERSION,
+        suite_id: 1,
+        domain: DeploymentDomain {
+            namespace: ChainNamespace::parse("eip155:10143")?,
+            settlement_contract: Some(AddressBytes::new(settlement.to_vec())?),
+            pool: None,
+            verifier_version: 1,
+        },
+        deal_id: [seed; 16],
+        revision: 1,
+        transcript_root: [0; 32],
+        buyer_authorization_key: KeyBytes::new(buyer_address.to_vec())?,
+        seller_authorization_key: KeyBytes::new(seller_address.to_vec())?,
+        payment_recipient: KeyBytes::new(seller_address.to_vec())?,
+        asset: asset.clone(),
+        amount: BaseUnits::new(amount),
+        expiry: now + 3_600,
+        fee_policy: FeePolicy::none(),
+        settlement_mode: SettlementMode::PublicBound,
+        required_guarantees: GuaranteeSet::from_guarantee(Guarantee::AgreementBoundSettlement),
+        settlement_nonce: [seed; 32],
+        service: ServiceRecord {
+            resource: "gpu.h100.hour".to_owned(),
+            quantity: BaseUnits::new(1),
+            unit: "gpu-hour".to_owned(),
+            access_recipient: KeyBytes::new(buyer_address.to_vec())?,
+            delivery_deadline: now + 7_200,
+            fulfillment_method: "http-access".to_owned(),
+            fulfillment_digest: [0; 32],
+        },
+    };
+    let blinding = CommitmentBlinding::from_bytes([0x0a; 32]);
+    let commitment = commit_agreement(&terms, &blinding)?;
+    let buyer = authorization(Role::Buyer, &terms, commitment, &buyer_key)?;
+    let seller = authorization(Role::Seller, &terms, commitment, &seller_key)?;
+
+    let context = SettlementContext {
+        require_local_proving: true,
+        mode: SettlementMode::PublicBound,
+        domain: terms.domain.clone(),
+        suite_id: 1,
+        asset: asset.clone(),
+        required_guarantees: terms.required_guarantees,
+    };
+    let capabilities: BackendCapabilities = EvmSettlementBackend::connect(
+        deployment.clone(),
+        &buyer_bytes,
+    )?
+    .capabilities();
+    let policy = SpendingPolicy {
+        per_deal_max: BaseUnits::new(amount),
+        allowed_assets: [asset].into_iter().collect(),
+        ..SpendingPolicy::default()
+    };
+    let coordinator = Coordinator::open(
+        state_root.join("coordinator"),
+        terms.buyer_authorization_key.clone(),
+        context.clone(),
+        &context,
+        &capabilities,
+        policy,
+    )?;
+    let operation_ref = [0x11; 32];
+    coordinator.record_intent(operation_ref, &terms, &blinding, now)?;
+    coordinator.authorize_buyer(operation_ref, now, |_, _| Ok::<_, ()>(buyer.clone()))?;
+    coordinator.accept_seller(operation_ref, &seller)?;
+    coordinator.prepare(operation_ref, now, |terms, blinding, buyer, seller| {
+        EvmSettlementBackend::connect(deployment.clone(), &buyer_bytes)
+            .and_then(|backend| backend.prepare(terms, blinding, buyer, seller, operation_ref))
+    })?;
+
+    let chain = EvmChain::connect(deployment.clone(), Duration::from_secs(15)).await?;
+    let journal = SignerJournal::open(state_root.join("signer"), 10_143, buyer_address)?;
+    let fees = Eip1559Fees::new(200_000_000_000, 1_000_000_000)?;
+    let plan = chain
+        .reserve_nonce(&journal, &coordinator.prepared_settlement(operation_ref)?, fees, 1_000_000)
+        .await?;
+    let transaction_key = TransactionKey::from_bytes(&buyer_bytes)?;
+    coordinator.sign_transaction(
+        operation_ref,
+        now,
+        &plan.encode(),
+        |prepared, plan_bytes| {
+            let plan = SigningPlan::decode(plan_bytes)?;
+            plan.sign(&deployment, prepared, &transaction_key)
+                .map(|transaction| transaction.raw().to_vec())
+        },
+        |prepared, plan_bytes, raw| {
+            let plan = SigningPlan::decode(plan_bytes)?;
+            plan.validate(&deployment, prepared, raw)
+        },
+    )?;
+    let broadcast = chain
+        .broadcast_journaled(&coordinator, operation_ref, now)
+        .await?;
+
+    let prepared = coordinator.prepared_settlement(operation_ref)?;
+    // A live chain is far taller than a public RPC's `eth_getLogs` range cap, so the scan
+    // starts at the deployment block and checkpoints its progress. The caller must supply a
+    // block at or before the deployment's first possible settlement.
+    let from_block: u64 = env("EREBUS_EVM_FROM_BLOCK")?.parse()?;
+    let journal = ObservationJournal::open(state_root.join("history"))?;
+    let budget = ObservationLimits {
+        log_block_range: 100,
+        max_log_queries: 1_024,
+        max_ancestry: 8_192,
+    };
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let assessment = loop {
+        match chain
+            .finalized_deal_evidence_resumable_from(
+                &journal,
+                &prepared.deal_nullifier,
+                from_block,
+                budget,
+            )
+            .await?
+        {
+            HistoricalObservation::Complete { evidence, .. } => {
+                let assessment = coordinator.reconcile(operation_ref, &evidence, now + 1)?;
+                // Monad's finalized anchor trails the head; a winner is not payment-final
+                // until its block is at or below it. Re-observe until it is.
+                if matches!(assessment.state, DealState::PaidFinalized { .. })
+                    || Instant::now() >= deadline
+                {
+                    break assessment;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            HistoricalObservation::Pending { .. } if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            HistoricalObservation::Pending { .. } => {
+                return Err("observation did not complete".into())
+            }
+        }
+    };
+
+    println!(
+        "{}",
+        json!({
+            "transaction": format!("0x{}", hex::encode(broadcast.hash)),
+            "deal_commitment": commitment.to_hex(),
+            "deal_nullifier": prepared.deal_nullifier.to_hex(),
+            "deal_state": format!("{:?}", assessment.state),
+            "payment_finalized": matches!(
+                assessment.state,
+                erebus_core::deal_state::DealState::PaidFinalized { .. }
+            ),
+        })
+    );
+    Ok(())
+}

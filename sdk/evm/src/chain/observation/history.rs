@@ -187,8 +187,14 @@ impl EvmChain {
                 .is_some_and(|scan| !scan.complete)
         };
         let (first, second) = tokio::join!(
-            self.continue_history(journal, nullifier, budget, !needs_work(&peer_cursor)),
-            peer.continue_history(peer_journal, nullifier, budget, !needs_work(&first_cursor)),
+            self.continue_history(journal, nullifier, budget, !needs_work(&peer_cursor), 0),
+            peer.continue_history(
+                peer_journal,
+                nullifier,
+                budget,
+                !needs_work(&first_cursor),
+                0,
+            ),
         );
         let first = first?;
         let second = second?;
@@ -228,7 +234,26 @@ impl EvmChain {
         nullifier: &DealNullifier,
         budget: ObservationLimits,
     ) -> Result<HistoricalObservation, EvmError> {
-        self.continue_history(journal, nullifier, budget, true)
+        self.continue_history(journal, nullifier, budget, true, 0)
+            .await
+    }
+
+    /// As [`Self::finalized_deal_evidence_resumable`], but begins a fresh scan at
+    /// `start_block` instead of genesis.
+    ///
+    /// Live chains are far taller than a public RPC's `eth_getLogs` range cap, so a genesis
+    /// scan is not possible. `start_block` must be at or before the earliest block in which
+    /// this deployment could settle the deal (use the deployment block); a larger value would
+    /// omit settlement logs and is the caller's error, not a safe default. Continuations use
+    /// the stored checkpoint and ignore this argument.
+    pub async fn finalized_deal_evidence_resumable_from(
+        &self,
+        journal: &ObservationJournal,
+        nullifier: &DealNullifier,
+        start_block: u64,
+        budget: ObservationLimits,
+    ) -> Result<HistoricalObservation, EvmError> {
+        self.continue_history(journal, nullifier, budget, true, start_block)
             .await
     }
 
@@ -238,6 +263,7 @@ impl EvmChain {
         nullifier: &DealNullifier,
         budget: ObservationLimits,
         refresh_completed: bool,
+        start_block: u64,
     ) -> Result<HistoricalObservation, EvmError> {
         if budget.log_block_range == 0 || budget.max_log_queries == 0 || budget.max_ancestry == 0 {
             return Err(EvmError::ObservationLimit);
@@ -313,10 +339,9 @@ impl EvmChain {
             {
                 return Err(inconsistent("history finalized anchor regressed"));
             }
-            let from = cursor
-                .prefix
-                .as_ref()
-                .map_or(0, |prefix| prefix.number.to::<u64>().saturating_add(1));
+            let from = cursor.prefix.as_ref().map_or(start_block, |prefix| {
+                prefix.number.to::<u64>().saturating_add(1)
+            });
             cursor.scan = Some(Scan {
                 current: head.clone(),
                 finalized,

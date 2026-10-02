@@ -19,6 +19,29 @@ by block hash, masked the four immutable slots, matched the artifact byte-for-by
 bytes), and read `verifierVersion()` = 1. The deployer key is dedicated testnet material kept
 outside the repository in a mode-`0600` file.
 
+### Live public-bound settlement
+
+The coordinated lifecycle completed on the live deployment. A test token
+(`0x902f79145059910ef875aecf4187c771b204ea14`) was minted to the buyer and approved; then
+`sdk/evm/examples/settle_public_bound.rs` ran the full flow against Monad testnet: durable
+intent, both authorizations, preparation, nonce claim, local signing, journaled broadcast,
+finalized observation, and reconciliation. Result:
+
+| Field | Value |
+|---|---|
+| Transaction | `0x1f7ec208a7b03b835f224ac989cc59c9aee4c33634a2b04498b8394ddede4c09` |
+| Deal commitment | `4511793857dd5a2f50e5f3910b034a652127bfababaae9abedeae68c02be1abd` |
+| Deal nullifier | `3cfeea17e120c471e435534a46036fa6542dbf19b9ef50dfd598628b1e757360` |
+| Deal state | `PaidFinalized`, `payment_finalized: true` |
+| Seller balance | 3,000,000 base units after three settlements; buyer 0 |
+
+**Live-chain fix.** The one-shot observer scans from genesis and the public RPC caps
+`eth_getLogs` at a 100-block range, so it cannot serve a chain 67M blocks tall. The resumable
+observer now has `finalized_deal_evidence_resumable_from`, which starts a fresh scan at the
+deployment block and checkpoints it; the caller must pass a block at or before the first
+possible settlement. The example waits for the winner to reach `finalized` before reporting a
+receipt, which is why Monad's trailing finalized anchor is exercised.
+
 ## Verified
 
 **Monad network parameters and verifier support (checklist item 1).** Official Monad sources
@@ -80,10 +103,11 @@ not built.
 
 ## Not done
 
-**Deploy to Monad testnet (item 2) is done** (see Deployed above). What is not done is the
-funded end-to-end workflow on that deployment: a real buyer/seller settlement, observer
-verification, and disclosure against the live contract. That needs a buyer token and
-allowances on testnet, which the installed workflow does not yet provide.
+**Deploy to Monad testnet (item 2) is done** (see Deployed above), and a live public-bound
+settlement finalized on it. What is not done is the *independent-process* workflow: the live
+run used one process that holds both authorization keys and the observer. Separate buyer,
+seller, observer, and disclosure processes, the installed packages and fresh-install guide,
+the Python/MCP boundary, the access service, x402, and stage measurements remain.
 
 The remaining items are not started or only partially present:
 
