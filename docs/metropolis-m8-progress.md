@@ -43,6 +43,15 @@ local deployment: the correct version passes, a wrong version fails. The manifes
 `contracts/evm/deployments.example.json`, and the procedure is
 [M8 runbook](metropolis-m8-runbook.md).
 
+**Buyer onboarding starts (checklist item 3).** `erebus-settle funding` is a read-only,
+one-request-per-process command. Given a deployment, a gas payer address, and signed evidence,
+it reports the buyer's token allowance and balance against the signed amount plus fee and the
+gas payer's native shortfall, before anything is authorized. It signs nothing, submits nothing,
+and never prints the endpoint, terms, or signatures. The read-only backend constructor
+(`EvmSettlementBackend::read_only`) cannot submit. Tests: three CLI failure-path tests and a
+funded Anvil test that reports `funded: true` with zero shortfalls for a funded buyer. Backend
+selection, receipt output, and the rest of the installed workflow are not built.
+
 ## Not done
 
 **Deploy to Monad testnet (item 2).** Everything is ready except the funded key and the

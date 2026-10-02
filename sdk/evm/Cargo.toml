@@ -37,6 +37,10 @@ name = "erebus-tx-relayer"
 path = "src/bin/erebus_tx_relayer.rs"
 
 [[bin]]
+name = "erebus-settle"
+path = "src/bin/erebus_settle.rs"
+
+[[bin]]
 name = "erebus-disclosure"
 path = "src/bin/erebus_disclosure.rs"
 

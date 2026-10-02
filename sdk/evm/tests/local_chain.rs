@@ -3260,3 +3260,56 @@ async fn a_falsified_or_dropped_rpc_response_is_never_payment_evidence() {
         Stage::Finalized
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn the_settle_cli_reports_funding_for_a_funded_buyer() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let fixture = fixture().await;
+    let prepared = prepared(&fixture);
+    let evidence = SettlementEvidence::decode(&prepared.backend_evidence).expect("evidence");
+    let signer = address_recover(&SigningKey::from_slice(&RELAYER_KEY).expect("relayer key"));
+    let request = serde_json::json!({
+        "method": "funding",
+        "deployment": {
+            "namespace": "eip155:31337",
+            "settlement_contract": format!("0x{}", hex::encode(address_bytes(fixture.settlement))),
+            "verifier_version": 1,
+            "rpc_url": fixture.rpc_url,
+        },
+        "signer_address": format!("0x{}", hex::encode(signer)),
+        "evidence": hex::encode(evidence.encode()),
+    });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_erebus-settle"))
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn erebus-settle");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&serde_json::to_vec(&request).expect("request"))
+        .expect("write request");
+    let output = child.wait_with_output().expect("wait");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["funded"], true);
+    assert_eq!(
+        response["required_allowance"].as_str().expect("amount"),
+        (AMOUNT + FEE).to_string()
+    );
+    assert_eq!(response["allowance_shortfall"], "0");
+    assert_eq!(response["balance_shortfall"], "0");
+    assert_eq!(response["signer_shortfall"], "0");
+}

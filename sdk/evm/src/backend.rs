@@ -130,6 +130,26 @@ impl EvmSettlementBackend {
         })
     }
 
+    /// Connects read-only: no signing key, so it can only prepare, estimate, and read.
+    ///
+    /// `signer_address` is the gas payer whose native funding diagnostics are reported. This
+    /// constructor cannot submit; the journaled coordinator path owns signing and broadcast.
+    pub fn read_only(
+        deployment: EvmDeployment,
+        signer_address: [u8; ADDRESS_BYTES],
+    ) -> Result<Self, EvmError> {
+        let url: alloy::transports::http::reqwest::Url = deployment
+            .rpc_url
+            .parse()
+            .map_err(|error| EvmError::Rpc(format!("invalid RPC URL: {error}")))?;
+        let provider = ProviderBuilder::new().connect_http(url).erased();
+        Ok(Self {
+            deployment,
+            provider,
+            signer_address: Address::from(signer_address),
+        })
+    }
+
     /// The configured deployment.
     #[must_use]
     pub fn deployment(&self) -> &EvmDeployment {
