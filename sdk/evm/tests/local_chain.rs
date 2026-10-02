@@ -482,6 +482,307 @@ async fn a_replay_is_rejected_on_chain() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires anvil from a Foundry install"]
+async fn auditor_opens_one_grant_and_verifies_final_payment_from_chain() {
+    use erebus_evm::disclosure::{verify_public_bound_disclosure, DisclosureVerificationError};
+    use erebus_transport::disclosure::{DisclosureGrant, SelectedAgreement};
+    use erebus_transport::hashing::TRANSCRIPT_HASH_VERSION;
+    use erebus_transport::identity::{AuthorizationIdentity, DisclosureIdentity};
+    use erebus_transport::message::{Message, MessageType};
+    use erebus_transport::transcript::Transcript;
+
+    let mut fixture = fixture().await;
+    let message = Message::new(
+        [0x19; 32],
+        fixture.terms.deal_id,
+        fixture.terms.revision,
+        Role::Buyer,
+        1,
+        [0; 32],
+        MessageType::Offer,
+        b"one gpu-hour".to_vec(),
+    )
+    .unwrap();
+    let mut transcript = Transcript::new(fixture.terms.deal_id, TRANSCRIPT_HASH_VERSION).unwrap();
+    transcript.append(&message).unwrap();
+    fixture.terms.transcript_root = transcript.root().unwrap();
+    let prepared = prepared(&fixture);
+    let commitment = prepared.deal_commitment;
+    let selected = SelectedAgreement {
+        terms: fixture.terms.clone(),
+        blinding: fixture.blinding.clone(),
+        buyer: authorization(Role::Buyer, &fixture.terms, &commitment, &fixture.buyer_key),
+        seller: authorization(
+            Role::Seller,
+            &fixture.terms,
+            &commitment,
+            &fixture.seller_key,
+        ),
+        transcript_hash_version: TRANSCRIPT_HASH_VERSION,
+        messages: vec![message],
+    };
+    let issuer = AuthorizationIdentity::from_bytes(&[0x5e; 32]).unwrap();
+    let auditor = DisclosureIdentity::generate().unwrap();
+    let grant = DisclosureGrant::seal(
+        &selected,
+        &issuer,
+        auditor.public_key(),
+        now() + 3600,
+        now(),
+    )
+    .unwrap();
+    let chain = EvmChain::connect(deployment(&fixture), Duration::from_secs(5))
+        .await
+        .unwrap();
+    let before = verify_public_bound_disclosure(
+        &grant,
+        &auditor,
+        issuer.address(),
+        now(),
+        &chain,
+        ObservationLimits::default(),
+    )
+    .await;
+    assert!(matches!(before, Err(DisclosureVerificationError::Payment)));
+
+    settle_coordinated(&fixture, &RELAYER_KEY).await;
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 3).await;
+    let verified = verify_public_bound_disclosure(
+        &grant,
+        &auditor,
+        issuer.address(),
+        now(),
+        &chain,
+        ObservationLimits::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(verified.agreement.commitment, prepared.deal_commitment);
+    assert_eq!(verified.evidence.terms.amount, fixture.terms.amount);
+
+    let outsider = AuthorizationIdentity::from_bytes(&[0x33; 32]).unwrap();
+    let outsider_grant = DisclosureGrant::seal(
+        &selected,
+        &outsider,
+        auditor.public_key(),
+        now() + 3600,
+        now(),
+    )
+    .unwrap();
+    assert!(matches!(
+        verify_public_bound_disclosure(
+            &outsider_grant,
+            &auditor,
+            outsider.address(),
+            now(),
+            &chain,
+            ObservationLimits::default(),
+        )
+        .await,
+        Err(DisclosureVerificationError::Payment)
+    ));
+
+    let mut changed = selected;
+    changed.terms.amount = BaseUnits::new(AMOUNT + 1);
+    let changed_commitment = commit_agreement(&changed.terms, &changed.blinding).unwrap();
+    changed.buyer = authorization(
+        Role::Buyer,
+        &changed.terms,
+        &changed_commitment,
+        &fixture.buyer_key,
+    );
+    changed.seller = authorization(
+        Role::Seller,
+        &changed.terms,
+        &changed_commitment,
+        &fixture.seller_key,
+    );
+    let changed_grant =
+        DisclosureGrant::seal(&changed, &issuer, auditor.public_key(), now() + 3600, now())
+            .unwrap();
+    let wrong_payment = verify_public_bound_disclosure(
+        &changed_grant,
+        &auditor,
+        issuer.address(),
+        now(),
+        &chain,
+        ObservationLimits::default(),
+    )
+    .await;
+    assert!(matches!(
+        wrong_payment,
+        Err(DisclosureVerificationError::Payment)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn an_independent_auditor_process_verifies_without_participant_keys_or_relay() {
+    use erebus_transport::disclosure::{DisclosureGrant, SelectedAgreement};
+    use erebus_transport::hashing::TRANSCRIPT_HASH_VERSION;
+    use erebus_transport::identity::{AuthorizationIdentity, DisclosureIdentity};
+    use erebus_transport::message::{Message, MessageType};
+    use erebus_transport::transcript::Transcript;
+    use std::io::Write;
+
+    let mut fixture = fixture().await;
+    let message = Message::new(
+        [0x19; 32],
+        fixture.terms.deal_id,
+        1,
+        Role::Buyer,
+        1,
+        [0; 32],
+        MessageType::Offer,
+        b"one gpu-hour".to_vec(),
+    )
+    .unwrap();
+    let mut transcript = Transcript::new(fixture.terms.deal_id, TRANSCRIPT_HASH_VERSION).unwrap();
+    transcript.append(&message).unwrap();
+    fixture.terms.transcript_root = transcript.root().unwrap();
+    let prepared = prepared(&fixture);
+    let selected = SelectedAgreement {
+        terms: fixture.terms.clone(),
+        blinding: fixture.blinding.clone(),
+        buyer: authorization(
+            Role::Buyer,
+            &fixture.terms,
+            &prepared.deal_commitment,
+            &fixture.buyer_key,
+        ),
+        seller: authorization(
+            Role::Seller,
+            &fixture.terms,
+            &prepared.deal_commitment,
+            &fixture.seller_key,
+        ),
+        transcript_hash_version: TRANSCRIPT_HASH_VERSION,
+        messages: vec![message],
+    };
+    let issuer = AuthorizationIdentity::from_bytes(&[0x5e; 32]).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let auditor_key = directory.path().join("auditor.key");
+    let auditor = DisclosureIdentity::generate_and_store(&auditor_key).unwrap();
+    let grant = DisclosureGrant::seal(
+        &selected,
+        &issuer,
+        auditor.public_key(),
+        now() + 3600,
+        now(),
+    )
+    .unwrap();
+    let grant_file = directory.path().join("deal.grant");
+    grant.write_backup(&grant_file).unwrap();
+    settle_coordinated(&fixture, &RELAYER_KEY).await;
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 3).await;
+
+    // The child sees only the auditor's key, encrypted grant, and public chain endpoint.
+    let output = Command::new(std::env::current_exe().unwrap())
+        .current_dir(directory.path())
+        .env_clear()
+        .arg("--exact")
+        .arg("disclosure_subprocess_worker")
+        .arg("--nocapture")
+        .env("EREBUS_DISCLOSURE_WORKER", "1")
+        .env("EREBUS_DISCLOSURE_GRANT", &grant_file)
+        .env("EREBUS_DISCLOSURE_KEY", &auditor_key)
+        .env("EREBUS_DISCLOSURE_RPC", &fixture.rpc_url)
+        .env(
+            "EREBUS_DISCLOSURE_CONTRACT",
+            hex::encode(fixture.settlement),
+        )
+        .env("EREBUS_DISCLOSURE_ISSUER", hex::encode(issuer.address()))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("disclosure_subprocess_worker ... ok"));
+
+    let binary = std::env::var_os("EREBUS_TEST_DISCLOSURE_BIN")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_erebus-disclosure").into());
+    let mut child = Command::new(binary)
+        .current_dir(directory.path())
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let request = serde_json::json!({
+        "method": "verify_payment",
+        "grant_file": "deal.grant",
+        "key_file": "auditor.key",
+        "expected_issuer": format!("0x{}", hex::encode(issuer.address())),
+        "deployment": {
+            "namespace": "eip155:31337",
+            "settlement_contract": format!("0x{}", hex::encode(fixture.settlement)),
+            "verifier_version": 1,
+            "rpc_url": fixture.rpc_url,
+        },
+    });
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&request).unwrap())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.stderr.is_empty());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(output.status.success(), "{response}");
+    assert_eq!(response["agreement_verified"], true);
+    assert_eq!(response["payment_verified"], true);
+    assert_eq!(response["delivery_verified"], false);
+    assert_eq!(response["deal_id"], hex::encode(fixture.terms.deal_id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disclosure_subprocess_worker() {
+    use erebus_evm::disclosure::verify_public_bound_disclosure;
+    use erebus_transport::disclosure::DisclosureGrant;
+    use erebus_transport::identity::DisclosureIdentity;
+
+    if std::env::var_os("EREBUS_DISCLOSURE_WORKER").is_none() {
+        return;
+    }
+    let key = DisclosureIdentity::load(std::env::var("EREBUS_DISCLOSURE_KEY").unwrap()).unwrap();
+    let grant =
+        DisclosureGrant::load_backup(std::env::var("EREBUS_DISCLOSURE_GRANT").unwrap()).unwrap();
+    let contract: [u8; 20] = hex::decode(std::env::var("EREBUS_DISCLOSURE_CONTRACT").unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let issuer: [u8; 20] = hex::decode(std::env::var("EREBUS_DISCLOSURE_ISSUER").unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let deployment = EvmDeployment::new(
+        ChainNamespace::new("eip155", "31337").unwrap(),
+        contract,
+        1,
+        std::env::var("EREBUS_DISCLOSURE_RPC").unwrap(),
+    )
+    .unwrap();
+    let chain = EvmChain::connect(deployment, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let verified = verify_public_bound_disclosure(
+        &grant,
+        &key,
+        issuer,
+        now(),
+        &chain,
+        ObservationLimits::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(verified.evidence.terms.deal_id, verified.agreement.deal_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
 async fn the_contract_rejects_mutated_terms_and_expiry() {
     let mut fixture = fixture().await;
     let original = SettlementEvidence::decode(&prepared(&fixture).backend_evidence).unwrap();

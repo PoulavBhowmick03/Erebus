@@ -1,0 +1,497 @@
+//! Shared local disclosure command protocol, with backend-specific payment verification.
+
+use std::fs::File;
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::chain::{EvmChain, ObservationLimits};
+use crate::deployment::{parse_lowercase_address, EvmDeployment};
+use crate::disclosure::{open_public_bound_disclosure, verify_public_bound_disclosure};
+use erebus_core::ids::ChainNamespace;
+use erebus_core::terms::SettlementMode;
+use erebus_transport::disclosure::{
+    verify_selected_agreement, DisclosureGrant, SelectedAgreement, VerifiedAgreement,
+    MAX_DISCLOSURE_BYTES, MAX_GRANT_BYTES,
+};
+use erebus_transport::identity::{AuthorizationIdentity, DisclosureIdentity};
+use erebus_transport::store::FileTranscriptStore;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use zeroize::Zeroizing;
+
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+#[derive(Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
+enum Request {
+    Version,
+    Keygen {
+        key_file: PathBuf,
+    },
+    KeyInfo {
+        key_file: PathBuf,
+    },
+    Select {
+        state_root: PathBuf,
+        operation_ref: String,
+        store_root: PathBuf,
+        namespace: String,
+        transcript_hash_version: u16,
+        evidence_file: PathBuf,
+    },
+    Export {
+        evidence_file: PathBuf,
+        issuer_key_file: PathBuf,
+        recipient_public_key: String,
+        grant_file: PathBuf,
+        expires_at: u64,
+    },
+    VerifyAgreement {
+        grant_file: PathBuf,
+        key_file: PathBuf,
+        expected_issuer: String,
+    },
+    VerifyPayment {
+        grant_file: PathBuf,
+        key_file: PathBuf,
+        expected_issuer: String,
+        deployment: Value,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Deployment {
+    namespace: String,
+    settlement_contract: String,
+    verifier_version: u32,
+    rpc_url: String,
+}
+
+const HELP: &str = "erebus-disclosure: one public-bound disclosure request as JSON on stdin.
+Methods: version, keygen, key_info, select, export, verify_agreement, verify_payment.
+Private keys and selected evidence are read from owner-only local files.
+select rebuilds canonical SelectedAgreement evidence from a participant's durable coordinator
+state and transcript store; it writes a new owner-only evidence file.
+export requires canonical SelectedAgreement bytes and the participant's raw 32-byte issuer key.
+verify_agreement is offline and does not establish payment.
+verify_payment requires an independently configured deployment and finalized RPC evidence.
+Output contains verification status and deal identifiers, not plaintext terms or private keys.
+No method submits transactions or generates proofs. Version-2 grants use direct suite-2 signing.
+Shielded payment verification requires the erebus-shielded-disclosure command.
+See docs/metropolis-m7-runbook.md for request schemas and recovery boundaries.";
+
+/// Runs the bounded JSON command protocol with an independent payment verifier.
+pub async fn run<F, Fut>(verify_payment: F)
+where
+    F: FnOnce(PaymentRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<VerifiedAgreement, &'static str>>,
+{
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if matches!(arguments.as_slice(), [argument] if argument == "--help") {
+        println!("{HELP}");
+        return;
+    }
+    if !arguments.is_empty() {
+        finish(Err("invalid arguments"));
+    }
+    let mut input = Zeroizing::new(Vec::new());
+    if std::io::stdin()
+        .take((MAX_REQUEST_BYTES + 1) as u64)
+        .read_to_end(&mut input)
+        .is_err()
+    {
+        finish(Err("cannot read request"));
+    }
+    if input.len() > MAX_REQUEST_BYTES {
+        finish(Err("request exceeds size limit"));
+    }
+    let request = match serde_json::from_slice(&input) {
+        Ok(request) => request,
+        Err(_) => finish(Err("invalid request")),
+    };
+    finish(handle(request, verify_payment).await);
+}
+
+fn finish(result: Result<Value, &'static str>) -> ! {
+    let failed = result.is_err();
+    let response = result.unwrap_or_else(|error| json!({"status": "error", "error": error}));
+    println!("{response}");
+    if std::io::stdout().flush().is_err() {
+        std::process::exit(1);
+    }
+    std::process::exit(i32::from(failed));
+}
+
+async fn handle<F, Fut>(request: Request, verify_payment: F) -> Result<Value, &'static str>
+where
+    F: FnOnce(PaymentRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<VerifiedAgreement, &'static str>>,
+{
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock unavailable")?
+        .as_secs();
+    match request {
+        Request::Version => Ok(json!({
+            "status": "ok", "protocol": 1,
+            "methods": ["version", "keygen", "key_info", "select", "export", "verify_agreement", "verify_payment"],
+        })),
+        Request::Keygen { key_file } => {
+            let recipient = DisclosureIdentity::generate_and_store(&key_file)
+                .map_err(|_| "cannot create disclosure key")?;
+            let parent = key_file
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "cannot persist disclosure key directory")?;
+            Ok(json!({"status": "ok", "recipient_public_key": hex::encode(recipient.public_key())}))
+        }
+        Request::KeyInfo { key_file } => {
+            let recipient = load_recipient(&key_file)?;
+            Ok(json!({"status": "ok", "recipient_public_key": hex::encode(recipient.public_key())}))
+        }
+        Request::Select {
+            state_root,
+            operation_ref,
+            store_root,
+            namespace,
+            transcript_hash_version,
+            evidence_file,
+        } => {
+            let operation_ref = parse_operation_ref(&operation_ref)?;
+            let (terms, blinding, buyer, seller) =
+                erebus_coordinator::read_disclosure_opening(&state_root, operation_ref)
+                    .map_err(|_| "cannot read durable agreement opening")?;
+            let store = FileTranscriptStore::open(&store_root)
+                .map_err(|_| "cannot open participant transcript store")?;
+            let selected = SelectedAgreement::from_store(
+                terms,
+                blinding,
+                buyer,
+                seller,
+                transcript_hash_version,
+                &store,
+                &namespace,
+            )
+            .map_err(|_| "cannot select a verified agreement from participant storage")?;
+            let agreement = verify_selected_agreement(&selected)
+                .map_err(|_| "selected agreement did not verify")?;
+            let bytes = Zeroizing::new(
+                selected
+                    .encode()
+                    .map_err(|_| "cannot encode selected evidence")?,
+            );
+            write_owner_only_new(&evidence_file, &bytes)?;
+            Ok(json!({
+                "status": "ok",
+                "evidence_saved": true,
+                "deal_id": hex::encode(agreement.deal_id),
+                "revision": agreement.revision,
+                "deal_commitment": agreement.commitment.to_hex(),
+                "deal_nullifier": agreement.nullifier.to_hex(),
+            }))
+        }
+        Request::Export {
+            evidence_file,
+            issuer_key_file,
+            recipient_public_key,
+            grant_file,
+            expires_at,
+        } => {
+            let bytes = read_private_file(&evidence_file, MAX_DISCLOSURE_BYTES)?;
+            let evidence =
+                SelectedAgreement::decode(&bytes).map_err(|_| "invalid selected evidence")?;
+            let agreement =
+                verify_selected_agreement(&evidence).map_err(|_| "invalid selected evidence")?;
+            let key = read_private_file(&issuer_key_file, 32)?;
+            let recipient = public_key(&recipient_public_key)?;
+            let grant = match (evidence.terms.suite_id, evidence.terms.settlement_mode) {
+                (1, SettlementMode::PublicBound) => {
+                    let issuer = AuthorizationIdentity::from_bytes(&key)
+                        .map_err(|_| "invalid issuer key")?;
+                    if evidence.terms.buyer_authorization_key.as_bytes() != issuer.address()
+                        && evidence.terms.seller_authorization_key.as_bytes() != issuer.address()
+                    {
+                        return Err("issuer is not an agreement participant");
+                    }
+                    DisclosureGrant::seal(&evidence, &issuer, recipient, expires_at, now)
+                }
+                (2, SettlementMode::Shielded) => {
+                    let seed = Zeroizing::new(
+                        <[u8; 32]>::try_from(key.as_slice()).map_err(|_| "invalid issuer seed")?,
+                    );
+                    DisclosureGrant::seal_shielded(&evidence, &seed, recipient, expires_at, now)
+                }
+                _ => return Err("unsupported disclosure suite or mode"),
+            }
+            .map_err(|_| "cannot create participant disclosure grant")?;
+            grant
+                .write_backup(&grant_file)
+                .map_err(|_| "cannot save disclosure grant")?;
+            Ok(json!({
+                "status": "ok",
+                "grant_saved": true,
+                "deal_id": hex::encode(agreement.deal_id),
+                "issuer": format!("0x{}", hex::encode(&grant.issuer)),
+            }))
+        }
+        Request::VerifyAgreement {
+            grant_file,
+            key_file,
+            expected_issuer,
+        } => {
+            let (grant, recipient, issuer) = load_grant(&grant_file, &key_file, &expected_issuer)?;
+            let (evidence, agreement) = open_checked(&grant, &recipient, &issuer, now)?;
+            Ok(verification_response(
+                agreement,
+                evidence.terms.settlement_mode,
+                false,
+            ))
+        }
+        Request::VerifyPayment {
+            grant_file,
+            key_file,
+            expected_issuer,
+            deployment,
+        } => {
+            let (grant, recipient, issuer) = load_grant(&grant_file, &key_file, &expected_issuer)?;
+            let (evidence, _) = open_checked(&grant, &recipient, &issuer, now)?;
+            let mode = evidence.terms.settlement_mode;
+            let verified = verify_payment(PaymentRequest {
+                grant,
+                recipient,
+                issuer,
+                now,
+                deployment,
+                evidence,
+            })
+            .await?;
+            Ok(verification_response(verified, mode, true))
+        }
+    }
+}
+
+/// An authenticated grant and the operator's payment observation configuration.
+/// Private evidence must stay local; do not log this request.
+pub struct PaymentRequest {
+    /// Encrypted, participant-signed grant.
+    pub grant: DisclosureGrant,
+    /// Local recipient identity, never a participant spending key.
+    pub recipient: DisclosureIdentity,
+    /// Independently supplied participant identity.
+    pub issuer: Vec<u8>,
+    /// Current time for grant policy checks.
+    pub now: u64,
+    /// Backend-specific trusted deployment configuration.
+    pub deployment: Value,
+    /// Already verified selected agreement; its opening is private.
+    pub evidence: SelectedAgreement,
+}
+
+fn open_checked(
+    grant: &DisclosureGrant,
+    recipient: &DisclosureIdentity,
+    issuer: &[u8],
+    now: u64,
+) -> Result<(SelectedAgreement, VerifiedAgreement), &'static str> {
+    let (evidence, agreement) = grant
+        .open(recipient, issuer, now)
+        .map_err(|_| "disclosure agreement not verified")?;
+    if evidence.terms.buyer_authorization_key.as_bytes() != issuer
+        && evidence.terms.seller_authorization_key.as_bytes() != issuer
+    {
+        return Err("issuer is not an agreement participant");
+    }
+    Ok((evidence, agreement))
+}
+
+/// Independently verifies a public-bound payment; shielded requests fail without RPC access.
+pub async fn verify_public_payment(
+    request: PaymentRequest,
+) -> Result<VerifiedAgreement, &'static str> {
+    let PaymentRequest {
+        grant,
+        recipient,
+        issuer,
+        now,
+        deployment,
+        evidence,
+    } = request;
+    let issuer: [u8; 20] = issuer
+        .try_into()
+        .map_err(|_| "public-bound participant required")?;
+    open_public_bound_disclosure(&grant, &recipient, issuer, now)
+        .map_err(|_| "public-bound disclosure required")?;
+    let deployment: Deployment =
+        serde_json::from_value(deployment).map_err(|_| "invalid public-bound deployment")?;
+    let namespace =
+        ChainNamespace::parse(&deployment.namespace).map_err(|_| "invalid deployment")?;
+    let contract =
+        parse_lowercase_address(&deployment.settlement_contract).ok_or("invalid deployment")?;
+    if contract == [0; 20] || deployment.verifier_version == 0 {
+        return Err("invalid deployment");
+    }
+    let configured = EvmDeployment::new(
+        namespace,
+        contract,
+        deployment.verifier_version,
+        deployment.rpc_url,
+    )
+    .map_err(|_| "invalid deployment")?;
+    if configured.chain_id == 0 {
+        return Err("invalid deployment");
+    }
+    configured
+        .matches_domain(&evidence.terms.domain)
+        .map_err(|_| "deployment does not match agreement")?;
+    let chain = EvmChain::connect(configured, Duration::from_secs(15))
+        .await
+        .map_err(|_| "payment verification unavailable")?;
+    let verified = verify_public_bound_disclosure(
+        &grant,
+        &recipient,
+        issuer,
+        now,
+        &chain,
+        ObservationLimits::default(),
+    )
+    .await
+    .map_err(|_| "payment not independently verified")?;
+    Ok(verified.agreement)
+}
+
+fn verification_response(
+    agreement: VerifiedAgreement,
+    mode: SettlementMode,
+    payment_verified: bool,
+) -> Value {
+    json!({
+        "status": "ok",
+        "mode": if mode == SettlementMode::Shielded { "shielded" } else { "public_bound" },
+        "agreement_verified": true,
+        "payment_verified": payment_verified,
+        "delivery_verified": false,
+        "deal_id": hex::encode(agreement.deal_id),
+        "revision": agreement.revision,
+        "deal_commitment": agreement.commitment.to_hex(),
+        "deal_nullifier": agreement.nullifier.to_hex(),
+    })
+}
+
+fn load_grant(
+    grant_file: &Path,
+    key_file: &Path,
+    issuer: &str,
+) -> Result<(DisclosureGrant, DisclosureIdentity, Vec<u8>), &'static str> {
+    let digits = issuer.strip_prefix("0x").ok_or("invalid expected issuer")?;
+    if !matches!(digits.len(), 40 | 128)
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid expected issuer");
+    }
+    let issuer = hex::decode(digits).map_err(|_| "invalid expected issuer")?;
+    let recipient = load_recipient(key_file)?;
+    let bytes = read_private_file(grant_file, MAX_GRANT_BYTES)?;
+    let grant = DisclosureGrant::decode(&bytes).map_err(|_| "cannot load disclosure grant")?;
+    Ok((grant, recipient, issuer))
+}
+
+fn load_recipient(path: &Path) -> Result<DisclosureIdentity, &'static str> {
+    let bytes = read_private_file(path, 32)?;
+    let private: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "cannot load disclosure key")?;
+    let private = Zeroizing::new(private);
+    DisclosureIdentity::from_private_key(*private).map_err(|_| "cannot load disclosure key")
+}
+
+fn parse_operation_ref(text: &str) -> Result<[u8; 32], &'static str> {
+    let digits = text.strip_prefix("0x").unwrap_or(text);
+    if digits.len() != 64
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid operation reference");
+    }
+    hex::decode(digits)
+        .map_err(|_| "invalid operation reference")?
+        .try_into()
+        .map_err(|_| "invalid operation reference")
+}
+
+/// Writes a new owner-only file, refusing to overwrite an existing one.
+fn write_owner_only_new(path: &Path, bytes: &[u8]) -> Result<(), &'static str> {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|_| "cannot create evidence file")?;
+    file.write_all(bytes)
+        .map_err(|_| "cannot write evidence file")?;
+    file.sync_all()
+        .map_err(|_| "cannot persist evidence file")?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "cannot persist evidence directory")
+}
+
+fn public_key(text: &str) -> Result<[u8; 32], &'static str> {
+    if text.len() != 64
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid recipient public key");
+    }
+    hex::decode(text)
+        .map_err(|_| "invalid recipient public key")?
+        .try_into()
+        .map_err(|_| "invalid recipient public key")
+}
+
+fn read_private_file(path: &Path, maximum: usize) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| "private input unavailable")?;
+    if !metadata.is_file() || metadata.len() > maximum as u64 {
+        return Err("invalid private input");
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err("private input permissions are not owner-only");
+    }
+    let file = File::open(path).map_err(|_| "private input unavailable")?;
+    let metadata = file.metadata().map_err(|_| "private input unavailable")?;
+    if !metadata.is_file() {
+        return Err("invalid private input");
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err("private input permissions are not owner-only");
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take((maximum + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "private input unavailable")?;
+    if bytes.len() > maximum {
+        return Err("invalid private input");
+    }
+    Ok(bytes)
+}

@@ -2637,6 +2637,7 @@ dependencies = [
  "sha3 0.10.9",
  "thiserror 2.0.21",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -2697,6 +2698,7 @@ dependencies = [
  "snow",
  "thiserror 2.0.21",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

@@ -97,23 +97,36 @@ fn hash(inputs: &[Fr]) -> Result<Fr, ShieldedMapError> {
     poseidon.hash(inputs).map_err(|_| ShieldedMapError::Hash)
 }
 
+/// Maps a complete disclosure-grant digest to a domain-separated suite-2 message.
+/// Both 128-bit limbs are retained; no reduction of the original digest occurs.
+/// This offchain domain is distinct from payment authorizations and note hashes.
+pub fn disclosure_message(digest: &[u8; 32]) -> Result<[u8; 32], ShieldedMapError> {
+    let (high, low) = limbs(digest);
+    Ok(field_bytes(hash(&[Fr::from(3001u64), high, low])?))
+}
+
 fn domain_fields(domain: &DeploymentDomain) -> Result<[Fr; 4], ShieldedMapError> {
     if domain.namespace.family() != "eip155" || domain.verifier_version == 0 {
         return Err(ShieldedMapError::Shape("EVM domain or verifier version"));
     }
     let reference = domain.namespace.reference();
-    let chain = reference.parse::<u64>()
+    let chain = reference
+        .parse::<u64>()
         .map_err(|_| ShieldedMapError::Shape("chain id"))?;
     if chain == 0 || chain.to_string() != reference {
         return Err(ShieldedMapError::Shape("canonical chain id"));
     }
-    let contract = domain.settlement_contract.as_ref()
+    let contract = domain
+        .settlement_contract
+        .as_ref()
         .ok_or(ShieldedMapError::Shape("settlement contract"))?;
     if domain.pool.as_ref() != Some(contract)
         || contract.as_bytes().len() != 20
         || contract.as_bytes().iter().all(|byte| *byte == 0)
     {
-        return Err(ShieldedMapError::Shape("pool and contract must be one EVM address"));
+        return Err(ShieldedMapError::Shape(
+            "pool and contract must be one EVM address",
+        ));
     }
     let chain = Fr::from(chain);
     let contract = Fr::from_be_bytes_mod_order(contract.as_bytes());
@@ -136,9 +149,16 @@ pub fn authorization_message(
     role_message(domain, role, commitment)
 }
 
-fn role_message(domain: Fr, role: Role, commitment: &DealCommitment) -> Result<[u8; 32], ShieldedMapError> {
+fn role_message(
+    domain: Fr,
+    role: Role,
+    commitment: &DealCommitment,
+) -> Result<[u8; 32], ShieldedMapError> {
     let field = canonical_field(commitment.as_bytes(), "deal commitment")?;
-    let tag = match role { Role::Buyer => 2004u64, Role::Seller => 2005u64 };
+    let tag = match role {
+        Role::Buyer => 2004u64,
+        Role::Seller => 2005u64,
+    };
     Ok(field_bytes(hash(&[Fr::from(tag), domain, field])?))
 }
 

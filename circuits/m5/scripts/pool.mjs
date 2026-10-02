@@ -267,7 +267,18 @@ async function main() {
 
     const domain = poseidon([chainId, contractAddress, version]);
     const dealId = BigInt(`0x${sha256("EREBUS_M5_DEAL_TEST_ONLY").slice(0, 32)}`);
-    const [transcriptRootLo, transcriptRootHi] = limbs("transcript");
+    const transcript = JSON.parse(execFileSync("cargo", [
+      "run", "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/transport/Cargo.toml"),
+      "--example", "m5_transcript", "--", fieldHex(dealId, 16),
+    ], { cwd: dir, encoding: "utf8" }));
+    if (transcript.dealIdHex !== fieldHex(dealId, 16)
+      || !/^[0-9a-f]{64}$/.test(transcript.transcriptRootHex)
+      || !Array.isArray(transcript.messagesHex) || transcript.messagesHex.length === 0) {
+      throw new Error("Rust transcript fixture is invalid");
+    }
+    writeFileSync(resolve(build, "transcript.json"), `${JSON.stringify(transcript, null, 2)}\n`);
+    const transcriptRootLo = BigInt(`0x${transcript.transcriptRootHex.slice(0, 32)}`);
+    const transcriptRootHi = BigInt(`0x${transcript.transcriptRootHex.slice(32)}`);
     const [serviceDigestLo, serviceDigestHi] = serviceDigestFromM1Vector();
     const [settlementNonceLo, settlementNonceHi] = limbs("nonce");
     const recipientSpendSecret = testField("seller-spend");
@@ -338,7 +349,7 @@ async function main() {
     ];
     const transferProof = await prove("transfer", transferInput, transferPublic);
     let settlementProof = transferProof;
-    if (process.env.EREBUS_M5_NATIVE_PROOF === "1") {
+    if (process.env.EREBUS_M5_NATIVE_PROOF === "1" && process.env.EREBUS_M6_COORDINATED !== "1") {
       const prepared = JSON.parse(readFileSync(resolve(build, "rust-prepared-transfer-calldata.json"), "utf8"));
       const native = stringify(pool.interface.decodeFunctionData("transferPrivate", prepared));
       if (!Array.isArray(native[3]) || native[3].length !== transferProof[3].length
@@ -381,7 +392,39 @@ async function main() {
         await reject("asset-changing transaction", async () => pool.transferPrivate(...changed));
       }
     }
-    await (await pool.transferPrivate(...settlementProof)).wait();
+    let fundedMatrix = null;
+    let fundedDisclosure = null;
+    if (process.env.EREBUS_M6_COORDINATED === "1") {
+      if (process.env.EREBUS_M5_NATIVE_PROOF !== "1") {
+        throw new Error("coordinated transfer requires the native Rust proof");
+      }
+      const deploymentReceipt = await pool.deploymentTransaction().wait();
+      const stateRoot = mkdtempSync(resolve(build, "coordinated-"));
+      run("cargo", ["build", ...(process.env.EREBUS_M6_MATRIX === "1" ? ["--release"] : []),
+        "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"), "--bin", "erebus-shielded-disclosure"]);
+      process.env.EREBUS_M7_DISCLOSURE_BIN ??= resolve(root, "sdk/shielded/target",
+        process.env.EREBUS_M6_MATRIX === "1" ? "release" : "debug", "erebus-shielded-disclosure");
+      run("cargo", [
+        "run", ...(process.env.EREBUS_M6_MATRIX === "1" ? ["--release"] : []),
+        "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"),
+        "--example", "coordinated_transfer", "--", `http://127.0.0.1:${port}`, poolAddress,
+        String(deploymentReceipt.blockNumber), deploymentReceipt.blockHash,
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", stateRoot,
+      ]);
+      fundedDisclosure = JSON.parse(readFileSync(resolve(stateRoot, "disclosure-report.json"), "utf8"));
+      if (fundedDisclosure.mode !== "shielded" || fundedDisclosure.agreement_verified !== true
+        || fundedDisclosure.payment_verified !== true || fundedDisclosure.delivery_verified !== false) {
+        throw new Error("independent shielded disclosure did not verify agreement and payment");
+      }
+      if (process.env.EREBUS_M6_MATRIX === "1") {
+        fundedMatrix = JSON.parse(readFileSync(resolve(stateRoot, "funded-matrix/report.json"), "utf8"));
+        if (fundedMatrix.boundaries < 1 || fundedMatrix.completedTrials !== fundedMatrix.boundaries + 1) {
+          throw new Error("funded crash matrix did not complete every discovered boundary");
+        }
+      }
+    } else {
+      await (await pool.transferPrivate(...settlementProof)).wait();
+    }
     if (!await pool.insertedCommitments(paymentNote) || !await pool.insertedCommitments(changeNote)) {
       throw new Error("transfer outputs were not registered");
     }
@@ -565,6 +608,8 @@ async function main() {
       deposit: inputAmount.toString(), privatePayment: amount.toString(),
       finalVaultBalance: (await token.balanceOf(poolAddress)).toString(), artifacts,
       testOnly: true,
+      fundedMatrix,
+      fundedDisclosure,
     }, null, 2)}\n`);
     console.log("M5 local prototype: funded deposit, private transfer, output recovery, withdrawal, replay checks passed");
   } finally {

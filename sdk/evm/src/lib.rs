@@ -59,6 +59,7 @@ pub mod abi;
 pub mod backend;
 pub mod chain;
 pub mod deployment;
+pub mod disclosure;
 pub mod error;
 pub mod evidence;
 pub mod relay;

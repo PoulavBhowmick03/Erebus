@@ -14,6 +14,44 @@ use serde_json::Value;
 
 const FIXTURE: &str = include_str!("fixtures/agreement-suite2-vector.json");
 
+#[test]
+fn disclosure_messages_match_circomlib_and_cannot_authorize_payment() {
+    use erebus_core::shielded::disclosure_message;
+    // circomlibjs 0.1.7: Poseidon([3001, high128(digest), low128(digest)]).
+    for (digest, expected) in [
+        (
+            [0; 32],
+            "2920fd34a3f1366d8fdf72b216134c0fba4ea675cdbc96ef21158929d772fe98",
+        ),
+        (
+            [0xff; 32],
+            "00ec53d46422bcccb62bf09b2cd3e4cdcd719dfa125c3f6e5102c4ca12b8b3ab",
+        ),
+    ] {
+        assert_eq!(hex::encode(disclosure_message(&digest).unwrap()), expected);
+    }
+    let mut high = [0; 32];
+    high[0] = 1;
+    let mut low = [0; 32];
+    low[31] = 1;
+    assert_ne!(
+        disclosure_message(&high).unwrap(),
+        disclosure_message(&low).unwrap()
+    );
+    let (terms, blinding, _) = fixture_terms();
+    let deal = ShieldedDeal::from_terms(&terms).unwrap();
+    let commitment = deal.commitment(&blinding).unwrap();
+    let message = disclosure_message(commitment.as_bytes()).unwrap();
+    let seed = [1; 32];
+    let (key, signature) = sign_message(&seed, &message).unwrap();
+    verify_message(&key, &message, &signature).unwrap();
+    for role in [Role::Buyer, Role::Seller] {
+        let payment = deal.authorization_message(role, &commitment).unwrap();
+        assert_ne!(message, payment);
+        assert!(verify_message(&key, &payment, &signature).is_err());
+    }
+}
+
 fn bytes(value: &str) -> Vec<u8> {
     hex::decode(value).expect("pinned hex")
 }
@@ -114,7 +152,9 @@ fn rust_matches_circomlib_commitment_and_messages() {
 
 #[test]
 fn shared_agreement_api_matches_the_shielded_circuit() {
-    use erebus_core::auth::{authorization_digest, verify_authorization, verify_authorization_signature};
+    use erebus_core::auth::{
+        authorization_digest, verify_authorization, verify_authorization_signature,
+    };
     use erebus_core::commitment::{commit_agreement, deal_nullifier};
     let (terms, blinding, vector) = fixture_terms();
     let encoded = terms.encode().expect("suite-2 terms encode");
@@ -139,14 +179,29 @@ fn shared_agreement_api_matches_the_shielded_circuit() {
     invalid_context.domain.pool = None;
     assert!(check_capabilities(&invalid_context, &capabilities).is_err());
     let commitment = commit_agreement(&terms, &blinding).expect("shared commitment");
-    assert_eq!(commitment.to_hex(), field(&vector["expected"], "commitmentHex"));
-    assert_eq!(deal_nullifier(&terms).unwrap().to_hex(), field(&vector["expected"], "dealNullifierHex"));
+    assert_eq!(
+        commitment.to_hex(),
+        field(&vector["expected"], "commitmentHex")
+    );
+    assert_eq!(
+        deal_nullifier(&terms).unwrap().to_hex(),
+        field(&vector["expected"], "dealNullifierHex")
+    );
     for (role, name) in [(Role::Buyer, "buyer"), (Role::Seller, "seller")] {
         let message = authorization_digest(&terms.domain, role, &commitment, 2).unwrap();
-        assert_eq!(hex::encode(message), field(&vector["expected"], &format!("{name}MessageHex")));
+        assert_eq!(
+            hex::encode(message),
+            field(&vector["expected"], &format!("{name}MessageHex"))
+        );
         let auth = Authorization {
-            role, suite_id: 2, commitment,
-            signature: SignatureBytes::new(bytes(field(&vector["expected"], &format!("{name}SignatureHex")))).unwrap(),
+            role,
+            suite_id: 2,
+            commitment,
+            signature: SignatureBytes::new(bytes(field(
+                &vector["expected"],
+                &format!("{name}SignatureHex"),
+            )))
+            .unwrap(),
         };
         verify_authorization(&terms, &commitment, &blinding, &auth, terms.expiry - 1).unwrap();
         assert!(verify_authorization(&terms, &commitment, &blinding, &auth, terms.expiry).is_err());

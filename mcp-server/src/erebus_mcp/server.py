@@ -56,6 +56,10 @@ logger = logging.getLogger("erebus_mcp")
 
 def build_server() -> MCPServer:
     """Read configuration from the environment and assemble the server."""
+    if os.environ.get("EREBUS_BACKEND", "").strip().lower() == "disclosure":
+        from erebus_mcp.disclosure import build_disclosure_server
+
+        return build_disclosure_server()
     config = ServerConfig.from_env()
 
     server = MCPServer(
@@ -185,7 +189,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 os.environ.update(selected)
             else:
                 load_config_file(config_path)
-        elif not environment_is_configured():
+        elif os.environ.get("EREBUS_BACKEND", "").strip().lower() != "disclosure" and not environment_is_configured():
             if sys.stdin.isatty():
                 created = default_config_path()
                 print(

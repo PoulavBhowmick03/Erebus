@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 pub mod descriptor;
+pub mod disclosure;
 pub mod hashing;
 pub mod identity;
 pub mod limits;

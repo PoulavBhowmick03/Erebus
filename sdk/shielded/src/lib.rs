@@ -4,6 +4,7 @@
 //! proving keys, choose a deployment, upload witnesses, or declare M5 release readiness.
 
 pub mod chain;
+pub mod disclosure;
 pub mod index_store;
 pub mod indexer;
 pub mod observation;

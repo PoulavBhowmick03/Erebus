@@ -30,10 +30,15 @@ serde_json = "1"
 # Function selectors and the digest the contract recomputes.
 sha3 = "0.10"
 hex = "0.4"
+zeroize = "1"
 
 [[bin]]
 name = "erebus-tx-relayer"
 path = "src/bin/erebus_tx_relayer.rs"
+
+[[bin]]
+name = "erebus-disclosure"
+path = "src/bin/erebus_disclosure.rs"
 
 [dev-dependencies]
 tempfile = "3"

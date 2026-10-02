@@ -23,9 +23,12 @@ The Rust binary also generates entropy. Python does not produce keys or salts.
 from importlib.metadata import version as _metadata_version
 
 from erebus._network import Network, NetworkPreset, identify_network, network_preset
+from erebus._disclosure import DisclosureError, DisclosureSeam
 from erebus._seam import PROTOCOL, ErebusError, Seam, SeamConfig, SeamUnavailable
 
 __all__ = [
+    "DisclosureError",
+    "DisclosureSeam",
     "PROTOCOL",
     "ErebusError",
     "Network",

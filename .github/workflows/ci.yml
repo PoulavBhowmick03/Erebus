@@ -119,11 +119,100 @@ jobs:
         working-directory: sdk/core
         run: cargo test --all-targets
 
+      - name: Compile-fail API and documentation tests
+        working-directory: sdk/core
+        run: cargo test --locked --doc
+
       - name: Docs
         working-directory: sdk/core
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
+
+  rust-journal:
+    name: Rust journal
+    runs-on: ubuntu-latest
+    # The shared operation-journal storage engine (Metropolis M6, DM6-2). sdk/rs compiles it
+    # as a path dependency but never runs its tests. The EVM and shielded backends are meant to
+    # share it, so it must not pull in any chain, proving, or SDK crate: this job fails if one
+    # is added.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/journal
+
+      - name: Format
+        working-directory: sdk/journal
+        run: cargo fmt --check
+
+      - name: Check chain-neutral dependencies
+        working-directory: sdk/journal
+        run: |
+          cargo metadata --locked --format-version 1 | python3 -c '
+          import json, sys
+          packages = json.load(sys.stdin)["packages"]
+          def banned(name):
+              return (
+                  "starknet" in name
+                  or "felt" in name
+                  or name.startswith("alloy")
+                  or name == "ark" or name.startswith("ark-")
+                  or name == "erebus-sdk"
+              )
+          forbidden = [p["name"] for p in packages if banned(p["name"])]
+          if forbidden:
+              sys.exit("Chain-specific dependencies in erebus-journal: " + ", ".join(forbidden))
+          '
+
+      - name: Clippy
+        working-directory: sdk/journal
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: sdk/journal
+        run: cargo test --locked --all-targets
+
+      - name: Docs
+        working-directory: sdk/journal
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
+
+  rust-coordinator:
+    name: Rust coordinator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/coordinator
+      - name: Format
+        working-directory: sdk/coordinator
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: sdk/coordinator
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test durable local lifecycle
+        working-directory: sdk/coordinator
+        run: cargo test --locked
+      - name: Exhaustive two-suite persistence sweep
+        working-directory: sdk/coordinator
+        run: cargo test --locked --release --test lifecycle every_discovered -- --ignored
+      - name: Docs
+        working-directory: sdk/coordinator
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
 
   rust-transport:
     name: Rust transport
@@ -216,7 +305,15 @@ jobs:
       - name: Test the adapter against a local chain
         working-directory: sdk/evm
         # The ignored tests spawn anvil, which this job installed above.
-        run: cargo test --locked -- --include-ignored
+        run: cargo test --locked -- --include-ignored --skip every_public_bound_operation_write_recovers_one_actual_payment
+
+      - name: Exhaustive funded public-bound persistence sweep
+        working-directory: sdk/evm
+        run: cargo test --locked --release --test local_chain every_public_bound_operation -- --ignored
+
+      - name: Removed legacy API compile-fail guards
+        working-directory: sdk/evm
+        run: cargo test --locked --doc
 
       - name: Docs
         working-directory: sdk/evm
@@ -294,6 +391,15 @@ jobs:
         working-directory: circuits/m5
         run: npm ci
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install branch MCP packages for independent shielded disclosure
+        run: uv sync --all-packages --locked
+
       - name: Check shielded wallet and indexer
         working-directory: sdk/shielded
         run: cargo test --locked --all-targets
@@ -320,12 +426,23 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run prototype
 
+      - name: Recover funded shielded settlement at every durable boundary
+        working-directory: circuits/m5
+        env:
+          EREBUS_M5_NATIVE_PROOF: "1"
+          EREBUS_M6_COORDINATED: "1"
+          EREBUS_M6_MATRIX: "1"
+          EREBUS_TEST_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: npm run prototype
+
       - uses: actions/upload-artifact@v4
         with:
           name: m5-local-prototype-run
           path: |
             circuits/m5/build/run.json
             circuits/m5/build/artifact-manifest.json
+            circuits/m5/build/coordinated-*/disclosure-report.json
           if-no-files-found: error
           retention-days: 7
 
@@ -362,6 +479,20 @@ jobs:
         # Plain `uv sync` skips workspace members' editable installs, so the erebus-*
         # packages would not be importable. See CLAUDE.md.
         run: uv sync --all-packages
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/evm
+
+      - name: Build the disclosure binding target
+        run: cargo build --locked --manifest-path sdk/evm/Cargo.toml --bin erebus-disclosure
+
+      - name: Verify the fresh auditor through MCP
+        env:
+          EREBUS_TEST_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: cargo test --locked --manifest-path sdk/evm/Cargo.toml --test disclosure_cli issuer_selects
 
       - name: Test
         # -rs reports skips in the log so a silent skip is visible in review even when the

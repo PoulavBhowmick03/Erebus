@@ -1,5 +1,10 @@
 # MCP server
 
+Metropolis development: `EREBUS_BACKEND=disclosure` starts the branch's separate
+disclosure-only surface over `erebus-disclosure`. It needs no Starknet wallet or prover URL.
+See the [M7 runbook](../docs/metropolis-m7-runbook.md#disclosure-only-mcp) for configuration,
+backup rules, and the current public-bound limitation. This is not part of the published release.
+
 This page describes current `main`, which speaks Protocol 4 and exposes thirteen tools.
 The published `v0.2.0` packages speak Protocol 4 and expose thirteen tools. The older
 `v0.1.0` packages speak Protocol 2 and expose ten tools.

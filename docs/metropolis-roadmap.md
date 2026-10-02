@@ -2,7 +2,9 @@
 
 Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
-Status: M0-M4 locally complete at their stated scopes. M5-M9 remain pending.
+Status: M0-M4 locally complete at their stated scopes. M5 has a funded local prototype and is
+incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
+M7 is complete at its local scoped gate. M8-M9 are pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -277,34 +279,107 @@ Monad testnet evidence.
 
 Dependencies: M1 and M3. Extend the same lifecycle to M5.
 
-- [ ] Resolve the backend once from session configuration and verify both peers accept the same settlement context.
-- [ ] Persist canonical intent before signing, proving, or submitting.
-- [ ] Separate prepared, submitted, unknown, included, finalized, reverted, and expired outcomes.
-- [ ] Bind relayer compensation and prevent copied submissions from redirecting value.
-- [ ] Handle concurrent calls, nonce replacement, RPC disagreement, dropped responses, and reorgs.
-- [ ] Reconcile from transaction and contract evidence before resubmission.
-- [ ] Keep journal migrations explicit and isolate note reservations across operations.
-- [ ] Enforce spending policies before authorization, with concurrent reservations and reconciliation of uncertain payments.
-- [ ] Add redacted operation diagnostics, health metrics, and runbooks for relay, relayer, indexer, and RPC failures.
-- [ ] Package the relayer with explicit fee funding, access limits, and provider-switch recovery.
+- [x] Resolve the backend once from session configuration and verify both peers accept the same settlement context.
+- [x] Persist canonical intent before signing, proving, or submitting.
+- [x] Separate prepared, submitted, unknown, included, finalized, reverted, and expired outcomes.
+- [x] Bind relayer compensation and prevent copied submissions from redirecting value.
+- [x] Handle concurrent calls, nonce replacement, RPC disagreement, dropped responses, and reorgs.
+- [x] Reconcile from transaction and contract evidence before resubmission.
+- [x] Keep journal migrations explicit and isolate note reservations across operations.
+- [x] Enforce spending policies before authorization, with concurrent reservations and reconciliation of uncertain payments.
+- [x] Add redacted operation diagnostics, health metrics, and runbooks for relay, relayer, indexer, and RPC failures.
+- [x] Package the relayer with explicit fee funding, access limits, and provider-switch recovery.
 
 Done: fault injection after every durable boundary yields at most one payment and a recoverable operation state.
 Test both settlement modes. A local timeout never becomes evidence of an unpaid deal.
 Policy limits survive concurrent requests and restarts. Operators can diagnose stalled operations without exporting private keys or transcripts.
 
+Local progress through 2026-09-28: the shared journal and deal classifier are integrated.
+The [local coordinator](../sdk/coordinator/README.md) persists intent and policy reservations
+before signer/prover callbacks. It applies winner accounting and losing-revision release
+atomically. These local checks do not replace the EVM transaction fault matrix.
+See [M6 progress and remaining gates](metropolis-m6-progress.md).
+
+Local progress through 2026-09-29: the public-bound EVM path is integrated end to end.
+Canonical chain observation (receipts, complete settlement-log history, winner calldata and
+authorization verification, explicit RPC `finalized`) is part of `sdk/evm`. Verified nonce-claim
+release requires a finalized consumed nonce. Thirteen Anvil-backed tests cover the coordinated
+lifecycle, a foreign winner, crashes at durable boundaries, the relayer's signed fee and
+recipient binding, provider failover with funding diagnostics, and a TCP JSON-RPC fault proxy
+that drops or falsifies responses. `erebus-tx-relayer` packages funding diagnostics and access
+limits, and now requires relayer-owned persistent storage for journaled submission and recovery;
+[the runbook](metropolis-m6-runbook.md) covers relay, relayer, indexer, and RPC failures.
+Monad's documented `finalized` semantics match the implemented policy (documentation research;
+live verification is M8). The shielded EVM path now uses the same durable coordinator and nonce
+journal in a funded Anvil run, with native proof generation, restart, broadcast, and finalized
+pool reconciliation. Honest partials: the local `Stage` collapses `included` into `submitted`
+until finality, so the listed outcomes are separated across chain observation, the core
+classifier, and the coordinator rather than one enum. As of 2026-09-30, combined funded
+operation-write sweeps including fee replacement passed 68 injected boundaries for shielded mode and 56 for public-bound
+mode, plus each baseline. RPC timeout sweeps hold reservations and recover from honest
+evidence without another send. Paired-provider reads reject inconsistent evidence.
+The owner selected mandatory paired operator recovery on 2026-10-01; the relayer and shielded
+coordinator path enforce it without an automatic single-provider fallback.
+Relayer CLI recovery wiring is locally verified.
+
+M6 status 2026-10-01: **implementation locally complete; owner review pending.**
+The exhaustive coordinator sweep was rerun and passed in both settlement modes
+(`every_discovered_lifecycle_write_is_restartable_in_both_settlement_modes`, ~17.5 minutes):
+fault injection after every discovered durable boundary yields at most one payment and a
+recoverable operation state. All ten checklist items are checked. What remains is not code:
+the open owner decisions in [M6 decisions](metropolis-m6-decisions.md) — DM6-5 (provider
+quorum vs one RPC), DM6-7 (authorized-expiry cap and ledger scope), DM6-8 (relayer quote
+flow), and the documented v1/v2 `accepted_at` ambiguity in DM6-2 — plus the recorded
+limitations (trusted local observation checkpoints, 128 MiB shielded index cache with no
+compaction, CLI `--serve` counters resetting on restart, no authenticated multi-client
+gateway). Live Monad evidence is M8.
+Public-bound history now resumes bounded log scans and ancestry walks from durable checkpoints;
+the relayer uses this path before signing or sending. Shielded observation saves bounded
+verified batches and holds reservations until history is complete. Local tests cover restart,
+old winners, nonfinal reorgs, and paired-provider disagreement. Cache replay and the shielded
+cache-size limit remain operational constraints. On 2026-10-01 the owner selected removal
+of the legacy unjournaled backend APIs. Successful M3 payment tests now use coordinator-backed
+submission and paired finality; invalid direct calls remain only as contract rejection tests.
+M6 remains under final owner review;
+remaining decision-record questions are not resolved implicitly by the RPC-policy choice.
+See [M6 progress](metropolis-m6-progress.md).
+
 ### M7. Scoped disclosure
 
 Dependencies: M2, M6, and the relevant settlement backend.
 
-- [ ] Define a recipient-bound package containing transcript evidence, agreement opening, authorizations, and settlement evidence.
-- [ ] Provide issuer authentication and independent receipt verification.
-- [ ] Export only per-deal capabilities, never parent session keys or spending secrets.
-- [ ] Implement explicit transcript backup and availability behavior.
-- [ ] Test wrong recipients, altered evidence, neighboring deals, and missing relay data.
-- [ ] Document backup and restoration of disclosure evidence without a dependency on hosted relay retention.
+- [x] Define a recipient-bound package containing transcript evidence, agreement opening, authorizations, and settlement evidence.
+- [x] Provide issuer authentication and independent receipt verification.
+- [x] Export only per-deal capabilities, never parent session keys or spending secrets.
+- [x] Implement explicit transcript backup and availability behavior.
+- [x] Test wrong recipients, altered evidence, neighboring deals, and missing relay data.
+- [x] Document backup and restoration of disclosure evidence without a dependency on hosted relay retention.
 
 Done: a third process verifies the selected agreement and payment without either participant being online.
 Document that expiry and revocation cannot erase plaintext already disclosed.
+
+Local progress: `sdk/transport` verifies one selected agreement and exports a recipient-bound,
+issuer-signed grant with an owner-only backup. `sdk/evm` independently checks finalized public-bound
+payment evidence against the disclosed deal on Anvil, including from a fresh auditor subprocess
+with only its grant, key, and RPC configuration. On 2026-10-01, SDK tests verified saved-grant
+recovery after relay and transcript loss, and missing-grant reissue from retained signed evidence.
+Installed agreement-opening restoration now has a durable read path:
+`read_disclosure_opening` plus the CLI `select` method rebuild canonical evidence from the
+coordinator snapshot and transcript store. The CLI issuer/recipient workflow is exercised
+end to end in separate processes: `select` (issuer, from durable state) -> `export` ->
+`verify_agreement` (fresh recipient, files only, participant directory deleted).
+This verifies the agreement, not payment or delivery. On 2026-10-02 the same fresh-auditor
+workflow passed through the disclosure-only MCP server, with Python passing paths to Rust.
+See [M7 progress](metropolis-m7-progress.md).
+The shielded SDK checks an opened agreement through paired finalized pool observation; its
+local predicates and the 11 loopback RPC fixture tests pass on a machine that permits local
+socket binds. The M5 harness now binds a replayable Rust-generated transcript into the funded
+agreement, and the coordinated runner verifies that transcript before settlement.
+The owner selected direct suite-2 grant signing. Version-2 grants authenticate the buyer or seller without a separate suite-1 issuer.
+The funded local run passes through separate issuer and auditor CLI processes and the official MCP client.
+Participant storage is unavailable during auditor verification. The auditor needs no note wallet, spend key, or prover.
+M7 is complete at this local gate; Monad deployment and package-only installation remain M8 requirements.
+See [M7 decisions](metropolis-m7-decisions.md) for signature domains and public grant metadata.
 
 ### M8. Monad deployment and agent integration
 
@@ -403,5 +478,15 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-09-21 | M3 EVM public-bound settlement | [M3 decision record](metropolis-m3-decisions.md) and [M3 baseline](metropolis-m3-baseline.md) |
 | 2026-09-24 | M4 private-transfer proof prototype | [M4 decision record](metropolis-m4-decisions.md), [M4 baseline](metropolis-m4-baseline.md), and `circuits/m4` |
 | 2026-09-25 | M5 funded local prototype, not milestone completion | [M5 progress and open gates](metropolis-m5-progress.md) and `circuits/m5` |
+| 2026-09-29 | M6 public-bound coordinator, observation, release, and relayer (M6 still open) | [M6 progress and remaining gates](metropolis-m6-progress.md) |
+| 2026-09-30 | M6 bounded historical recovery in both settlement modes (RPC default still open) | [M6 progress](metropolis-m6-progress.md) and [DM6-12](metropolis-m6-decisions.md#dm6-12-bounded-historical-observation) |
+| 2026-10-01 | Mandatory two-provider operator recovery | [M6 policy decision](metropolis-m6-decisions.md#dm6-5-finality-source-and-evidence-quorum) |
+| 2026-10-01 | Remove legacy unjournaled backend submission and confirmation-based finality | [M6 operation lifecycle decision](metropolis-m6-decisions.md#dm6-4-evm-operation-record-and-stages) |
+| 2026-10-01 | M7 installed issuer read path (`read_disclosure_opening` + CLI `select`) | [M7 progress](metropolis-m7-progress.md) and `sdk/coordinator/tests/lifecycle.rs` |
+| 2026-10-01 | M6 exhaustive sweep rerun in both settlement modes | [M6 progress](metropolis-m6-progress.md); coordinator `--ignored` test |
+| 2026-10-02 | M7 direct suite-2 grants and independent funded CLI/MCP auditor | [M7 decisions](metropolis-m7-decisions.md) and [M7 progress](metropolis-m7-progress.md) |
 
-M0-M4 are complete locally at their scoped gates. M5-M9 remain incomplete.
+M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains
+incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
+M7 is complete locally: all six checklist items and the independent funded auditor criterion pass in both settlement modes.
+M8-M9 remain incomplete.

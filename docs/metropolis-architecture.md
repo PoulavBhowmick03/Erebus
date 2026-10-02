@@ -237,6 +237,13 @@ Wire-v3 scoped disclosure remains available separately; it is not a guarantee co
 
 Keep funding and withdrawal as explicit wallet operations. Negotiation must not silently authorize either.
 Core types must not assume a Starknet `Felt`, EVM address, proof system, or transaction format.
+
+Scoped disclosure has separate agreement and payment checks. The owner selected direct suite-2 signing for shielded grants.
+Version-2 grants use a participant's agreement seed locally and a distinct disclosure-signature domain.
+The auditor verifies the issuer against the disclosed buyer or seller key before observing payment.
+Public-bound version-1 grants remain supported. Neither grant contains spending secrets or parent session keys.
+Public grant headers reveal the issuer identity, recipient public key, deal ID, expiry, and ciphertext size.
+See [M7 decisions](metropolis-m7-decisions.md) for the encoding and [M7 runbook](metropolis-m7-runbook.md) for CLI/MCP commands.
 A receipt includes domain, commitment, nullifier, transaction and block identifiers, finality state, and the verified guarantee set.
 The caller rejects a backend that lacks a required guarantee. Never silently downgrade to public settlement.
 
@@ -256,6 +263,13 @@ guarantee and must not be presented as though it does.
 Proposed lifecycle: `Negotiating -> Authorized -> Prepared -> Submitted -> Included -> Finalized`.
 `Unknown` requires reconciliation, not a fresh payment. Reorgs can return included transactions to pending or unknown.
 An expired unsubmitted agreement cannot settle. A local timeout does not prove that an already submitted transaction failed.
+
+The Metropolis EVM operator default requires two matching RPC providers before changing
+payment accounting, recovered note state, or finalized signer claims. Incomplete history,
+provider failure, and disagreement keep reservations held. Broadcast failover does not
+reduce verification to one provider. Each observer uses a separate persistent history cache.
+This is a consistency check, not consensus proof; operators must choose independent providers.
+Honest provider lag can also delay recovery. See [M6 decisions](metropolis-m6-decisions.md#dm6-5-finality-source-and-evidence-quorum).
 
 Keep existing STRK20 codecs and execution behind its adapter.
 Extract shared semantics only after tests describe their current behavior.

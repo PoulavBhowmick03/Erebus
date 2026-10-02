@@ -175,6 +175,49 @@ impl TransportIdentity {
     }
 }
 
+/// A separate X25519 key for opening offline deal disclosures.
+/// Generate it independently from the live transport identity.
+#[derive(Clone)]
+pub struct DisclosureIdentity(TransportIdentity);
+
+impl fmt::Debug for DisclosureIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DisclosureIdentity { <redacted> }")
+    }
+}
+
+impl DisclosureIdentity {
+    /// Generates a fresh disclosure key.
+    pub fn generate() -> Result<Self, IdentityError> {
+        TransportIdentity::generate().map(Self)
+    }
+
+    /// Restores a disclosure key from owner-controlled secret bytes.
+    pub fn from_private_key(private: [u8; TRANSPORT_KEY_BYTES]) -> Result<Self, IdentityError> {
+        TransportIdentity::from_private_key(private).map(Self)
+    }
+
+    /// Stores a fresh disclosure key in an owner-only file.
+    pub fn generate_and_store(path: impl AsRef<Path>) -> Result<Self, IdentityError> {
+        TransportIdentity::generate_and_store(path).map(Self)
+    }
+
+    /// Opens an owner-only disclosure key file.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, IdentityError> {
+        TransportIdentity::load(path).map(Self)
+    }
+
+    /// Public key to give to an issuer.
+    #[must_use]
+    pub fn public_key(&self) -> [u8; TRANSPORT_KEY_BYTES] {
+        self.0.public_key()
+    }
+
+    pub(crate) fn private_key(&self) -> &[u8; TRANSPORT_KEY_BYTES] {
+        self.0.private_key()
+    }
+}
+
 /// The secp256k1 key that signs descriptors and becomes the suite-1 authorization key.
 #[derive(Clone)]
 pub struct AuthorizationIdentity {
