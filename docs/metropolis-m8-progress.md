@@ -239,13 +239,22 @@ The remaining items are not started or only partially present:
 
 ## What is needed
 
-1. The installed workflow (items 3-5, 8): a buyer-side CLI that drives the journaled
-   settlement on the deployed contract, test-token funding, the fresh-install guide, and the
-   Python/MCP boundary. `erebus-settle` covers capabilities, funding, and receipt.
-   `erebus-payment` now connects native public-bound negotiation to durable signing, submission,
-   and paired recovery locally. Native shielded settlement and packaged composition remain open.
-2. Installed and live access integration (items 9-11), plus specified x402 composition.
-3. Stage measurements on the live run.
+1. **Versioned packages and a published fresh-install path.** The commands exist and the
+   [fresh-install guide](metropolis-install.md) is written, but nothing is published; every
+   command builds from this checkout. Item 4 remains open.
+2. **Hosted and self-hosting packages (items 6-7).** The four services run locally with health
+   surfaces and configuration; a hosted testnet deployment and a packaged self-hosting path do
+   not exist.
+3. **x402 composition (items 12-13).** The decision gate and the measured comparison plan are
+   recorded in [the x402 decision](metropolis-m8-x402.md); no scheme is selected and no code
+   exists.
+4. **Stage measurements (item 14).** `erebus-payment` reports deployment authentication,
+   observation, funding, local signing, and submission; negotiation, proof, inclusion, finality,
+   and delivery are not yet reported separately.
+5. **The external rehearsal.** The local installed rehearsal passes
+   (`funded_http_access_recovers_a_lost_response_after_service_restart_without_a_second_payment`,
+   Anvil + funded shielded payment + HTTP access service + restart recovery). It has not been
+   repeated from a fresh environment using only published packages and public documentation.
 
 M8's Done criterion — independent buyer, seller, observer, and disclosure processes completing
 the real Monad workflow, with hosted and self-hosted support and recoverable access issuance —
