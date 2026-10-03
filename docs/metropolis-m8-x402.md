@@ -1,7 +1,7 @@
 # Metropolis M8: x402 Decision Record
 
-Status: **open; no scheme selected.** This records the gate and the evidence needed before any
-x402 code is written. The roadmap deliberately requires composition "only against a specified
+Status: **scheme selected: `exact` (owner, 2026-10-03); no x402 code yet.** This records the gate
+and the evidence needed before x402 code is written. The roadmap deliberately requires composition "only against a specified
 scheme", because an x402 integration changes what is public and can introduce a second charge.
 
 ## What x402 would add
@@ -49,5 +49,7 @@ code exists.
 
 ## Owner decision
 
-- Decision: _owner_
+- Decision: `exact`, for now (owner, 2026-10-03). Composition is built against `exact` first.
 - Rationale: _owner_
+- Not yet done: the measured comparison against `upto` and batched settlement. Choosing `exact`
+  first does not complete that roadmap item.

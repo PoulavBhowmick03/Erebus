@@ -353,3 +353,51 @@ uv run --locked pytest agents/tests/test_metropolis_loop.py
 
 This is Anvil with prototype keys and test artifacts, not Monad. The operation ID is agreed out
 of band; there is no discovery handshake for it. Delivery through MCP was not part of this loop.
+
+## Public-Bound Delivery, Timings, Installed Agents, and Self-Hosting (2026-10-03)
+
+Owner decisions: finish the product public-bound first, then deploy a shielded testnet pool
+(DM8-10); x402 composes against `exact` (DM8-11).
+
+**Delivery and timings.** A finalized public-bound payment now reports `chain_times`: inclusion and
+finalized-anchor block numbers and timestamps, read from the primary RPC as diagnostics only. The
+agent loop retrieves the resource when the buyer's server exposes access. It retries a failed
+retrieval by retrieving again and never by paying. It reports latencies for inclusion, finality,
+payment verification, and delivery. In the combined MCP mode, buyer access is enabled by
+`EREBUS_ACCESS_SERVICE_URL`, and the evidence directory is fixed to `<state_root>/agent` (DM8-12).
+
+`two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send` runs two real MCP servers
+on Anvil (one-second blocks) through the lossy proxy. Settlement returns `pending` at
+`BroadcastUnknown`, and observation reaches `Finalized`. The buyer retrieves the 37-byte payload
+and its hash matches the agreed digest. The proxy sees one raw transaction, and the seller holds 70
+tokens. The full deal took 11.6 s (debug build): negotiation 0.3 s, local signing 0.09 s,
+submission 0.04 s, payment verified 2.3 s after submission, delivery 0.1 s. Anvil makes
+inclusion and finality meaningless (`--slots-in-an-epoch 1`, whole-second timestamps). Those two
+numbers need Monad.
+
+**Installed packages only.** The registry was built from this tree and installed into a fresh
+venv outside the repository. Two headless Claude Code agents then ran with each MCP server as
+that venv's `erebus-mcp-server`, only the venv's `bin` on `PATH`, and no binary overrides. The
+buyer negotiated, settled once, observed twice to `Finalized`, and retrieved the snapshot. The
+seller made one call. One transaction was sent and the seller was paid 70. The chain fixture and
+the seller's access service still run from the test (`hold_public_agent_environment`).
+
+**Self-hosting.** `scripts/metropolis-selfhost.sh` and the
+[self-hosting guide](metropolis-self-hosting.md) start, check, and stop the services from
+installed binaries under one owner-only directory. Verified locally with installed binaries:
+relay and access service healthy, relayer configuration accepted, state retained across
+restart. The indexer was not exercised (shielded only).
+
+**Friction found.** The seller's negotiated agreement never reaches its own access service
+without an operator step ([F48](friction.md)). Agents misread the access flags `resource_verified`,
+`delivery_verified`, and the seller-reported payment claim ([F49](friction.md)).
+
+Verified locally:
+
+```sh
+cargo test --locked --manifest-path sdk/shielded/Cargo.toml --test negotiation_cli -- --include-ignored
+uv run --locked pytest agents/tests/test_metropolis_loop.py mcp-server/tests/test_metropolis.py sdk/py/tests/test_metropolis_seam.py
+```
+
+Not done: publishing or hosting the registry, x402 `exact` composition, wallet onboarding, local
+proving from installed packages (deferred with the shielded pool), and anything on Monad.

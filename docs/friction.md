@@ -1898,3 +1898,42 @@ the checkout saw it. The lesson repeats F12's shape — the defect hides in the 
 not the one you are testing — and it argues for the install check to hit a real endpoint, since
 the existing `check-onboarding-install.py` uses a local stub server that had no opinion about
 the `User-Agent`.
+
+## F48: Nothing hands the seller's negotiated agreement to its own access service (2026-10-03)
+
+**What we were trying to do.** Run a public-bound Metropolis deal end to end through MCP: two
+agents negotiate, the buyer pays, and the buyer retrieves the snapshot from the seller's access
+service.
+
+**What the stack did instead.** The seller's `negotiate_deal` writes the selected agreement to
+`<state_root>/agent/<operation>.0.tx`. The access service reads evidence only as
+`<evidence_root>/<deal commitment>.evidence`. Nothing connects the two, so a seller's agent can
+agree to a deal its own service will never serve. The buyer would see access fail after a
+verified payment.
+
+**Whether we worked around it.** Only in tests. `agent_driver.rs` runs a seller-operator watcher
+that waits for the negotiated file, verifies it, computes the commitment, and publishes it under
+the service's naming. The funded tests and the held environment for LLM agents both depend on it.
+
+**What would have made it easier.** Either negotiation publishes to a configured evidence root
+in the service's naming, or the service resolves evidence by operation. The current split means
+two directories and two naming schemes for the same agreement.
+
+## F49: Agents cannot tell which verification flag means "you got what you paid for" (2026-10-03)
+
+**What we were trying to do.** Let headless Claude Code agents, given only their MCP tools, buy
+and retrieve a snapshot and report what they received.
+
+**What the stack did instead.** Retrieval returns `resource_verified: true` (the payload hash
+matches the agreed fulfillment digest), `delivery_verified: false`, and `payment_verified: false`
+with `seller_reported_payment_finalized: true`. In two runs the buyer agent read this as "can't
+confirm the file is what we agreed", called the 37-byte test payload suspiciously small, and
+flagged that retrieval reported payment unverified right after `recover_deal` had verified it on
+chain. The flags are each correct, but their meanings live in runbooks the agent cannot see.
+
+**Whether we worked around it.** No. The deterministic harness checks the flags directly and is
+unaffected.
+
+**What would have made it easier.** Tool descriptions, or a one-line summary in the result, that
+say what each flag establishes. For example: the content hash matches the agreement, the payment
+claim here is the seller's, and chain verification comes from `recover_deal`.

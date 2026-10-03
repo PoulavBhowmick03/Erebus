@@ -5,8 +5,9 @@ Target submission date: October 13, supplied by the project owner. Verify the po
 Status: M0-M4 locally complete at their stated scopes. M5 has a funded local prototype and is
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
 M7 is complete at its local scoped gate. M8 has verified network readiness, a verified
-testnet deployment, and local native negotiation-to-payment evidence in both modes; packaging
-release, hosting, x402, and the live installed workflow remain. M9 is pending.
+testnet deployment, and a local public-bound negotiate-pay-deliver loop driven by MCP agents from
+installed packages; publishing, hosting, x402, onboarding, and the live Monad workflow remain.
+M9 is pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -393,14 +394,14 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [ ] Publish versioned testnet packages and a fresh-install guide covering identity, discovery, funding, settlement, disclosure, recovery, and withdrawal.
 - [ ] Make local proving work from the installed Erebus MCP/SDK package, with automatic hash-checked shared artifact installation; require no source checkout, Circom installation, separate prover service, or operator setup ceremony.
 - [ ] Deploy optional shared testnet services and document their metadata exposure, retention, access limits, and availability behavior.
-- [ ] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
+- [x] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
 - [x] Update the Python boundary, MCP configuration, and deterministic two-agent harness.
 - [x] Add the HTTP service adapter and bind access to the finalized agreement and intended buyer.
 - [x] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
 - [x] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
 - [ ] Implement x402 composition only against a specified scheme, with exactly one payment and explicit privacy exposure.
 - [ ] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
-- [ ] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately.
+- [x] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately.
 
 Done: independent buyer, seller, observer, and disclosure processes complete the real Monad workflow.
 Both hosted endpoints and the self-hosting package support the documented workflow.
@@ -431,9 +432,15 @@ A deterministic two-agent harness drives that path through two real MCP servers,
 headless Claude Code agents, each confined to its own server, completed it twice. Each run
 recovered a lost broadcast by observation with one transaction sent (local Anvil; the
 harness item is checked at that scope).
-Still open: published packages, hosted and rehearsed self-hosted services, wallet
-funding/withdrawal onboarding, live access recovery, x402, and inclusion, finality, and
-delivery measurements.
+Owner decisions (DM8-10, DM8-11): finish the product public-bound first, then deploy a shielded
+testnet pool; x402 composes against `exact`. The public-bound loop now runs through MCP with
+delivery. Two LLM agents completed it from packages installed into a fresh environment.
+Stage timings are reported, and a self-hosting launcher brings the services up from installed
+binaries. Those two items are checked at local scope; inclusion and finality need Monad to be
+meaningful.
+Still open: published and hosted packages and services, wallet onboarding, x402 `exact`
+composition, local proving from installed packages (with the shielded pool), and the live Monad
+workflow.
 These local checks do not complete the private-payment release gate.
 The checked access items have funded local evidence for both modes, including Rust and MCP retrieval.
 They do not claim live Monad access, hosted operation, or a published package release.
@@ -528,6 +535,7 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-10-03 | M8 native public-bound negotiation, one-payment submission, paired recovery, snapshot delivery retry, and independent auditor | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/payment_driver.rs`; funded Anvil evidence, not a new live Monad run |
 | 2026-10-03 | M8 native shielded payment: negotiated suite-2 deal, local proof, one submission, recovery without a second send | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/shielded_driver.rs`; funded Anvil, prototype keys, not a live Monad run |
 | 2026-10-03 | M8 two-agent MCP harness and two headless LLM agent runs: settle once, recover a lost broadcast by observation | [M8 progress](metropolis-m8-progress.md#two-agents-over-mcp-2026-10-03), `agents/src/erebus_agents/metropolis_loop.py`, `scripts/metropolis-agent-rehearsal.sh`; Anvil, prototype keys |
+| 2026-10-03 | M8 public-bound MCP loop with delivery and stage timings; LLM agents from installed packages; self-hosting launcher | [M8 progress](metropolis-m8-progress.md#public-bound-delivery-timings-installed-agents-and-self-hosting-2026-10-03), [self-hosting](metropolis-self-hosting.md), `sdk/shielded/tests/support/agent_driver.rs`; Anvil only |
 | 2026-10-03 | M8 combined Metropolis MCP mode and unpublished separate-registry packages with a fresh-environment install check | [Install guide](metropolis-install.md), [DM8-9](metropolis-m8-decisions.md#dm8-9-metropolis-packages-use-a-separate-registry), `scripts/check-metropolis-install.py`; nothing published |
 
 M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains

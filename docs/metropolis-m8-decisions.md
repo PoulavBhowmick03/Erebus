@@ -113,6 +113,26 @@ without editing their source metadata, bundles the native binaries into a host-t
 verifies hashes, native protocols, and MCP startup. Wheels cover the build host only, with no
 portability audit. Hosting the index and publication remain open and require owner approval.
 
+## DM8-10. Complete the product public-bound first
+
+Owner decision (2026-10-03): finish the whole Metropolis product loop in public-bound mode first
+(negotiation, settlement, delivery, packaging, self-hosting, x402), then deploy a shielded testnet
+pool. The shielded driver and its local evidence stay in place but are not the path to M8
+completion on Monad until a pool is deployed. Public-bound settlement exposes the accepted terms,
+amount, and parties on chain; only the negotiation history stays private.
+
+## DM8-11. x402 composes against `exact`
+
+Owner decision (2026-10-03): the x402 scheme is `exact`, for now. See the
+[x402 record](metropolis-m8-x402.md).
+
+## DM8-12. Metropolis buyer access uses the participant's evidence directory
+
+In the combined `metropolis` MCP mode, a buyer gains `retrieve_service_access` when
+`EREBUS_ACCESS_SERVICE_URL` is set. The evidence directory is fixed to `<state_root>/agent`, which is the only
+place negotiation writes buyer evidence. It is created owner-only if missing. A different
+`EREBUS_ACCESS_EVIDENCE_DIR` is rejected. The standalone `access` mode is unchanged.
+
 ## Open release decisions
 
 - Secure shielded artifacts, ceremony evidence, and authenticated verifier deployment.

@@ -91,7 +91,10 @@ See [payment configuration](metropolis-payment-runbook.md) before running either
 `erebus-negotiate` reports `measurements_ms.negotiation` for the whole call. `erebus-payment`
 reports `measurements_ms` for deployment authentication, observation, funding, local signing, and
 submission, plus artifact installation and proof preparation on the shielded path. Inclusion,
-finality, and delivery latency are not reported separately. An interrupted payment is recovered by re-running it: the
+finality, and delivery are measured by the agent harness: a finalized public-bound payment
+reports `chain_times` (inclusion and finalized-anchor blocks and timestamps from the primary RPC),
+and `agents/src/erebus_agents/metropolis_loop.py` turns them into latencies against its own
+submission time and times retrieval. An interrupted payment is recovered by re-running it: the
 durable journal observes the same operation without another automatic submission.
 A crash before network submission can require explicit operator recovery; retries do not guarantee eventual payment.
 
@@ -121,6 +124,8 @@ See the [access](metropolis-access-runbook.md), [payment](metropolis-payment-run
 [proving](metropolis-local-proving-runbook.md), and [negotiation](metropolis-negotiation-runbook.md)
 runbooks, and the [M6 runbook](metropolis-m6-runbook.md) for relay, relayer, indexer, and RPC
 failure handling. Hosted and self-hosted deployments run the same binaries.
+[Self-hosting](metropolis-self-hosting.md) covers the storage layout and
+`scripts/metropolis-selfhost.sh`, which starts and checks these services from installed binaries.
 
 ## 9. Agent access over MCP
 
@@ -138,8 +143,9 @@ The negotiation configuration's `role` selects the tools. A buyer gets `negotiat
 `check_settlement_funding`, `settle_deal`, and `recover_deal`; a seller gets `negotiate_deal`
 only and refuses a payment configuration. The payment configuration's `mode` and `state_root`
 must match the participant. `recover_deal` observes and never submits. Setting
-`EREBUS_ACCESS_EVIDENCE_DIR` (with the access variables from the
-[access runbook](metropolis-access-runbook.md)) adds `retrieve_service_access` to a buyer.
+`EREBUS_ACCESS_SERVICE_URL` (with the other access variables from the
+[access runbook](metropolis-access-runbook.md)) adds `retrieve_service_access` to a buyer. Its
+evidence directory is fixed to `<state_root>/agent` and created owner-only if missing (DM8-12).
 `EREBUS_NEGOTIATION_CLI`, `EREBUS_PAYMENT_CLI`, and `EREBUS_NATIVE_TIMEOUT_SECONDS` (1-900)
 override binary discovery on `PATH` and the per-call timeout.
 
@@ -164,6 +170,6 @@ x86_64); there is no portability audit. Nothing is published.
 
 - No published versioned packages; the registry above is built and checked locally only.
 - No hosted testnet deployment of the shared services.
-- No x402 composition; see the [x402 decision](metropolis-m8-x402.md).
+- No x402 composition yet; the scheme is `exact` ([x402 decision](metropolis-m8-x402.md)).
 - The external rehearsal on Monad with only these packages and public documentation has not
   been run.
