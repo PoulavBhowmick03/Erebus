@@ -239,21 +239,27 @@ The remaining items are not started or only partially present:
 
 ## What is needed
 
-1. **Versioned packages and a published fresh-install path.** The commands exist and the
-   [fresh-install guide](metropolis-install.md) is written, but nothing is published; every
-   command builds from this checkout. Item 4 remains open.
+1. **Versioned packages and a published fresh-install path.** Owner decision: a separate
+   Metropolis registry. `scripts/build-metropolis-registry.py` builds an unpublished `.devN` index
+   (three wheels, native binaries in a host-tagged `erebus-cli` wheel, hashed `release.json`), and
+   `scripts/check-metropolis-install.py` installs it into a fresh environment and verifies it. Hosting
+   and publishing the index are not done. Item 4 remains open.
 2. **Hosted and self-hosting packages (items 6-7).** The four services run locally with health
    surfaces and configuration; a hosted testnet deployment and a packaged self-hosting path do
    not exist.
 3. **x402 composition (items 12-13).** The decision gate and the measured comparison plan are
    recorded in [the x402 decision](metropolis-m8-x402.md); no scheme is selected and no code
    exists.
-4. **Stage measurements (item 14).** `erebus-payment` reports deployment authentication,
-   observation, funding, local signing, and submission; negotiation, proof, inclusion, finality,
-   and delivery are not yet reported separately.
+4. **Stage measurements (item 14).** `erebus-negotiate` reports negotiation; `erebus-payment`
+   reports deployment authentication, observation, funding, local signing, and submission, plus
+   artifact installation and proof preparation in shielded mode. Inclusion, finality, and
+   delivery are not yet reported separately.
 5. **The external rehearsal.** The local installed rehearsal passes
    (`funded_http_access_recovers_a_lost_response_after_service_restart_without_a_second_payment`,
-   Anvil + funded shielded payment + HTTP access service + restart recovery). It has not been
+   Anvil + funded public-bound payment + HTTP access service + restart recovery), and so does the
+   native shielded path (`negotiation_cli` `payment_driver` tests: separate agents negotiate a
+   suite-2 deal, the buyer proves locally and submits once, and recovery completes after a dropped
+   RPC response; Anvil, known-entropy prototype keys). It has not been
    repeated from a fresh environment using only published packages and public documentation.
 
 M8's Done criterion — independent buyer, seller, observer, and disclosure processes completing

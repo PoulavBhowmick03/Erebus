@@ -87,17 +87,37 @@ The first block must have that code, and the preceding block must have no code.
 This prevents a late history start from silently omitting payments.
 Runtime and paired RPC checks are not a contract audit or proof of provider honesty.
 
-This driver currently supports public-bound settlement only.
-It rejects shielded agreements without a fallback.
 Public-bound calldata exposes the accepted canonical terms, blinding, and final authorizations.
 Only the offchain negotiation history remains confidential in that mode.
-The native shielded lifecycle remains required for M8 completion.
+
+Update 2026-10-03: the same driver now settles suite-2 agreements under a separate strict
+`mode: "shielded"` configuration. Operator configuration selects the mode; neither path can
+downgrade the signed agreement. The driver also pins the runtime hashes of the pool's four
+immutable dependencies. It persists the selected input and change opening in the encrypted wallet
+before proving, so a retry cannot substitute another input or opening. It simulates before
+signing, and the same broadcast fence and two-provider observation apply. Recovery after an
+attempted broadcast needs the wallet key but not the transaction key, artifacts, or transcript.
+It does not create or fund wallets, withdraw, or make the prototype artifacts secure.
 See the [payment runbook](metropolis-payment-runbook.md).
+
+## DM8-9. Metropolis packages use a separate registry
+
+Owner decision (2026-10-03): Metropolis testnet packages are published to a separate package
+registry, not GitHub prerelease assets on the existing Python package index. The stable release
+workflow and index stay untouched.
+
+`scripts/build-metropolis-registry.py` stages the three Python packages at a `.devN` version
+without editing their source metadata, bundles the native binaries into a host-tagged
+`erebus-cli` wheel, and writes `release.json` with binary and wheel hashes and the source commit.
+`scripts/check-metropolis-install.py` installs only from that index into a fresh environment and
+verifies hashes, native protocols, and MCP startup. Wheels cover the build host only, with no
+portability audit. Hosting the index and publication remain open and require owner approval.
 
 ## Open release decisions
 
 - Secure shielded artifacts, ceremony evidence, and authenticated verifier deployment.
-- Versioned platform packages and public artifact distribution.
+- Hosting and publishing the Metropolis registry (channel decided in DM8-9), platform coverage,
+  and public artifact distribution.
 - Hosted-service resources, quotas, retention, and incident ownership.
 - x402 scheme and measured per-request, prepaid, and batched comparison.
 - Mainnet activation. The planning default remains a testnet developer release.

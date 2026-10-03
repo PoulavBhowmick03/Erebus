@@ -1,11 +1,11 @@
 # Native Payment Driver
 
-Status: local public-bound integration on `metropolis`. M8 remains open.
+Status: local public-bound and shielded drivers on `metropolis`. M8 remains open.
 
 `erebus-payment` continues an agreement from [native negotiation](metropolis-negotiation-runbook.md).
 It does not construct new terms, sign agreement consent, or select another settlement mode.
-It supports public-bound payment only. Shielded agreements fail without a downgrade.
-Payment amounts and parties remain public in this mode.
+Operator configuration selects public-bound or shielded payment. Neither path can downgrade the signed agreement.
+For public-bound settlement, payment amounts and parties remain public.
 The full accepted canonical agreement, blinding, and final signatures appear in settlement calldata.
 This includes the signed service fields. Rejected offers and the offchain transcript remain private.
 
@@ -22,7 +22,7 @@ The binary reads one JSON request from stdin.
 The request names an operator configuration file and the retained negotiation operation.
 Keys, deployment pins, fees, and RPC endpoints come from that configuration, not the request.
 
-## Configuration
+## Public-Bound Configuration
 
 Use an owner-only regular JSON file. Private keys contain exactly 32 raw bytes.
 Use absolute paths. The owner must control these paths and their parent directories.
@@ -86,7 +86,7 @@ The operation reference is the nonzero 32-byte identity used during negotiation.
 {"method":"funding","config_file":"/absolute/payment.json","operation_ref":"<64 lowercase hex digits>"}
 ```
 
-`funding` checks token allowance, token balance, estimated gas, and the native gas budget.
+For public-bound settlement, `funding` checks token allowance, token balance, estimated gas, and the native gas budget.
 It never signs or submits a transaction.
 It can persist preparation, history checkpoints, and independently justified reconciliation.
 It reports `funding_required` with decimal shortfalls, or `ready` when these checks pass.
@@ -137,7 +137,57 @@ Exit code `0` means the named operation completed or the read-only funding check
 `payment_verified: true` requires the finalized winner to match this agreement commitment.
 `delivery_verified` remains false. Use the [access client](metropolis-access-runbook.md) for resource retrieval.
 The response includes separate local durations for deployment authentication, observation, funding, signing, and submission.
-These durations do not measure inclusion latency, finality latency, proof time, or delivery.
+Shielded first preparation also reports artifact installation and local proof preparation time.
+Proof preparation includes witness construction, proof generation, and local verification.
+These durations do not measure inclusion latency, finality latency, or delivery.
+
+## Shielded Configuration
+
+The suite-2 driver uses the same stdin requests, but a different strict operator configuration.
+Use `mode: "shielded"`, not the public-bound configuration above.
+Set these fields:
+
+| Fields | Meaning |
+|---|---|
+| `version`, `mode` | `1` and `shielded` |
+| `state_root`, `namespace`, `asset`, `maximum_price` | Same buyer state, chain, asset, and policy as negotiation |
+| `pool`, `verifier_version` | Exact deployment named by the suite-2 agreement |
+| `buyer_key_hex` | 128 lowercase hex digits for the authenticated BabyJubJub agreement key |
+| `runtime_keccak256`, `first_block`, `first_hash` | Independently verified pool runtime and deployment origin |
+| `poseidon_keccak256`, `deposit_verifier_keccak256`, `transfer_verifier_keccak256`, `withdraw_verifier_keccak256` | Trusted Keccak runtime hashes of the pool's immutable dependencies |
+| `rpc_url`, `peer_rpc_url` | Distinct primary and peer endpoints |
+| `wallet_file`, `wallet_key_file` | Existing encrypted note wallet and its owner-only 32-byte encryption key |
+| `manifest_file`, `manifest_sha256`, `artifact_cache` | Owner-only release manifest, independently trusted digest, and local cache |
+| `allow_test_artifacts`, `allow_loopback_http` | Development-only exceptions; both default to false |
+| `signer_address`, `signer_journal_root`, `transaction_key_file` | Dedicated gas payer, shared nonce journal, optional local signing key |
+| `gas_limit`, `max_fee_per_gas`, `max_priority_fee_per_gas` | Fixed operator gas and fee caps |
+| `timeout_seconds`, `max_scan_blocks` | Per-request RPC timeout of 1-30 seconds; 1-1000 new blocks per provider scan |
+
+Use absolute paths. Decimal amounts and fees are strings. Runtime hashes are 64 lowercase hex digits, optionally prefixed with `0x`.
+The signed fee must be zero; the current private circuit does not support a relayer payment fee.
+The pool runtime must exist at its deployment block and finalized anchor, and not at the preceding block.
+The driver also checks the four immutable dependency runtimes at that finalized anchor.
+These pins require independently reviewed deployment evidence; matching providers are not an audit.
+
+Shielded `funding` replays finalized note history and checks a buyer-owned note and the gas budget.
+It does not download artifacts, generate a proof, reserve a new input, sign, or submit.
+`ready` means these funding checks passed, not that proving or a transaction simulation succeeded.
+
+The first `settle` verifies the frozen negotiation, authenticates the manifest, and downloads checked artifacts.
+It persists the selected input and random change opening in the encrypted wallet before proving.
+Proof failures retain that choice. Retries cannot substitute another agreement, input, or zero-change opening.
+Preparation and signing use the existing shielded SDK and shared coordinator, not a separate payment protocol.
+The driver simulates the prepared pool call before signing and enforces the fixed gas limit.
+
+Separate checkpoint files retain deal history and finalized wallet history for both RPCs.
+Partial scans return pending and do not release reservations.
+After an attempted broadcast, recovery needs neither transaction key, artifacts, manifest contents, nor negotiation transcript.
+It still needs the wallet encryption key to replay finalized notes before coordinator reconciliation.
+An expired unpaid deal retains the note reservation for explicit no-effect recovery; this command does not force-release it.
+Local cache replay and wallet-event checks scale with retained history, even when new scans are bounded.
+
+This driver does not create or fund a wallet, perform withdrawals, publish artifacts, or deploy a pool.
+Prototype artifacts have known test entropy. Development opt-in is not a secure release ceremony.
 
 Output excludes terms, amounts, authorization signatures, raw transactions, keys, and RPC response text.
 Funding shortfalls and estimated gas are operator diagnostics; they reveal financial requirements to that operator.

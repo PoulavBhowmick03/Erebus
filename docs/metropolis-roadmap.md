@@ -4,8 +4,9 @@ Written: 2026-09-20. Working branch: `metropolis`.
 Target submission date: October 13, supplied by the project owner. Verify the portal cutoff and timezone before submission.
 Status: M0-M4 locally complete at their stated scopes. M5 has a funded local prototype and is
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
-M7 is complete at its local scoped gate. M8 has verified network readiness and a verified
-testnet deployment; the installed workflow and access service remain. M9 is pending.
+M7 is complete at its local scoped gate. M8 has verified network readiness, a verified
+testnet deployment, and local native negotiation-to-payment evidence in both modes; packaging
+release, hosting, x402, and the live installed workflow remain. M9 is pending.
 Unchecked items are not implemented or verified by this document.
 
 This plan covers the complete Monad implementation: Rust core, private transport, agreements, settlement contracts, proving, recovery, disclosure, and agent integration.
@@ -419,8 +420,16 @@ proof generation, and public-bound HTTP access recovery now pass local tests.
 The Rust negotiation SDK now freezes transcripts before final signatures and exchanges private shielded-key identity bindings.
 Independent processes pass negotiation, restart, policy-reserved authorization, and scoped agreement disclosure locally.
 That test submits no chain payment; the combined installed Monad workflow remains open.
-Still open: released packages, complete installed negotiation/settlement integration,
-hosted and rehearsed self-hosted services, live access recovery, x402, and stage measurements.
+`erebus-payment` now settles suite-2 agreements as well: separate agents negotiate, the buyer
+proves locally and submits once, and recovery completes after a dropped RPC response without a
+second send (funded Anvil, prototype keys and test artifacts). A combined `metropolis` MCP mode
+exposes negotiation to both roles and funding, settlement, and observe-only recovery to the
+buyer, with role, keys, and mode fixed by operator files. Metropolis packages use a separate
+registry (DM8-9); a local `.devN` index builds and installs into a fresh environment, but nothing
+is published. Negotiation, artifact installation, and proof preparation are now timed.
+Still open: published packages, hosted and rehearsed self-hosted services, a two-agent harness
+driven through MCP, wallet funding/withdrawal onboarding, live access recovery, x402, and
+inclusion, finality, and delivery measurements.
 These local checks do not complete the private-payment release gate.
 The checked access items have funded local evidence for both modes, including Rust and MCP retrieval.
 They do not claim live Monad access, hosted operation, or a published package release.
@@ -513,6 +522,8 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-10-03 | M8 local frozen negotiation, shielded identity binding, and separate-process authorization | [Negotiation runbook](metropolis-negotiation-runbook.md) and `sdk/evm/tests/negotiation_flow.rs`; no payment submitted |
 | 2026-10-03 | M8 cold-start native negotiation in both modes, transcript synchronization, and durable seller payment openings | [Negotiation runbook](metropolis-negotiation-runbook.md) and `sdk/shielded/tests/negotiation_cli.rs`; no payment submitted |
 | 2026-10-03 | M8 native public-bound negotiation, one-payment submission, paired recovery, snapshot delivery retry, and independent auditor | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/payment_driver.rs`; funded Anvil evidence, not a new live Monad run |
+| 2026-10-03 | M8 native shielded payment: negotiated suite-2 deal, local proof, one submission, recovery without a second send | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/shielded_driver.rs`; funded Anvil, prototype keys, not a live Monad run |
+| 2026-10-03 | M8 combined Metropolis MCP mode and unpublished separate-registry packages with a fresh-environment install check | [Install guide](metropolis-install.md), [DM8-9](metropolis-m8-decisions.md#dm8-9-metropolis-packages-use-a-separate-registry), `scripts/check-metropolis-install.py`; nothing published |
 
 M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
