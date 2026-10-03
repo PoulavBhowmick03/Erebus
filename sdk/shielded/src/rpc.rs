@@ -62,6 +62,19 @@ pub struct PoolIdentity {
     pub verifier_version: u32,
 }
 
+/// Independently reviewed runtime hashes for the pool's four immutable dependencies.
+#[derive(Clone, Copy)]
+pub struct PoolDependencyPins {
+    /// Poseidon implementation runtime hash.
+    pub poseidon: [u8; 32],
+    /// Deposit verifier runtime hash.
+    pub deposit: [u8; 32],
+    /// Transfer verifier runtime hash.
+    pub transfer: [u8; 32],
+    /// Withdrawal verifier runtime hash.
+    pub withdraw: [u8; 32],
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RpcLog {
@@ -84,6 +97,50 @@ pub struct PoolRpc {
 }
 
 impl PoolRpc {
+    /// Checks immutable hash/verifier dependencies at one canonical block hash.
+    /// Pins must come from reviewed deployment evidence; this does not authenticate providers.
+    pub async fn authenticate_dependencies_at(
+        &self,
+        block_hash: [u8; 32],
+        pins: PoolDependencyPins,
+    ) -> Result<(), RpcError> {
+        self.check_chain().await?;
+        let block = serde_json::json!({"blockHash":format!("0x{}", hex::encode(block_hash)),"requireCanonical":true});
+        for (signature, expected) in [
+            ("poseidonTwo()", pins.poseidon),
+            ("depositVerifier()", pins.deposit),
+            ("transferVerifier()", pins.transfer),
+            ("withdrawVerifier()", pins.withdraw),
+        ] {
+            if expected == [0; 32] {
+                return Err(RpcError::Configuration);
+            }
+            let address: String = self.call("eth_call", serde_json::json!([
+                {"to":format!("0x{}", hex::encode(self.pool)),"data":format!("0x{}",hex::encode(&Keccak256::digest(signature.as_bytes())[..4]))}, block
+            ])).await?;
+            let word = fixed_hex::<32>(&address)?;
+            if word[..12] != [0; 12] || word[12..] == [0; 20] {
+                return Err(RpcError::Evidence("invalid immutable pool dependency"));
+            }
+            let code: String = self
+                .call(
+                    "eth_getCode",
+                    serde_json::json!([format!("0x{}", hex::encode(&word[12..])), block]),
+                )
+                .await?;
+            let code = hex::decode(
+                code.strip_prefix("0x")
+                    .ok_or(RpcError::Evidence("invalid dependency code"))?,
+            )
+            .map_err(|_| RpcError::Evidence("invalid dependency code"))?;
+            if code.is_empty() || Keccak256::digest(&code).as_slice() != expected {
+                return Err(RpcError::Evidence(
+                    "pool dependency runtime differs from trusted pin",
+                ));
+            }
+        }
+        self.check_chain().await
+    }
     /// Checks endpoint identity without exposing a URL or its credentials.
     /// Distinct URLs do not establish operational provider independence.
     pub fn shares_endpoint(&self, other: &Self) -> bool {

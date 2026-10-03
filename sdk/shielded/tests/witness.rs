@@ -124,6 +124,89 @@ fn fixture_terms(agreement: &Value) -> AgreementTerms {
 }
 
 #[test]
+fn native_input_choice_survives_restart_and_keeps_zero_change_opening() {
+    let agreement: Value = serde_json::from_str(include_str!(
+        "../../core/tests/fixtures/agreement-suite2-vector.json"
+    ))
+    .unwrap();
+    let terms = fixture_terms(&agreement);
+    let blinding = CommitmentBlinding::from_bytes(hex_bytes(text(&agreement, "blindingHex")));
+    for amount in [terms.amount.get(), terms.amount.get() + 80] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("private/wallet.enc");
+        let domain = WalletDomain {
+            chain_id: 10143,
+            pool: terms
+                .domain
+                .pool
+                .as_ref()
+                .unwrap()
+                .as_bytes()
+                .try_into()
+                .unwrap(),
+        };
+        let store = WalletStore::new(&path, domain, [7; 32]).unwrap();
+        let note = OwnedNote::new(
+            hex_bytes(&terms.asset.asset_reference()[2..]),
+            amount,
+            terms.buyer_authorization_key.as_bytes().try_into().unwrap(),
+            test_field("choice-secret"),
+            test_field("choice-salt"),
+        )
+        .unwrap();
+        let input = note.commitment();
+        store
+            .update(|wallet| {
+                wallet.add(note)?;
+                wallet.observe_insertion(
+                    &input,
+                    NoteInclusion {
+                        index: 0,
+                        block_number: 12,
+                        block_hash: [3; 32],
+                        root: [4; 32],
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let first = store
+            .update(|wallet| wallet.choose_transfer(&terms, &blinding, [8; 32]))
+            .unwrap();
+        let opening = first.change();
+        assert_eq!(first.input(), input);
+        assert_eq!(
+            opening.owned_note(&terms, amount).unwrap().is_none(),
+            amount == terms.amount.get()
+        );
+        drop(store);
+        let store = WalletStore::new(&path, domain, [7; 32]).unwrap();
+        let again = store
+            .update(|wallet| wallet.choose_transfer(&terms, &blinding, [8; 32]))
+            .unwrap();
+        assert_eq!(again.input(), first.input());
+        assert_eq!(again.change().spend_secret, opening.spend_secret);
+        assert_eq!(again.change().salt, opening.salt);
+        assert!(store
+            .update(|wallet| wallet.choose_transfer(&terms, &blinding, [9; 32]))
+            .is_err());
+        let mut changed = terms.clone();
+        changed.amount = BaseUnits::new(terms.amount.get() + 1);
+        assert!(store
+            .update(|wallet| wallet.choose_transfer(&changed, &blinding, [8; 32]))
+            .is_err());
+        let other_blinding = CommitmentBlinding::from_bytes([1; 32]);
+        assert!(store
+            .update(|wallet| wallet.choose_transfer(&terms, &other_blinding, [8; 32]))
+            .is_err());
+        let ciphertext = fs::read(&path).unwrap();
+        assert!(!ciphertext
+            .windows(32)
+            .any(|bytes| bytes == opening.spend_secret));
+    }
+}
+
+#[test]
 fn durable_preparation_isolates_inputs_and_survives_failure_and_recovery() {
     use erebus_coordinator::{Coordinator, Error as CoordinatorError, Stage};
     use erebus_core::policy::{ReservationState, SpendingPolicy};

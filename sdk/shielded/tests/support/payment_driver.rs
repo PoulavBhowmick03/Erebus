@@ -21,6 +21,8 @@ use std::sync::{
 struct ServiceProcess(Child);
 #[path = "native_product.rs"]
 mod native_product;
+#[path = "shielded_driver.rs"]
+mod shielded_driver;
 impl Drop for ServiceProcess {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -73,6 +75,9 @@ async fn forward(State(proxy): State<Proxy>, Json(request): Json<Value>) -> Json
             data.starts_with(&format!(
                 "0x{}",
                 hex::encode(&abi::encode_consumed_deals_call(&[0; 32])[..4])
+            )) || data.starts_with(&format!(
+                "0x{}",
+                hex::encode(&keccak256(&[b"consumedDeals(uint256)"])[..4])
             ))
         })
     {
@@ -145,11 +150,14 @@ async fn deploy(
 }
 
 async fn run_payment(binary: &Path, cwd: &Path, config: &Path, method: &str) -> (bool, Value) {
-    finish(spawn(
-        binary,
-        cwd,
-        json!({"method":method,"config_file":config,"operation_ref":hex::encode(OPERATION)}),
-    ))
+    finish_with_timeout(
+        spawn(
+            binary,
+            cwd,
+            json!({"method":method,"config_file":config,"operation_ref":hex::encode(OPERATION)}),
+        ),
+        Duration::from_secs(180),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

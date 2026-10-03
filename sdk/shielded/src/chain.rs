@@ -58,6 +58,32 @@ pub struct ShieldedChain {
 }
 
 impl ShieldedChain {
+    /// Shared EVM submission lane; pool-specific validation remains in this backend.
+    pub fn evm(&self) -> &EvmChain {
+        &self.evm
+    }
+
+    /// Sends the first validated pool call once, with a durable Unknown fence before I/O.
+    pub async fn broadcast_initial(
+        &self,
+        coordinator: &Coordinator,
+        operation_ref: [u8; 32],
+        now: u64,
+    ) -> Result<Broadcast, ShieldedChainError> {
+        let prepared = coordinator.prepared_settlement(operation_ref)?;
+        let (target, calldata) = self.checked_call(&prepared)?;
+        Ok(self
+            .evm
+            .broadcast_initial_journaled_call(
+                coordinator,
+                operation_ref,
+                now,
+                &prepared,
+                target,
+                calldata,
+            )
+            .await?)
+    }
     /// Default two-provider reconciliation. Neither wallet/accounting nor nonce claims change
     /// until both providers agree on pinned deal evidence and the finalized signer nonce.
     /// Operators must choose independent RPC infrastructure and separate index caches.

@@ -126,6 +126,32 @@ pub async fn observe_shielded_deal_agreed(
     nullifier: &DealNullifier,
     revisions: &[SignedRevision],
 ) -> Result<DealEvidence, ObservationError> {
+    observe_shielded_deal_agreed_bounded(
+        rpc,
+        index_store,
+        peer_rpc,
+        peer_index,
+        context,
+        nullifier,
+        revisions,
+        1_000,
+    )
+    .await
+}
+
+/// Paired deal observation with a bounded number of new blocks per provider.
+/// Partial history is never evidence of payment or nonpayment.
+#[allow(clippy::too_many_arguments)]
+pub async fn observe_shielded_deal_agreed_bounded(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    peer_rpc: &PoolRpc,
+    peer_index: &IndexStore,
+    context: &SettlementContext,
+    nullifier: &DealNullifier,
+    revisions: &[SignedRevision],
+    max_blocks: u64,
+) -> Result<DealEvidence, ObservationError> {
     if index_store.domain() != peer_index.domain()
         || rpc.endpoint() == peer_rpc.endpoint()
         || index_store
@@ -135,8 +161,8 @@ pub async fn observe_shielded_deal_agreed(
         return Err(ObservationError::Context);
     }
     let (first, second) = tokio::join!(
-        anchored_shielded_deal(rpc, index_store, context, nullifier, revisions, 1_000),
-        anchored_shielded_deal(peer_rpc, peer_index, context, nullifier, revisions, 1_000)
+        anchored_shielded_deal(rpc, index_store, context, nullifier, revisions, max_blocks),
+        anchored_shielded_deal(peer_rpc, peer_index, context, nullifier, revisions, max_blocks)
     );
     let first = first?;
     if first != second? {

@@ -25,7 +25,7 @@ use erebus_core::{
     terms::AgreementTerms,
 };
 
-use crate::InputNote;
+use crate::{ChangeNote, InputNote};
 
 const MAGIC: &[u8; 8] = b"ERBWL001";
 const NONCE_BYTES: usize = 24;
@@ -273,6 +273,41 @@ pub struct WalletSnapshot {
     notes: Vec<OwnedNote>,
     #[serde(default)]
     transfers: Vec<TransferReservation>,
+    #[serde(default)]
+    choices: Vec<TransferChoice>,
+}
+
+/// Private input and change opening retained across proof failures, including zero change.
+/// Only the encrypted wallet store may serialize this record.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TransferChoice {
+    operation: [u8; 32],
+    agreement: [u8; 32],
+    input: [u8; 32],
+    spend_secret: [u8; 32],
+    salt: [u8; 32],
+}
+
+impl TransferChoice {
+    /// The input reserved for this operation.
+    pub fn input(&self) -> [u8; 32] {
+        self.input
+    }
+
+    /// Copies the retained change opening into the prover request.
+    pub fn change(&self) -> ChangeNote {
+        ChangeNote {
+            spend_secret: self.spend_secret,
+            salt: self.salt,
+        }
+    }
+}
+
+impl Drop for TransferChoice {
+    fn drop(&mut self) {
+        self.spend_secret.zeroize();
+        self.salt.zeroize();
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,11 +325,94 @@ impl Default for WalletSnapshot {
             version: 1,
             notes: Vec::new(),
             transfers: Vec::new(),
+            choices: Vec::new(),
         }
     }
 }
 
 impl WalletSnapshot {
+    /// Selects and reserves an input once, retaining both change fields before proving.
+    /// Call through `WalletStore::update`. Existing legacy reservations need their original
+    /// opening; this method never invents a replacement for them.
+    pub fn choose_transfer(
+        &mut self,
+        terms: &AgreementTerms,
+        blinding: &erebus_core::commitment::CommitmentBlinding,
+        operation: [u8; 32],
+    ) -> Result<TransferChoice, WalletError> {
+        use ark_ff::{BigInteger, PrimeField};
+        use ark_std::{rand::rngs::OsRng, UniformRand};
+        use erebus_core::commitment::{commit_agreement, deal_nullifier};
+        use erebus_core::suite::keccak256;
+
+        ShieldedDeal::from_terms(terms).map_err(|_| WalletError::Note("agreement shape"))?;
+        let commitment = commit_agreement(terms, blinding)
+            .map_err(|_| WalletError::Note("agreement commitment"))?;
+        let nullifier =
+            deal_nullifier(terms).map_err(|_| WalletError::Note("agreement nullifier"))?;
+        let agreement = keccak256(&[
+            b"erebus/shielded/input-choice/v1",
+            commitment.as_bytes(),
+            nullifier.as_bytes(),
+        ]);
+        if operation == [0; 32] {
+            return Err(WalletError::Note("zero operation identity"));
+        }
+        if let Some(choice) = self
+            .choices
+            .iter()
+            .find(|choice| choice.operation == operation)
+        {
+            if choice.agreement != agreement
+                || self.spendable_for(&choice.input, operation).is_none()
+            {
+                return Err(WalletError::Note("operation binding mismatch"));
+            }
+            return Ok(choice.clone());
+        }
+        if self.transfers.iter().any(|r| r.operation == operation)
+            || self
+                .notes
+                .iter()
+                .any(|n| n.reserved_operation == Some(operation))
+        {
+            return Err(WalletError::Note(
+                "retained input requires its original change opening",
+            ));
+        }
+        let asset = erebus_evm::deployment::parse_lowercase_address(terms.asset.asset_reference())
+            .ok_or(WalletError::Note("agreement asset"))?;
+        let input = self
+            .notes
+            .iter()
+            .filter(|note| {
+                note.asset == asset
+                    && note.owner() == terms.buyer_authorization_key.as_bytes()
+                    && note.amount >= terms.amount.get()
+                    && note.inclusion.is_some()
+                    && note.consumption.is_none()
+                    && note.reserved_operation.is_none()
+            })
+            .min_by_key(|note| (note.amount, note.commitment))
+            .ok_or(WalletError::Note("no funded buyer note covers the payment"))?
+            .commitment;
+        let random_field = || {
+            let bytes = ark_bn254::Fr::rand(&mut OsRng).into_bigint().to_bytes_be();
+            let mut field = [0; 32];
+            field[32 - bytes.len()..].copy_from_slice(&bytes);
+            field
+        };
+        let choice = TransferChoice {
+            operation,
+            agreement,
+            input,
+            spend_secret: random_field(),
+            salt: random_field(),
+        };
+        self.reserve(&input, operation)?;
+        self.choices.push(choice.clone());
+        Ok(choice)
+    }
     /// Finds an explicit input available to this operation, including its own reservation.
     pub fn spendable_for(&self, commitment: &[u8; 32], operation: [u8; 32]) -> Option<&OwnedNote> {
         if operation == [0; 32] {
@@ -545,6 +663,16 @@ impl WalletSnapshot {
                 })
             {
                 return Err(WalletError::Note("invalid transfer reservation"));
+            }
+        }
+        let mut operations = HashSet::new();
+        for choice in &self.choices {
+            if choice.operation == [0; 32]
+                || choice.agreement == [0; 32]
+                || !operations.insert(choice.operation)
+                || !commitments.contains(&choice.input)
+            {
+                return Err(WalletError::Note("invalid retained transfer choice"));
             }
         }
         Ok(())

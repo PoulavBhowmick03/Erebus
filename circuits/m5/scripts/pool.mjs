@@ -118,7 +118,7 @@ async function setup() {
   return manifest;
 }
 
-function compileContracts() {
+export function compileContracts() {
   const sources = {};
   for (const name of ["deposit", "transfer", "withdraw"]) {
     sources[`${name}-verifier.sol`] = { content: readFileSync(resolve(build, `${name}-verifier.sol`), "utf8") };
@@ -644,4 +644,6 @@ async function main() {
   }
 }
 
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => { console.error(error); process.exitCode = 1; });
+}

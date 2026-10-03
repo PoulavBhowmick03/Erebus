@@ -64,20 +64,37 @@ pub(super) async fn finish(
     let url = format!("http://127.0.0.1:{port}");
     let service_config = seller_root.join("access.json");
     let service_id = [42; 32];
+    let backend = if selected.terms.suite_id == 2 {
+        json!({"mode":"shielded","chain_id":31337,"pool":config["pool"],"rpc_url":config["rpc_url"],
+            "peer_rpc_url":config["peer_rpc_url"],"first_block":config["first_block"],
+            "first_hash":hex::decode(config["first_hash"].as_str().unwrap().trim_start_matches("0x")).unwrap()})
+    } else {
+        json!({"mode":"public_bound","namespace":config["namespace"],"settlement_contract":config["settlement_contract"],
+            "verifier_version":1,"rpc_url":config["peer_rpc_url"],"from_block":config["first_block"],
+            "log_block_range":100,"max_log_queries":8,"max_ancestry":64})
+    };
     private(&service_config,json!({"service_id":service_id,"seller_key":selected.terms.seller_authorization_key.as_bytes(),
-        "suite_id":1,"resource":selected.terms.service.resource,"payload_file":payload,"evidence_root":agreements,
-        "state_root":seller_root.join("issuance"),"port":port,"backend":{"mode":"public_bound","namespace":config["namespace"],
-            "settlement_contract":config["settlement_contract"],"verifier_version":1,"rpc_url":config["peer_rpc_url"],
-            "from_block":config["first_block"],"log_block_range":100,"max_log_queries":8,"max_ancestry":64}}).to_string().as_bytes());
+        "suite_id":selected.terms.suite_id,"resource":selected.terms.service.resource,"payload_file":payload,"evidence_root":agreements,
+        "state_root":seller_root.join("issuance"),"port":port,"backend":backend}).to_string().as_bytes());
     let process = service(&service_config, &url, client).await;
     let expiry = clock() + 120;
     let digest = request_digest(&selected, service_id, [43; 32], expiry).unwrap();
-    let identity = AuthorizationIdentity::from_bytes(&[21; 32]).unwrap();
+    let signature = if selected.terms.suite_id == 2 {
+        erebus_core::shielded_auth::sign_message(&[61; 32], &digest)
+            .unwrap()
+            .1
+            .to_vec()
+    } else {
+        AuthorizationIdentity::from_bytes(&[21; 32])
+            .unwrap()
+            .sign_digest(&digest)
+            .to_vec()
+    };
     let request = AccessRequest {
         deal_commitment: buyer["deal_commitment"].as_str().unwrap().into(),
         nonce: [43; 32],
         expires_at: expiry,
-        signature: identity.sign_digest(&digest).to_vec(),
+        signature,
     };
     let issued = client
         .post(format!("{url}/v1/access"))
@@ -154,14 +171,21 @@ pub(super) async fn finish(
     )
     .unwrap();
     fs::rename(&seller_root, fixture.root.path().join("seller-offline")).unwrap();
+    let deployment = if selected.terms.suite_id == 2 {
+        json!({"namespace":config["namespace"],"settlement_contract":config["pool"],"verifier_version":2,
+            "rpc_url":config["rpc_url"],"peer_rpc_url":config["peer_rpc_url"],"first_block":config["first_block"],
+            "first_hash":config["first_hash"],"cache_root":auditor.join("public-history")})
+    } else {
+        json!({"namespace":config["namespace"],"settlement_contract":config["settlement_contract"],"verifier_version":1,
+            "rpc_url":config["peer_rpc_url"],"from_block":config["first_block"],"log_block_range":100,"max_log_queries":8,
+            "max_ancestry":64,"cache_root":auditor.join("public-history")})
+    };
     let (ok, verified) = super::super::finish(spawn(
         &disclosure,
         &auditor,
         json!({"method":"verify_payment","grant_file":grant,"key_file":auditor_key,
         "expected_issuer":format!("0x{}",hex::encode(selected.terms.seller_authorization_key.as_bytes())),
-        "deployment":{"namespace":config["namespace"],"settlement_contract":config["settlement_contract"],"verifier_version":1,
-            "rpc_url":config["peer_rpc_url"],"from_block":config["first_block"],"log_block_range":100,"max_log_queries":8,
-            "max_ancestry":64,"cache_root":auditor.join("public-history")}}),
+        "deployment":deployment}),
     ));
     assert!(ok, "{verified}");
     assert_eq!(verified["agreement_verified"], true);

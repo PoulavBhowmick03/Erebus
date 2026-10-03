@@ -117,6 +117,66 @@ impl EvmChain {
         Ok(result)
     }
 
+    /// Atomically fences the first backend-validated call before network I/O.
+    /// Any retained attempt or replacement prevents automatic resubmission.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn broadcast_initial_journaled_call(
+        &self,
+        coordinator: &erebus_coordinator::Coordinator,
+        operation_ref: [u8; 32],
+        now: u64,
+        expected: &PreparedSettlement,
+        target: [u8; 20],
+        calldata: &[u8],
+    ) -> Result<Broadcast, JournaledBroadcastError> {
+        let attempt = coordinator.begin_initial_broadcast_attempt(operation_ref, now)?;
+        let transaction = &attempt.transaction;
+        if transaction.prepared() != expected {
+            return Err(EvmError::SignedIntentMismatch.into());
+        }
+        let plan = SigningPlan::decode(transaction.plan())?;
+        let result = self
+            .broadcast_call(&plan, transaction.raw(), target, calldata)
+            .await?;
+        self.finish_journaled_broadcast(coordinator, operation_ref, &attempt.token, result)?;
+        Ok(result)
+    }
+
+    /// Reads the gas payer's balance after checking the configured chain.
+    /// No allowance, payment authorization, or transaction is created.
+    pub async fn gas_payer_balance(&self, sender: [u8; 20]) -> Result<u128, EvmError> {
+        self.check_chain().await?;
+        let balance = tokio::time::timeout(
+            self.timeout,
+            self.provider.get_balance(Address::from(sender)),
+        )
+        .await
+        .map_err(|_| EvmError::Rpc("gas funding check timed out".into()))?
+        .map_err(|_| EvmError::Rpc("gas funding check failed".into()))?;
+        balance
+            .try_into()
+            .map_err(|_| EvmError::SignedIntentMismatch)
+    }
+
+    /// Estimates a backend-derived call without filling or signing transaction fields.
+    pub async fn estimate_call_gas(
+        &self,
+        sender: [u8; 20],
+        target: [u8; 20],
+        calldata: &[u8],
+    ) -> Result<u64, EvmError> {
+        use alloy::rpc::types::TransactionRequest;
+        self.check_chain().await?;
+        let request = TransactionRequest::default()
+            .from(Address::from(sender))
+            .to(Address::from(target))
+            .input(Bytes::copy_from_slice(calldata).into());
+        tokio::time::timeout(self.timeout, self.provider.estimate_gas(request))
+            .await
+            .map_err(|_| EvmError::Rpc("gas estimate timed out".into()))?
+            .map_err(|_| EvmError::Rpc("gas estimate failed".into()))
+    }
+
     fn finish_journaled_broadcast(
         &self,
         coordinator: &erebus_coordinator::Coordinator,

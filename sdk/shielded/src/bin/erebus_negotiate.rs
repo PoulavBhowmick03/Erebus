@@ -312,6 +312,8 @@ fn negotiate(
     operation: &str,
     freeze_only: bool,
 ) -> Result<Value, &'static str> {
+    // Wall-clock for the whole call, so a retried operation reports only its own resumption.
+    let started = Instant::now();
     let id = OperationId::from_file_stem(operation).ok_or("invalid operation reference")?;
     let operation_ref: [u8; 32] = hex::decode(operation)
         .map_err(|_| "invalid operation reference")?
@@ -558,7 +560,7 @@ fn negotiate(
     let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreed deal")?;
     if freeze_only {
         return Ok(
-            json!({"protocol_version":1,"status":"frozen","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"payment_verified":false,"delivery_verified":false}),
+            json!({"protocol_version":1,"status":"frozen","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}}),
         );
     }
     if role == Role::Buyer {
@@ -700,7 +702,7 @@ fn negotiate(
         })
         .map_err(|_| "disclosure evidence persistence failed")?;
     Ok(
-        json!({"protocol_version":1,"status":"authorized","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"agreement_verified":true,"evidence_file":store.blob_path(&record.id,0),"payment_verified":false,"delivery_verified":false}),
+        json!({"protocol_version":1,"status":"authorized","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"agreement_verified":true,"evidence_file":store.blob_path(&record.id,0),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}}),
     )
 }
 

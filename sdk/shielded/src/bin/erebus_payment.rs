@@ -1,4 +1,4 @@
-//! Public-bound operator driver for an already negotiated and durably authorized deal.
+//! Operator driver for an already negotiated and durably authorized deal.
 //! Keys and deployment pins come from operator configuration, not an agent request.
 //! After the first broadcast attempt, every invocation observes only; it never resends.
 
@@ -33,9 +33,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
+#[path = "payment/shielded.rs"]
+mod shielded;
+
 const HELP: &str = "erebus-payment: one bounded JSON request on stdin.
 Methods: version, funding, settle, observe. Requests use config_file and operation_ref.
-This driver supports public-bound payment only. It never downgrades a shielded agreement.
+Operator configuration selects public-bound or shielded payment; there is no downgrade.
 Settle uses retained negotiation and coordinator consent, fixed operator fee caps, and a
 local gas-payer key. A durable broadcast attempt disables automatic resubmission forever.
 Observe needs no signing key and never submits. Two distinct RPCs and checkpoint stores
@@ -64,6 +67,8 @@ enum Request {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
+    #[serde(default)]
+    mode: Option<String>,
     version: u16,
     state_root: PathBuf,
     namespace: String,
@@ -233,7 +238,7 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
     let (path, operation, submit, funding_only) = match request {
         Request::Version {} => {
             return Ok(json!({"status":"ok","protocol_version":1,
-            "service":"erebus-payment","modes":["public-bound"],"automatic_rebroadcast":false}))
+            "service":"erebus-payment","modes":["public-bound","shielded"],"automatic_rebroadcast":false}))
         }
         Request::Funding {
             config_file,
@@ -248,8 +253,21 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             operation_ref,
         } => (config_file, operation_ref, false, false),
     };
-    let config: Config = serde_json::from_slice(&read(&path, 16 * 1024)?)
-        .map_err(|_| "invalid operator configuration")?;
+    let bytes = read(&path, 16 * 1024)?;
+    let selector: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid operator configuration")?;
+    if selector.get("mode").and_then(Value::as_str) == Some("shielded") {
+        return shielded::run(&bytes, digest(&operation)?, submit, funding_only).await;
+    }
+    let config: Config =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid operator configuration")?;
+    if config
+        .mode
+        .as_deref()
+        .is_some_and(|mode| mode != "public-bound")
+    {
+        return Err("unsupported operator settlement mode");
+    }
     let operation = digest(&operation)?;
     let runtime_hash = digest(&config.runtime_keccak256)?;
     let first_hash = digest(&config.first_hash)?;

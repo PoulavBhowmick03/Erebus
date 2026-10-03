@@ -111,8 +111,12 @@ fn spawn(binary: &Path, cwd: &Path, request: Value) -> Running {
         .unwrap();
     Running(Some(child))
 }
-fn finish(mut running: Running) -> (bool, Value) {
-    let deadline = Instant::now() + Duration::from_secs(45);
+fn finish(running: Running) -> (bool, Value) {
+    finish_with_timeout(running, Duration::from_secs(45))
+}
+
+fn finish_with_timeout(mut running: Running, timeout: Duration) -> (bool, Value) {
+    let deadline = Instant::now() + timeout;
     loop {
         if running.0.as_mut().unwrap().try_wait().unwrap().is_some() {
             break;
@@ -433,7 +437,7 @@ fn payment_protocol_rejects_unknown_fields_without_echoing_operator_inputs() {
     let (ok, version) = finish(spawn(binary, root.path(), json!({"method":"version"})));
     assert!(ok);
     assert_eq!(version["automatic_rebroadcast"], false);
-    assert_eq!(version["modes"], json!(["public-bound"]));
+    assert_eq!(version["modes"], json!(["public-bound", "shielded"]));
     for request in [
         json!({"method":"version","seed":"PRIVATE_KEY_NEVER_ECHO"}),
         json!({"method":"settle","config_file":"PRIVATE_CONFIG","operation_ref":"ab".repeat(32),"amount":"999"}),

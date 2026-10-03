@@ -236,6 +236,56 @@ fn history_domain() -> IndexDomain {
 }
 
 #[tokio::test]
+async fn paired_bounded_wallet_recovery_persists_only_public_progress_until_complete() {
+    use erebus_shielded_prover::{
+        recovery::recover_finalized_wallet_agreed_bounded,
+        wallet::{WalletDomain, WalletStore},
+    };
+    use std::sync::atomic::Ordering;
+    let root = tempfile::tempdir().unwrap();
+    let first = IndexStore::new(root.path().join("first.json"), history_domain()).unwrap();
+    let second = IndexStore::new(root.path().join("second.json"), history_domain()).unwrap();
+    let path = root.path().join("private/wallet.enc");
+    let wallet = WalletStore::new(
+        &path,
+        WalletDomain {
+            chain_id: 31337,
+            pool: [3; 20],
+        },
+        [7; 32],
+    )
+    .unwrap();
+    wallet.update(|_| Ok(())).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let (rpc, state, server) = start_history().await;
+    let (peer, peer_state, peer_server) = start_history().await;
+    state.finalized.store(20, Ordering::SeqCst);
+    peer_state.finalized.store(20, Ordering::SeqCst);
+    for attempt in 0..8 {
+        let first_count = state.logs.load(Ordering::SeqCst);
+        let peer_count = peer_state.logs.load(Ordering::SeqCst);
+        let result =
+            recover_finalized_wallet_agreed_bounded(&rpc, &first, &peer, &second, &wallet, 3).await;
+        assert!(state.logs.load(Ordering::SeqCst) - first_count <= 3);
+        assert!(peer_state.logs.load(Ordering::SeqCst) - peer_count <= 3);
+        match result {
+            Err(RecoveryError::HistoryPending { .. }) => {
+                assert_eq!(std::fs::read(&path).unwrap(), before)
+            }
+            Ok(report) => {
+                assert_eq!(attempt, 6);
+                assert_eq!(report.through, 20);
+                server.abort();
+                peer_server.abort();
+                return;
+            }
+            other => panic!("unexpected bounded recovery: {other:?}"),
+        }
+    }
+    panic!("bounded wallet scan failed to complete");
+}
+
+#[tokio::test]
 async fn paired_finalized_wallet_recovery_never_writes_on_disagreement_or_peer_failure() {
     use erebus_shielded_prover::{
         recovery::recover_finalized_wallet_agreed,

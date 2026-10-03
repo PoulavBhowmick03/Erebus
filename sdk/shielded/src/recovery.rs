@@ -53,7 +53,7 @@ pub async fn recover_finalized_wallet(
     index_store: &IndexStore,
     wallet_store: &WalletStore,
 ) -> Result<RecoveryReport, RecoveryError> {
-    recover_finalized_wallet_inner(rpc, index_store, wallet_store, None).await
+    recover_finalized_wallet_inner(rpc, index_store, wallet_store, None, None).await
 }
 
 /// Restores notes only after two distinct RPCs agree on the entire finalized pool prefix.
@@ -72,8 +72,40 @@ pub async fn recover_finalized_wallet_agreed(
     {
         return Err(RecoveryError::Deployment);
     }
-    recover_finalized_wallet_inner(rpc, index_store, wallet_store, Some((peer_rpc, peer_index)))
-        .await
+    recover_finalized_wallet_inner(
+        rpc,
+        index_store,
+        wallet_store,
+        Some((peer_rpc, peer_index)),
+        None,
+    )
+    .await
+}
+
+/// Performs a paired finalized wallet scan with at most `max_blocks` new blocks per provider.
+/// Pending scans persist public progress but never change the wallet or release reservations.
+pub async fn recover_finalized_wallet_agreed_bounded(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    peer_rpc: &PoolRpc,
+    peer_index: &IndexStore,
+    wallet_store: &WalletStore,
+    max_blocks: u64,
+) -> Result<RecoveryReport, RecoveryError> {
+    if rpc.shares_endpoint(peer_rpc)
+        || index_store.domain() != peer_index.domain()
+        || index_store.shares_cache(peer_index)?
+    {
+        return Err(RecoveryError::Deployment);
+    }
+    recover_finalized_wallet_inner(
+        rpc,
+        index_store,
+        wallet_store,
+        Some((peer_rpc, peer_index)),
+        Some(max_blocks),
+    )
+    .await
 }
 
 async fn recover_finalized_wallet_inner(
@@ -81,6 +113,7 @@ async fn recover_finalized_wallet_inner(
     index_store: &IndexStore,
     wallet_store: &WalletStore,
     peer: Option<(&PoolRpc, &IndexStore)>,
+    max_blocks: Option<u64>,
 ) -> Result<RecoveryReport, RecoveryError> {
     let domain = index_store.domain();
     if wallet_store.domain().chain_id != domain.chain_id
@@ -108,8 +141,8 @@ async fn recover_finalized_wallet_inner(
     };
     let (index, report) = if let Some((peer_rpc, peer_index)) = peer {
         let (first, second) = tokio::join!(
-            sync_finalized_public_index(rpc, index_store),
-            sync_finalized_public_index(peer_rpc, peer_index)
+            sync_finalized_public_index_inner(rpc, index_store, max_blocks),
+            sync_finalized_public_index_inner(peer_rpc, peer_index, max_blocks)
         );
         let (index, report) = first?;
         let (peer_index, peer_report) = second?;
@@ -120,7 +153,7 @@ async fn recover_finalized_wallet_inner(
         }
         (index, report)
     } else {
-        sync_finalized_public_index(rpc, index_store).await?
+        sync_finalized_public_index_inner(rpc, index_store, max_blocks).await?
     };
     for block in index.blocks() {
         let cached: Vec<_> = block.events.iter().filter(relevant).collect();
@@ -325,8 +358,19 @@ pub async fn sync_finalized_public_index(
     rpc: &PoolRpc,
     index_store: &IndexStore,
 ) -> Result<(PoolIndex, RecoveryReport), RecoveryError> {
+    sync_finalized_public_index_inner(rpc, index_store, None).await
+}
+
+async fn sync_finalized_public_index_inner(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    max_blocks: Option<u64>,
+) -> Result<(PoolIndex, RecoveryReport), RecoveryError> {
     let anchor = rpc.finalized_head().await?;
-    let (index, report) = sync_public_index_through(rpc, index_store, anchor.number).await?;
+    let (index, report) = match max_blocks {
+        Some(limit) => sync_public_index_step(rpc, index_store, anchor.number, limit).await?,
+        None => sync_public_index_through(rpc, index_store, anchor.number).await?,
+    };
     if report.block_hash != anchor.hash
         || rpc.canonical_block_hash(anchor.number).await? != anchor.hash
     {
