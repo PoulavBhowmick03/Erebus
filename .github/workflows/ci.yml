@@ -414,6 +414,15 @@ jobs:
         working-directory: sdk/shielded
         run: cargo test --locked --test local_proof -- --ignored
 
+      - name: Install hash-pinned public artifacts and prove in fresh processes
+        working-directory: sdk/shielded
+        run: cargo test --locked --test artifacts -- --include-ignored
+
+      - name: Exercise local proof generation over installed Python and MCP boundaries
+        env:
+          EREBUS_M8_TEST_LOCAL_PROOF: "1"
+        run: uv run --locked pytest sdk/py/tests/test_proving_seam.py mcp-server/tests/test_proving.py
+
       - name: Compare Rust agreement-to-witness construction with the JS flow
         working-directory: sdk/shielded
         run: cargo test --locked --test witness -- --ignored
@@ -432,9 +441,25 @@ jobs:
           EREBUS_M5_NATIVE_PROOF: "1"
           EREBUS_M6_COORDINATED: "1"
           EREBUS_M6_MATRIX: "1"
+          EREBUS_M8_ACCESS: "1"
           EREBUS_TEST_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run prototype
+
+      - name: Recover public-bound HTTP access without another payment
+        working-directory: sdk/shielded
+        env:
+          EREBUS_TEST_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: cargo test --locked --test access_http -- --include-ignored
+
+      - name: Negotiate in separate processes and recover a lost payment response
+        working-directory: sdk/shielded
+        run: cargo test --locked --test negotiation_cli payment_driver -- --include-ignored
+
+      - name: Check path-only buyer access SDK and MCP boundaries
+        env:
+          EREBUS_M8_TEST_ACCESS_INSTALL: "1"
+        run: uv run --locked pytest sdk/py/tests/test_access_seam.py mcp-server/tests/test_access.py
 
       - uses: actions/upload-artifact@v4
         with:
@@ -443,6 +468,7 @@ jobs:
             circuits/m5/build/run.json
             circuits/m5/build/artifact-manifest.json
             circuits/m5/build/coordinated-*/disclosure-report.json
+            circuits/m5/build/coordinated-*/access-report.json
           if-no-files-found: error
           retention-days: 7
 

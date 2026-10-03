@@ -9,7 +9,7 @@ use erebus_transport::disclosure::{
 };
 use erebus_transport::identity::DisclosureIdentity;
 
-use crate::chain::{EvmChain, ObservationLimits};
+use crate::chain::{EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits};
 use crate::error::EvmError;
 
 /// A selected agreement and its verified final public-bound payment.
@@ -26,6 +26,22 @@ impl core::fmt::Debug for FinalizedDisclosure {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("FinalizedDisclosure { <redacted> }")
     }
+}
+
+/// A bounded disclosure observation. Pending work does not establish payment or non-payment.
+#[derive(Debug)]
+pub enum DisclosureObservation {
+    /// Authenticated agreement with remaining public history work persisted to the journal.
+    Pending {
+        /// Independently verified agreement identity, not a payment receipt.
+        agreement: VerifiedAgreement,
+        /// Next block range to scan, if log work remains.
+        next_log_block: Option<u64>,
+        /// Parent-walk checkpoint.
+        ancestry_block: u64,
+    },
+    /// The authenticated agreement has a matching finalized payment.
+    Finalized(Box<FinalizedDisclosure>),
 }
 
 /// The grant or final payment could not be independently verified.
@@ -93,10 +109,57 @@ pub async fn verify_public_bound_disclosure_from(
     let (evidence, agreement) =
         open_public_bound_disclosure(grant, recipient, expected_issuer, now)?;
     chain.deployment().matches_domain(&evidence.terms.domain)?;
-    let DealEvidence::Observed(reads) = chain
+    let observed = chain
         .finalized_deal_evidence_from(&agreement.nullifier, start_block, limits)
+        .await?;
+    finalize(evidence, agreement, observed)
+}
+
+/// Verifies one bounded chunk of public-bound history, retaining progress across processes.
+///
+/// The grant and deployment are checked before opening any network request. Reopen the same
+/// journal and retry on Pending. Corruption, changed canonical anchors, and RPC errors fail
+/// closed. `start_block` must not omit any possible settlement of this deployment.
+#[allow(clippy::too_many_arguments)]
+pub async fn verify_public_bound_disclosure_resumable(
+    grant: &DisclosureGrant,
+    recipient: &DisclosureIdentity,
+    expected_issuer: [u8; 20],
+    now: u64,
+    chain: &EvmChain,
+    journal: &ObservationJournal,
+    start_block: u64,
+    limits: ObservationLimits,
+) -> Result<DisclosureObservation, DisclosureVerificationError> {
+    let (evidence, agreement) =
+        open_public_bound_disclosure(grant, recipient, expected_issuer, now)?;
+    chain.deployment().matches_domain(&evidence.terms.domain)?;
+    match chain
+        .finalized_deal_evidence_resumable_from(journal, &agreement.nullifier, start_block, limits)
         .await?
-    else {
+    {
+        HistoricalObservation::Pending {
+            next_log_block,
+            ancestry_block,
+        } => Ok(DisclosureObservation::Pending {
+            agreement,
+            next_log_block,
+            ancestry_block,
+        }),
+        HistoricalObservation::Complete {
+            evidence: observed, ..
+        } => Ok(DisclosureObservation::Finalized(Box::new(finalize(
+            evidence, agreement, observed,
+        )?))),
+    }
+}
+
+fn finalize(
+    evidence: SelectedAgreement,
+    agreement: VerifiedAgreement,
+    observed: DealEvidence,
+) -> Result<FinalizedDisclosure, DisclosureVerificationError> {
+    let DealEvidence::Observed(reads) = observed else {
         return Err(DisclosureVerificationError::Payment);
     };
     let Some(winner) = &reads.winner else {

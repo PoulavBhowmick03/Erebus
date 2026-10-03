@@ -24,12 +24,20 @@ use fs2::FileExt;
 
 use crate::message::{Message, MessageError};
 use crate::transcript::{Transcript, TranscriptError};
+use erebus_core::encoding::{Reader, Writer};
 
 const RECORD_CHECKSUM_BYTES: usize = 32;
+const FREEZE_BYTES: usize = 116;
 
 /// A transcript could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
+    /// The transcript was sealed before final agreement authorizations.
+    #[error("negotiation transcript is frozen")]
+    Frozen,
+    /// A typed negotiation transition was rejected before writing.
+    #[error("negotiation transition rejected")]
+    Transition,
     /// The namespace was empty or contained path-unsafe characters.
     #[error("store namespace `{0}` is invalid")]
     InvalidNamespace(String),
@@ -45,6 +53,70 @@ pub enum StoreError {
     /// The message could not be decoded.
     #[error(transparent)]
     Message(#[from] MessageError),
+}
+
+/// Durable boundary between negotiation messages and final agreement signatures.
+///
+/// This record binds a transcript prefix and selected proposal. It does not itself prove
+/// consent; the typed negotiation layer checks both acceptance messages before creating it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenTranscript {
+    hash_version: u16,
+    deal_id: [u8; 16],
+    root: [u8; 32],
+    proposal_digest: [u8; 32],
+}
+
+impl FrozenTranscript {
+    /// The immutable root used by the final agreement.
+    #[must_use]
+    pub fn root(&self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Digest of the accepted proposal, before inserting the transcript root.
+    #[must_use]
+    pub fn proposal_digest(&self) -> [u8; 32] {
+        self.proposal_digest
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut writer = Writer::new();
+        writer.u16(1);
+        writer.u16(self.hash_version);
+        writer.fixed(&self.deal_id);
+        writer.fixed(&self.root);
+        writer.fixed(&self.proposal_digest);
+        let mut bytes = writer.finish();
+        bytes.extend_from_slice(&record_checksum(&bytes));
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
+        if bytes.len() != FREEZE_BYTES
+            || bytes[FREEZE_BYTES - 32..] != record_checksum(&bytes[..FREEZE_BYTES - 32])
+        {
+            return Err(StoreError::Corrupt("invalid freeze record".into()));
+        }
+        let mut reader = Reader::new(&bytes[..FREEZE_BYTES - 32]);
+        let decoded = (|| {
+            if reader.u16("freeze_version")? != 1 {
+                return Err(erebus_core::encoding::EncodingError::UnknownTag(
+                    "freeze_version",
+                    0,
+                ));
+            }
+            let value = Self {
+                hash_version: reader.u16("hash_version")?,
+                deal_id: reader.fixed("deal_id")?,
+                root: reader.fixed("root")?,
+                proposal_digest: reader.fixed("proposal_digest")?,
+            };
+            reader.finish()?;
+            Ok(value)
+        })();
+        decoded.map_err(|_| StoreError::Corrupt("invalid freeze record".into()))
+    }
 }
 
 /// A durable, append-only transcript log.
@@ -174,6 +246,186 @@ impl FileTranscriptStore {
         handle.flush().map_err(io_error)?;
         handle.sync_all().map_err(io_error)
     }
+
+    fn read_freeze(directory: &Path) -> Result<Option<FrozenTranscript>, StoreError> {
+        let path = directory.join("negotiation.freeze");
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        if !metadata.is_file() || metadata.len() != FREEZE_BYTES as u64 {
+            return Err(StoreError::Corrupt("invalid freeze file".into()));
+        }
+        let mut bytes = Vec::new();
+        File::open(path)
+            .map_err(io_error)?
+            .take(FREEZE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io_error)?;
+        FrozenTranscript::decode(&bytes).map(Some)
+    }
+
+    fn validate_freeze(
+        directory: &Path,
+        transcript: &Transcript,
+    ) -> Result<Option<FrozenTranscript>, StoreError> {
+        let frozen = Self::read_freeze(directory)?;
+        if let Some(record) = &frozen {
+            if record.deal_id != transcript.deal_id()
+                || record.hash_version != transcript.hash_version()
+                || record.root != transcript.root()?
+                || transcript.is_empty()
+            {
+                return Err(StoreError::Corrupt("frozen transcript mismatch".into()));
+            }
+        }
+        Ok(frozen)
+    }
+
+    fn write_freeze(directory: &Path, record: &FrozenTranscript) -> Result<(), StoreError> {
+        let temporary = directory.join(format!(
+            "freeze-{}.tmp",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let result = (|| {
+            let mut handle = options.open(&temporary).map_err(io_error)?;
+            handle.write_all(&record.encode()).map_err(io_error)?;
+            handle.sync_all().map_err(io_error)?;
+            fs::rename(&temporary, directory.join("negotiation.freeze")).map_err(io_error)?;
+            sync_directory(directory)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result
+    }
+
+    /// Seals exactly the expected nonempty prefix under the same lock used by append.
+    ///
+    /// Repeating the same freeze is idempotent. Changing the root or selected proposal fails.
+    /// A caller must establish bilateral acceptance before calling this low-level operation.
+    pub fn freeze(
+        &self,
+        namespace: &str,
+        deal_id: [u8; 16],
+        hash_version: u16,
+        expected_root: [u8; 32],
+        proposal_digest: [u8; 32],
+    ) -> Result<FrozenTranscript, StoreError> {
+        let directory = self.deal_directory(namespace, deal_id)?;
+        create_private_directory(&directory)?;
+        let lock = open_lock(&directory)?;
+        lock.lock_exclusive().map_err(io_error)?;
+        let stored = self.recover_messages(&directory)?;
+        let transcript = Transcript::replay(deal_id, hash_version, &stored)?;
+        let record = FrozenTranscript {
+            hash_version,
+            deal_id,
+            root: expected_root,
+            proposal_digest,
+        };
+        if transcript.is_empty() || transcript.root()? != expected_root {
+            return Err(StoreError::Transition);
+        }
+        if let Some(existing) = Self::validate_freeze(&directory, &transcript)? {
+            return if existing == record {
+                Ok(existing)
+            } else {
+                Err(StoreError::Transition)
+            };
+        }
+        Self::write_freeze(&directory, &record)?;
+        Ok(record)
+    }
+
+    /// Loads a frozen prefix and verifies that its log has not changed.
+    pub fn frozen(
+        &self,
+        namespace: &str,
+        deal_id: [u8; 16],
+        hash_version: u16,
+    ) -> Result<Option<FrozenTranscript>, StoreError> {
+        let directory = self.deal_directory(namespace, deal_id)?;
+        if !directory.exists() {
+            return Ok(None);
+        }
+        let lock = open_lock(&directory)?;
+        lock.lock_exclusive().map_err(io_error)?;
+        let stored = self.recover_messages(&directory)?;
+        let transcript = Transcript::replay(deal_id, hash_version, &stored)?;
+        Self::validate_freeze(&directory, &transcript)
+    }
+
+    pub(crate) fn append_checked(
+        &self,
+        namespace: &str,
+        deal_id: [u8; 16],
+        hash_version: u16,
+        message: &Message,
+        allow_replay: bool,
+        check: impl FnOnce(&[Message]) -> Result<Option<[u8; 32]>, StoreError>,
+    ) -> Result<Transcript, StoreError> {
+        let directory = self.deal_directory(namespace, deal_id)?;
+        create_private_directory(&directory)?;
+        let lock = open_lock(&directory)?;
+        lock.lock_exclusive().map_err(io_error)?;
+        let stored = self.recover_messages(&directory)?;
+        let mut transcript = Transcript::replay(deal_id, hash_version, &stored)?;
+        let frozen = Self::validate_freeze(&directory, &transcript)?;
+        let replay = allow_replay
+            && stored
+                .iter()
+                .any(|previous| previous.encode_body() == message.encode_body());
+        if frozen.is_some() && !replay {
+            return Err(StoreError::Frozen);
+        }
+        let proposal = check(&stored)?;
+        if replay {
+            if let Some(proposal_digest) = proposal {
+                let record = FrozenTranscript {
+                    hash_version,
+                    deal_id,
+                    root: transcript.root()?,
+                    proposal_digest,
+                };
+                if let Some(existing) = frozen {
+                    if existing != record {
+                        return Err(StoreError::Transition);
+                    }
+                } else {
+                    Self::write_freeze(&directory, &record)?;
+                }
+            }
+            return Ok(transcript);
+        }
+        transcript.append(message)?;
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let path = directory.join("transcript.log");
+        let mut handle = options.open(&path).map_err(io_error)?;
+        set_private_file_permissions(&path)?;
+        Self::write_record(&mut handle, message)?;
+        sync_directory(&directory)?;
+        if let Some(proposal_digest) = proposal {
+            Self::write_freeze(
+                &directory,
+                &FrozenTranscript {
+                    hash_version,
+                    deal_id,
+                    root: transcript.root()?,
+                    proposal_digest,
+                },
+            )?;
+        }
+        Ok(transcript)
+    }
 }
 
 impl TranscriptStore for FileTranscriptStore {
@@ -184,27 +436,9 @@ impl TranscriptStore for FileTranscriptStore {
         hash_version: u16,
         message: &Message,
     ) -> Result<Transcript, StoreError> {
-        let directory = self.deal_directory(namespace, deal_id)?;
-        create_private_directory(&directory)?;
-        let lock = open_lock(&directory)?;
-        lock.lock_exclusive().map_err(io_error)?;
-
-        let stored = self.recover_messages(&directory)?;
-        let mut transcript = Transcript::replay(deal_id, hash_version, &stored)?;
-        transcript.append(message)?;
-
-        let mut options = OpenOptions::new();
-        options.create(true).append(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let path = directory.join("transcript.log");
-        let mut handle = options.open(&path).map_err(io_error)?;
-        set_private_file_permissions(&path)?;
-        Self::write_record(&mut handle, message)?;
-        sync_directory(&directory)?;
-        // The caller may acknowledge only after this point. Dropping the lock is the ack grant.
-        drop(lock);
-        Ok(transcript)
+        self.append_checked(namespace, deal_id, hash_version, message, false, |_| {
+            Ok(None)
+        })
     }
 
     fn load(
@@ -220,7 +454,9 @@ impl TranscriptStore for FileTranscriptStore {
         let lock = open_lock(&directory)?;
         lock.lock_exclusive().map_err(io_error)?;
         let stored = self.recover_messages(&directory)?;
-        Transcript::replay(deal_id, hash_version, &stored).map_err(StoreError::Transcript)
+        let transcript = Transcript::replay(deal_id, hash_version, &stored)?;
+        Self::validate_freeze(&directory, &transcript)?;
+        Ok(transcript)
     }
 
     fn messages(&self, namespace: &str, deal_id: [u8; 16]) -> Result<Vec<Message>, StoreError> {
@@ -230,7 +466,12 @@ impl TranscriptStore for FileTranscriptStore {
         }
         let lock = open_lock(&directory)?;
         lock.lock_exclusive().map_err(io_error)?;
-        self.recover_messages(&directory)
+        let messages = self.recover_messages(&directory)?;
+        if let Some(frozen) = Self::read_freeze(&directory)? {
+            let transcript = Transcript::replay(deal_id, frozen.hash_version, &messages)?;
+            Self::validate_freeze(&directory, &transcript)?;
+        }
+        Ok(messages)
     }
 }
 

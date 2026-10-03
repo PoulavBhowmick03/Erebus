@@ -81,6 +81,10 @@ signature proves that the agreement identity (the key that will authorize settle
 behind that transport key. A relay or discovery directory cannot substitute either without
 failing verification, so it cannot redirect a buyer to a different seller.
 
+That direct agreement-key mapping applies to suite 1.
+M8 adds an encrypted descriptor-signed binding for separate suite-2 agreement keys.
+See [DM8-7](metropolis-m8-decisions.md); the public descriptor encoding is unchanged.
+
 ## DM2-3. Message envelope and canonical encoding
 
 Every message is carried inside one Noise transport message. The envelope plaintext is:
@@ -97,6 +101,8 @@ Every message is carried inside one Noise transport message. The envelope plaint
 | 8 | `message_type` | `u8` tag | 1 offer, 2 counter, 3 authorization |
 | 9 | `body` | bytes 0..=8192 | type-specific, canonical |
 
+The physical envelope is `session_id || encode_body`; the table lists logical fields.
+`encode_body` starts with `protocol_version` and excludes `session_id`.
 The envelope is authenticated by Noise AEAD. `session_id` stays in the envelope but is
 **excluded from the transcript digest** (DM2-4): the transcript is per deal and must survive a
 re-handshake after a restart, so it cannot be keyed by an ephemeral session.
@@ -255,5 +261,39 @@ every ciphertext is secure.
 - Two real subprocesses negotiate over TCP, exit, reload their transport identities, reopen
   separate stores, re-handshake, load a signed JSON directory, and agree on one root in
   `sdk/transport/tests/eleusis.rs`.
-- This record does not select a shielded settlement suite (M4) and does not implement the
-  offchain state machine's business semantics beyond ordered, authenticated transport.
+- The original M2 gate covers ordered, authenticated transport, not business negotiation.
+  M8 now adds the price-only profile below; arbitrary service-term negotiation remains unsupported.
+
+## M8 extension: typed negotiation and freeze boundary
+
+The owner selected a frozen negotiation prefix before final agreement authorizations ([DM8-6](metropolis-m8-decisions.md)).
+The envelope tags and transcript hash version stay unchanged.
+`sdk/transport/src/negotiation.rs` defines profile version `1` inside the opaque message body.
+The body starts with `u16 profile_version`, then one `u8 event_tag`.
+
+| Event | Envelope type | Body after version and event tag | Stored in negotiation |
+|---|---|---|---|
+| 1 proposal | Offer or Counter | parent proposal digest `[32]`, length-prefixed encoded proposal | Yes |
+| 2 acceptance | Authorization | selected proposal digest `[32]` | Yes |
+| 3 final authorization | Authorization | length-prefixed canonical authorization | No |
+| 4 identity binding | Authorization | length-prefixed canonical key binding | No |
+
+A proposal encodes length-prefixed canonical draft terms, then raw blinding `[32]`.
+Its digest is `Keccak256("EREBUS_NEGOTIATION_PROPOSAL_V1" || encoded_proposal)`.
+Draft terms require a zero transcript root.
+The initial buyer offer fixes all context; later counters change only amount and revision.
+Each counter alternates authors and binds the preceding proposal digest.
+The nonproposer accepts first; the proposer then confirms the same draft.
+Neither acceptance contains a signature over the eventual agreement.
+
+Both acceptance messages contribute to the sealed M2 root.
+The final terms insert that root before either party signs the M1 commitment.
+Final authorization envelopes reference the frozen author's next sequence and head but never extend its log.
+Identity-binding envelopes use revision `1`, sequence `1`, and a zero parent as separate channel control.
+Noise authenticates their session and author; they are not transcript sequence entries.
+
+The low-level append store still rejects duplicates.
+The typed store allows exact-body re-delivery after a fresh handshake without another append.
+A checksum-protected, atomic freeze record prevents any later generic append under the same lock.
+Checksums detect corruption; local owner-only storage remains trusted, not remotely authenticated evidence.
+The SDK closes a connection after failed incoming validation or failed authorization persistence.

@@ -66,3 +66,53 @@ def test_timeout_does_not_expose_request_or_raw_output(monkeypatch):
     with pytest.raises(DisclosureError) as caught:
         DisclosureSeam(binary="local-rust").call("key_info", key_file="key.path")
     assert "SECRET" not in str(caught.value)
+
+
+def test_pending_payment_is_explicit_and_never_claims_payment(monkeypatch):
+    reply(monkeypatch, {
+        "status": "pending", "agreement_verified": True,
+        "payment_verified": False, "delivery_verified": False,
+        "ancestry_block": 42, "next_log_block": 10,
+    }, returncode=2)
+    response = DisclosureSeam(binary="local-rust").call(
+        "verify_payment", grant_file="grant.path", key_file="key.path",
+        expected_issuer="public", deployment={},
+    )
+    assert response["status"] == "pending"
+    assert response["payment_verified"] is False
+
+
+@pytest.mark.parametrize("mutation", [
+    {"payment_verified": True}, {"delivery_verified": True},
+    {"agreement_verified": False}, {"ancestry_block": True},
+    {"ancestry_block": -1}, {"next_log_block": 2**64},
+])
+def test_pending_cannot_forge_verification_or_progress(monkeypatch, mutation):
+    payload = {
+        "status": "pending", "agreement_verified": True,
+        "payment_verified": False, "delivery_verified": False, "ancestry_block": 42,
+    }
+    reply(monkeypatch, {**payload, **mutation}, returncode=2)
+    with pytest.raises(DisclosureError):
+        DisclosureSeam(binary="local-rust").call(
+            "verify_payment", grant_file="grant.path", key_file="key.path",
+            expected_issuer="public", deployment={},
+        )
+
+
+def test_pending_requires_its_exit_code_and_payment_method(monkeypatch):
+    payload = {
+        "status": "pending", "agreement_verified": True,
+        "payment_verified": False, "delivery_verified": False, "ancestry_block": 42,
+    }
+    reply(monkeypatch, payload, returncode=0)
+    with pytest.raises(DisclosureError):
+        DisclosureSeam(binary="local-rust").call(
+            "verify_payment", grant_file="grant.path", key_file="key.path",
+            expected_issuer="public", deployment={},
+        )
+    reply(monkeypatch, payload, returncode=2)
+    with pytest.raises(DisclosureError):
+        DisclosureSeam(binary="local-rust").call(
+            "verify_agreement", grant_file="grant.path", key_file="key.path", expected_issuer="public",
+        )

@@ -84,6 +84,11 @@ pub struct PoolRpc {
 }
 
 impl PoolRpc {
+    /// Checks endpoint identity without exposing a URL or its credentials.
+    /// Distinct URLs do not establish operational provider independence.
+    pub fn shares_endpoint(&self, other: &Self) -> bool {
+        self.matches_endpoint(other.endpoint())
+    }
     /// Endpoint identity for configuration checks. It may contain credentials; do not log it.
     pub(crate) fn endpoint(&self) -> &str {
         self.url.as_str()

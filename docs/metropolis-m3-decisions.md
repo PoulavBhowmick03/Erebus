@@ -103,7 +103,11 @@ normalized.
 
 | Public | Hidden |
 |---|---|
-| amount, asset, payer, payment recipient, fee and fee recipient, timing, contract, function | negotiation, unshared terms, other deals |
+| full accepted canonical agreement, service fields, blinding, final signatures, amount, asset, parties, fee, timing, contract, function | offchain transcript, rejected offers, private bargaining policy |
+
+Boundary clarified during M8 integration: the contract receives the complete agreement opening.
+It cannot keep accepted commercial terms private in public-bound mode.
+Other public-bound settlements also expose their accepted agreements, though their offchain transcripts remain private.
 
 The adapter declares exactly one guarantee: `agreement-bound-settlement`. It does not declare
 `hidden-amount` or `hidden-recipient`, and it does not declare `scoped-disclosure`. A deal that

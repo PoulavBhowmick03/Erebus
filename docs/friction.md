@@ -8,6 +8,24 @@ Cloned to `../starknet-privacy` (sibling of this repo, not vendored in).
 
 ---
 
+## F47: A nonblocking listener broke the synchronous Noise handshake (2026-10-03)
+
+**What we were trying to do.** Run copied native buyer and seller commands with separate keys and private state.
+The seller used a nonblocking listener to enforce a bounded connection wait.
+
+**What happened.** On macOS, the accepted stream retained nonblocking behavior.
+The synchronous handshake failed immediately instead of waiting until its configured deadline.
+The buyer then reported uncertain offer delivery. The earlier blocking-listener tests passed.
+
+**What we changed.** `SocketChannel` now normalizes each connected stream to blocking mode before the handshake.
+Its reads and writes retain absolute deadlines, including partial progress.
+A regression test starts with explicitly nonblocking streams and checks handshake, delivery, and timeout behavior.
+Copied-command tests now exercise the actual native listener in both settlement modes.
+
+**What would have caught it earlier.** Test the operator's listener and connection setup, not only the encrypted session in isolation.
+
+---
+
 ## F46: Estimating a boolean Groth16 verifier found the cheap failure path (2026-09-24)
 
 **What we were trying to do.** Measure M4 verifier gas using the generated Solidity

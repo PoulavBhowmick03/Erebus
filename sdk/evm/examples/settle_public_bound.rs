@@ -1,13 +1,15 @@
 //! Drives one coordinated public-bound settlement against a live EVM deployment.
 //!
-//! Test tooling for the M8 funded workflow: it uses deterministic test-only seller, blinding,
-//! nonce, and deal values. The buyer key is read from an owner-only file and never printed.
+//! Test tooling for the M8 funded workflow: blinding, nonce, and deal values are test-only.
+//! Independent mode requires an explicit seller address and external authorization.
+//! A deterministic local seller requires EREBUS_EVM_ALLOW_TEST_SELLER=1.
 //!
 //! Environment:
 //! - `EREBUS_EVM_RPC_URL`, `EREBUS_EVM_SETTLEMENT`, `EREBUS_EVM_TOKEN`
 //! - `EREBUS_EVM_BUYER_KEY_FILE` (a 32-byte hex key, owner-only)
 //! - `EREBUS_EVM_STATE_ROOT` (coordinator and signer-journal directory)
 //! - `EREBUS_EVM_AMOUNT` (base units, default 1000000)
+//! - `EREBUS_EVM_SELLER_ADDRESS` (expected independent seller, lowercase 0x address)
 //!
 //! Flow: durable intent, both authorizations, preparation, nonce claim, local signing,
 //! journaled broadcast, finalized observation, and reconciliation.
@@ -40,6 +42,53 @@ use erebus_transport::disclosure::SelectedAgreement;
 use erebus_transport::hashing::TRANSCRIPT_HASH_VERSION;
 use k256::ecdsa::SigningKey;
 use serde_json::json;
+use zeroize::Zeroizing;
+
+fn private_read(
+    path: &std::path::Path,
+    limit: u64,
+) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err("private input must be a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("private input must be owner-only".into());
+        }
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err("private input exceeds limit".into());
+    }
+    Ok(bytes)
+}
+
+fn private_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
 
 fn env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
     std::env::var(name).map_err(|_| format!("{name} is not set").into())
@@ -89,17 +138,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1_000_000);
-    let buyer_bytes: [u8; 32] = {
-        let text = std::fs::read_to_string(env("EREBUS_EVM_BUYER_KEY_FILE")?)?;
-        let bytes = hex::decode(text.trim().trim_start_matches("0x"))?;
-        bytes.try_into().map_err(|_| "buyer key must be 32 bytes")?
+    let buyer_bytes: Zeroizing<[u8; 32]> = {
+        let bytes = private_read(
+            std::path::Path::new(&env("EREBUS_EVM_BUYER_KEY_FILE")?),
+            128,
+        )?;
+        let text = std::str::from_utf8(&bytes)?.trim();
+        let bytes = Zeroizing::new(hex::decode(text.strip_prefix("0x").unwrap_or(text))?);
+        Zeroizing::new(
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "buyer key must be 32 bytes")?,
+        )
     };
-    let buyer_key = SigningKey::from_slice(&buyer_bytes)?;
-    let seller_key = SigningKey::from_slice(&[0x5e; 32])?;
+    let buyer_key = SigningKey::from_slice(buyer_bytes.as_ref())?;
+    let seller_key =
+        if std::env::var("EREBUS_EVM_ALLOW_TEST_SELLER").is_ok_and(|value| value == "1") {
+            Some(SigningKey::from_slice(&[0x5e; 32])?)
+        } else {
+            None
+        };
     // A fresh seed gives a fresh deal identity; the same seed is a different signed revision
     // of an already-consumed deal.
     let buyer_address = address_of(&buyer_key);
-    let seller_address = address_of(&seller_key);
+    let seller_address = match &seller_key {
+        Some(key) => address_of(key),
+        None => parse_lowercase_address(&env("EREBUS_EVM_SELLER_ADDRESS")?)
+            .ok_or("expected seller must be a lowercase 0x address")?,
+    };
     let now = unix_now()?;
 
     let namespace = ChainNamespace::parse("eip155:10143")?;
@@ -109,7 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The buyer proposes terms and a blinding. A separate seller process signs the same
     // proposal; this process can also load that proposal instead of rebuilding it.
     let (terms, blinding) = if let Ok(path) = std::env::var("EREBUS_EVM_PROPOSAL_IN") {
-        let proposal: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        let proposal: serde_json::Value =
+            serde_json::from_slice(&private_read(std::path::Path::new(&path), 64 * 1024)?)?;
         let terms = AgreementTerms::decode(&hex::decode(
             proposal["terms"].as_str().ok_or("proposal has no terms")?,
         )?)?;
@@ -160,33 +228,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         (terms, CommitmentBlinding::from_bytes([0x0a; 32]))
     };
+    deployment.matches_domain(&terms.domain)?;
+    if terms.suite_id != 1
+        || terms.settlement_mode != SettlementMode::PublicBound
+        || terms.buyer_authorization_key.as_bytes() != buyer_address
+        || terms.seller_authorization_key.as_bytes() != seller_address
+        || terms.asset != asset
+    {
+        return Err("proposal differs from the selected buyer, seller, backend, or asset".into());
+    }
     let commitment = commit_agreement(&terms, &blinding)?;
+    if let Ok(path) = std::env::var("EREBUS_EVM_PROPOSAL_OUT") {
+        private_write(
+            std::path::Path::new(&path),
+            &serde_json::to_vec(&json!({
+                "terms":hex::encode(terms.encode()?),"blinding":hex::encode(blinding.as_bytes()),
+            }))?,
+        )?;
+        println!(
+            "{}",
+            json!({"status":"ok","proposal":path,"deal_commitment":commitment.to_hex()})
+        );
+        return Ok(());
+    }
     let buyer = authorization(Role::Buyer, &terms, commitment, &buyer_key)?;
     let seller = if let Ok(path) = std::env::var("EREBUS_EVM_SELLER_AUTHORIZATION_FILE") {
-        let seller = Authorization::decode(&hex::decode(std::fs::read_to_string(path)?.trim())?)?;
+        let bytes = private_read(std::path::Path::new(&path), 4096)?;
+        let seller = Authorization::decode(&hex::decode(std::str::from_utf8(&bytes)?.trim())?)?;
         if seller.role != Role::Seller || seller.commitment != commitment {
             return Err("seller authorization does not match the proposal".into());
         }
         verify_authorization_signature(&terms, &commitment, &blinding, &seller)?;
         seller
     } else {
-        authorization(Role::Seller, &terms, commitment, &seller_key)?
+        let key = seller_key
+            .as_ref()
+            .ok_or("independent settlement requires the seller authorization file")?;
+        authorization(Role::Seller, &terms, commitment, key)?
     };
-
-    if let Ok(path) = std::env::var("EREBUS_EVM_PROPOSAL_OUT") {
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&json!({
-                "terms": hex::encode(terms.encode()?),
-                "blinding": hex::encode(blinding.as_bytes()),
-            }))?,
-        )?;
-        println!(
-            "{}",
-            json!({"status": "ok", "proposal": path, "deal_commitment": commitment.to_hex()})
-        );
-        return Ok(());
-    }
     if let Ok(path) = std::env::var("EREBUS_EVM_EVIDENCE_OUT") {
         let evidence = SelectedAgreement {
             terms: terms.clone(),
@@ -196,7 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             transcript_hash_version: TRANSCRIPT_HASH_VERSION,
             messages: Vec::new(),
         };
-        std::fs::write(&path, evidence.encode()?)?;
+        private_write(std::path::Path::new(&path), &evidence.encode()?)?;
     }
 
     let context = SettlementContext {
@@ -287,10 +366,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let assessment = coordinator.reconcile(operation_ref, &evidence, now + 1)?;
                 // Monad's finalized anchor trails the head; a winner is not payment-final
                 // until its block is at or below it. Re-observe until it is.
-                if matches!(assessment.state, DealState::PaidFinalized { .. })
-                    || Instant::now() >= deadline
-                {
+                if matches!(assessment.state, DealState::PaidFinalized { .. }) {
                     break assessment;
+                }
+                if Instant::now() >= deadline {
+                    return Err(
+                        "payment has not finalized; retain state and reconcile before retrying"
+                            .into(),
+                    );
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -317,4 +400,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proposal_files_are_private_durable_and_never_overwritten() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("proposal.json");
+        private_write(&path, b"private opening").unwrap();
+        assert_eq!(
+            private_read(&path, 64).unwrap().as_slice(),
+            b"private opening"
+        );
+        assert!(private_write(&path, b"other opening").is_err());
+        assert!(private_read(&path, 1).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{symlink, PermissionsExt};
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let link = root.path().join("link");
+            symlink(&path, &link).unwrap();
+            assert!(private_read(&link, 64).is_err());
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(private_read(&path, 64).is_err());
+        }
+    }
 }

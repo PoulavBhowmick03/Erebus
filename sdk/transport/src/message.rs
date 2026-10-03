@@ -35,7 +35,8 @@ pub enum MessageType {
     Offer,
     /// A counteroffer to a prior offer.
     Counter,
-    /// An authorization over an agreed revision.
+    /// Agreement control or authorization for an agreed revision. The typed profile separates
+    /// transcript acceptance votes from detached final signatures.
     Authorization,
 }
 

@@ -11,6 +11,9 @@
 //! - [`store`]: the durable transcript and session state.
 //! - [`relay`]: the minimal ciphertext mailbox.
 //! - [`descriptor`]: signed service publication and discovery.
+//! - [`binding`]: private discovery-to-shielded-agreement identity attestations.
+//! - [`negotiation`]: typed price negotiation and the durable boundary before final signatures.
+//! - [`socket`]: bounded descriptor-authenticated TCP delivery.
 //!
 //! The design and its decisions are specified in `docs/metropolis-m2-decisions.md`. The crate is
 //! chain-neutral: it depends on `erebus-core` for canonical encoding. Transcript hash
@@ -22,13 +25,16 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub mod binding;
 pub mod descriptor;
 pub mod disclosure;
 pub mod hashing;
 pub mod identity;
 pub mod limits;
 pub mod message;
+pub mod negotiation;
 pub mod relay;
 pub mod session;
+pub mod socket;
 pub mod store;
 pub mod transcript;

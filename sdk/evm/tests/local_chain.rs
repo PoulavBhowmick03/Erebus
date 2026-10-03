@@ -673,7 +673,7 @@ async fn an_independent_auditor_process_verifies_without_participant_keys_or_rel
     let grant_file = directory.path().join("deal.grant");
     grant.write_backup(&grant_file).unwrap();
     settle_coordinated(&fixture, &RELAYER_KEY).await;
-    mine_blocks(&read_only_provider(&fixture.rpc_url), 3).await;
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 20).await;
 
     // The child sees only the auditor's key, encrypted grant, and public chain endpoint.
     let output = Command::new(std::env::current_exe().unwrap())
@@ -702,14 +702,6 @@ async fn an_independent_auditor_process_verifies_without_participant_keys_or_rel
 
     let binary = std::env::var_os("EREBUS_TEST_DISCLOSURE_BIN")
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_erebus-disclosure").into());
-    let mut child = Command::new(binary)
-        .current_dir(directory.path())
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
     let request = serde_json::json!({
         "method": "verify_payment",
         "grant_file": "deal.grant",
@@ -720,8 +712,73 @@ async fn an_independent_auditor_process_verifies_without_participant_keys_or_rel
             "settlement_contract": format!("0x{}", hex::encode(fixture.settlement)),
             "verifier_version": 1,
             "rpc_url": fixture.rpc_url,
+            "from_block": 1,
+            "log_block_range": 2,
+            "max_log_queries": 1,
+            "max_ancestry": 2,
         },
     });
+    let mut pending = 0;
+    let mut response = None;
+    for _ in 0..100 {
+        let mut child = Command::new(&binary)
+            .current_dir(directory.path())
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&request).unwrap())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.stderr.is_empty());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if output.status.code() == Some(2) {
+            assert_eq!(result["status"], "pending");
+            assert_eq!(result["agreement_verified"], true);
+            assert_eq!(result["payment_verified"], false);
+            assert_eq!(result["delivery_verified"], false);
+            pending += 1;
+        } else {
+            assert!(output.status.success(), "{result}");
+            response = Some(result);
+            break;
+        }
+    }
+    assert!(
+        pending > 2,
+        "fresh auditor processes must resume both log and ancestry work"
+    );
+    let response = response.expect("bounded verification eventually finishes");
+    assert_eq!(response["agreement_verified"], true);
+    assert_eq!(response["payment_verified"], true);
+    assert_eq!(response["delivery_verified"], false);
+    assert_eq!(response["deal_id"], hex::encode(fixture.terms.deal_id));
+
+    // A corrupt cache is not silently recreated and can never become a paid response.
+    let cache = directory.path().join("public-cache");
+    let checkpoint = std::fs::read_dir(&cache)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .expect("public checkpoint");
+    std::fs::write(checkpoint, b"invalid checkpoint").unwrap();
+    let mut child = Command::new(&binary)
+        .current_dir(directory.path())
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     child
         .stdin
         .take()
@@ -729,13 +786,10 @@ async fn an_independent_auditor_process_verifies_without_participant_keys_or_rel
         .write_all(&serde_json::to_vec(&request).unwrap())
         .unwrap();
     let output = child.wait_with_output().unwrap();
-    assert!(output.stderr.is_empty());
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(output.status.success(), "{response}");
-    assert_eq!(response["agreement_verified"], true);
-    assert_eq!(response["payment_verified"], true);
-    assert_eq!(response["delivery_verified"], false);
-    assert_eq!(response["deal_id"], hex::encode(fixture.terms.deal_id));
+    assert_eq!(output.status.code(), Some(1));
+    let failed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(failed["status"], "error");
+    assert_ne!(failed["payment_verified"], true);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3334,7 +3388,7 @@ async fn the_settle_cli_reports_a_finalized_receipt_after_settlement() {
         .broadcast_journaled(&coordinator, operation_ref, now)
         .await
         .expect("broadcast");
-    mine_blocks(&read_only_provider(&fixture.rpc_url), 3).await;
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 20).await;
     let evidence = chain
         .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
         .await
@@ -3350,30 +3404,48 @@ async fn the_settle_cli_reports_a_finalized_receipt_after_settlement() {
             "settlement_contract": format!("0x{}", hex::encode(address_bytes(fixture.settlement))),
             "verifier_version": 1,
             "rpc_url": fixture.rpc_url,
+            "from_block": 1,
+            "log_block_range": 2,
+            "max_log_queries": 1,
+            "max_ancestry": 2,
         },
         "state_root": state_root.path().join("coordinator"),
         "operation_ref": hex::encode(operation_ref),
     });
-    let mut child = Command::new(env!("CARGO_BIN_EXE_erebus-settle"))
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn erebus-settle");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(&serde_json::to_vec(&request).expect("request"))
-        .expect("write request");
-    let output = child.wait_with_output().expect("wait");
+    let mut pending = 0;
+    let mut response = None;
+    for _ in 0..100 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_erebus-settle"))
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn erebus-settle");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(&serde_json::to_vec(&request).expect("request"))
+            .expect("write request");
+        let output = child.wait_with_output().expect("wait");
+        assert!(output.stderr.is_empty());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+        if output.status.code() == Some(2) {
+            assert_eq!(result["status"], "pending");
+            assert_eq!(result["payment_finalized"], false);
+            pending += 1;
+        } else {
+            assert!(output.status.success(), "{result}");
+            response = Some(result);
+            break;
+        }
+    }
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stdout)
+        pending > 2,
+        "receipt must resume from fresh processes, not restart its scan"
     );
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+    let response = response.expect("bounded receipt observation completes");
     assert_eq!(response["status"], "ok");
     assert_eq!(response["payment_finalized"], true);
     assert_eq!(response["deal_state"], "paid_finalized");

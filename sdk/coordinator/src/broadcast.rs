@@ -200,10 +200,35 @@ impl Coordinator {
         operation_ref: [u8; 32],
         now: u64,
     ) -> Result<BroadcastAttempt, Error> {
+        self.begin_attempt(operation_ref, now, false)
+    }
+
+    /// Atomically fences only the initial transaction's first broadcast. Any retained
+    /// attempt or replacement conflicts, including an Unknown fence after a crash before
+    /// network I/O. Use explicit recovery APIs for retries; do not erase that uncertainty.
+    pub fn begin_initial_broadcast_attempt(
+        &self,
+        operation_ref: [u8; 32],
+        now: u64,
+    ) -> Result<BroadcastAttempt, Error> {
+        self.begin_attempt(operation_ref, now, true)
+    }
+
+    fn begin_attempt(
+        &self,
+        operation_ref: [u8; 32],
+        now: u64,
+        initial_only: bool,
+    ) -> Result<BroadcastAttempt, Error> {
         let _lock = self.store.lock_identity().map_err(|_| Error::Storage)?;
         let mut state = self.load()?;
         let index = state.index(operation_ref)?;
         let intent = &state.intents[index];
+        if initial_only
+            && (!intent.broadcast_attempts.is_empty() || !intent.replacements.is_empty())
+        {
+            return Err(Error::Conflict);
+        }
         let (terms, _) = intent.opening()?;
         self.check_terms(&terms)?;
         if intent.accounting != record::Accounting::Reserved {

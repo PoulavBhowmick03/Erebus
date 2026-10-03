@@ -31,7 +31,7 @@ pub const TRANSPORT_PROTOCOL_VERSION: u16 = 1;
 
 /// Largest handshake message accepted. XX handshake messages are small; the bound only exists so
 /// a malicious peer cannot make us allocate an unbounded buffer.
-const MAX_HANDSHAKE_MESSAGE_BYTES: usize = 1024;
+pub const MAX_HANDSHAKE_MESSAGE_BYTES: usize = 1024;
 
 /// A session could not be established or a message could not be processed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

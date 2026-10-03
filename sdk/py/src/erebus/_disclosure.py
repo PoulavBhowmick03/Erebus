@@ -31,6 +31,7 @@ class DisclosureSeam:
         "status", "protocol", "methods", "mode", "recipient_public_key", "evidence_saved",
         "grant_saved", "deal_id", "revision", "deal_commitment", "deal_nullifier", "issuer",
         "agreement_verified", "payment_verified", "delivery_verified",
+        "next_log_block", "ancestry_block",
     }
 
     def __init__(self, binary: str | Path | None = None, timeout: int = 60) -> None:
@@ -56,7 +57,14 @@ class DisclosureSeam:
             response = json.loads(completed.stdout)
         except (ValueError, TypeError):
             raise DisclosureError("invalid disclosure response") from None
-        if completed.returncode != 0 or not isinstance(response, dict) or response.get("status") != "ok":
+        pending = (
+            isinstance(response, dict) and method == "verify_payment"
+            and response.get("status") == "pending" and completed.returncode == 2
+        )
+        if not pending and (
+            completed.returncode != 0 or not isinstance(response, dict)
+            or response.get("status") != "ok"
+        ):
             raise DisclosureError("disclosure verification or storage failed; retain evidence")
         if completed.stderr or set(response) - self._public_fields:
             raise DisclosureError("unexpected disclosure response fields")
@@ -71,8 +79,19 @@ class DisclosureSeam:
                 raise DisclosureError("invalid disclosure response shape")
         if method in {"verify_agreement", "verify_payment"} and (
             response.get("agreement_verified") is not True
-            or response.get("payment_verified") is not (method == "verify_payment")
+            or response.get("payment_verified") is not (method == "verify_payment" and not pending)
             or response.get("delivery_verified") is not False
         ):
             raise DisclosureError("invalid disclosure verification claims")
+        if pending and (
+            type(response.get("ancestry_block")) is not int
+            or not 0 <= response["ancestry_block"] <= 2**64 - 1
+            or ("next_log_block" in response and (
+                type(response["next_log_block"]) is not int
+                or not 0 <= response["next_log_block"] <= 2**64 - 1
+            ))
+        ):
+            raise DisclosureError("invalid disclosure observation progress")
+        if not pending and {"next_log_block", "ancestry_block"} & response.keys():
+            raise DisclosureError("unexpected disclosure observation progress")
         return response

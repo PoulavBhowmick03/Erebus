@@ -73,6 +73,26 @@ impl EvmChain {
         Ok(result)
     }
 
+    /// Submits the initial public-bound transaction at most once through this automatic
+    /// path. The coordinator atomically rejects any prior attempt or replacement before
+    /// network I/O, including a concurrent caller or an interrupted Unknown fence.
+    /// A returned error does not establish nonpayment. Explicit retries use separate APIs.
+    pub async fn broadcast_initial_journaled(
+        &self,
+        coordinator: &erebus_coordinator::Coordinator,
+        operation_ref: [u8; 32],
+        now: u64,
+    ) -> Result<Broadcast, JournaledBroadcastError> {
+        let attempt = coordinator.begin_initial_broadcast_attempt(operation_ref, now)?;
+        let transaction = &attempt.transaction;
+        let plan = SigningPlan::decode(transaction.plan())?;
+        let result = self
+            .broadcast(transaction.prepared(), &plan, transaction.raw())
+            .await?;
+        self.finish_journaled_broadcast(coordinator, operation_ref, &attempt.token, result)?;
+        Ok(result)
+    }
+
     /// Broadcasts only an already journaled backend-validated call.
     /// `expected` must be derived from the accepted agreement, not caller-supplied RPC data.
     pub async fn broadcast_journaled_call(

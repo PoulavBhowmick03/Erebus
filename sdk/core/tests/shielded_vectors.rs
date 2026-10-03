@@ -15,6 +15,34 @@ use serde_json::Value;
 const FIXTURE: &str = include_str!("fixtures/agreement-suite2-vector.json");
 
 #[test]
+fn access_signatures_preserve_digest_limbs_and_cannot_authorize_payment_or_disclosure() {
+    use erebus_core::shielded::{access_message, disclosure_message};
+    let mut high = [0; 32];
+    high[0] = 1;
+    let mut low = [0; 32];
+    low[31] = 1;
+    assert_ne!(
+        access_message(&high).unwrap(),
+        access_message(&low).unwrap()
+    );
+    let (terms, blinding, _) = fixture_terms();
+    let deal = ShieldedDeal::from_terms(&terms).unwrap();
+    let commitment = deal.commitment(&blinding).unwrap();
+    let digest = commitment.as_bytes();
+    let access = access_message(digest).unwrap();
+    let (key, signature) = sign_message(&[1; 32], &access).unwrap();
+    verify_message(&key, &access, &signature).unwrap();
+    let disclosure = disclosure_message(digest).unwrap();
+    assert_ne!(access, disclosure);
+    assert!(verify_message(&key, &disclosure, &signature).is_err());
+    for role in [Role::Buyer, Role::Seller] {
+        let payment = deal.authorization_message(role, &commitment).unwrap();
+        assert_ne!(access, payment);
+        assert!(verify_message(&key, &payment, &signature).is_err());
+    }
+}
+
+#[test]
 fn disclosure_messages_match_circomlib_and_cannot_authorize_payment() {
     use erebus_core::shielded::disclosure_message;
     // circomlibjs 0.1.7: Poseidon([3001, high128(digest), low128(digest)]).

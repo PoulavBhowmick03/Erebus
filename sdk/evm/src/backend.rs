@@ -81,7 +81,7 @@ pub struct SettlementEstimate {
     pub allowance: u128,
     /// The buyer's current token balance.
     pub buyer_balance: u128,
-    /// Estimated gas for the settlement transaction.
+    /// Estimated gas for the settlement transaction, or zero when token funding is short.
     pub gas: u64,
 }
 
@@ -262,6 +262,17 @@ impl EvmSettlementBackend {
         let balance = self
             .read_token_word(&token, &abi::encode_balance_of_call(&payer))
             .await?;
+
+        // Estimation would revert for an unfunded buyer. Preserve actionable diagnostics
+        // instead of replacing a known allowance/balance shortfall with an RPC error.
+        if allowance < total || balance < total {
+            return Ok(SettlementEstimate {
+                required_allowance: total,
+                allowance,
+                buyer_balance: balance,
+                gas: 0,
+            });
+        }
 
         let settlement = Address::from(self.deployment.settlement_contract);
         let evidence = self.evidence(&prepared)?;

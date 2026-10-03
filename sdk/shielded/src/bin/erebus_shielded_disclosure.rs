@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use erebus_core::{ids::ChainNamespace, terms::SettlementMode};
 use erebus_evm::{
     deployment::{parse_lowercase_address, EvmDeployment},
-    disclosure::cli::{self, PaymentRequest},
+    disclosure::cli::{self, PaymentRequest, PaymentVerification},
 };
 use erebus_shielded_prover::{
     disclosure::verify_shielded_payment,
@@ -38,9 +38,7 @@ async fn main() {
     .await;
 }
 
-async fn verify(
-    request: PaymentRequest,
-) -> Result<erebus_transport::disclosure::VerifiedAgreement, &'static str> {
+async fn verify(request: PaymentRequest) -> Result<PaymentVerification, &'static str> {
     let deployment: Deployment =
         serde_json::from_value(request.deployment).map_err(|_| "invalid shielded deployment")?;
     let namespace =
@@ -89,5 +87,5 @@ async fn verify(
     let result = verify_shielded_payment(request.evidence, &rpc, &index, &peer_rpc, &peer_index)
         .await
         .map_err(|_| "payment not independently verified; retain caches and retry")?;
-    Ok(result.agreement)
+    Ok(PaymentVerification::Finalized(result.agreement))
 }

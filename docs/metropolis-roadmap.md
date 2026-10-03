@@ -394,9 +394,9 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [ ] Deploy optional shared testnet services and document their metadata exposure, retention, access limits, and availability behavior.
 - [ ] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
 - [ ] Update the Python boundary, MCP configuration, and deterministic two-agent harness.
-- [ ] Add the HTTP service adapter and bind access to the finalized agreement and intended buyer.
-- [ ] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
-- [ ] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
+- [x] Add the HTTP service adapter and bind access to the finalized agreement and intended buyer.
+- [x] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
+- [x] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
 - [ ] Implement x402 composition only against a specified scheme, with exactly one payment and explicit privacy exposure.
 - [ ] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
 - [ ] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately.
@@ -406,17 +406,25 @@ Both hosted endpoints and the self-hosting package support the documented workfl
 An interrupted service response can recover access without a second charge.
 Mainnet deployment is a separate release decision after review and testnet evidence.
 
-M8 status 2026-10-02: **network readiness verified and testnet deployment done; installed
-workflow and access service not done.**
+M8 status 2026-10-03: **public-bound live workflow recorded; complete developer release still open.**
 `erebus-network-check` passed all 16 live checks against `testnet-rpc.monad.xyz` (chain ID
 10143, explicit `finalized`, hash-pinned reads, and the BN254 add/mul/pairing precompiles).
 `ErebusSettlement` is live at `0xa5f0c864f434331bef9a7fc5e05450d598d24da4` (block 67495473,
 transaction `0x6c7b810c…`), and its identity was verified against the reviewed artifact on
 finalized state (`scripts/check-evm-deployment.py`), including `verifierVersion()` = 1. The
 manifest is `contracts/evm/deployments/monad-testnet.json`. `erebus-settle` now covers
-capabilities, funding, and receipt. Still open: the funded end-to-end workflow on the live
-contract, packages and the fresh-install guide, the Python/MCP boundary, the access service,
-x402, and stage measurements. See [M8 progress](metropolis-m8-progress.md) and the
+capabilities, funding, and bounded receipt observation. Separate public-bound buyer, seller,
+and auditor processes have a recorded live run. Local artifact installation, isolated MCP
+proof generation, and public-bound HTTP access recovery now pass local tests.
+The Rust negotiation SDK now freezes transcripts before final signatures and exchanges private shielded-key identity bindings.
+Independent processes pass negotiation, restart, policy-reserved authorization, and scoped agreement disclosure locally.
+That test submits no chain payment; the combined installed Monad workflow remains open.
+Still open: released packages, complete installed negotiation/settlement integration,
+hosted and rehearsed self-hosted services, live access recovery, x402, and stage measurements.
+These local checks do not complete the private-payment release gate.
+The checked access items have funded local evidence for both modes, including Rust and MCP retrieval.
+They do not claim live Monad access, hosted operation, or a published package release.
+See [M8 decisions](metropolis-m8-decisions.md), [M8 progress](metropolis-m8-progress.md), and the
 [M8 runbook](metropolis-m8-runbook.md).
 
 ### M9. Hardening and submission
@@ -501,8 +509,11 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-10-02 | M7 direct suite-2 grants and independent funded CLI/MCP auditor | [M7 decisions](metropolis-m7-decisions.md) and [M7 progress](metropolis-m7-progress.md) |
 | 2026-10-02 | M8 live Monad network and verifier-readiness verification | [M8 progress](metropolis-m8-progress.md) and `sdk/evm/src/readiness.rs` |
 | 2026-10-02 | M8 verified ErebusSettlement deployment on Monad testnet | [Manifest](../contracts/evm/deployments/monad-testnet.json) and [M8 progress](metropolis-m8-progress.md) |
+| 2026-10-03 | M8 local frozen negotiation, shielded identity binding, and separate-process authorization | [Negotiation runbook](metropolis-negotiation-runbook.md) and `sdk/evm/tests/negotiation_flow.rs`; no payment submitted |
+| 2026-10-03 | M8 cold-start native negotiation in both modes, transcript synchronization, and durable seller payment openings | [Negotiation runbook](metropolis-negotiation-runbook.md) and `sdk/shielded/tests/negotiation_cli.rs`; no payment submitted |
+| 2026-10-03 | M8 native public-bound negotiation, one-payment submission, paired recovery, snapshot delivery retry, and independent auditor | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/payment_driver.rs`; funded Anvil evidence, not a new live Monad run |
 
 M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains
 incomplete. M6 implementation is locally complete and awaits owner review of its open decisions.
 M7 is complete locally: all six checklist items and the independent funded auditor criterion pass in both settlement modes.
-M8 has verified live network readiness but no deployment; M9 remains incomplete.
+M8 has a verified public-bound deployment and partial integration evidence; its complete product gate and M9 remain incomplete.

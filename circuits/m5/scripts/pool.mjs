@@ -34,9 +34,9 @@ function limbs(name) {
   return [BigInt(`0x${digest.slice(0, 32)}`), BigInt(`0x${digest.slice(32)}`)];
 }
 
-function serviceDigestFromM1Vector() {
+function serviceDigestFromM1Vector(override) {
   const fixture = JSON.parse(readFileSync(resolve(root, "sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8"));
-  const { service } = fixture.vectors[0].terms;
+  const service = override ?? fixture.vectors[0].terms.service;
   const sized = (bytes) => {
     const length = Buffer.alloc(2);
     length.writeUInt16BE(bytes.length);
@@ -53,7 +53,7 @@ function serviceDigestFromM1Vector() {
     sized(Buffer.from(service.fulfillmentMethod, "utf8")),
     Buffer.from(service.fulfillmentDigestHex, "hex"),
   ]);
-  if (!fixture.vectors[0].expected.canonicalHex.endsWith(encoded.toString("hex"))) {
+  if (!override && !fixture.vectors[0].expected.canonicalHex.endsWith(encoded.toString("hex"))) {
     throw new Error("M5 service encoding differs from the pinned Rust M1 vector");
   }
   const digest = sha256(encoded);
@@ -279,7 +279,13 @@ async function main() {
     writeFileSync(resolve(build, "transcript.json"), `${JSON.stringify(transcript, null, 2)}\n`);
     const transcriptRootLo = BigInt(`0x${transcript.transcriptRootHex.slice(0, 32)}`);
     const transcriptRootHi = BigInt(`0x${transcript.transcriptRootHex.slice(32)}`);
-    const [serviceDigestLo, serviceDigestHi] = serviceDigestFromM1Vector();
+    const service = process.env.EREBUS_M8_ACCESS === "1" ? {
+      resource: "dataset.snapshot.v1", quantity: "1", unit: "snapshot",
+      accessRecipientHex: fieldHex(buyer[0]) + fieldHex(buyer[1]),
+      deliveryDeadline: 4102444800, fulfillmentMethod: "http-access-v1",
+      fulfillmentDigestHex: sha256("EREBUS_M8_TEST_ONLY_DATASET"),
+    } : JSON.parse(readFileSync(resolve(root, "sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8")).vectors[0].terms.service;
+    const [serviceDigestLo, serviceDigestHi] = serviceDigestFromM1Vector(process.env.EREBUS_M8_ACCESS === "1" ? service : undefined);
     const [settlementNonceLo, settlementNonceHi] = limbs("nonce");
     const recipientSpendSecret = testField("seller-spend");
     const recipientSpendTag = poseidon([2006n, recipientSpendSecret]);
@@ -300,7 +306,6 @@ async function main() {
     const sellerMessage = eddsa.poseidon([2005n, domain, dealCommitment]);
     const buyerSignature = eddsa.signPoseidon(buyerPrivate, buyerMessage);
     const sellerSignature = eddsa.signPoseidon(sellerPrivate, sellerMessage);
-    const service = JSON.parse(readFileSync(resolve(root, "sdk/core/tests/fixtures/agreement-v1-vectors.json"), "utf8")).vectors[0].terms.service;
     const signatureHex = (signature) => [F.toObject(signature.R8[0]), F.toObject(signature.R8[1]), signature.S]
       .map((part) => fieldHex(part)).join("");
     const agreementInput = {
@@ -404,6 +409,14 @@ async function main() {
         "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"), "--bin", "erebus-shielded-disclosure"]);
       process.env.EREBUS_M7_DISCLOSURE_BIN ??= resolve(root, "sdk/shielded/target",
         process.env.EREBUS_M6_MATRIX === "1" ? "release" : "debug", "erebus-shielded-disclosure");
+      if (process.env.EREBUS_M8_ACCESS === "1") {
+        run("cargo", ["build", ...(process.env.EREBUS_M6_MATRIX === "1" ? ["--release"] : []),
+          "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"), "--bin", "erebus-access-service", "--bin", "erebus-access"]);
+        process.env.EREBUS_M8_ACCESS_BIN ??= resolve(root, "sdk/shielded/target",
+          process.env.EREBUS_M6_MATRIX === "1" ? "release" : "debug", "erebus-access-service");
+        process.env.EREBUS_M8_ACCESS_CLIENT_BIN ??= resolve(root, "sdk/shielded/target",
+          process.env.EREBUS_M6_MATRIX === "1" ? "release" : "debug", "erebus-access");
+      }
       run("cargo", [
         "run", ...(process.env.EREBUS_M6_MATRIX === "1" ? ["--release"] : []),
         "--locked", "--quiet", "--manifest-path", resolve(root, "sdk/shielded/Cargo.toml"),

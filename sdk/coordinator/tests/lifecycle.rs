@@ -599,6 +599,62 @@ fn signed_coordinator(root: &std::path::Path) -> (Coordinator, AgreementTerms) {
 }
 
 #[test]
+fn initial_broadcast_fence_is_atomic_and_never_retries_unknown_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let (coordinator, terms) = signed_coordinator(dir.path());
+    let barrier = Arc::new(Barrier::new(8));
+    let wins = std::thread::scope(|scope| {
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let barrier = barrier.clone();
+            let coordinator = &coordinator;
+            threads.push(scope.spawn(move || {
+                barrier.wait();
+                match coordinator.begin_initial_broadcast_attempt([1; 32], 14) {
+                    Ok(_) => true,
+                    Err(Error::Conflict) => false,
+                    other => panic!("unexpected fence outcome: {other:?}"),
+                }
+            }));
+        }
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|won| *won)
+            .count()
+    });
+    assert_eq!(wins, 1);
+    let history = coordinator.broadcast_history([1; 32]).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].outcome, BroadcastOutcome::Unknown);
+    let restarted = open(dir.path(), &terms, 2_000_000);
+    assert!(matches!(
+        restarted.begin_initial_broadcast_attempt([1; 32], 15),
+        Err(Error::Conflict)
+    ));
+    // The owner-controlled retry API still appends an explicit attempt without erasing the first.
+    restarted.begin_broadcast_attempt([1; 32], 15).unwrap();
+    assert_eq!(restarted.broadcast_history([1; 32]).unwrap().len(), 2);
+
+    let replaced_dir = tempfile::tempdir().unwrap();
+    let (replaced, _) = signed_coordinator(replaced_dir.path());
+    replaced
+        .sign_replacement(
+            [1; 32],
+            14,
+            b"replacement-plan",
+            |_, _| Ok::<_, ()>(b"replacement-transaction".to_vec()),
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        replaced.begin_initial_broadcast_attempt([1; 32], 15),
+        Err(Error::Conflict)
+    ));
+    assert!(replaced.broadcast_history([1; 32]).unwrap().is_empty());
+}
+
+#[test]
 fn broadcast_restart_preserves_unknown_attempts_and_scopes_late_responses() {
     let dir = tempfile::tempdir().unwrap();
     let (coordinator, terms) = signed_coordinator(dir.path());

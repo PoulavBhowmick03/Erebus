@@ -3,6 +3,9 @@
 #[path = "support/funded_faults.rs"]
 mod funded_faults;
 
+#[path = "support/funded_access.rs"]
+mod funded_access;
+
 use std::{
     fs,
     io::Write,
@@ -845,6 +848,22 @@ async fn main() {
                         first_block,
                         first_hash,
                     );
+                    if std::env::var("EREBUS_M8_ACCESS").as_deref() == Ok("1") {
+                        funded_access::run(
+                            &root,
+                            &terms,
+                            rpc_url,
+                            &fault_proxy.url,
+                            first_block,
+                            first_hash,
+                        )
+                        .await;
+                        assert_eq!(
+                            fault_proxy.state.sends.load(Ordering::SeqCst),
+                            1,
+                            "delivery recovery must not repeat settlement"
+                        );
+                    }
                     return;
                 }
             }

@@ -7,9 +7,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::chain::{EvmChain, ObservationLimits};
+use crate::chain::{EvmChain, ObservationJournal, ObservationLimits};
 use crate::deployment::{parse_lowercase_address, EvmDeployment};
-use crate::disclosure::{open_public_bound_disclosure, verify_public_bound_disclosure_from};
+use crate::disclosure::{
+    open_public_bound_disclosure, verify_public_bound_disclosure_resumable, DisclosureObservation,
+};
 use erebus_core::ids::ChainNamespace;
 use erebus_core::terms::SettlementMode;
 use erebus_transport::disclosure::{
@@ -78,10 +80,24 @@ struct Deployment {
     /// endpoint allows 100); lower it when the provider rejects wider ranges.
     #[serde(default = "default_log_block_range")]
     log_block_range: u64,
+    #[serde(default = "default_log_queries")]
+    max_log_queries: u64,
+    #[serde(default = "default_ancestry")]
+    max_ancestry: u64,
+    #[serde(default)]
+    cache_root: Option<PathBuf>,
 }
 
 fn default_log_block_range() -> u64 {
     2_000
+}
+
+fn default_log_queries() -> u64 {
+    8
+}
+
+fn default_ancestry() -> u64 {
+    64
 }
 
 const HELP: &str = "erebus-disclosure: one public-bound disclosure request as JSON on stdin.
@@ -92,6 +108,8 @@ state and transcript store; it writes a new owner-only evidence file.
 export requires canonical SelectedAgreement bytes and the participant's raw 32-byte issuer key.
 verify_agreement is offline and does not establish payment.
 verify_payment requires an independently configured deployment and finalized RPC evidence.
+Public-bound verification persists public history in deployment.cache_root (default:
+public-cache beside the grant). Pending verification exits 2; repeat the same request to resume.
 Output contains verification status and deal identifiers, not plaintext terms or private keys.
 No method submits transactions or generates proofs. Version-2 grants use direct suite-2 signing.
 Shielded payment verification requires the erebus-shielded-disclosure command.
@@ -101,7 +119,7 @@ See docs/metropolis-m7-runbook.md for request schemas and recovery boundaries.";
 pub async fn run<F, Fut>(verify_payment: F)
 where
     F: FnOnce(PaymentRequest) -> Fut,
-    Fut: std::future::Future<Output = Result<VerifiedAgreement, &'static str>>,
+    Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
 {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if matches!(arguments.as_slice(), [argument] if argument == "--help") {
@@ -132,17 +150,18 @@ where
 fn finish(result: Result<Value, &'static str>) -> ! {
     let failed = result.is_err();
     let response = result.unwrap_or_else(|error| json!({"status": "error", "error": error}));
+    let pending = response["status"] == "pending";
     println!("{response}");
     if std::io::stdout().flush().is_err() {
         std::process::exit(1);
     }
-    std::process::exit(i32::from(failed));
+    std::process::exit(if pending { 2 } else { i32::from(failed) });
 }
 
 async fn handle<F, Fut>(request: Request, verify_payment: F) -> Result<Value, &'static str>
 where
     F: FnOnce(PaymentRequest) -> Fut,
-    Fut: std::future::Future<Output = Result<VerifiedAgreement, &'static str>>,
+    Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -283,9 +302,30 @@ where
                 now,
                 deployment,
                 evidence,
+                default_cache_root: grant_file
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join("public-cache"),
             })
             .await?;
-            Ok(verification_response(verified, mode, true))
+            match verified {
+                PaymentVerification::Finalized(agreement) => {
+                    Ok(verification_response(agreement, mode, true))
+                }
+                PaymentVerification::Pending {
+                    agreement,
+                    next_log_block,
+                    ancestry_block,
+                } => {
+                    let mut response = verification_response(agreement, mode, false);
+                    response["status"] = json!("pending");
+                    response["ancestry_block"] = json!(ancestry_block);
+                    if let Some(block) = next_log_block {
+                        response["next_log_block"] = json!(block);
+                    }
+                    Ok(response)
+                }
+            }
         }
     }
 }
@@ -305,6 +345,23 @@ pub struct PaymentRequest {
     pub deployment: Value,
     /// Already verified selected agreement; its opening is private.
     pub evidence: SelectedAgreement,
+    /// Default public observation cache beside the grant. Contains no participant secrets.
+    pub default_cache_root: PathBuf,
+}
+
+/// An independent payment verifier's result. Pending is never a payment claim.
+pub enum PaymentVerification {
+    /// Matching finalized payment was independently verified.
+    Finalized(VerifiedAgreement),
+    /// Authenticated agreement, but public history verification is incomplete.
+    Pending {
+        /// Agreement identity only.
+        agreement: VerifiedAgreement,
+        /// Next log range, if unfinished.
+        next_log_block: Option<u64>,
+        /// Saved ancestry checkpoint.
+        ancestry_block: u64,
+    },
 }
 
 fn open_checked(
@@ -327,7 +384,7 @@ fn open_checked(
 /// Independently verifies a public-bound payment; shielded requests fail without RPC access.
 pub async fn verify_public_payment(
     request: PaymentRequest,
-) -> Result<VerifiedAgreement, &'static str> {
+) -> Result<PaymentVerification, &'static str> {
     let PaymentRequest {
         grant,
         recipient,
@@ -335,6 +392,7 @@ pub async fn verify_public_payment(
         now,
         deployment,
         evidence,
+        default_cache_root,
     } = request;
     let issuer: [u8; 20] = issuer
         .try_into()
@@ -343,6 +401,15 @@ pub async fn verify_public_payment(
         .map_err(|_| "public-bound disclosure required")?;
     let deployment: Deployment =
         serde_json::from_value(deployment).map_err(|_| "invalid public-bound deployment")?;
+    if deployment.log_block_range == 0
+        || deployment.log_block_range > 2_000
+        || deployment.max_log_queries == 0
+        || deployment.max_log_queries > 1_024
+        || deployment.max_ancestry == 0
+        || deployment.max_ancestry > 8_192
+    {
+        return Err("invalid observation budget");
+    }
     let namespace =
         ChainNamespace::parse(&deployment.namespace).map_err(|_| "invalid deployment")?;
     let contract =
@@ -368,20 +435,37 @@ pub async fn verify_public_payment(
         .map_err(|_| "payment verification unavailable")?;
     let limits = ObservationLimits {
         log_block_range: deployment.log_block_range,
-        ..ObservationLimits::default()
+        max_log_queries: deployment.max_log_queries,
+        max_ancestry: deployment.max_ancestry,
     };
-    let verified = verify_public_bound_disclosure_from(
+    let journal = ObservationJournal::open(deployment.cache_root.unwrap_or(default_cache_root))
+        .map_err(|_| "public history cache unavailable")?;
+    let observed = verify_public_bound_disclosure_resumable(
         &grant,
         &recipient,
         issuer,
         now,
         &chain,
+        &journal,
         deployment.from_block,
         limits,
     )
     .await
     .map_err(|_| "payment not independently verified")?;
-    Ok(verified.agreement)
+    match observed {
+        DisclosureObservation::Finalized(verified) => {
+            Ok(PaymentVerification::Finalized(verified.agreement))
+        }
+        DisclosureObservation::Pending {
+            agreement,
+            next_log_block,
+            ancestry_block,
+        } => Ok(PaymentVerification::Pending {
+            agreement,
+            next_log_block,
+            ancestry_block,
+        }),
+    }
 }
 
 fn verification_response(

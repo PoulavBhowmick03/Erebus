@@ -125,8 +125,10 @@ installed Erebus client/MCP package, not a separately operated service. The pack
 obtain the shared, versioned circuit/proving artifacts, verify their published hashes and
 deployed verifier identity, and fail closed on a mismatch. Operators keep spend secrets and
 witnesses locally; they do not run a setup ceremony. Artifact download availability and local
-CPU/RAM requirements remain explicit operational dependencies. The M5 local runner does not
-yet provide this installed experience.
+CPU/RAM requirements remain explicit operational dependencies.
+M8 now has hash-checked artifact installation and isolated SDK/MCP component proof tests.
+Published platform packages, secure release artifacts, and live verifier authentication remain open.
+See the [local proving runbook](metropolis-local-proving-runbook.md).
 
 ## 4. Agreement representation
 
@@ -161,6 +163,12 @@ Bind relayer fees and any recipient restrictions into the authorized fee policy.
 
 Messages need a session ID, deal ID, revision, author, sequence, parent hash, type, and authenticated payload.
 The final transcript root commits to the agreed transcript. It does not prove that every unshared message exists or that business claims are true.
+The M8 negotiation profile freezes that transcript before final authorizations.
+Both peers accept the same draft digest; final signatures remain outside the root they authorize.
+The buyer reserves policy capacity before signing, through the existing coordinator.
+For shielded negotiation, an encrypted descriptor-signed binding authenticates each separate agreement key.
+These are the owner's decisions [DM8-6 and DM8-7](metropolis-m8-decisions.md).
+The [negotiation runbook](metropolis-negotiation-runbook.md) records local evidence and the remaining product integration gates.
 Authenticating a shared encryption key alone cannot establish which participant authored a message to an auditor.
 Choose a signature scheme for independently verifiable authorship where disclosure requires it.
 M2 specifies the envelope, the Noise session protocol, the ordering rules, and the transcript-root derivation in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); the transport is implemented in [`sdk/transport`](../sdk/transport).
@@ -255,8 +263,10 @@ ERC-20 settlement cannot satisfy hidden amount and recipient and must not be cho
 that requires them.
 
 Two EVM milestones are distinct. V1 binds a publicly visible settlement to the accepted deal
-through signatures and contract state; it preserves negotiation privacy but not settlement
-privacy. V2 hides amount and recipient behind a proof and is the analogue of the STRK20
+through signatures and contract state. Its calldata exposes the full accepted canonical
+agreement, blinding, and final signatures, including the service fields.
+The offchain transcript and rejected offers remain confidential; accepted terms do not.
+V2 hides amount and recipient behind a proof and is the analogue of the STRK20
 backend. V1 exercises the coordinator and backend boundary; it does not satisfy the shielded
 guarantee and must not be presented as though it does.
 
@@ -298,6 +308,12 @@ Private authorization needs a compatible proof design; EIP-712 alone does not pr
 Use established encryption implementations. [HPKE](https://www.rfc-editor.org/rfc/rfc9180) is a candidate building block, not a complete session protocol.
 x402 composition requires an explicitly supported payment scheme and resource-server integration.
 The resource server controls access issuance. There must be exactly one payment, and payment finality does not prove service delivery.
+The first HTTP access profile uses the buyer agreement key, as selected by the owner.
+It rejects a different `access_recipient` and binds the request to the service and resource digest.
+It persists issuance before returning an immutable snapshot.
+Both funded local settlement modes pass restart recovery without another payment.
+This profile does not implement usage accounting, refunds, or an x402 payment scheme.
+See [M8 decisions](metropolis-m8-decisions.md) and the [access runbook](metropolis-access-runbook.md).
 A private settlement per API call is not the default architecture. M8 must compare it with a
 prepaid service allocation and batched usage, then document capability binding, accounting,
 replay, overspend, refund, expiry, and recovery. Do not call a prepaid or batched adapter x402

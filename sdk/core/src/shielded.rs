@@ -105,6 +105,13 @@ pub fn disclosure_message(digest: &[u8; 32]) -> Result<[u8; 32], ShieldedMapErro
     Ok(field_bytes(hash(&[Fr::from(3001u64), high, low])?))
 }
 
+/// Maps an HTTP access request digest into its own suite-2 signature domain.
+/// Both 128-bit limbs are retained. This is not a payment or disclosure authorization.
+pub fn access_message(digest: &[u8; 32]) -> Result<[u8; 32], ShieldedMapError> {
+    let (high, low) = limbs(digest);
+    Ok(field_bytes(hash(&[Fr::from(3002u64), high, low])?))
+}
+
 fn domain_fields(domain: &DeploymentDomain) -> Result<[Fr; 4], ShieldedMapError> {
     if domain.namespace.family() != "eip155" || domain.verifier_version == 0 {
         return Err(ShieldedMapError::Shape("EVM domain or verifier version"));

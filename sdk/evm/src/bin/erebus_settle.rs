@@ -25,7 +25,7 @@ use erebus_core::deal_state::{
 use erebus_core::ids::{ChainNamespace, SignatureBytes};
 use erebus_core::terms::AgreementTerms;
 use erebus_evm::backend::{public_bound_capabilities, EvmSettlementBackend};
-use erebus_evm::chain::{EvmChain, ObservationLimits};
+use erebus_evm::chain::{EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits};
 use erebus_evm::deployment::{parse_lowercase_address, EvmDeployment};
 use erebus_evm::evidence::SettlementEvidence;
 use serde::Deserialize;
@@ -58,9 +58,30 @@ struct Deployment {
     settlement_contract: String,
     verifier_version: u32,
     rpc_url: String,
+    #[serde(default)]
+    from_block: u64,
+    #[serde(default = "default_log_block_range")]
+    log_block_range: u64,
+    #[serde(default = "default_log_queries")]
+    max_log_queries: u64,
+    #[serde(default = "default_ancestry")]
+    max_ancestry: u64,
+}
+
+fn default_log_block_range() -> u64 {
+    2_000
+}
+fn default_log_queries() -> u64 {
+    8
+}
+fn default_ancestry() -> u64 {
+    64
 }
 
 const HELP: &str = "erebus-settle: buyer-side public-bound settlement as JSON on stdin.
+Receipt observation persists public history under state_root/public-observation.
+Pending history exits 2 with payment_finalized:false; repeat the same request to resume.
+Configure deployment.from_block and log_block_range for the chosen RPC.
 Methods: capabilities, funding, receipt.
 capabilities reports the public-bound backend's declared suites, modes, and guarantees.
 funding is read-only: it reports the buyer's token allowance and balance against the signed
@@ -101,9 +122,16 @@ async fn main() {
 fn finish(result: Result<Value, &'static str>) -> ! {
     let failed = result.is_err();
     let response = result.unwrap_or_else(|error| json!({"status": "error", "error": error}));
+    let pending = response["status"] == "pending";
     println!("{response}");
-    let _ = std::io::stdout().flush();
-    std::process::exit(i32::from(failed));
+    let flushed = std::io::stdout().flush().is_ok();
+    std::process::exit(if !flushed {
+        1
+    } else if pending {
+        2
+    } else {
+        i32::from(failed)
+    });
 }
 
 async fn handle(request: Request) -> Result<Value, &'static str> {
@@ -125,6 +153,21 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             operation_ref,
             timeout_ms,
         } => {
+            let limits = ObservationLimits {
+                log_block_range: deployment.log_block_range,
+                max_log_queries: deployment.max_log_queries,
+                max_ancestry: deployment.max_ancestry,
+            };
+            if limits.log_block_range == 0
+                || limits.log_block_range > 2_000
+                || limits.max_log_queries == 0
+                || limits.max_log_queries > 1_024
+                || limits.max_ancestry == 0
+                || limits.max_ancestry > 8_192
+            {
+                return Err("invalid observation budget");
+            }
+            let from_block = deployment.from_block;
             let namespace = ChainNamespace::parse(&deployment.namespace)
                 .map_err(|_| "invalid deployment namespace")?;
             let contract = parse_lowercase_address(&deployment.settlement_contract)
@@ -145,13 +188,34 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                 erebus_coordinator::read_disclosure_opening(&state_root, operation_ref)
                     .map_err(|_| "cannot read durable agreement opening")?;
             let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreement")?;
+            deployment
+                .matches_domain(&terms.domain)
+                .map_err(|_| "deployment does not match agreement")?;
+            let journal = ObservationJournal::open(state_root.join("public-observation"))
+                .map_err(|_| "public history cache unavailable")?;
             let chain = EvmChain::connect(deployment, Duration::from_millis(timeout))
                 .await
                 .map_err(|_| "chain unavailable")?;
-            let evidence = chain
-                .finalized_deal_evidence(&nullifier, ObservationLimits::default())
+            let observed = chain
+                .finalized_deal_evidence_resumable_from(&journal, &nullifier, from_block, limits)
                 .await
                 .map_err(|_| "finalized evidence unavailable")?;
+            let evidence = match observed {
+                HistoricalObservation::Complete { evidence, .. } => evidence,
+                HistoricalObservation::Pending {
+                    next_log_block,
+                    ancestry_block,
+                } => {
+                    let mut result = json!({
+                        "status": "pending", "payment_finalized": false,
+                        "deal_nullifier": nullifier.to_hex(), "ancestry_block": ancestry_block,
+                    });
+                    if let Some(block) = next_log_block {
+                        result["next_log_block"] = json!(block);
+                    }
+                    return Ok(result);
+                }
+            };
             let revision =
                 SignedRevision::from_opening(&terms, &blinding).map_err(|_| "invalid agreement")?;
             let assessment = assess_deal(std::slice::from_ref(&revision), &evidence);

@@ -25,6 +25,12 @@ Public-bound settlement is an intermediate milestone. It does not satisfy the sh
 The release gate requires an independent integration from a fresh environment using documented packages and commands.
 Mainnet activation remains unresolved and requires a separate release decision.
 
+Local development components now include [hash-checked local proving](./docs/metropolis-local-proving-runbook.md),
+[buyer-authenticated snapshot access](./docs/metropolis-access-runbook.md),
+[native private negotiation](./docs/metropolis-negotiation-runbook.md),
+and [durable public-bound payment](./docs/metropolis-payment-runbook.md).
+These have local test evidence, not a published Monad product release.
+
 ## Four settlements on mainnet
 
 | Date | Paid | Transaction |

@@ -169,6 +169,29 @@ impl EvmChain {
         nullifier: &DealNullifier,
         budget: ObservationLimits,
     ) -> Result<HistoricalObservation, EvmError> {
+        self.finalized_deal_evidence_resumable_agreed_from(
+            journal,
+            peer,
+            peer_journal,
+            nullifier,
+            0,
+            budget,
+        )
+        .await
+    }
+
+    /// As [`Self::finalized_deal_evidence_resumable_agreed`], beginning fresh scans at the
+    /// authenticated deployment block. Both peers use the same lower bound; existing
+    /// checkpoints retain their scan. A later start could omit payments and is unsafe.
+    pub async fn finalized_deal_evidence_resumable_agreed_from(
+        &self,
+        journal: &ObservationJournal,
+        peer: &Self,
+        peer_journal: &ObservationJournal,
+        nullifier: &DealNullifier,
+        start_block: u64,
+        budget: ObservationLimits,
+    ) -> Result<HistoricalObservation, EvmError> {
         self.check_peer(peer)?;
         let first_root = std::fs::canonicalize(journal.store.root())
             .map_err(|_| inconsistent("history checkpoint unavailable"))?;
@@ -187,13 +210,19 @@ impl EvmChain {
                 .is_some_and(|scan| !scan.complete)
         };
         let (first, second) = tokio::join!(
-            self.continue_history(journal, nullifier, budget, !needs_work(&peer_cursor), 0),
+            self.continue_history(
+                journal,
+                nullifier,
+                budget,
+                !needs_work(&peer_cursor),
+                start_block
+            ),
             peer.continue_history(
                 peer_journal,
                 nullifier,
                 budget,
                 !needs_work(&first_cursor),
-                0,
+                start_block,
             ),
         );
         let first = first?;

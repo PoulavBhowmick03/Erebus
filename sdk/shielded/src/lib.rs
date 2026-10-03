@@ -1,8 +1,11 @@
 //! Local proof generation for the experimental Erebus shielded EVM pool.
 //!
-//! This crate reads only caller-supplied, hash-pinned artifacts. It does not publish
-//! proving keys, choose a deployment, upload witnesses, or declare M5 release readiness.
+//! Proving uses hash-pinned local artifacts. The optional public artifact installer
+//! verifies an independently trusted manifest digest before downloading to the local cache.
+//! It does not publish keys, choose a deployment, upload witnesses, or establish setup safety.
 
+pub mod access;
+pub mod artifacts;
 pub mod chain;
 pub mod disclosure;
 pub mod index_store;

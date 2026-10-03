@@ -162,6 +162,62 @@ fn inconsistent(detail: &'static str) -> EvmError {
 }
 
 impl EvmChain {
+    /// Checks an operator-pinned runtime and its first deployment block at a finalized
+    /// anchor. The preceding block must have no code at this address, so a later scan start
+    /// cannot silently omit earlier settlements. This supports immutable deployments only.
+    /// The pin must come from an independently verified deployment record. Matching RPC
+    /// reads do not authenticate malicious providers or constitute a contract audit.
+    pub async fn authenticate_deployment_runtime(
+        &self,
+        expected_runtime_hash: [u8; 32],
+        first_block: u64,
+        first_hash: [u8; 32],
+    ) -> Result<BlockRef, EvmError> {
+        if expected_runtime_hash == [0; 32] || first_hash == [0; 32] {
+            return Err(EvmError::DeploymentMismatch);
+        }
+        self.check_chain().await?;
+        let finalized = self
+            .observation_block("finalized")
+            .await?
+            .ok_or(EvmError::FinalityUnavailable)?;
+        if finalized.number.to::<u64>() < first_block {
+            return Err(EvmError::FinalityUnavailable);
+        }
+        let first = self.canonical_block(first_block).await?;
+        if first.hash.0 != first_hash {
+            return Err(EvmError::DeploymentMismatch);
+        }
+        for block in [&first, &finalized] {
+            let code = self.runtime_at(block.hash).await?;
+            if code.is_empty() || keccak256(code).0 != expected_runtime_hash {
+                return Err(EvmError::DeploymentMismatch);
+            }
+        }
+        if first_block != 0 {
+            let parent = self.canonical_block(first_block - 1).await?;
+            if !self.runtime_at(parent.hash).await?.is_empty() {
+                return Err(EvmError::DeploymentMismatch);
+            }
+            self.recheck_block(&parent).await?;
+        }
+        self.recheck_block(&first).await?;
+        self.recheck_block(&finalized).await?;
+        self.check_chain().await?;
+        Ok(finalized.anchor())
+    }
+
+    async fn runtime_at(&self, hash: B256) -> Result<Bytes, EvmError> {
+        self.observation_rpc(
+            "eth_getCode",
+            (
+                Address::from(self.deployment.settlement_contract),
+                json!({"blockHash": hash, "requireCanonical": true}),
+            ),
+        )
+        .await
+    }
+
     /// Reads a nonce using EIP-1898 at an explicit RPC finalized block, with no fallback.
     pub async fn verified_finalized_nonce(
         &self,

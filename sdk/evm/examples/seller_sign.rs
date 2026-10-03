@@ -19,6 +19,7 @@ use erebus_core::terms::AgreementTerms;
 use k256::ecdsa::SigningKey;
 use serde::Deserialize;
 use serde_json::json;
+use zeroize::Zeroizing;
 
 const LIMIT: usize = 64 * 1024;
 
@@ -31,11 +32,12 @@ struct Proposal {
 }
 
 fn main() {
-    let mut input = String::new();
+    let mut input = Zeroizing::new(String::new());
     if std::io::stdin()
-        .take(LIMIT as u64)
+        .take((LIMIT + 1) as u64)
         .read_to_string(&mut input)
         .is_err()
+        || input.len() > LIMIT
     {
         fail("cannot read proposal");
     }
@@ -47,8 +49,8 @@ fn main() {
     let failed = result.is_err();
     let response = result.unwrap_or_else(|error| json!({"status": "error", "error": error}));
     println!("{response}");
-    let _ = std::io::stdout().flush();
-    std::process::exit(i32::from(failed));
+    let flushed = std::io::stdout().flush().is_ok();
+    std::process::exit(i32::from(failed || !flushed));
 }
 
 fn sign(proposal: &Proposal) -> Result<serde_json::Value, &'static str> {
@@ -59,16 +61,35 @@ fn sign(proposal: &Proposal) -> Result<serde_json::Value, &'static str> {
         .try_into()
         .map_err(|_| "invalid blinding")?;
     let blinding = CommitmentBlinding::from_bytes(blinding_bytes);
-    let key_bytes: [u8; 32] = hex::decode(
-        std::fs::read_to_string(&proposal.seller_key_file)
-            .map_err(|_| "cannot read seller key")?
-            .trim()
-            .trim_start_matches("0x"),
-    )
-    .map_err(|_| "invalid seller key")?
-    .try_into()
-    .map_err(|_| "seller key must be 32 bytes")?;
-    let key = SigningKey::from_slice(&key_bytes).map_err(|_| "invalid seller key")?;
+    let metadata = std::fs::symlink_metadata(&proposal.seller_key_file)
+        .map_err(|_| "cannot read seller key")?;
+    if !metadata.is_file() || metadata.len() > 128 {
+        return Err("seller key must be a bounded regular file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("seller key must be owner-only");
+        }
+    }
+    let mut text = Zeroizing::new(String::new());
+    std::fs::File::open(&proposal.seller_key_file)
+        .map_err(|_| "cannot read seller key")?
+        .take(129)
+        .read_to_string(&mut text)
+        .map_err(|_| "cannot read seller key")?;
+    if text.len() > 128 {
+        return Err("seller key must be a bounded regular file");
+    }
+    let decoded = Zeroizing::new(
+        hex::decode(text.trim().strip_prefix("0x").unwrap_or(text.trim()))
+            .map_err(|_| "invalid seller key")?,
+    );
+    if decoded.len() != 32 {
+        return Err("seller key must be 32 bytes");
+    }
+    let key = SigningKey::from_slice(&decoded).map_err(|_| "invalid seller key")?;
     let seller_address = address_of(&key);
     if terms.seller_authorization_key.as_bytes() != seller_address {
         return Err("proposal names a different seller key");
@@ -94,6 +115,80 @@ fn sign(proposal: &Proposal) -> Result<serde_json::Value, &'static str> {
         "deal_commitment": commitment.to_hex(),
         "seller_authorization": hex::encode(authorization.encode().map_err(|_| "cannot encode")?),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proposal(path: std::path::PathBuf) -> Proposal {
+        // Invalid terms are rejected before any private key is opened.
+        Proposal {
+            terms: "00".into(),
+            blinding: "00".repeat(32),
+            seller_key_file: path,
+        }
+    }
+
+    #[test]
+    fn malformed_proposal_does_not_read_an_arbitrary_key() {
+        let input = proposal("/missing/private-key".into());
+        assert_eq!(sign(&input).unwrap_err(), "invalid terms");
+    }
+
+    #[test]
+    fn seller_signing_requires_a_private_regular_key_and_the_named_identity() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../core/tests/fixtures/agreement-v1-vectors.json"
+        ))
+        .unwrap();
+        let vector = &fixture["vectors"][0];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("seller.key");
+        std::fs::write(&path, hex::encode([2; 32])).unwrap();
+        let input = Proposal {
+            terms: vector["expected"]["canonicalHex"].as_str().unwrap().into(),
+            blinding: vector["blindingHex"].as_str().unwrap().into(),
+            seller_key_file: path.clone(),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{symlink, PermissionsExt};
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(sign(&input).unwrap_err(), "seller key must be owner-only");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let link = directory.path().join("link");
+            symlink(&path, &link).unwrap();
+            let linked = Proposal {
+                seller_key_file: link,
+                ..proposal(path.clone())
+            };
+            let linked = Proposal {
+                terms: input.terms.clone(),
+                blinding: input.blinding.clone(),
+                ..linked
+            };
+            assert_eq!(
+                sign(&linked).unwrap_err(),
+                "seller key must be a bounded regular file"
+            );
+        }
+        let response = sign(&input).unwrap();
+        assert_eq!(
+            response["seller_address"],
+            format!(
+                "0x{}",
+                vector["terms"]["sellerAuthorizationKeyHex"]
+                    .as_str()
+                    .unwrap()
+            )
+        );
+        std::fs::write(&path, hex::encode([3; 32])).unwrap();
+        assert_eq!(
+            sign(&input).unwrap_err(),
+            "proposal names a different seller key"
+        );
+    }
 }
 
 fn address_of(key: &SigningKey) -> [u8; 20] {
