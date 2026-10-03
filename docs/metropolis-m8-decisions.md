@@ -133,6 +133,25 @@ In the combined `metropolis` MCP mode, a buyer gains `retrieve_service_access` w
 place negotiation writes buyer evidence. It is created owner-only if missing. A different
 `EREBUS_ACCESS_EVIDENCE_DIR` is rejected. The standalone `access` mode is unchanged.
 
+## DM8-13. x402 `exact` is a separate payment mode over Permit2, seller-facilitated
+
+Owner decisions (2026-10-03): x402 `exact` is its own operator-fixed payment mode
+(`x402-exact`), never a fallback from or to `ErebusSettlement`. The transfer method is Permit2
+through the canonical `x402ExactPermit2Proxy`. The seller's access service is its own
+facilitator and submits `settle` with its own gas key.
+
+Binding (implementation choice, owner review pending): the Permit2 nonce is the deal nullifier.
+Permit2 consumes each `(owner, nonce)` once, so `nonceBitmap(buyer, nullifier >> 8)` is this
+rail's consumed-deal flag, and a second payment for the same deal from the same buyer reverts.
+`sdk/evm/src/x402.rs` makes that the only way to build an authorization. A deal could still be
+paid on both rails if an operator switched modes, which is why the mode is fixed per operator.
+
+Exposure: on chain, the buyer and `payTo` addresses, amount, token, and the deal nullifier
+(already public in public-bound mode). The agreement terms, blinding, and signatures are not
+published, unlike `ErebusSettlement`. The deployed proxy emits a data-free `Settled()`, so
+evidence is the token `Transfer` in that transaction, its `settle` input, and the nonce bit
+([F50](friction.md)).
+
 ## Open release decisions
 
 - Secure shielded artifacts, ceremony evidence, and authenticated verifier deployment.

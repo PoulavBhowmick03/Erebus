@@ -1,6 +1,6 @@
 # Metropolis M8: x402 Decision Record
 
-Status: **scheme selected: `exact` (owner, 2026-10-03); no x402 code yet.** This records the gate
+Status: **scheme selected: `exact` over Permit2, seller-facilitated (owner, 2026-10-03); primitives built.** This records the gate
 and the evidence needed before x402 code is written. The roadmap deliberately requires composition "only against a specified
 scheme", because an x402 integration changes what is public and can introduce a second charge.
 
@@ -46,6 +46,25 @@ The measured comparison the roadmap asks for must record, per model: latency fro
 access, proof and submission cost, on-chain accounting, what becomes public, and how an
 interrupted request recovers without a second charge. No model is selected yet, and no x402
 code exists.
+
+## Composition (DM8-13)
+
+`x402-exact` is a separate payment mode. The buyer signs a Permit2 `PermitWitnessTransferFrom`
+for the agreed amount to the seller's `payTo`, with the proxy as spender and the **deal
+nullifier as the nonce**. The seller's access service verifies and submits
+`x402ExactPermit2Proxy.settle` itself. Permit2's nonce bitmap then marks the deal paid, so a
+retried or replayed request cannot pay twice. It is checked against the non-negotiables above:
+
+1. One payment: the nonce is consumed once per `(buyer, deal)`. Cross-rail double payment is
+   prevented only by fixing the mode per operator.
+2. Exposure: buyer, `payTo`, amount, token, nullifier. No terms or signatures on chain.
+3. No downgrade: a shielded deal cannot use this mode.
+4. Payment is not delivery: access issuance stays separate and durable.
+
+Built and pinned so far: `sdk/evm/src/x402.rs` (digest, signing, `settle` calldata, nonce
+bitmap), KATs against the x402 Python SDK (`tests/x402_vectors.rs`), and an Anvil run on the
+canonical runtime bytecode pinned from Monad testnet (`tests/x402_permit2_chain.rs`). Not built:
+the seller endpoint, the buyer mode, observation, MCP, and the auditor.
 
 ## Owner decision
 

@@ -1937,3 +1937,22 @@ unaffected.
 **What would have made it easier.** Tool descriptions, or a one-line summary in the result, that
 say what each flag establishes. For example: the content hash matches the agreement, the payment
 claim here is the seller's, and chain verification comes from `recover_deal`.
+
+## F50: The x402 spec's reference proxy emits an event the deployed proxy does not (2026-10-03)
+
+**What we were trying to do.** Observe an x402 `exact` Permit2 payment on chain, using the
+`x402ExactPermit2Proxy` reference listing in `specs/schemes/exact/scheme_exact_evm.md`. That
+listing emits `x402PermitTransfer(from, to, amount, asset)`.
+
+**What the stack did instead.** The canonical proxy (`0x4020…0001`, runtime pinned from Monad
+testnet) emits a data-free `Settled()`. The repository's actual contract,
+`contracts/evm/src/x402BasePermit2Proxy.sol`, matches the deployment. The spec document is stale.
+An observer written from the spec would never see a payment.
+
+**Whether we worked around it.** Yes, by testing against the deployed bytecode instead of the
+listing. Evidence is now the token `Transfer` in the settling transaction, that transaction's
+`settle` input (its nonce is the deal nullifier), and the Permit2 nonce bit.
+
+**What would have made it easier.** A spec listing generated from the deployed source, or
+a note that the event changed after audit. The `Witness` struct comment already says
+"post-audit: extra removed", so the listing was updated once and the event was missed.
