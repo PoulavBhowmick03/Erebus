@@ -139,6 +139,7 @@ Exit code `0` means the named operation completed or the read-only funding check
 The response includes separate local durations for deployment authentication, observation, funding, signing, and submission.
 Shielded first preparation also reports artifact installation and local proof preparation time.
 Proof preparation includes witness construction, proof generation, and local verification.
+Local signing includes re-verifying the selected agreement against the retained transcript and the nonce-journal signing step.
 These durations do not measure inclusion latency, finality latency, or delivery.
 
 ## Shielded Configuration

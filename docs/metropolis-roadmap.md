@@ -394,7 +394,7 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [ ] Make local proving work from the installed Erebus MCP/SDK package, with automatic hash-checked shared artifact installation; require no source checkout, Circom installation, separate prover service, or operator setup ceremony.
 - [ ] Deploy optional shared testnet services and document their metadata exposure, retention, access limits, and availability behavior.
 - [ ] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
-- [ ] Update the Python boundary, MCP configuration, and deterministic two-agent harness.
+- [x] Update the Python boundary, MCP configuration, and deterministic two-agent harness.
 - [x] Add the HTTP service adapter and bind access to the finalized agreement and intended buyer.
 - [x] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
 - [x] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
@@ -427,9 +427,13 @@ exposes negotiation to both roles and funding, settlement, and observe-only reco
 buyer, with role, keys, and mode fixed by operator files. Metropolis packages use a separate
 registry (DM8-9); a local `.devN` index builds and installs into a fresh environment, but nothing
 is published. Negotiation, artifact installation, and proof preparation are now timed.
-Still open: published packages, hosted and rehearsed self-hosted services, a two-agent harness
-driven through MCP, wallet funding/withdrawal onboarding, live access recovery, x402, and
-inclusion, finality, and delivery measurements.
+A deterministic two-agent harness drives that path through two real MCP servers, and two
+headless Claude Code agents, each confined to its own server, completed it twice. Each run
+recovered a lost broadcast by observation with one transaction sent (local Anvil; the
+harness item is checked at that scope).
+Still open: published packages, hosted and rehearsed self-hosted services, wallet
+funding/withdrawal onboarding, live access recovery, x402, and inclusion, finality, and
+delivery measurements.
 These local checks do not complete the private-payment release gate.
 The checked access items have funded local evidence for both modes, including Rust and MCP retrieval.
 They do not claim live Monad access, hosted operation, or a published package release.
@@ -523,6 +527,7 @@ The final module layout follows the inspected dependency graph, not this list al
 | 2026-10-03 | M8 cold-start native negotiation in both modes, transcript synchronization, and durable seller payment openings | [Negotiation runbook](metropolis-negotiation-runbook.md) and `sdk/shielded/tests/negotiation_cli.rs`; no payment submitted |
 | 2026-10-03 | M8 native public-bound negotiation, one-payment submission, paired recovery, snapshot delivery retry, and independent auditor | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/payment_driver.rs`; funded Anvil evidence, not a new live Monad run |
 | 2026-10-03 | M8 native shielded payment: negotiated suite-2 deal, local proof, one submission, recovery without a second send | [Payment runbook](metropolis-payment-runbook.md) and `sdk/shielded/tests/support/shielded_driver.rs`; funded Anvil, prototype keys, not a live Monad run |
+| 2026-10-03 | M8 two-agent MCP harness and two headless LLM agent runs: settle once, recover a lost broadcast by observation | [M8 progress](metropolis-m8-progress.md#two-agents-over-mcp-2026-10-03), `agents/src/erebus_agents/metropolis_loop.py`, `scripts/metropolis-agent-rehearsal.sh`; Anvil, prototype keys |
 | 2026-10-03 | M8 combined Metropolis MCP mode and unpublished separate-registry packages with a fresh-environment install check | [Install guide](metropolis-install.md), [DM8-9](metropolis-m8-decisions.md#dm8-9-metropolis-packages-use-a-separate-registry), `scripts/check-metropolis-install.py`; nothing published |
 
 M0-M4 are complete locally at their scoped gates. M5 has a funded local prototype and remains

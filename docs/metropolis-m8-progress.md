@@ -316,3 +316,40 @@ The offchain negotiation history remains private, not the final service terms.
 This does not close native shielded integration, released packages, hosted services, x402,
 the combined MCP workflow, or the live independent-product acceptance gate.
 See the [payment runbook](metropolis-payment-runbook.md) for configuration and recovery limits.
+
+## Two Agents over MCP (2026-10-03)
+
+The deterministic harness is `agents/src/erebus_agents/metropolis_loop.py`.
+Each agent holds its own MCP client to its own `metropolis`-mode server and supplies only the
+shared operation ID. Both negotiate concurrently. The buyer checks funding and calls
+`settle_deal` once. It then observes with `recover_deal` until the payment is finalized and the
+winning commitment matches the deal. It never calls `settle_deal` again, including after a
+pending result or a failed call. Unit tests in `agents/tests/test_metropolis_loop.py` cover those decisions.
+
+The funded test `two_mcp_agents_negotiate_and_settle_once_through_a_lost_broadcast` runs that loop
+against two real stdio servers on Anvil with one-second blocks and the lossy proxy. Settlement
+returns `pending` at `BroadcastUnknown`; one observation reaches `Finalized`. The proxy sees exactly
+one raw transaction and the buyer's 80-unit change note is included.
+
+Two headless Claude Code agents then drove the same loop through
+`scripts/metropolis-agent-rehearsal.sh`. Each had no built-in tools and only its own server
+(`--strict-mcp-config`, `--tools ""`), so neither could reach the other's server or the
+repository. The prompts named the role and operation ID only. They did not mention the
+no-second-payment rule. In two independent runs the buyer met the lost acknowledgement, chose
+`recover_deal` over a second `settle_deal`, and cited the server's instructions. The seller made
+one call. Each run sent one transaction and included the change note.
+
+Debug-build timings from the harness run: negotiation 6.7 s (buyer) and 4.5 s (seller), artifact
+download 3.5 s for 32 MB, proof preparation 52 s, local signing 6.7 s, and submission 4.2 s.
+`local_signing` also covers re-verifying the selected agreement against the retained transcript
+and the nonce-journal signing step, not only the signature.
+
+Verified locally:
+
+```sh
+cargo test --locked --manifest-path sdk/shielded/Cargo.toml --test negotiation_cli shielded_driver -- --include-ignored
+uv run --locked pytest agents/tests/test_metropolis_loop.py
+```
+
+This is Anvil with prototype keys and test artifacts, not Monad. The operation ID is agreed out
+of band; there is no discovery handshake for it. Delivery through MCP was not part of this loop.
