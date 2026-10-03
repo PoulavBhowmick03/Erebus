@@ -117,8 +117,19 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             """Observe and reconcile this operation; cannot sign, prove, or submit a payment."""
             return await payment(operation_ref, "observe")
 
-        if os.environ.get("EREBUS_ACCESS_EVIDENCE_DIR"):
+        if os.environ.get("EREBUS_ACCESS_SERVICE_URL"):
             from erebus_mcp.access import AccessSettings, register_access_tools
 
+            # Negotiation writes buyer evidence only under <state_root>/agent, so that is the
+            # evidence directory; a separately configured one could only disagree with it.
+            evidence = Path(settings.state_root) / "agent"
+            configured = os.environ.get("EREBUS_ACCESS_EVIDENCE_DIR")
+            if configured and Path(configured).resolve() != evidence.resolve():
+                raise ConfigError("Metropolis access evidence is this participant's <state_root>/agent")
+            try:
+                evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+            except OSError:
+                raise ConfigError("cannot create the participant evidence directory") from None
+            os.environ["EREBUS_ACCESS_EVIDENCE_DIR"] = str(evidence)
             register_access_tools(server, AccessSettings.from_env())
     return server

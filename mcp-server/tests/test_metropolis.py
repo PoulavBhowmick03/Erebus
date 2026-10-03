@@ -93,3 +93,30 @@ def test_stdio_tools_follow_the_configured_role(tmp_path, role, tools):
                     assert result["error"]["code"] == "METROPOLIS_UNAVAILABLE"
                     assert result["error"]["retry_without_new_payment"] is True
     asyncio.run(run())
+
+
+@pytest.mark.skipif(not (BINARIES / "erebus-access").exists(), reason="build the shielded binaries")
+def test_buyer_access_uses_the_participant_evidence_directory(tmp_path):
+    state = tmp_path / "state"
+    negotiation = operator_file(tmp_path / "negotiation.json", {"role": "buyer", "state_root": str(state)})
+    payment = operator_file(tmp_path / "payment.json", {"mode": "public-bound", "state_root": str(state)})
+    key = tmp_path / "buyer.key"
+    key.write_bytes(b"x" * 32)
+    key.chmod(0o600)
+    env = {"EREBUS_BACKEND": "metropolis", "EREBUS_NEGOTIATION_CONFIG": str(negotiation), "EREBUS_PAYMENT_CONFIG": str(payment),
+           "EREBUS_NEGOTIATION_CLI": str(BINARIES / "erebus-negotiate"), "EREBUS_PAYMENT_CLI": str(BINARIES / "erebus-payment"),
+           "EREBUS_ACCESS_CLI": str(BINARIES / "erebus-access"), "EREBUS_ACCESS_BUYER_KEY_FILE": str(key),
+           "EREBUS_ACCESS_SERVICE_URL": "https://example.com/v1/access", "EREBUS_ACCESS_SERVICE_ID": "ab" * 32,
+           "EREBUS_ACCESS_CACHE": str(tmp_path / "cache")}
+
+    async def tools(environment):
+        params = StdioServerParameters(command=sys.executable, args=["-m", "erebus_mcp.server"], cwd=str(ROOT), env=environment)
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return {tool.name for tool in (await session.list_tools()).tools}
+
+    assert "retrieve_service_access" in asyncio.run(tools(env))
+    assert (state / "agent").is_dir() and (state / "agent").stat().st_mode & 0o077 == 0
+    with pytest.raises(Exception):
+        asyncio.run(tools({**env, "EREBUS_ACCESS_EVIDENCE_DIR": str(tmp_path)}))

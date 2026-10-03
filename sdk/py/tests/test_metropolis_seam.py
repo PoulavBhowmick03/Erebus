@@ -136,3 +136,26 @@ def test_process_errors_are_redacted(monkeypatch, code, stderr):
     with pytest.raises(MetropolisError) as error:
         seam().payment(OPERATION, method="observe")
     assert "private-provider-error" not in str(error.value)
+
+
+def test_chain_times_pass_through_with_verified_payment(monkeypatch):
+    times = {"finalized_anchor_block": 20, "finalized_anchor_unix": 1_700_000_020, "inclusion_block": 18, "inclusion_unix": 1_700_000_018}
+    fake(monkeypatch, {**settled(), "chain_times": times})
+    assert seam().payment(OPERATION, method="settle")["chain_times"] == times
+
+
+@pytest.mark.parametrize("times", [{"inclusion_block": 1, "inclusion_unix": 1}, {"finalized_anchor_block": 1, "finalized_anchor_unix": -1},
+                                   {"finalized_anchor_block": 1, "finalized_anchor_unix": 1, "rpc_url": 1}, []])
+def test_malformed_chain_times_are_rejected(monkeypatch, times):
+    fake(monkeypatch, {**settled(), "chain_times": times})
+    with pytest.raises(MetropolisError):
+        seam().payment(OPERATION, method="settle")
+
+
+def test_chain_times_require_verified_payment(monkeypatch):
+    pending = {**settled(), "status": "pending", "payment_verified": False, "stage": "Submitted",
+               "chain_times": {"finalized_anchor_block": 1, "finalized_anchor_unix": 1}}
+    del pending["winning_commitment"]
+    fake(monkeypatch, pending, code=2)
+    with pytest.raises(MetropolisError):
+        seam().payment(OPERATION, method="settle")

@@ -5,7 +5,7 @@ use erebus_shielded_prover::access::{request_digest, AccessRequest};
 
 pub(super) const PAYLOAD: &[u8] = b"private negotiated data-feed snapshot";
 
-async fn service(config: &Path, url: &str, client: &reqwest::Client) -> ServiceProcess {
+pub(super) async fn service(config: &Path, url: &str, client: &reqwest::Client) -> ServiceProcess {
     let mut process = ServiceProcess(
         Command::new(env!("CARGO_BIN_EXE_erebus-access-service"))
             .env_clear()

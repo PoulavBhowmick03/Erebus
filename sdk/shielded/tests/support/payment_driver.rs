@@ -19,6 +19,8 @@ use std::sync::{
 };
 
 struct ServiceProcess(Child);
+#[path = "agent_driver.rs"]
+mod agent_driver;
 #[path = "native_product.rs"]
 mod native_product;
 #[path = "shielded_driver.rs"]
@@ -31,7 +33,7 @@ impl Drop for ServiceProcess {
 }
 
 #[derive(Clone)]
-struct Proxy {
+pub(super) struct Proxy {
     upstream: String,
     client: reqwest::Client,
     lose_broadcast: Arc<AtomicBool>,
@@ -160,9 +162,29 @@ async fn run_payment(binary: &Path, cwd: &Path, config: &Path, method: &str) -> 
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Anvil and built EVM artifacts; copied commands submit public-bound test payments"]
-async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_send() {
+/// A deployed public-bound settlement and token, negotiated configs for both participants, and
+/// the buyer's payment configuration behind an RPC proxy. Nothing is negotiated or funded yet.
+pub(super) struct PublicDeployed {
+    pub(super) fixture: Fixture,
+    pub(super) client: reqwest::Client,
+    pub(super) rpc_url: String,
+    pub(super) proxy: Proxy,
+    pub(super) proxy_url: String,
+    pub(super) contract: String,
+    pub(super) token: String,
+    pub(super) deployer: String,
+    pub(super) first_block: u64,
+    pub(super) binary: PathBuf,
+    pub(super) key_path: PathBuf,
+    pub(super) config: Value,
+    pub(super) config_path: PathBuf,
+    pub(super) gas_address: String,
+    pub(super) buyer_address: String,
+    pub(super) task: tokio::task::JoinHandle<()>,
+    _anvil: ServiceProcess,
+}
+
+pub(super) async fn deploy_public(block_time: Option<u64>) -> PublicDeployed {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -172,7 +194,7 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
         .local_addr()
         .unwrap()
         .port();
-    let _anvil = ServiceProcess(
+    let anvil = ServiceProcess(
         Command::new("anvil")
             .args([
                 "--port",
@@ -183,6 +205,12 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
                 "1",
                 "--silent",
             ])
+            .args(
+                block_time
+                    .map(|seconds| ["--block-time".to_string(), seconds.to_string()])
+                    .into_iter()
+                    .flatten(),
+            )
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -257,8 +285,6 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     template.service.fulfillment_method = "http-access-v1".into();
     template.service.fulfillment_digest = Sha256::digest(native_product::PAYLOAD).into();
     let fixture = Fixture::with_terms(template);
-    let (buyer, seller) = fixture.pair(false);
-    assert_eq!(buyer["deal_commitment"], seller["deal_commitment"]);
     let binary = fixture.root.path().join("erebus-payment");
     fs::copy(env!("CARGO_BIN_EXE_erebus-payment"), &binary).unwrap();
     let gas_seed = [24; 32];
@@ -297,22 +323,50 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
         "maximum_price":"75","gas_limit":500_000,"max_fee_per_gas":"3000000000","max_priority_fee_per_gas":"1000000000",
         "timeout_seconds":2,"log_block_range":100,"max_log_queries":1,"max_ancestry":64});
     private(&config_path, config.to_string().as_bytes());
-    rpc(&client, &rpc_url, "anvil_mine", json!(["0x3"])).await;
-    let (_, unfunded) = run_payment(&binary, fixture.root.path(), &config_path, "funding").await;
-    assert_eq!(unfunded["status"], "funding_required", "{unfunded}");
-    assert_eq!(unfunded["funding"]["allowance_shortfall"], "70");
-    assert_eq!(unfunded["funding"]["balance_shortfall"], "70");
-    assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
+    PublicDeployed {
+        fixture,
+        client,
+        rpc_url,
+        proxy,
+        proxy_url,
+        contract: contract.to_string(),
+        token: token.to_string(),
+        deployer: deployer.to_string(),
+        first_block,
+        binary,
+        key_path,
+        config,
+        config_path,
+        gas_address,
+        buyer_address,
+        task,
+        _anvil: anvil,
+    }
+}
+
+/// Gives the gas payer native funds and the buyer 70 tokens approved to the settlement contract.
+pub(super) async fn fund_public(deployed: &PublicDeployed) {
+    let PublicDeployed {
+        client,
+        rpc_url,
+        contract,
+        token,
+        deployer,
+        gas_address,
+        buyer_address,
+        ..
+    } = deployed;
+    let (contract, token, deployer) = (contract.as_str(), token.as_str(), deployer.as_str());
     rpc(
-        &client,
-        &rpc_url,
+        client,
+        rpc_url,
         "anvil_setBalance",
         json!([gas_address, "0xde0b6b3a7640000"]),
     )
     .await;
     send(
-        &client,
-        &rpc_url,
+        client,
+        rpc_url,
         deployer,
         Some(token),
         abi::encode_mint_call(
@@ -324,23 +378,23 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     )
     .await;
     rpc(
-        &client,
-        &rpc_url,
+        client,
+        rpc_url,
         "anvil_impersonateAccount",
         json!([buyer_address]),
     )
     .await;
     rpc(
-        &client,
-        &rpc_url,
+        client,
+        rpc_url,
         "anvil_setBalance",
         json!([buyer_address, "0xde0b6b3a7640000"]),
     )
     .await;
     send(
-        &client,
-        &rpc_url,
-        &buyer_address,
+        client,
+        rpc_url,
+        buyer_address,
         Some(token),
         abi::encode_approve_call(
             &hex::decode(contract.trim_start_matches("0x"))
@@ -351,8 +405,39 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
         ),
     )
     .await;
-    rpc(&client, &rpc_url, "anvil_mine", json!(["0x3"])).await;
-    let (ok, ready) = run_payment(&binary, fixture.root.path(), &config_path, "funding").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil and built EVM artifacts; copied commands submit public-bound test payments"]
+async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_send() {
+    let deployed = deploy_public(None).await;
+    let (buyer, seller) = deployed.fixture.pair(false);
+    assert_eq!(buyer["deal_commitment"], seller["deal_commitment"]);
+    let PublicDeployed {
+        fixture,
+        client,
+        rpc_url,
+        proxy,
+        proxy_url,
+        contract,
+        token,
+        first_block,
+        binary,
+        key_path,
+        config,
+        config_path,
+        ..
+    } = &deployed;
+    let (contract, token, first_block) = (contract.as_str(), token.as_str(), *first_block);
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
+    let (_, unfunded) = run_payment(binary, fixture.root.path(), config_path, "funding").await;
+    assert_eq!(unfunded["status"], "funding_required", "{unfunded}");
+    assert_eq!(unfunded["funding"]["allowance_shortfall"], "70");
+    assert_eq!(unfunded["funding"]["balance_shortfall"], "70");
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
+    fund_public(&deployed).await;
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
+    let (ok, ready) = run_payment(binary, fixture.root.path(), config_path, "funding").await;
     assert!(ok, "{ready}");
     assert_eq!(ready["status"], "ready");
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
@@ -362,22 +447,22 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
         .open(fixture.root.path().join("buyer/state/.payment-driver.lock"))
         .unwrap();
     fs2::FileExt::try_lock_exclusive(&held).unwrap();
-    let (ok, busy) = run_payment(&binary, fixture.root.path(), &config_path, "settle").await;
+    let (ok, busy) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
     assert!(!ok);
     assert_eq!(busy["error"], "another payment command is active");
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
     drop(held);
     // Invalid runtime data fails before signing/broadcast and cannot release policy capacity.
     proxy.corrupt_code.store(true, Ordering::SeqCst);
-    let (ok, corrupted) = run_payment(&binary, fixture.root.path(), &config_path, "settle").await;
+    let (ok, corrupted) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
     assert!(!ok);
     assert_eq!(corrupted["status"], "error");
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
     proxy.corrupt_code.store(false, Ordering::SeqCst);
     // A shifted start at a later canonical block must also be rejected.
     let later = rpc(
-        &client,
-        &rpc_url,
+        client,
+        rpc_url,
         "eth_getBlockByNumber",
         json!([format!("0x{:x}", first_block + 1), false]),
     )
@@ -387,34 +472,33 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     invalid["first_hash"] = later["hash"].clone();
     let invalid_path = fixture.root.path().join("buyer/late-deployment.json");
     private(&invalid_path, invalid.to_string().as_bytes());
-    let (ok, late) = run_payment(&binary, fixture.root.path(), &invalid_path, "settle").await;
+    let (ok, late) = run_payment(binary, fixture.root.path(), &invalid_path, "settle").await;
     assert!(!ok);
     assert_eq!(late["status"], "error");
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
     proxy.lose_broadcast.store(true, Ordering::SeqCst);
-    let (_, submitted) = run_payment(&binary, fixture.root.path(), &config_path, "settle").await;
+    let (_, submitted) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
     assert_eq!(submitted["submitted_this_call"], true, "{submitted}");
     assert_eq!(submitted["payment_verified"], false);
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
     // Further settle calls are observation only, even while finality is outstanding.
-    let (_, pending) = run_payment(&binary, fixture.root.path(), &config_path, "settle").await;
+    let (_, pending) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
     assert_eq!(pending["submitted_this_call"], false);
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
-    fs::remove_file(&key_path).unwrap();
+    fs::remove_file(key_path).unwrap();
     fs::rename(
         fixture.root.path().join("buyer/state/transcripts"),
         fixture.root.path().join("buyer/retained-transcripts"),
     )
     .unwrap();
-    rpc(&client, &rpc_url, "anvil_mine", json!(["0x3"])).await;
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
     proxy.corrupt_consumed.store(true, Ordering::SeqCst);
-    let (ok, disagreement) =
-        run_payment(&binary, fixture.root.path(), &config_path, "observe").await;
+    let (ok, disagreement) = run_payment(binary, fixture.root.path(), config_path, "observe").await;
     assert!(!ok, "{disagreement}");
     assert_eq!(disagreement["payment_verified"], false);
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
     proxy.corrupt_consumed.store(false, Ordering::SeqCst);
-    let (ok, recovered) = run_payment(&binary, fixture.root.path(), &config_path, "observe").await;
+    let (ok, recovered) = run_payment(binary, fixture.root.path(), config_path, "observe").await;
     assert!(ok, "{recovered}");
     assert_eq!(recovered["payment_verified"], true);
     assert_eq!(recovered["delivery_verified"], false);
@@ -423,13 +507,13 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
     assert_eq!(recovered["deal_commitment"], buyer["deal_commitment"]);
     assert_eq!(*proxy.minimum_log_block.lock().unwrap(), Some(first_block));
-    let balance = rpc(&client,&rpc_url,"eth_call",json!([{"to":token,"data":format!("0x{}",hex::encode(abi::encode_balance_of_call(&AuthorizationIdentity::from_bytes(&[22;32]).unwrap().address())))},"latest"])).await;
+    let balance = rpc(client,rpc_url,"eth_call",json!([{"to":token,"data":format!("0x{}",hex::encode(abi::encode_balance_of_call(&AuthorizationIdentity::from_bytes(&[22;32]).unwrap().address())))},"latest"])).await;
     assert_eq!(
         u128::from_str_radix(balance.as_str().unwrap().trim_start_matches("0x"), 16).unwrap(),
         70
     );
     // Paired scans yield and resume from the same authenticated bound under a tiny budget.
-    rpc(&client, &rpc_url, "anvil_mine", json!(["0x3"])).await;
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
     let deployment = EvmDeployment::new(
         ChainNamespace::parse("eip155:31337").unwrap(),
         hex::decode(contract.trim_start_matches("0x"))
@@ -489,8 +573,7 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     ] {
         assert!(recovered.get(field).is_none());
     }
-    native_product::finish(&fixture, &buyer, &seller, &config, &client).await;
+    native_product::finish(fixture, &buyer, &seller, config, client).await;
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
-    task.abort();
-    let _ = task.await;
+    deployed.task.abort();
 }

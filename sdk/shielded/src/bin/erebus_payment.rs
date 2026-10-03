@@ -22,7 +22,7 @@ use erebus_evm::{
     backend::{public_bound_capabilities, EvmSettlementBackend},
     chain::{
         Eip1559Fees, EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits,
-        SignedTransaction, SignerJournal, SigningPlan, TransactionKey,
+        SignedTransaction, SignerJournal, SigningPlan, TransactionKey, TxStatus,
     },
     deployment::{parse_lowercase_address, EvmDeployment},
 };
@@ -397,7 +397,7 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
         "deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),
         "submitted_this_call":false,"retry_without_new_payment":true,
         "measurements_ms":{"deployment_authentication":authentication_ms,"observation":observed_at.elapsed().as_millis()}});
-    let evidence = match observed {
+    let (evidence, finalized) = match observed {
         HistoricalObservation::Pending {
             next_log_block,
             ancestry_block,
@@ -407,7 +407,11 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             response["ancestry_block"] = json!(ancestry_block);
             return Ok(response);
         }
-        HistoricalObservation::Complete { evidence, .. } => evidence,
+        HistoricalObservation::Complete {
+            evidence,
+            finalized,
+            ..
+        } => (evidence, finalized),
     };
     let assessment = coordinator
         .reconcile(operation, &evidence, clock()?)
@@ -430,6 +434,9 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             response["status"] = json!("ok");
             response["payment_verified"] = json!(winning == commitment);
             response["winning_commitment"] = json!(winning.to_hex());
+            // Latency diagnostics only: block times, never inputs to payment accounting.
+            response["chain_times"] = json!({"finalized_anchor_block":finalized.number,
+                "finalized_anchor_unix":finalized.timestamp});
             if let Some(signed) = coordinator
                 .signed_transaction(operation)
                 .map_err(|_| "signed recovery state unavailable")?
@@ -438,6 +445,14 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                     .map_err(|_| "invalid durable transaction")?;
                 response["locally_signed_transaction_hash"] =
                     json!(format!("0x{}", hex::encode(tx.hash())));
+                // Primary RPC only. A failed lookup omits inclusion; it never fails the call.
+                if let Ok(TxStatus::Included(inclusion)) = chain.observe(tx.hash()).await {
+                    if inclusion.success {
+                        response["chain_times"]["inclusion_block"] = json!(inclusion.block.number);
+                        response["chain_times"]["inclusion_unix"] =
+                            json!(inclusion.block.timestamp);
+                    }
+                }
             }
             // Payment evidence survives a separate nonce-cleanup failure. Do not resubmit.
             response["nonce_cleanup_pending"] = json!(match chain

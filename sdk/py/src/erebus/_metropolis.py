@@ -108,7 +108,7 @@ class MetropolisSeam:
                     "deal_commitment", "deal_nullifier", "submitted_this_call", "retry_without_new_payment", "measurements_ms"}
         optional = {"history_pending", "next_log_block", "through", "ancestry_block", "stage", "broadcast_attempts",
                     "winning_commitment", "nonce_cleanup_pending", "wallet_release_required", "funding", "proof_required",
-                    "transaction_hash", "locally_signed_transaction_hash", "downloaded_bytes"}
+                    "transaction_hash", "locally_signed_transaction_hash", "downloaded_bytes", "chain_times"}
         status = response.get("status")
         if (not required <= set(response) or not set(response) <= required | optional
             or status not in {"ok", "ready", "pending", "funding_required", "closed_unpaid"}
@@ -135,6 +135,13 @@ class MetropolisSeam:
         for field in ("next_log_block", "through", "ancestry_block", "broadcast_attempts", "downloaded_bytes"):
             if field in response and (type(response[field]) is not int or not 0 <= response[field] <= 2**64 - 1):
                 raise MetropolisError("invalid bounded diagnostic")
+        if "chain_times" in response:
+            times = response["chain_times"]
+            names = {"finalized_anchor_block", "finalized_anchor_unix", "inclusion_block", "inclusion_unix"}
+            if (not isinstance(times, dict) or not {"finalized_anchor_block", "finalized_anchor_unix"} <= set(times) <= names
+                    or any(type(value) is not int or not 0 <= value <= 2**64 - 1 for value in times.values())
+                    or not response["payment_verified"]):
+                raise MetropolisError("invalid chain timing metadata")
         metrics = response["measurements_ms"]
         metric_names = {"deployment_authentication", "observation", "funding", "artifact_installation", "proof_preparation", "local_signing", "submission"}
         if not isinstance(metrics, dict) or not set(metrics) <= metric_names or any(type(value) is not int or not 0 <= value <= 2**64 - 1 for value in metrics.values()):
