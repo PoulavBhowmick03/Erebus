@@ -64,3 +64,4 @@ pub mod error;
 pub mod evidence;
 pub mod readiness;
 pub mod relay;
+pub mod x402;

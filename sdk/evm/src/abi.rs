@@ -289,14 +289,14 @@ fn u128_word(word: &[u8; 32]) -> Result<u128, AbiDecodeError> {
     Ok(u128::from_be_bytes(low))
 }
 
-struct Encoder {
+pub(crate) struct Encoder {
     head: Vec<[u8; 32]>,
     tail: Vec<u8>,
     tail_base: usize,
 }
 
 impl Encoder {
-    fn new(parameters: usize) -> Self {
+    pub(crate) fn new(parameters: usize) -> Self {
         Self {
             head: Vec::with_capacity(parameters),
             tail: Vec::new(),
@@ -304,11 +304,11 @@ impl Encoder {
         }
     }
 
-    fn push_static(&mut self, word: &[u8; 32]) {
+    pub(crate) fn push_static(&mut self, word: &[u8; 32]) {
         self.head.push(*word);
     }
 
-    fn push_dynamic(&mut self, data: &[u8]) {
+    pub(crate) fn push_dynamic(&mut self, data: &[u8]) {
         let offset = self.tail_base + self.tail.len();
         let mut word = [0u8; 32];
         word[24..].copy_from_slice(&(offset as u64).to_be_bytes());
@@ -321,7 +321,7 @@ impl Encoder {
         self.tail.resize(self.tail.len() + padding, 0);
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub(crate) fn finish(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.head.len() * 32 + self.tail.len());
         for word in self.head {
             out.extend_from_slice(&word);
@@ -331,7 +331,7 @@ impl Encoder {
     }
 }
 
-fn left_pad(bytes: &[u8; 20]) -> [u8; 32] {
+pub(crate) fn left_pad(bytes: &[u8; 20]) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[12..].copy_from_slice(bytes);
     word
