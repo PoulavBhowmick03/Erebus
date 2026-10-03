@@ -2632,6 +2632,7 @@ dependencies = [
  "erebus-journal",
  "erebus-transport",
  "hex",
+ "k256",
  "serde",
  "serde_json",
  "sha3 0.10.9",
