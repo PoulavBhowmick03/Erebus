@@ -26,11 +26,14 @@ from erebus._network import Network, NetworkPreset, identify_network, network_pr
 from erebus._disclosure import DisclosureError, DisclosureSeam
 from erebus._proving import LocalProvingError, LocalProvingSeam
 from erebus._access import AccessError, AccessSeam
+from erebus._metropolis import MetropolisError, MetropolisSeam
 from erebus._seam import PROTOCOL, ErebusError, Seam, SeamConfig, SeamUnavailable
 
 __all__ = [
     "AccessError",
     "AccessSeam",
+    "MetropolisError",
+    "MetropolisSeam",
     "DisclosureError",
     "DisclosureSeam",
     "LocalProvingError",

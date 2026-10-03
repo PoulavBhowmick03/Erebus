@@ -61,11 +61,6 @@ class AccessSettings:
 def build_access_server(settings: AccessSettings | None = None) -> MCPServer:
     """Rust handles key access, signatures, payload verification, and durable storage."""
     settings = settings or AccessSettings.from_env()
-    try:
-        seam = AccessSeam(binary=settings.binary)
-        seam.version()
-    except AccessError:
-        raise ConfigError("configured access binary is unavailable or incompatible") from None
     server = MCPServer(name="erebus-access", instructions=(
         "Retrieve one immutable snapshot using the existing buyer agreement key. "
         "The endpoint, key path, and private evidence directory are fixed by the operator. "
@@ -73,6 +68,17 @@ def build_access_server(settings: AccessSettings | None = None) -> MCPServer:
         "The seller's payment claim is not independent chain verification or a delivery audit. "
         "Pending or failed access must not trigger another payment. This mode never submits a transaction."
     ))
+    register_access_tools(server, settings)
+    return server
+
+
+def register_access_tools(server: MCPServer, settings: AccessSettings) -> None:
+    """Reuse the same path-only access boundary in a combined Metropolis server."""
+    try:
+        seam = AccessSeam(binary=settings.binary)
+        seam.version()
+    except AccessError:
+        raise ConfigError("configured access binary is unavailable or incompatible") from None
 
     @server.tool()
     async def retrieve_service_access(evidence_name: str) -> dict[str, Any]:
@@ -86,4 +92,3 @@ def build_access_server(settings: AccessSettings | None = None) -> MCPServer:
             return {"ok": response["status"] == "retrieved", "result": response}
         except AccessError as error:
             return {"ok": False, "error": {"code": "ACCESS_UNAVAILABLE", "message": str(error), "retry_without_payment": True}}
-    return server
