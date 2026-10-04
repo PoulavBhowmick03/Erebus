@@ -446,6 +446,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: npm run prototype
 
+      - name: Build the EVM contracts the funded HTTP and x402 tests deploy
+        run: forge build --root contracts/evm
+
       - name: Recover public-bound HTTP access without another payment
         working-directory: sdk/shielded
         env:
