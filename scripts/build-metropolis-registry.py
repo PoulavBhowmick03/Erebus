@@ -75,7 +75,7 @@ def native_wheel_tag(wheels: Path) -> str:
     tag = tags[0].removeprefix("py3-none-")
     if not native[0].name.endswith(f"-py3-none-{tag}.whl") or metadata.get("Root-Is-Purelib") != "false":
         raise ValueError("native wheel filename and metadata disagree")
-    if not (tag == "linux_x86_64" or re.fullmatch(r"macosx_[0-9]+_[0-9]+_arm64", tag, re.ASCII)):
+    if tag not in {"linux_x86_64", "macosx_11_0_arm64"}:
         raise ValueError("native wheel tag must name a supported build host")
     return tag
 
@@ -156,7 +156,11 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
                 command.append("--release")
             for name in names:
                 command.extend(["--bin", name])
-            subprocess.run(command, cwd=ROOT, check=True)
+            environment = dict(os.environ)
+            if platform.system() == "Darwin":
+                # Must match MACOS_DEPLOYMENT_TARGET in packaging/metropolis/hatch_build.py.
+                environment["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
+            subprocess.run(command, cwd=ROOT, env=environment, check=True)
         for name in names:
             binary = ROOT / crate / "target" / profile / name
             validate_binary(binary)

@@ -122,3 +122,40 @@ def test_native_tag_rejects_mislabeled_or_pure_wheels(tmp_path, filename, tag, p
 def test_native_tag_requires_one_native_wheel(tmp_path):
     with pytest.raises(ValueError, match="one native"):
         registry.native_wheel_tag(tmp_path)
+
+
+def load_hatch_hook(monkeypatch):
+    import sys
+    import types
+
+    interface = types.ModuleType("hatchling.builders.hooks.plugin.interface")
+    interface.BuildHookInterface = object
+    for name in ("hatchling", "hatchling.builders", "hatchling.builders.hooks", "hatchling.builders.hooks.plugin"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, interface.__name__, interface)
+    spec = importlib.util.spec_from_file_location("metropolis_hatch_build", ROOT / "packaging/metropolis/hatch_build.py")
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    return hook
+
+
+@pytest.mark.parametrize("system,machine,tag", [("Darwin", "arm64", "macosx_11_0_arm64"), ("Linux", "x86_64", "linux_x86_64")])
+def test_bundle_tag_names_the_binaries_not_a_universal2_python(monkeypatch, system, machine, tag):
+    import sysconfig
+
+    hook = load_hatch_hook(monkeypatch)
+    # GitHub's macOS Python reports universal2; the tag must still name thin arm64 binaries.
+    monkeypatch.setattr(sysconfig, "get_platform", lambda: "macosx-10.9-universal2")
+    monkeypatch.setattr(hook.platform, "system", lambda: system)
+    monkeypatch.setattr(hook.platform, "machine", lambda: machine)
+    assert hook.native_tag() == tag
+    assert hook.MACOS_DEPLOYMENT_TARGET == "11.0"
+
+
+@pytest.mark.parametrize("system,machine", [("Darwin", "x86_64"), ("Linux", "aarch64"), ("Windows", "AMD64")])
+def test_bundle_tag_refuses_unqualified_hosts(monkeypatch, system, machine):
+    hook = load_hatch_hook(monkeypatch)
+    monkeypatch.setattr(hook.platform, "system", lambda: system)
+    monkeypatch.setattr(hook.platform, "machine", lambda: machine)
+    with pytest.raises(RuntimeError, match="macOS arm64 or Linux x86_64"):
+        hook.native_tag()
