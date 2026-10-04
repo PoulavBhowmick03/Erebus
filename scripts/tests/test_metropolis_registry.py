@@ -159,3 +159,26 @@ def test_bundle_tag_refuses_unqualified_hosts(monkeypatch, system, machine):
     monkeypatch.setattr(hook.platform, "machine", lambda: machine)
     with pytest.raises(RuntimeError, match="macOS arm64 or Linux x86_64"):
         hook.native_tag()
+
+
+@pytest.mark.parametrize("relative,files", [("packaging/erebus-cli", ["LICENSE", "THIRD_PARTY_NOTICES"]), ("sdk/py", ["LICENSE"]), ("mcp-server", ["LICENSE"])])
+def test_every_package_declares_its_license_files(relative, files):
+    native = {"erebus-payment": Path("unused")} if relative == "packaging/erebus-cli" else None
+    project = tomllib.loads(registry.package_metadata(ROOT / relative, "0.3.0.dev1", native))["project"]
+    assert project["license"] == "Apache-2.0"
+    assert project["license-files"] == files
+
+
+def test_wheels_without_their_licenses_are_refused(tmp_path):
+    import zipfile
+
+    def wheel(name, licenses):
+        with zipfile.ZipFile(tmp_path / name, "w") as archive:
+            for license_name in licenses:
+                archive.writestr(f"pkg-0.1.dist-info/licenses/{license_name}", "text")
+    wheel("erebus_sdk-0.1-py3-none-any.whl", ["LICENSE"])
+    wheel("erebus_cli-0.1-py3-none-linux_x86_64.whl", ["LICENSE", "THIRD_PARTY_NOTICES"])
+    registry.require_licenses(tmp_path)
+    wheel("erebus_mcp_server-0.1-py3-none-any.whl", [])
+    with pytest.raises(ValueError, match="missing license"):
+        registry.require_licenses(tmp_path)

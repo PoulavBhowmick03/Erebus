@@ -93,7 +93,9 @@ def package_metadata(source: Path, version: str, binaries: dict[str, Path] | Non
     q = json.dumps
     lines = ["[project]", f"name = {q(project['name'])}", f"version = {q(version)}",
              f"description = {q('Experimental Metropolis testnet package: ' + project['description'])}",
-             f"requires-python = {q(project['requires-python'])}", f"dependencies = {q(dependencies)}"]
+             f"requires-python = {q(project['requires-python'])}", f"dependencies = {q(dependencies)}",
+             'license = "Apache-2.0"',
+             f"license-files = {q(['LICENSE', THIRD_PARTY_NOTICES] if binaries is not None else ['LICENSE'])}"]
     if project.get("scripts"):
         lines.extend(["", "[project.scripts]"])
         lines.extend(f"{q(name)} = {q(target)}" for name, target in project["scripts"].items())
@@ -107,6 +109,127 @@ def package_metadata(source: Path, version: str, binaries: dict[str, Path] | Non
         lines.extend(f"{q('bin/' + name)} = {q(name)}" for name in sorted(binaries))
         lines.extend(["", "[tool.hatch.build.targets.wheel.hooks.custom]", 'path = "hatch_build.py"'])
     return "\n".join(lines) + "\n"
+
+
+THIRD_PARTY_NOTICES = "THIRD_PARTY_NOTICES"
+LICENSE_TEXT = re.compile(r"(licen[cs]e|copying|notice)", re.IGNORECASE)
+
+
+def third_party_notices() -> tuple[str, dict]:
+    """License expressions and texts for every crate linked into the bundled binaries.
+
+    Only normal dependencies reachable from the four bundled crates are included; dev and build
+    dependencies do not ship. Workspace crates are covered by the project LICENSE.
+    """
+    packages: dict[str, dict] = {}
+    for crate in BINARY_GROUPS:
+        metadata = json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--locked", "--format-version", "1", "--manifest-path", str(ROOT / crate / "Cargo.toml")],
+            cwd=ROOT, text=True))
+        by_id = {package["id"]: package for package in metadata["packages"]}
+        nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+        pending = [metadata["resolve"]["root"]]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for dependency in nodes[current]["deps"]:
+                if any(kind["kind"] is None for kind in dependency["dep_kinds"]):
+                    pending.append(dependency["pkg"])
+        for package_id in seen:
+            package = by_id[package_id]
+            if package["source"] is None:
+                continue
+            packages[f"{package['name']} {package['version']}"] = package
+    sections, missing = [], []
+    for key in sorted(packages):
+        package = packages[key]
+        directory = Path(package["manifest_path"]).parent
+        texts = sorted(path for path in directory.iterdir() if path.is_file() and LICENSE_TEXT.match(path.name))
+        body = "\n\n".join(f"--- {path.name} ---\n{path.read_text(errors='replace').strip()}" for path in texts)
+        if not texts:
+            # The published crate carries no license file; its terms are the canonical texts in
+            # the appendix, with this crate's own copyright holders.
+            missing.append(key)
+            holders = ", ".join(package.get("authors") or []) or f"the {package['name']} authors"
+            body = (f"No license file is published inside this crate. Copyright (c) {holders}"
+                    f" ({package.get('repository') or 'repository not declared'}). Licensed under"
+                    f" {package.get('license') or 'an undeclared license'}; the canonical texts are in the appendix.")
+        sections.append(f"=== {key} ({package.get('license') or 'no SPDX expression'}) ===\n{body}")
+    header = ("Third-party software linked into the Erebus Metropolis native binaries.\n"
+              "Generated from `cargo metadata --locked` for sdk/rs, sdk/evm, sdk/transport, and sdk/shielded.\n\n")
+    appendix = "\n\n".join(f"=== Appendix: {name} ===\n{text.strip()}" for name, text in canonical_texts().items())
+    return (header + "\n\n".join(sections) + "\n\n" + appendix + "\n",
+            {"crates": len(packages), "crates_relying_on_appendix_texts": missing})
+
+
+def canonical_texts() -> dict[str, str]:
+    """Standard license texts that crates without their own license file refer to."""
+    return {
+        "Apache-2.0": (ROOT / "LICENSE").read_text(),
+        "MIT": """Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.""",
+        "BSD-3-Clause": """Redistribution and use in source and binary forms, with or without modification, are permitted
+provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the
+   following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and
+   the following disclaimer in the documentation and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or
+   promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.""",
+        "0BSD": """Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is
+hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.""",
+        "LLVM-exception": """As an exception, if, as a result of your compiling your source code, portions of this Software are
+embedded into an Object form of such source code, you may redistribute such embedded portions in such
+Object form without complying with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
+
+In addition, if you combine or link compiled forms of this Software with software that is licensed under
+the GPLv2 ("Combined Software") and if a court of competent jurisdiction determines that the patent
+provision (Section 3), the indemnity provision (Section 9) or other Section of the License conflicts with
+the conditions of the GPLv2, you may retroactively and prospectively choose to deem waived or otherwise
+exclude such Section(s) of the License, but only in their entirety and only with respect to the Combined
+Software.""",
+        "CC0-1.0": "CC0 1.0 Universal public-domain dedication: https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+    }
+
+
+def require_licenses(wheels: Path) -> None:
+    for wheel in wheels.glob("*.whl"):
+        with zipfile.ZipFile(wheel) as archive:
+            names = {name.rsplit("/", 1)[-1] for name in archive.namelist() if ".dist-info/licenses/" in name}
+        required = {"LICENSE", THIRD_PARTY_NOTICES} if wheel.name.startswith("erebus_cli-") else {"LICENSE"}
+        if not required <= names:
+            raise ValueError(f"{wheel.name} is missing license files: {sorted(required - names)}")
 
 
 def wheel_link(wheel: Path, base_url: str | None) -> str:
@@ -165,6 +288,7 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
             binary = ROOT / crate / "target" / profile / name
             validate_binary(binary)
             binaries[name] = binary
+    notices, notice_summary = third_party_notices()
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +306,9 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
             if native is not None:
                 native["erebus-selfhost"] = ROOT / "scripts/metropolis-selfhost.sh"
             (destination / "pyproject.toml").write_text(package_metadata(source, version, native))
+            shutil.copy2(ROOT / "LICENSE", destination / "LICENSE")
+            if native is not None:
+                (destination / THIRD_PARTY_NOTICES).write_text(notices)
             if native is not None:
                 (destination / "bin").mkdir()
                 for name, path in native.items():
@@ -191,6 +318,7 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
             environment = {key: value for key, value in os.environ.items() if key not in {"EREBUS_WHEEL_PLATFORM", "PYTHONPATH", "VIRTUAL_ENV"}}
             subprocess.run([uv, "build", "--wheel", "--no-sources", "--out-dir", str(wheels), str(destination)],
                            cwd=stage, env=environment, check=True)
+        require_licenses(wheels)
         build_index(wheels, registry / "simple", base_url)
         manifest = {
             "version": version, "channel": "metropolis-testnet", "published": False,
@@ -206,6 +334,7 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
             "launchers": {"erebus-selfhost": {"sha256": sha256(ROOT / "scripts/metropolis-selfhost.sh")}},
             "wheels": {path.name: {"sha256": sha256(path), "bytes": path.stat().st_size} for path in sorted(wheels.glob("*.whl"))},
             "test_only_artifacts_included": False,
+            "licenses": {"project": "Apache-2.0", "third_party": notice_summary},
         }
         (registry / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         shutil.copytree(registry, output)
