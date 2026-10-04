@@ -2,8 +2,9 @@
 
 Updated: 2026-10-04. Branch: `metropolis`. M8 is **not complete**.
 The public-bound live workflow, bounded disclosure observation, local artifact installation,
-and local HTTP access recovery have evidence. Released packages, hosted services, x402,
-and a complete installed two-agent workflow remain open.
+and local HTTP access recovery have evidence. Installed local x402 recovery and auditing also
+have evidence. Released packages, hosted services, live Monad x402, and independent external
+acceptance remain open.
 The local negotiation SDK now freezes agreement transcripts before signatures and authenticates separate shielded agreement keys.
 The native negotiation command supports cold-start private offers and durable consent in both modes, without payment submission.
 
@@ -538,6 +539,27 @@ independent auditor verified the payment from its grant.
 
 The owner approved publication, and `PoulavBhowmick03/erebus-metropolis` now exists with
 HTTPS Pages enabled. No package assets have been published yet. Render is the requested
-hosting target; account access and paid-plan approval are still needed. No hosted service or
+hosting target; the owner selected preparation only, with no paid provisioning. No hosted service or
 new Monad transaction is claimed. The prepaid/batch comparison and complete live workflow
 remain open, alongside Linux qualification and external acceptance.
+
+### Clean Revision Package Check
+
+Commit `f4714bba42b6909b860ba04d301ab23e4c3c3899` was pushed to `origin/metropolis`.
+A release-profile macOS arm64 build at `0.3.0.dev2026100402` recorded
+`dirty_source: false`. Its isolated install check verified 14 native binaries, the self-host
+launcher, package imports outside the checkout, relay health, and the installed local x402
+recovery/auditor rehearsal. It reported `installed_x402_rehearsal: true`,
+`live_payment: false`, and `published: false`.
+
+That run measured negotiation 475 ms, permit preparation plus intentional failed HTTP 25 ms,
+first observed inclusion 51 ms, finalized verification 144 ms, and delivery 304 ms.
+The proof stage was absent. These remain local Anvil measurements, not Monad latency.
+
+The [dual-platform qualification run](https://github.com/PoulavBhowmick03/Erebus/actions/runs/37180669150)
+builds both platforms from this revision. Publication waits for both isolated install checks
+and the pure-Python wheel comparison; starting that workflow is not qualification evidence.
+
+**Hosting boundary (owner, 2026-10-04).** Prepare and test the Render deployment files only.
+Do not provision paid services. The hosted-service acceptance gate remains open; a prepared
+blueprint and a local self-hosting test do not close it.

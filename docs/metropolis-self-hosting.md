@@ -83,6 +83,7 @@ The [Render blueprint](../packaging/metropolis/render/render.yaml) prepares one 
 single-instance relay with persistent storage. It uses the same Rust relay binary, requires
 a bearer token, exposes public liveness only through the gateway, and disables automatic
 deployments. No Render service is deployed or verified yet.
+The owner selected preparation only on 2026-10-04. Paid provisioning is not authorized.
 
 The Docker image also supports `EREBUS_HOSTED_SERVICE=access` behind a loopback Caddy gateway.
 Provision owner-only `/data/access.json`, use port 8081, and keep payload, evidence, issuance,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from email.parser import Parser
 import hashlib
 import html
 import json
@@ -16,6 +17,7 @@ import subprocess
 import sysconfig
 import tempfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 
@@ -55,6 +57,27 @@ def validate_binary(path: Path) -> None:
         raise ValueError("supported build hosts are macOS arm64 and Linux x86_64")
     if len(header) != 64 or not valid:
         raise ValueError("native file does not match the build host architecture")
+
+
+def native_wheel_tag(wheels: Path) -> str:
+    """Read the isolated build's tag; its Python need not match this process's Python."""
+    native = list(wheels.glob("erebus_cli-*.whl"))
+    if len(native) != 1:
+        raise ValueError("expected one native wheel for this platform")
+    with zipfile.ZipFile(native[0]) as archive:
+        records = [name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")]
+        if len(records) != 1:
+            raise ValueError("native wheel requires one WHEEL metadata record")
+        metadata = Parser().parsestr(archive.read(records[0]).decode("utf-8"))
+    tags = metadata.get_all("Tag", [])
+    if len(tags) != 1 or not tags[0].startswith("py3-none-"):
+        raise ValueError("native wheel requires one py3-none platform tag")
+    tag = tags[0].removeprefix("py3-none-")
+    if not native[0].name.endswith(f"-py3-none-{tag}.whl") or metadata.get("Root-Is-Purelib") != "false":
+        raise ValueError("native wheel filename and metadata disagree")
+    if not (tag == "linux_x86_64" or re.fullmatch(r"macosx_[0-9]+_[0-9]+_arm64", tag, re.ASCII)):
+        raise ValueError("native wheel tag must name a supported build host")
+    return tag
 
 
 def package_metadata(source: Path, version: str, binaries: dict[str, Path] | None = None) -> str:
@@ -171,7 +194,7 @@ def build(version: str, output: Path, profile: str, build_native: bool, base_url
             "platform": sysconfig.get_platform(), "portability_audit": False,
             "platform_qualification": {
                 "host": sysconfig.get_platform(),
-                "wheel_tag": sysconfig.get_platform().replace("-", "_").replace(".", "_"),
+                "wheel_tag": native_wheel_tag(wheels),
                 "supported_host": True,
                 "portability_audit": False,
             },

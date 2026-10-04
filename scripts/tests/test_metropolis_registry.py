@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -93,3 +94,31 @@ def test_release_asset_links_are_absolute_and_hash_pinned(tmp_path):
             f"{files[0].name}#sha256={registry.sha256(files[0])}"
         ) in page
         assert "github.io/Erebus/simple" not in page
+
+
+def wheel_metadata(path, tag, *, pure="false"):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("erebus_cli-0.3.0.dev1.dist-info/WHEEL",
+                         f"Wheel-Version: 1.0\nRoot-Is-Purelib: {pure}\nTag: {tag}\n")
+
+
+@pytest.mark.parametrize("tag", ["macosx_11_0_arm64", "linux_x86_64"])
+def test_qualification_reads_the_actual_native_wheel_tag(tmp_path, tag):
+    wheel_metadata(tmp_path / f"erebus_cli-0.3.0.dev1-py3-none-{tag}.whl", f"py3-none-{tag}")
+    assert registry.native_wheel_tag(tmp_path) == tag
+
+
+@pytest.mark.parametrize("filename,tag,pure", [
+    ("macosx_15_3_arm64", "py3-none-macosx_11_0_arm64", "false"),
+    ("linux_x86_64", "py3-none-linux_x86_64", "true"),
+    ("any", "py3-none-any", "false"),
+])
+def test_native_tag_rejects_mislabeled_or_pure_wheels(tmp_path, filename, tag, pure):
+    wheel_metadata(tmp_path / f"erebus_cli-0.3.0.dev1-py3-none-{filename}.whl", tag, pure=pure)
+    with pytest.raises(ValueError):
+        registry.native_wheel_tag(tmp_path)
+
+
+def test_native_tag_requires_one_native_wheel(tmp_path):
+    with pytest.raises(ValueError, match="one native"):
+        registry.native_wheel_tag(tmp_path)
