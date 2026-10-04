@@ -80,15 +80,40 @@ fn permit_records(cache: &Path) -> usize {
 /// Runs the repository's agent driver against two MCP servers. Exit status and the final JSON.
 fn run_agents(fixture: &Fixture, access: &Path, max_polls: u32) -> (bool, Value) {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = Command::new("uv");
+    let driver = repository.join("agents/src/erebus_agents/metropolis_loop.py");
+    let mut command = match (
+        std::env::var_os("EREBUS_TEST_MCP_SERVER"),
+        std::env::var_os("EREBUS_TEST_MCP_PYTHON"),
+    ) {
+        // Installed: the driver (stdlib and `mcp` only) runs isolated on the installed Python,
+        // and the servers are the installed entry point with only installed commands on PATH.
+        (Some(server), Some(python)) => {
+            let mut command = Command::new(python);
+            command
+                .arg("-I")
+                .arg(&driver)
+                .arg("--server-command")
+                .arg(server);
+            command
+        }
+        _ => {
+            let mut command = Command::new("uv");
+            command
+                .args([
+                    "run",
+                    "--locked",
+                    "python",
+                    "-m",
+                    "erebus_agents.metropolis_loop",
+                ])
+                .arg("--negotiation-cli")
+                .arg(&fixture.binary)
+                .current_dir(&repository)
+                .env_remove("VIRTUAL_ENV");
+            command
+        }
+    };
     command
-        .args([
-            "run",
-            "--locked",
-            "python",
-            "-m",
-            "erebus_agents.metropolis_loop",
-        ])
         .args([
             "--profile",
             "x402-exact",
@@ -101,30 +126,19 @@ fn run_agents(fixture: &Fixture, access: &Path, max_polls: u32) -> (bool, Value)
         .arg("--buyer-access")
         .arg(access)
         .arg("--seller-negotiation")
-        .arg(&fixture.seller_config)
-        .current_dir(&repository)
-        .env_remove("VIRTUAL_ENV");
-    match std::env::var_os("EREBUS_TEST_MCP_SERVER") {
-        // Installed: the servers resolve the installed native commands from PATH.
-        Some(server) => {
-            command.arg("--server-command").arg(server);
-        }
-        None => {
-            command.arg("--negotiation-cli").arg(&fixture.binary);
-        }
-    }
+        .arg(&fixture.seller_config);
     let output = command.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let last = stdout.trim().lines().last().unwrap_or("{}");
-    (
-        output.status.success(),
-        serde_json::from_str(last).unwrap_or_else(|_| {
-            panic!(
-                "agents: {stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-        }),
-    )
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let Some(last) = stdout.trim().lines().last() else {
+        panic!(
+            "agent driver produced no result (exit {:?}): {stderr}",
+            output.status.code()
+        );
+    };
+    let record: Value =
+        serde_json::from_str(last).unwrap_or_else(|_| panic!("agents: {stdout}\n{stderr}"));
+    (output.status.success(), record)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
