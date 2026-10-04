@@ -100,7 +100,13 @@ pub(super) async fn finish(
         signature,
         payment: None,
     };
-    let issued = client
+    // Shielded access verification replays pool history; on CI runners that took longer than
+    // the 10 s RPC client the caller uses, so access requests get their own bound.
+    let access_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .unwrap();
+    let issued = access_client
         .post(format!("{url}/v1/access"))
         .json(&request)
         .send()
@@ -111,7 +117,7 @@ pub(super) async fn finish(
     drop(issued);
     drop(process);
     let restarted = service(&service_config, &url, client).await;
-    let retrieved = client
+    let retrieved = access_client
         .post(format!("{url}/v1/access"))
         .json(&request)
         .send()
