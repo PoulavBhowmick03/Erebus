@@ -39,6 +39,22 @@ def test_paths_only_and_no_second_payment_request(monkeypatch):
     assert result["result"]["resource_verified"] and not result["result"]["payment_verified"]
 
 
+def test_x402_is_explicit_and_keeps_authorization_out_of_python(monkeypatch):
+    seen = fake(monkeypatch, response())
+    AccessSeam(binary="access").retrieve(**request(), x402_exact=True)
+    payload = json.loads(seen[0][1]["input"])
+    assert payload["x402_exact"] is True
+    assert "signature" not in payload and "payment" not in payload
+
+
+@pytest.mark.parametrize("value", [1, "true", None])
+def test_x402_mode_requires_a_boolean(monkeypatch, value):
+    seen = fake(monkeypatch, response())
+    with pytest.raises(AccessError):
+        AccessSeam(binary="access").retrieve(**request(), x402_exact=value)
+    assert not seen
+
+
 def test_pending_preserves_uncertainty(monkeypatch):
     pending = {"status": "pending", "retry_without_payment": True, "payment_verified": False,
                "resource_verified": False, "delivery_verified": False}

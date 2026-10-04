@@ -99,8 +99,9 @@ fn fixture(suite: u16) -> (AccessPolicy, PaidAccess, AccessRequest) {
         signature: signature(
             suite,
             [1; 32],
-            &request_digest(&evidence, policy.service_id, [4; 32], 1100).unwrap(),
+            &request_digest(&evidence, policy.service_id, [4; 32], 1100, None).unwrap(),
         ),
+        payment: None,
     };
     (
         policy,
@@ -144,6 +145,7 @@ fn wrong_buyer_expiry_commitment_nonce_and_service_never_issue() {
             issuer.policy.service_id,
             wrong.nonce,
             wrong.expires_at,
+            None,
         )
         .unwrap(),
     );
@@ -169,6 +171,7 @@ fn wrong_buyer_expiry_commitment_nonce_and_service_never_issue() {
         [0x43; 32],
         request.nonce,
         request.expires_at,
+        None,
     )
     .unwrap();
     let mut wrong = request.clone();
@@ -529,4 +532,45 @@ async fn buyer_endpoint_and_symlink_boundaries_fail_closed() {
         std::os::unix::fs::symlink(external, &receipt.resource_file).unwrap();
         assert_eq!(buyer.cached(&paid.evidence), Err(RetrievalError::Storage));
     }
+}
+
+#[test]
+fn x402_payment_block_is_bound_to_the_request_signature() {
+    let (policy, paid, mut request) = fixture(1);
+    let root = tempfile::tempdir().unwrap();
+    let issuer = AccessIssuer::open(root.path(), policy).unwrap();
+    request.payment = Some(X402Payment {
+        token: [7; 20],
+        amount: 70,
+        deadline: 2000,
+        to: [9; 20],
+        valid_after: 900,
+        signature: vec![1; 65],
+    });
+    // The old signature does not cover the payment block.
+    assert_eq!(
+        issuer.issue(&paid, &request, 1000),
+        Err(AccessError::Authentication)
+    );
+    request.signature = signature(
+        1,
+        [1; 32],
+        &request_digest(
+            &paid.evidence,
+            issuer.policy.service_id,
+            request.nonce,
+            request.expires_at,
+            request.payment.as_ref(),
+        )
+        .unwrap(),
+    );
+    assert!(issuer.issue(&paid, &request, 1000).is_ok());
+    // A mutated payment block no longer matches the signed digest.
+    let mut swapped = request.clone();
+    swapped.payment.as_mut().unwrap().amount = 71;
+    assert_eq!(
+        issuer.issue(&paid, &swapped, 1000),
+        Err(AccessError::Authentication)
+    );
+    assert_eq!(issuer.store.records().unwrap().len(), 1);
 }

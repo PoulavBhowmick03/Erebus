@@ -117,6 +117,11 @@ def test_buyer_access_uses_the_participant_evidence_directory(tmp_path):
                 return {tool.name for tool in (await session.list_tools()).tools}
 
     assert "retrieve_service_access" in asyncio.run(tools(env))
+    x402 = {**env, "EREBUS_ACCESS_PAYMENT_RAIL": "x402-exact"}
+    x402.pop("EREBUS_PAYMENT_CONFIG")
+    assert asyncio.run(tools(x402)) == {"negotiate_deal", "retrieve_service_access"}
+    with pytest.raises(Exception):
+        asyncio.run(tools({**env, "EREBUS_ACCESS_PAYMENT_RAIL": "x402-exact"}))
     assert (state / "agent").is_dir() and (state / "agent").stat().st_mode & 0o077 == 0
     with pytest.raises(Exception):
         asyncio.run(tools({**env, "EREBUS_ACCESS_EVIDENCE_DIR": str(tmp_path)}))

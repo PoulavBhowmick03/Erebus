@@ -7,13 +7,16 @@ pub(super) const PAYLOAD: &[u8] = b"private negotiated data-feed snapshot";
 
 pub(super) async fn service(config: &Path, url: &str, client: &reqwest::Client) -> ServiceProcess {
     let mut process = ServiceProcess(
-        Command::new(env!("CARGO_BIN_EXE_erebus-access-service"))
-            .env_clear()
-            .env("EREBUS_ACCESS_CONFIG", config)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
+        Command::new(native_binary(
+            "erebus-access-service",
+            env!("CARGO_BIN_EXE_erebus-access-service"),
+        ))
+        .env_clear()
+        .env("EREBUS_ACCESS_CONFIG", config)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap(),
     );
     for _ in 0..100 {
         assert!(
@@ -78,7 +81,7 @@ pub(super) async fn finish(
         "state_root":seller_root.join("issuance"),"port":port,"backend":backend}).to_string().as_bytes());
     let process = service(&service_config, &url, client).await;
     let expiry = clock() + 120;
-    let digest = request_digest(&selected, service_id, [43; 32], expiry).unwrap();
+    let digest = request_digest(&selected, service_id, [43; 32], expiry, None).unwrap();
     let signature = if selected.terms.suite_id == 2 {
         erebus_core::shielded_auth::sign_message(&[61; 32], &digest)
             .unwrap()
@@ -95,6 +98,7 @@ pub(super) async fn finish(
         nonce: [43; 32],
         expires_at: expiry,
         signature,
+        payment: None,
     };
     let issued = client
         .post(format!("{url}/v1/access"))

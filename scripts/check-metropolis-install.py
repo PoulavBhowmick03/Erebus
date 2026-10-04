@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,7 @@ class RegistryHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def check(registry: Path) -> dict:
+def check(registry: Path, rehearse_x402: bool = False) -> dict:
     manifest = json.loads((registry / "release.json").read_text())
     if manifest["channel"] != "metropolis-testnet" or manifest["published"] is not False:
         raise ValueError("expected an unpublished Metropolis registry")
@@ -50,8 +51,8 @@ def check(registry: Path) -> dict:
         thread.start()
         try:
             subprocess.run([uv, "pip", "install", "--python", str(python),
-                            "--index-url", f"http://127.0.0.1:{server.server_port}/simple/",
-                            "--extra-index-url", "https://pypi.org/simple", "--index-strategy", "first-index",
+                            "--extra-index-url", f"http://127.0.0.1:{server.server_port}/simple/",
+                            "--index-url", "https://pypi.org/simple", "--index-strategy", "first-index",
                             f"erebus-mcp-server=={manifest['version']}"], env=environment, cwd=root, check=True)
         finally:
             server.shutdown()
@@ -66,13 +67,28 @@ def check(registry: Path) -> dict:
             env=environment, cwd=root, text=True).splitlines()
         if any(not Path(path).resolve().is_relative_to(root / "environment") for path in imports[:2]) or imports[2:] != [manifest["version"]] * 3:
             raise ValueError("imports or package versions escaped the isolated environment")
-        for name, record in manifest["binaries"].items():
+        for name, record in (manifest["binaries"] | manifest["launchers"]).items():
             if Path(name).name != name:
                 raise ValueError("invalid binary inventory")
             binary = bins / name
             with binary.open("rb") as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != record["sha256"]:
                     raise ValueError("installed native binary hash mismatch")
+        subprocess.run([str(bins / "erebus-selfhost"), "init", str(root / "operator files")],
+                       env=environment, cwd=root, timeout=20, check=True)
+        operator = root / "operator files"
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        relay_config = operator / "relay.env"
+        relay_config.write_text(relay_config.read_text().replace("EREBUS_RELAY_PORT=8080", f"EREBUS_RELAY_PORT={port}"))
+        try:
+            for command in ("up", "check"):
+                subprocess.run([str(bins / "erebus-selfhost"), command, str(operator)],
+                               env=environment, cwd=root, timeout=30, check=True)
+        finally:
+            subprocess.run([str(bins / "erebus-selfhost"), "down", str(operator)],
+                           env=environment, cwd=root, timeout=20, check=True)
         for name in ("erebus-negotiate", "erebus-payment"):
             result = subprocess.run([str(bins / name)], input='{"method":"version"}',
                                     text=True, capture_output=True, cwd=root, env=environment, timeout=20, check=True)
@@ -123,15 +139,33 @@ asyncio.run(check())
         subprocess.run([str(python), "-I", "-c", code, str(bins / "erebus-mcp-server"), "negotiate_deal",
                         json.dumps({"operation_ref": "../outside"}), "retry_without_new_payment"],
                        env=environment, cwd=root, timeout=45, check=True)
+        if rehearse_x402:
+            checkout = Path(__file__).resolve().parents[1]
+            cargo = shutil.which("cargo")
+            if not cargo or not shutil.which("anvil"):
+                raise ValueError("the local chain fixture requires cargo and Anvil")
+            fixture_environment = dict(environment)
+            fixture_environment.update({
+                "PATH": str(bins) + os.pathsep + os.environ.get("PATH", ""),
+                "EREBUS_TEST_INSTALLED_BIN_DIR": str(bins),
+                "EREBUS_TEST_MCP_PYTHON": str(python),
+            })
+            subprocess.run([cargo, "test", "--locked", "--offline", "--manifest-path",
+                            str(checkout / "sdk/shielded/Cargo.toml"), "--test", "negotiation_cli",
+                            "negotiated_x402_settles_once_recovers_restart_and_audits_from_the_grant",
+                            "--", "--ignored", "--nocapture"],
+                           env=fixture_environment, cwd=root, timeout=600, check=True)
     return {"status": "verified", "version": manifest["version"], "binaries": len(manifest["binaries"]),
-            "source_imports": False, "live_payment": False, "published": False}
+            "source_imports": False, "live_payment": False, "published": False,
+            "installed_x402_rehearsal": rehearse_x402}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--rehearse-x402", action="store_true", help="run the Anvil fixture with installed participant, access, MCP, and auditor binaries")
     args = parser.parse_args()
-    print(json.dumps(check(args.registry.resolve())))
+    print(json.dumps(check(args.registry.resolve(), args.rehearse_x402)))
 
 
 if __name__ == "__main__":

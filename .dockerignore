@@ -1,0 +1,12 @@
+**/target
+**/node_modules
+**/__pycache__
+.git
+.venv
+.env
+.env.*
+**/*.key
+**/*.pem
+circuits/**/build
+contracts/**/out
+contracts/**/cache

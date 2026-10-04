@@ -1,0 +1,194 @@
+name: Metropolis registry
+
+# Build-only by default. Release creation, asset upload to the registry repository, and the
+# dispatch that triggers its Pages deployment happen ONLY when publish=true is passed to a
+# manual dispatch. Both platform legs build from the same commit; a compare job fails if the
+# pure-Python wheel hashes differ across runners or the source commit differs.
+on:
+  push:
+    branches: [metropolis]
+    paths:
+      - .github/workflows/metropolis-registry.yml
+      - packaging/metropolis/**
+      - scripts/build-metropolis-registry.py
+      - scripts/check-metropolis-install.py
+      - sdk/**
+      - mcp-server/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Dev prerelease version, for example 0.3.0.dev20261004"
+        required: true
+      profile:
+        description: "Build profile"
+        type: choice
+        options: [release, debug]
+        default: release
+      publish:
+        description: "Publish to PoulavBhowmick03/erebus-metropolis (release + dispatch)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  METROPOLIS_VERSION: ${{ inputs.version || format('0.3.0.dev{0}', github.run_number) }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require a clean source tree
+        run: |
+          test -z "$(git status --porcelain)" \
+            || { echo "release builds require a clean checkout"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v5
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - name: Registry unit tests
+        run: uv run --frozen pytest scripts/tests/test_metropolis_registry.py -q
+      - name: Build the registry
+        run: |
+          python3 scripts/build-metropolis-registry.py \
+            --version "$METROPOLIS_VERSION" \
+            --output registry \
+            --profile "${{ inputs.profile || 'release' }}" \
+            --build
+      - name: Isolated install check
+        run: |
+          forge build --root contracts/evm
+          cargo fetch --locked --manifest-path sdk/shielded/Cargo.toml
+          python3 scripts/check-metropolis-install.py --registry registry --rehearse-x402
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metropolis-registry-${{ matrix.platform }}
+          path: registry
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    name: Compare platform builds
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: metropolis-registry-*
+          path: artifacts
+      - name: Same commit, clean source, identical pure-Python wheels
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          manifests = {}
+          for path in pathlib.Path("artifacts").glob("*/release.json"):
+              data = json.loads(path.read_text())
+              manifests[data["platform"]] = data
+          if len(manifests) != 2:
+              sys.exit(f"expected two platform manifests, found {len(manifests)}")
+          commits = {m["source_commit"] for m in manifests.values()}
+          if len(commits) != 1:
+              sys.exit(f"platform builds used different commits: {sorted(commits)}")
+          dirty = [p for p, m in manifests.items() if m["dirty_source"]]
+          if dirty:
+              sys.exit(f"platform builds have a dirty source tree: {dirty}")
+          pure = {}
+          for platform, manifest in manifests.items():
+              for name, meta in manifest["wheels"].items():
+                  if name.endswith("-py3-none-any.whl"):
+                      pure.setdefault(name, {})[platform] = meta["sha256"]
+          if not pure:
+              sys.exit("no pure-Python wheels found")
+          mismatched = {n: h for n, h in pure.items() if len(h) != 2 or len(set(h.values())) != 1}
+          if mismatched:
+              sys.exit(f"pure-Python wheel hashes differ across runners: {mismatched}")
+          print(f"same commit {commits.pop()}; pure wheels match: {sorted(pure)}")
+          PY
+
+  publish:
+    name: Publish registry
+    needs: compare
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: metropolis-registry-*
+          path: artifacts
+      - name: Combine the platform manifests
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          platforms = {}
+          for path in sorted(pathlib.Path("artifacts").glob("*/release.json")):
+              data = json.loads(path.read_text())
+              platforms[data["platform"]] = data
+          import os
+          version = os.environ["METROPOLIS_VERSION"]
+          combined = {
+              "version": version,
+              "tag": "v" + version,
+              "channel": "metropolis-testnet",
+              "source_commit": "${{ github.sha }}",
+              "build_profile": "${{ inputs.profile || 'release' }}",
+              "platforms": platforms,
+          }
+          pathlib.Path("release-manifest.json").write_text(json.dumps(combined, indent=2) + "\n")
+          PY
+      - name: Refuse to overwrite an existing version
+        env:
+          GH_TOKEN: ${{ secrets.METROPOLIS_REGISTRY_TOKEN }}
+        run: |
+          if gh release view "v$METROPOLIS_VERSION" --repo PoulavBhowmick03/erebus-metropolis >/dev/null 2>&1; then
+            echo "release already exists; refusing to overwrite"
+            exit 1
+          fi
+      - name: Create the prerelease and upload the wheels and manifest
+        env:
+          GH_TOKEN: ${{ secrets.METROPOLIS_REGISTRY_TOKEN }}
+        run: |
+          gh release create "v$METROPOLIS_VERSION" \
+            --repo PoulavBhowmick03/erebus-metropolis \
+            --title "Metropolis $METROPOLIS_VERSION" \
+            --prerelease \
+            --notes "Built from ${{ github.sha }}. See release-manifest.json for wheel, native, and launcher hashes and platform qualifications."
+          mkdir release-assets
+          for dir in artifacts/metropolis-registry-*; do
+            for wheel in "$dir"/wheels/*.whl; do
+              name=$(basename "$wheel")
+              if test -f "release-assets/$name"; then
+                cmp "$wheel" "release-assets/$name"
+              else
+                cp "$wheel" "release-assets/$name"
+              fi
+            done
+          done
+          gh release upload "v$METROPOLIS_VERSION" --repo PoulavBhowmick03/erebus-metropolis \
+            release-assets/*.whl
+          gh release upload "v$METROPOLIS_VERSION" --repo PoulavBhowmick03/erebus-metropolis \
+            release-manifest.json
+      - name: Trigger the registry Pages deployment
+        env:
+          GH_TOKEN: ${{ secrets.METROPOLIS_REGISTRY_TOKEN }}
+        run: |
+          gh api repos/PoulavBhowmick03/erebus-metropolis/dispatches \
+            -f event_type=metropolis-registry \
+            -f "client_payload[tag]=v$METROPOLIS_VERSION"

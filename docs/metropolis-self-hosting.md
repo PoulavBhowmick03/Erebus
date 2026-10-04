@@ -12,7 +12,7 @@ resolves binaries from `PATH` only, so activate that environment or prepend its 
 ## Layout
 
 ```sh
-scripts/metropolis-selfhost.sh init /srv/erebus
+erebus-selfhost init /srv/erebus
 ```
 
 `init` creates an owner-only (`0700`) tree and a relay configuration with a random bearer token:
@@ -49,7 +49,11 @@ byte arrays, not hex. A public-bound example:
 ```
 
 Each negotiated agreement must be published to `access/evidence/<deal commitment>.evidence`
-before the buyer can retrieve. Nothing does this automatically yet ([F48](friction.md)).
+before the buyer can retrieve. Configure the seller negotiation process's
+`access_evidence_root` to this directory for durable local publication. A remote service's
+disk is not the local seller's disk: remote publication still requires a colocated seller
+process or an explicit authenticated operator transfer. The hosted relay is not wired into
+the native TCP negotiation path.
 The access service listens on loopback; put an authenticated TLS gateway in front for remote
 buyers. The relayer has no listener: a trusted host process runs it per request or with
 `--serve` over stdin. Its variables are documented in `erebus-tx-relayer`'s header and the
@@ -58,9 +62,9 @@ buyers. The relayer has no listener: a trusted host process runs it per request 
 ## Operate
 
 ```sh
-scripts/metropolis-selfhost.sh up /srv/erebus     # start relay, access, indexer; wait for health
-scripts/metropolis-selfhost.sh check /srv/erebus  # probe every configured service, relayer included
-scripts/metropolis-selfhost.sh down /srv/erebus
+erebus-selfhost up /srv/erebus     # start configured services
+erebus-selfhost check /srv/erebus  # probe configured services
+erebus-selfhost down /srv/erebus
 ```
 
 `up` is idempotent for running services. State survives `down`/`up`. This launcher is not a
@@ -72,3 +76,20 @@ From a fresh venv installed only from the local Metropolis index, against a fund
 deployment: relay and access service reached health, the relayer configuration was accepted, and
 both services came back healthy after `down`/`up` with state retained. The indexer was not
 exercised; it needs a shielded pool. Not verified: TLS gateways, remote clients, or Monad.
+
+## Render Preparation
+
+The [Render blueprint](../packaging/metropolis/render/render.yaml) prepares one paid,
+single-instance relay with persistent storage. It uses the same Rust relay binary, requires
+a bearer token, exposes public liveness only through the gateway, and disables automatic
+deployments. No Render service is deployed or verified yet.
+
+The Docker image also supports `EREBUS_HOSTED_SERVICE=access` behind a loopback Caddy gateway.
+Provision owner-only `/data/access.json`, use port 8081, and keep payload, evidence, issuance,
+payment and signer journals on `/data`. The image does not generate keys, accepted agreements,
+or authorization to spend. Do not start a hosted x402 facilitator without explicit approval
+for its funded testnet gas account. Back up durable state before replacing disks or services.
+
+Render deployment needs account access and an approved paid persistent-disk plan. A free
+stateless deployment does not satisfy the recovery gate. The image and gateway have not yet
+been built or exercised on Render; configuration tests do not prove hosted operation.

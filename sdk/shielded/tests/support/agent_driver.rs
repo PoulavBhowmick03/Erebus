@@ -1,48 +1,25 @@
 //! Public-bound negotiation, settlement, and delivery driven by two MCP agents.
 
 use super::*;
-use erebus_core::commitment::commit_agreement;
 
 const SERVICE_ID: [u8; 32] = [42; 32];
 
-/// Plays the seller's operator. Once negotiation leaves the seller's agreement on disk, it
-/// publishes that agreement to the access service under its commitment and starts the service.
-/// Nothing in the product performs this handoff; an operator must.
-async fn seller_operator(
+/// Starts a configured access service before negotiation. The native seller publishes evidence.
+async fn start_access_service(
     root: PathBuf,
     config: Value,
     client: reqwest::Client,
     port: u16,
+    terms: AgreementTerms,
 ) -> ServiceProcess {
     let seller_root = root.join("seller");
-    let negotiated = seller_root.join(format!("state/agent/{}.0.tx", hex::encode(OPERATION)));
-    let deadline = Instant::now() + Duration::from_secs(900);
-    while !negotiated.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "seller never reached an agreement"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let selected = SelectedAgreement::decode(&fs::read(&negotiated).unwrap()).unwrap();
-    verify_selected_agreement(&selected).unwrap();
-    let commitment = commit_agreement(&selected.terms, &selected.blinding).unwrap();
     let agreements = seller_root.join("access-evidence");
-    fs::create_dir(&agreements).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&agreements, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    private(
-        &agreements.join(format!("{}.evidence", commitment.to_hex())),
-        &selected.encode().unwrap(),
-    );
     let payload = seller_root.join("payload");
     private(&payload, native_product::PAYLOAD);
     let service_config = seller_root.join("access.json");
-    private(&service_config, json!({"service_id":SERVICE_ID,"seller_key":selected.terms.seller_authorization_key.as_bytes(),
-        "suite_id":selected.terms.suite_id,"resource":selected.terms.service.resource,"payload_file":payload,
+    let seller_identity = AuthorizationIdentity::from_bytes(&[22; 32]).unwrap();
+    private(&service_config, json!({"service_id":SERVICE_ID,"seller_key":seller_identity.address(),
+        "suite_id":terms.suite_id,"resource":terms.service.resource,"payload_file":payload,
         "evidence_root":agreements,"state_root":seller_root.join("issuance"),"port":port,
         "backend":{"mode":"public_bound","namespace":config["namespace"],"settlement_contract":config["settlement_contract"],
             "verifier_version":1,"rpc_url":config["peer_rpc_url"],"from_block":config["first_block"],
@@ -55,20 +32,32 @@ async fn seller_operator(
     .await
 }
 
-/// Funds the deal, starts the seller's operator, and writes the buyer's access variables.
-/// Returns the access variable file and the operator task holding the service.
+/// Configures native evidence publication and starts the seller access service.
+/// Returns buyer access variables and the task holding the service.
 fn prepare(deployed: &PublicDeployed) -> (PathBuf, tokio::task::JoinHandle<ServiceProcess>) {
     let root = deployed.fixture.root.path().to_path_buf();
+    let evidence = root.join("seller/access-evidence");
+    fs::create_dir(&evidence).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&evidence, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let mut negotiation: Value =
+        serde_json::from_slice(&fs::read(&deployed.fixture.seller_config).unwrap()).unwrap();
+    negotiation["access_evidence_root"] = json!(evidence);
+    fs::write(&deployed.fixture.seller_config, negotiation.to_string()).unwrap();
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
         .port();
-    let operator = tokio::spawn(seller_operator(
+    let operator = tokio::spawn(start_access_service(
         root.clone(),
         deployed.config.clone(),
         deployed.client.clone(),
         port,
+        deployed.fixture.template.clone(),
     ));
     let access = root.join("erebus-access");
     fs::copy(env!("CARGO_BIN_EXE_erebus-access"), &access).unwrap();
@@ -99,6 +88,7 @@ async fn two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send() 
             "erebus_agents.metropolis_loop",
         ])
         .args(["--operation", &hex::encode(OPERATION)])
+        .args(["--max-polls", "30"])
         .arg("--buyer-negotiation")
         .arg(&deployed.fixture.buyer_config)
         .arg("--buyer-payment")
@@ -136,12 +126,7 @@ async fn two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send() 
         record["delivery"]["resource_sha256"],
         hex::encode(Sha256::digest(native_product::PAYLOAD))
     );
-    for stage in [
-        "inclusion",
-        "finality",
-        "payment_verified_after",
-        "delivery",
-    ] {
+    for stage in ["payment_verified_after", "delivery"] {
         assert!(record["latency_s"][stage].is_number(), "{stage}: {record}");
     }
     assert_eq!(deployed.proxy.sends.load(Ordering::SeqCst), 1);
@@ -189,10 +174,66 @@ async fn hold_public_agent_environment() {
     let balance = rpc(&deployed.client,&deployed.rpc_url,"eth_call",json!([{"to":deployed.token,"data":format!("0x{}",hex::encode(abi::encode_balance_of_call(&AuthorizationIdentity::from_bytes(&[22;32]).unwrap().address())))},"latest"])).await;
     let paid =
         u128::from_str_radix(balance.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+    // Independent disclosure from the encrypted grant, auditor key, and public configuration.
+    // In installed mode the auditor binary comes from the fresh environment, not this checkout.
+    let evidence_root = deployed.fixture.root.path().join("seller/access-evidence");
+    let published: Vec<PathBuf> = fs::read_dir(&evidence_root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "evidence")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut disclosure = json!({"attempted": false});
+    if let Some(evidence_file) = published.first() {
+        let binary = match std::env::var_os("EREBUS_INSTALLED_ENV") {
+            Some(venv) => PathBuf::from(venv).join("bin/erebus-shielded-disclosure"),
+            None => PathBuf::from(env!("CARGO_BIN_EXE_erebus-shielded-disclosure")),
+        };
+        let auditor = deployed.fixture.root.path().join("auditor");
+        fs::create_dir_all(&auditor).unwrap();
+        let key = auditor.join("auditor.key");
+        let (ok, keyed) = finish(spawn(
+            &binary,
+            &auditor,
+            json!({"method":"keygen","key_file":key}),
+        ));
+        assert!(ok, "disclosure keygen: {keyed}");
+        let grant = auditor.join("deal.grant");
+        let (ok, exported) = finish(spawn(
+            &binary,
+            deployed.fixture.root.path(),
+            json!({"method":"export","evidence_file":evidence_file,
+                "issuer_key_file":deployed.fixture.root.path().join("seller/agreement.key"),
+                "recipient_public_key":keyed["recipient_public_key"],"grant_file":grant,
+                "expires_at":clock()+300}),
+        ));
+        assert!(ok, "disclosure export: {exported}");
+        let (ok, verified) = finish(spawn(
+            &binary,
+            &auditor,
+            json!({"method":"verify_payment","grant_file":grant,"key_file":key,
+                "expected_issuer":format!("0x{}",hex::encode(AuthorizationIdentity::from_bytes(&[22;32]).unwrap().address())),
+                "deployment":{"namespace":deployed.config["namespace"],
+                    "settlement_contract":deployed.config["settlement_contract"],"verifier_version":1,
+                    "rpc_url":deployed.config["peer_rpc_url"],
+                    "from_block":deployed.config["first_block"],"log_block_range":100,"max_log_queries":8,
+                    "max_ancestry":64,"cache_root":auditor.join("public-history")}}),
+        ));
+        assert!(ok, "disclosure verification: {verified}");
+        disclosure = json!({"attempted": true, "agreement_verified":verified["agreement_verified"],
+            "payment_verified":verified["payment_verified"], "delivery_verified":verified["delivery_verified"]});
+    }
     fs::write(
         directory.join("result.json"),
-        json!({"raw_transaction_sends":deployed.proxy.sends.load(Ordering::SeqCst),"seller_token_balance":paid.to_string()})
-            .to_string(),
+        json!({"raw_transaction_sends":deployed.proxy.sends.load(Ordering::SeqCst),
+            "seller_token_balance":paid.to_string(),"disclosure":disclosure})
+        .to_string(),
     )
     .unwrap();
     operator.abort();

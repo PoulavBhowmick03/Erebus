@@ -51,19 +51,23 @@ class AccessSeam:
         return response
 
     def retrieve(self, *, evidence_file: str, buyer_key_file: str, service_url: str,
-                 service_id: str, cache_root: str, allow_loopback_http: bool = False) -> dict[str, Any]:
+                 service_id: str, cache_root: str, allow_loopback_http: bool = False,
+                 x402_exact: bool = False) -> dict[str, Any]:
         """Authenticate locally and retrieve once. Pending is not verified payment."""
         if (
             any(not isinstance(path, str) or not path or len(path) > 4096 for path in (evidence_file, buyer_key_file, cache_root, service_url))
             or not isinstance(service_id, str) or not re.fullmatch(r"[a-f0-9]{64}", service_id)
-            or service_id == "0" * 64 or type(allow_loopback_http) is not bool
+            or service_id == "0" * 64 or type(allow_loopback_http) is not bool or type(x402_exact) is not bool
         ):
             raise AccessError("invalid access request")
-        code, response = self._run({
+        request = {
             "method": "retrieve", "evidence_file": evidence_file, "buyer_key_file": buyer_key_file,
             "service_url": service_url, "service_id": service_id, "cache_root": cache_root,
             "allow_loopback_http": allow_loopback_http,
-        })
+        }
+        if x402_exact:
+            request["x402_exact"] = True
+        code, response = self._run(request)
         if code == 2:
             status = response.get("status")
             if not isinstance(status, str) or status not in {"pending", "paid_but_undelivered"}:

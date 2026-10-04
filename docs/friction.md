@@ -1919,6 +1919,12 @@ the service's naming. The funded tests and the held environment for LLM agents b
 in the service's naming, or the service resolves evidence by operation. The current split means
 two directories and two naming schemes for the same agreement.
 
+**Resolution in the current tree.** The seller negotiation configuration now accepts
+`access_evidence_root`. Rust publishes the verified selected agreement under its commitment
+after durable authorization, with file and directory sync and conflict rejection.
+The public-bound MCP payment/access test now starts the service before negotiation and has
+no evidence-copy watcher. It passed locally on Anvil; a new Monad run remains required.
+
 ## F49: Agents cannot tell which verification flag means "you got what you paid for" (2026-10-03)
 
 **What we were trying to do.** Let headless Claude Code agents, given only their MCP tools, buy
@@ -1937,6 +1943,10 @@ unaffected.
 **What would have made it easier.** Tool descriptions, or a one-line summary in the result, that
 say what each flag establishes. For example: the content hash matches the agreement, the payment
 claim here is the seller's, and chain verification comes from `recover_deal`.
+
+**Resolution in the current tree.** Access tool results now include `verification_meaning`,
+a sentence distinguishing hash verification, `recover_deal` payment verification, and a
+separate delivery audit. No verification flag is promoted by this explanatory text.
 
 ## F50: The x402 spec's reference proxy emits an event the deployed proxy does not (2026-10-03)
 

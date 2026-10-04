@@ -25,6 +25,7 @@ class AccessSettings:
     cache_root: Path
     binary: str | None = None
     allow_loopback_http: bool = False
+    x402_exact: bool = False
 
     @classmethod
     def from_env(cls) -> AccessSettings:
@@ -50,7 +51,10 @@ class AccessSettings:
         development = os.environ.get("EREBUS_ALLOW_LOOPBACK_ACCESS_HTTP", "0")
         if development not in {"0", "1"}:
             raise ConfigError("loopback access exception must be 0 or 1")
-        return cls(directory.resolve(), key_file, url, service_id, Path(cache).expanduser(), os.environ.get("EREBUS_ACCESS_CLI"), development == "1")
+        rail = os.environ.get("EREBUS_ACCESS_PAYMENT_RAIL", "observe")
+        if rail not in {"observe", "x402-exact"}:
+            raise ConfigError("access payment rail must be observe or x402-exact")
+        return cls(directory.resolve(), key_file, url, service_id, Path(cache).expanduser(), os.environ.get("EREBUS_ACCESS_CLI"), development == "1", rail == "x402-exact")
 
     def evidence(self, name: str) -> str:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", name, flags=re.ASCII):
@@ -62,11 +66,12 @@ def build_access_server(settings: AccessSettings | None = None) -> MCPServer:
     """Rust handles key access, signatures, payload verification, and durable storage."""
     settings = settings or AccessSettings.from_env()
     server = MCPServer(name="erebus-access", instructions=(
+        ("The operator selected x402-exact: the first retrieval locally authorizes payment and asks the seller to submit once. Retries reuse the durable permit. " if settings.x402_exact else "This server retrieves already paid resources and cannot authorize payment. ") +
         "Retrieve one immutable snapshot using the existing buyer agreement key. "
         "The endpoint, key path, and private evidence directory are fixed by the operator. "
         "Private keys and payloads stay in local files. Rust verifies content against the signed agreement. "
         "The seller's payment claim is not independent chain verification or a delivery audit. "
-        "Pending or failed access must not trigger another payment. This mode never submits a transaction."
+        "Pending or failed access must not trigger another payment rail."
     ))
     register_access_tools(server, settings)
     return server
@@ -82,13 +87,19 @@ def register_access_tools(server: MCPServer, settings: AccessSettings) -> None:
 
     @server.tool()
     async def retrieve_service_access(evidence_name: str) -> dict[str, Any]:
-        """Return a verified local resource path or pending access, without paying again."""
+        """Retrieve a resource; operator-selected x402 mode authorizes its first payment.
+
+        Retries reuse the persisted permit and never authorize a second payment.
+        """
         try:
+            options = {"x402_exact": True} if settings.x402_exact else {}
             response = await asyncio.to_thread(
                 seam.retrieve, evidence_file=settings.evidence(evidence_name), buyer_key_file=str(settings.buyer_key_file),
                 service_url=settings.service_url, service_id=settings.service_id, cache_root=str(settings.cache_root),
                 allow_loopback_http=settings.allow_loopback_http,
+                **options,
             )
-            return {"ok": response["status"] == "retrieved", "result": response}
+            return {"ok": response["status"] == "retrieved", "result": response,
+                    "verification_meaning": "resource_verified checks the resource hash; payment_verified comes only from recover_deal; delivery_verified requires a separate delivery audit, not a successful download."}
         except AccessError as error:
             return {"ok": False, "error": {"code": "ACCESS_UNAVAILABLE", "message": str(error), "retry_without_payment": True}}

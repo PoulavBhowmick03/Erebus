@@ -30,6 +30,9 @@ struct Deployment {
 #[tokio::main]
 async fn main() {
     cli::run(|request| async move {
+        if cli::is_x402_request(&request.deployment) {
+            return cli::verify_x402_payment(request).await;
+        }
         if request.evidence.terms.settlement_mode == SettlementMode::PublicBound {
             return cli::verify_public_payment(request).await;
         }

@@ -22,6 +22,8 @@ struct Request {
     cache_root: PathBuf,
     #[serde(default)]
     allow_loopback_http: bool,
+    #[serde(default)]
+    x402_exact: bool,
 }
 
 #[tokio::main]
@@ -35,7 +37,7 @@ async fn main() {
         exit(0);
     }
     if args.len() == 1 && args[0] == "--help" {
-        println!("erebus-access: authenticate with the buyer agreement key and retrieve one signed snapshot.\nOne JSON request: method=retrieve, evidence_file, buyer_key_file, service_url, service_id, cache_root.\nThe endpoint must be HTTPS ending in /v1/access; loopback HTTP requires explicit development opt-in.\nKeys remain in owner-only local files. Payloads are saved locally, not printed. No payment is signed or submitted.\nExit 2 means pending access. A content receipt is not independent payment or delivery evidence.");
+        println!("erebus-access: authenticate with the buyer agreement key and retrieve one signed snapshot.\nOne JSON request: method=retrieve, evidence_file, buyer_key_file, service_url, service_id, cache_root.\nThe endpoint must be HTTPS ending in /v1/access; loopback HTTP requires explicit development opt-in.\nKeys remain in owner-only local files. Payloads are saved locally, not printed.\nDefault mode retrieves already paid resources. Explicit x402_exact=true signs and persists one Permit2 authorization before HTTP; the seller submits payment. Retries reuse that authorization.\nExit 2 means pending access. A content receipt is not independent payment or delivery evidence.");
         exit(0);
     }
     if !args.is_empty() {
@@ -122,7 +124,11 @@ async fn retrieve(request: Request) -> Result<RetrievalReceipt, RetrievalError> 
         .map_err(|_| RetrievalError::Authentication)?
         .as_secs();
     let seed = seed.ok_or(RetrievalError::Authentication)?;
-    client.retrieve(&evidence, &seed, now).await
+    if request.x402_exact {
+        client.retrieve_x402(&evidence, &seed, now).await
+    } else {
+        client.retrieve(&evidence, &seed, now).await
+    }
 }
 
 fn private_read(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>, RetrievalError> {

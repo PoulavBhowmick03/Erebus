@@ -11,6 +11,52 @@ about through it.
 
 ## Metropolis development
 
+**Monad reviewers: start here, not at the Starknet install below.**
+Use the [Metropolis install guide](./docs/metropolis-install.md) and
+[payment runbook](./docs/metropolis-payment-runbook.md). The stable `v0.3.0`
+package and the video below demonstrate the older Starknet product, not Monad.
+
+The verified live Monad path is **public-bound settlement**: accepted agreement,
+blinding, signatures, amount, and parties are public in transaction calldata.
+Offchain negotiation history stays encrypted. Shielded settlement and the complete
+two-agent MCP delivery loop have local Anvil evidence only; neither is a released
+private-payment product on Monad.
+
+The x402 `exact` rail (seller-facilitated Permit2) is implemented and locally verified end to
+end: real discovery and encrypted negotiation, one fenced payment, restart recovery, matching
+resource delivery, and independent auditor verification from the encrypted grant alone. It is
+not live on Monad. Release packages build and pass isolated-install checks on macOS arm64;
+Linux x86_64 is built only by the prepared registry workflow and is not locally qualified.
+
+Recorded Monad testnet payment:
+[`0x1f7ec208…`](https://testnet.monadexplorer.com/tx/0x1f7ec208a7b03b835f224ac989cc59c9aee4c33634a2b04498b8394ddede4c09).
+See [dated evidence and remaining gates](./docs/metropolis-m8-progress.md).
+The [submission checklist](./docs/metropolis-submission-gates.md) records the rubric and mandatory evidence gates.
+No Metropolis demo video or package-only external rehearsal is claimed complete.
+
+### Local Monad-Backend Rehearsal
+
+From this branch checkout, with Rust stable, uv, and Foundry installed:
+
+```sh
+uv sync --all-packages
+forge build --root contracts/evm
+cargo test --locked --manifest-path sdk/shielded/Cargo.toml --test negotiation_cli \
+  two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send -- --ignored --nocapture
+```
+
+This starts Anvil, negotiates through two MCP servers, pays once, recovers a lost
+broadcast response, and retrieves the resource. It is a local rehearsal, not a
+live Monad interaction. The live path needs separate participant keys, two RPC
+providers, test-token allowance, faucet gas, and the configuration in the runbooks.
+
+### AI-Assisted Development
+
+Claude, Codex, and OpenCode have assisted with implementation, tests, documentation,
+and review of the Metropolis work. AI-generated code requires human review and does
+not establish security or release readiness. The pre-existing Starknet/STRK20
+implementation is prior work; the Metropolis roadmap records the new branch work.
+
 The `metropolis` branch targets a developer/agent product on Monad testnet. This work is planned, not a shipped Monad release.
 The goal is for an external developer or marketplace to integrate agents, negotiate privately, settle, disclose one deal, and recover failures.
 The [Metropolis roadmap](./docs/metropolis-roadmap.md) defines the milestones and acceptance criteria.

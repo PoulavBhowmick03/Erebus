@@ -76,3 +76,20 @@ def test_binary_inventory_matches_current_cargo_targets():
         explicit = {binary["name"] for binary in manifest.get("bin", [])}
         automatic = {path.stem for path in (ROOT / crate / "src/bin").glob("*.rs")}
         assert set(names) <= explicit | automatic
+
+
+def test_release_asset_links_are_absolute_and_hash_pinned(tmp_path):
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    for name in registry.PROJECT_NAMES:
+        (wheels / f"{name.replace('-', '_')}-0.3.0.dev1-py3-none-any.whl").write_bytes(name.encode())
+    projects = registry.build_index(
+        wheels, tmp_path / "simple", "https://github.com/PoulavBhowmick03/erebus-metropolis/releases/download/v0.3.0.dev1"
+    )
+    for name, files in projects.items():
+        page = (tmp_path / "simple" / name / "index.html").read_text()
+        assert (
+            f"https://github.com/PoulavBhowmick03/erebus-metropolis/releases/download/v0.3.0.dev1/"
+            f"{files[0].name}#sha256={registry.sha256(files[0])}"
+        ) in page
+        assert "github.io/Erebus/simple" not in page

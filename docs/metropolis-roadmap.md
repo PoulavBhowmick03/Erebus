@@ -399,16 +399,27 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [x] Add the HTTP service adapter and bind access to the finalized agreement and intended buyer.
 - [x] Persist access-issuance state and retry interrupted delivery without repeating payment or granting access to another buyer.
 - [x] Expose paid-but-undelivered outcomes and document the seller cooperation required for recovery.
-- [ ] Implement x402 composition only against a specified scheme, with exactly one payment and explicit privacy exposure.
+- [x] Implement x402 composition only against a specified scheme, with exactly one payment and explicit privacy exposure.
+      Local evidence: seller-facilitated `exact` Permit2 with a durable one-permit fence, paired finalized observation,
+      an independent auditor that decodes the permit from finalized calldata, and a negotiated two-process test
+      (`sdk/shielded/tests/support/payment_driver.rs`) asserting one send and one payment. No live Monad x402 broadcast.
 - [ ] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
-- [x] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately.
+- [x] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately. Local call durations exist; block timestamps are diagnostics, not measured inclusion or finality latency.
+      Public-bound and x402 now report local monotonic `stages_ms` (negotiation, signing, submission, first observed
+      inclusion, finalized verification, delivery); proof is explicitly null for public-bound and driver-reported in
+      shielded mode. No shielded comparison is inferred from public-bound numbers.
 
 Done: independent buyer, seller, observer, and disclosure processes complete the real Monad workflow.
 Both hosted endpoints and the self-hosting package support the documented workflow.
 An interrupted service response can recover access without a second charge.
 Mainnet deployment is a separate release decision after review and testnet evidence.
 
-M8 status 2026-10-03: **public-bound live workflow recorded; complete developer release still open.**
+M8 status 2026-10-04: **public-bound live workflow recorded; x402 exact verified locally; complete developer release still open.**
+The x402 exact rail now has a negotiated two-process end-to-end test with one payment, restart recovery, resource
+verification, and independent auditor verification from the encrypted grant alone. Stage measurements are recorded
+for public-bound and x402. Release packages are built and isolated-install verified on macOS arm64; Linux x86_64 is
+built by the prepared registry workflow but was not verified locally (the emulated x86_64 environment was unstable).
+No live Monad x402 run, published registry, hosted service, demo video, or external acceptance exists yet.
 `erebus-network-check` passed all 16 live checks against `testnet-rpc.monad.xyz` (chain ID
 10143, explicit `finalized`, hash-pinned reads, and the BN254 add/mul/pairing precompiles).
 `ErebusSettlement` is live at `0xa5f0c864f434331bef9a7fc5e05450d598d24da4` (block 67495473,
@@ -435,11 +446,11 @@ harness item is checked at that scope).
 Owner decisions (DM8-10, DM8-11): finish the product public-bound first, then deploy a shielded
 testnet pool; x402 composes against `exact`. The public-bound loop now runs through MCP with
 delivery. Two LLM agents completed it from packages installed into a fresh environment.
-Stage timings are reported, and a self-hosting launcher brings the services up from installed
-binaries. Those two items are checked at local scope; inclusion and finality need Monad to be
+Local call timings are reported, and a self-hosting launcher brings services up from installed
+binaries. The complete measurement gate is open: inclusion and finality need Monad to be
 meaningful.
-Still open: published and hosted packages and services, wallet onboarding, x402 `exact`
-composition, local proving from installed packages (with the shielded pool), and the live Monad
+Still open: published and hosted packages and services, wallet onboarding, measured x402
+service-model comparison, local proving from installed packages (with the shielded pool), and the live Monad
 workflow.
 These local checks do not complete the private-payment release gate.
 The checked access items have funded local evidence for both modes, including Rust and MCP retrieval.

@@ -74,6 +74,8 @@ struct Config {
     seller_spend_secret_file: Option<PathBuf>,
     seller_wallet_file: Option<PathBuf>,
     seller_wallet_key_file: Option<PathBuf>,
+    #[serde(default)]
+    access_evidence_root: Option<PathBuf>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +334,9 @@ fn negotiate(
         "seller" => Role::Seller,
         _ => return Err("invalid configured role"),
     };
+    if role != Role::Seller && config.access_evidence_root.is_some() {
+        return Err("only the seller can publish access evidence");
+    }
     let maximum = BaseUnits::new(
         config
             .maximum_price
@@ -701,9 +706,61 @@ fn negotiate(
             Ok::<_, StoreError<OperationId>>(())
         })
         .map_err(|_| "disclosure evidence persistence failed")?;
+    if let Some(root) = &config.access_evidence_root {
+        if role != Role::Seller {
+            return Err("only the seller can publish access evidence");
+        }
+        publish_access_evidence(root, &commitment.to_hex(), &encoded)?;
+    }
     Ok(
         json!({"protocol_version":1,"status":"authorized","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"agreement_verified":true,"evidence_file":store.blob_path(&record.id,0),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}}),
     )
+}
+
+fn publish_access_evidence(
+    root: &Path,
+    commitment: &str,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
+    let metadata = fs::symlink_metadata(root).map_err(|_| "access evidence root unavailable")?;
+    if !root.is_absolute() || !metadata.is_dir() {
+        return Err("access evidence root must be an absolute real directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("access evidence root must be owner-only");
+        }
+    }
+    let target = root.join(format!("{commitment}.evidence"));
+    let temporary = tempfile::NamedTempFile::new_in(root)
+        .map_err(|_| "access evidence temporary file failed")?;
+    temporary
+        .as_file()
+        .write_all(bytes)
+        .map_err(|_| "access evidence write failed")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| "access evidence sync failed")?;
+    if let Err(error) = fs::hard_link(temporary.path(), &target) {
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err("access evidence publication failed");
+        }
+        let existing =
+            fs::symlink_metadata(&target).map_err(|_| "access evidence metadata failed")?;
+        if !existing.is_file()
+            || existing.len() != bytes.len() as u64
+            || fs::read(&target).map_err(|_| "access evidence read failed")? != bytes
+        {
+            return Err("access evidence conflicts with retained agreement");
+        }
+    }
+    fs::File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "access evidence directory sync failed")?;
+    Ok(())
 }
 
 fn finish_price_negotiation(
@@ -800,4 +857,47 @@ fn main() {
     println!("{response}");
     let flushed = std::io::stdout().flush().is_ok();
     std::process::exit(i32::from(failed || !flushed));
+}
+
+#[cfg(test)]
+mod access_publication_tests {
+    use super::*;
+
+    #[test]
+    fn publication_is_private_idempotent_and_rejects_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let commitment = "ab".repeat(32);
+        publish_access_evidence(root.path(), &commitment, b"verified agreement").unwrap();
+        publish_access_evidence(root.path(), &commitment, b"verified agreement").unwrap();
+        assert!(publish_access_evidence(root.path(), &commitment, b"different agreement").is_err());
+        let path = root.path().join(format!("{commitment}.evidence"));
+        assert_eq!(fs::read(&path).unwrap(), b"verified agreement");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn publication_rejects_symlinks_and_shared_roots() {
+        use std::os::unix::{fs::symlink, fs::PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let commitment = "ab".repeat(32);
+        symlink(
+            "missing",
+            root.path().join(format!("{commitment}.evidence")),
+        )
+        .unwrap();
+        assert!(publish_access_evidence(root.path(), &commitment, b"agreement").is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(publish_access_evidence(root.path(), &"cd".repeat(32), b"agreement").is_err());
+    }
 }

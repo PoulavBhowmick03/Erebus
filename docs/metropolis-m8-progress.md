@@ -1,11 +1,44 @@
 # Metropolis M8 Progress
 
-Updated: 2026-10-03. Branch: `metropolis`. M8 is **not complete**.
+Updated: 2026-10-04. Branch: `metropolis`. M8 is **not complete**.
 The public-bound live workflow, bounded disclosure observation, local artifact installation,
 and local HTTP access recovery have evidence. Released packages, hosted services, x402,
 and a complete installed two-agent workflow remain open.
 The local negotiation SDK now freezes agreement transcripts before signatures and authenticates separate shielded agreement keys.
 The native negotiation command supports cold-start private offers and durable consent in both modes, without payment submission.
+
+## Review Fixes (2026-10-03)
+
+- The shielded lockfile now accepts `--locked` builds after the EVM dependency change.
+- The Metropolis index has priority over PyPI. The native wheel includes `erebus-selfhost`.
+  An isolated install verified 14 native hashes and the launcher hash, then started,
+  checked, and stopped the installed relay from an operator path containing spaces.
+- Literal environment parsing preserves spaces and shell metacharacters without evaluation.
+- The native seller publishes verified agreement evidence to its configured access root.
+  The public-bound two-MCP-agent test passed without an evidence-copy watcher: one
+  broadcast, finalized recovery, and successful payload retrieval. This is Anvil evidence.
+- Access results explain hash, payment, and delivery verification without changing the flags.
+- The harness uses monotonic elapsed time from settlement-call start to payment verification.
+  Block timestamps remain diagnostics; inclusion/finality measurements are still open.
+- Permit2 payment signatures are explicitly documented as public calldata.
+
+The deployed settlement artifact was rechecked read-only with
+`scripts/check-evm-deployment.py` at finalized block hash
+`0x4ba79809c01f237e9ec11f80aae75b9b7ce6f642ed790ff21ac77db9d2c8f4bf`.
+Both runtimes were 15,652 bytes; four immutable reference ranges were masked,
+the remaining bytes matched, and `verifierVersion()` returned 1.
+This is artifact identity evidence, not an audit or a new payment.
+
+The [submission gates](metropolis-submission-gates.md) distinguish the supplied rubric
+from local engineering evidence. A new live isolated-key workflow, external rehearsal,
+published packages, and Monad demo video remain required.
+
+Verification after these changes: both-mode freeze/restart/publication test passed;
+the watcher-free public-bound MCP payment/access test passed; two publication safety
+tests passed; shielded fmt and all-target clippy with `-D warnings` passed.
+The Python workspace reported 394 passed, 4 skipped, and three existing failures in
+`scripts/tests/test_demo.py` (legacy web component paths and video expectations).
+Those failures are not evidence of a green branch and remain unresolved here.
 
 ## Deployed
 
@@ -362,8 +395,9 @@ Owner decisions: finish the product public-bound first, then deploy a shielded t
 **Delivery and timings.** A finalized public-bound payment now reports `chain_times`: inclusion and
 finalized-anchor block numbers and timestamps, read from the primary RPC as diagnostics only. The
 agent loop retrieves the resource when the buyer's server exposes access. It retries a failed
-retrieval by retrieving again and never by paying. It reports latencies for inclusion, finality,
-payment verification, and delivery. In the combined MCP mode, buyer access is enabled by
+retrieval by retrieving again and never by paying. It reports local elapsed time for
+payment verification and delivery. Inclusion and finality timestamps are diagnostics,
+not measured latency. In the combined MCP mode, buyer access is enabled by
 `EREBUS_ACCESS_SERVICE_URL`, and the evidence directory is fixed to `<state_root>/agent` (DM8-12).
 
 `two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send` runs two real MCP servers
@@ -373,7 +407,7 @@ and its hash matches the agreed digest. The proxy sees one raw transaction, and 
 tokens. The full deal took 11.6 s (debug build): negotiation 0.3 s, local signing 0.09 s,
 submission 0.04 s, payment verified 2.3 s after submission, delivery 0.1 s. Anvil makes
 inclusion and finality meaningless (`--slots-in-an-epoch 1`, whole-second timestamps). Those two
-numbers need Monad.
+numbers are not latency measurements and have been removed from the current harness output.
 
 **Installed packages only.** The registry was built from this tree and installed into a fresh
 venv outside the repository. Two headless Claude Code agents then ran with each MCP server as
@@ -399,5 +433,111 @@ cargo test --locked --manifest-path sdk/shielded/Cargo.toml --test negotiation_c
 uv run --locked pytest agents/tests/test_metropolis_loop.py mcp-server/tests/test_metropolis.py sdk/py/tests/test_metropolis_seam.py
 ```
 
-Not done: publishing or hosting the registry, x402 `exact` composition, wallet onboarding, local
+Not done at that checkpoint: publishing or hosting the registry, x402 `exact` composition, wallet onboarding, local
 proving from installed packages (deferred with the shielded pool), and anything on Monad.
+
+### x402 HTTP Composition (Local)
+
+The access service now supports an explicit `x402_exact` backend. The buyer persists a fixed
+Permit2 authorization before HTTP. The seller checks the signed agreement and matching v2
+header, journals the exact gas-funded transaction, and fences its broadcast before sending.
+Retries observe the same transaction at two configured finalized RPC anchors. No ordinary
+payment fallback, new permit, or automatic resend is permitted.
+
+`x402_http_submits_once_recovers_restart_and_rejects_mutations` runs separate native access
+client/service processes with canonical runtime fixtures on Anvil. It rejects changed amount,
+recipient, deadline and signature; recovers a lost broadcast acknowledgement and service
+restart; retrieves the agreed payload; and asserts one send and exactly 70 tokens paid.
+Buyer permit recovery is also tested after each of four durable-write boundaries. The two
+RPC endpoints in this test are a proxy and the same Anvil node, not independent providers.
+The agreement uses a fixture with an empty transcript, not an installed negotiation run.
+
+Python and dedicated access MCP configuration require explicit x402 opt-in. Ordinary combined
+settlement tools reject that rail. The client still reports `payment_verified: false`: its
+resource hash check and the seller's payment assertion are not an independent auditor check.
+
+Still open: the installed two-agent x402 rehearsal, independent x402 auditor verification,
+live Monad composition, complete stage measurements, publication/hosting and external
+fresh-environment acceptance. See [configuration and limits](metropolis-m8-x402.md).
+
+
+## Negotiated x402, Independent Audit, Measurements, and Installed Rehearsal (2026-10-04)
+
+All evidence below is local (Anvil and a fresh venv on macOS arm64) unless stated otherwise.
+Nothing was committed, published, deployed, or broadcast.
+
+**Negotiated two-process x402.** `negotiated_x402_settles_once_recovers_restart_and_audits_from_the_grant`
+runs real authenticated discovery and encrypted Noise negotiation between separate buyer and
+seller processes with separate key directories. The seller publishes the accepted agreement
+through its configured `access_evidence_root` (no test watcher). The buyer prepares one fixed
+Permit2 authorization; the x402 access service journals it, fences the broadcast, and submits
+exactly one transaction. The test drops the first response, restarts the service, retries with
+the same permit, retrieves the agreed payload, and asserts one send and the agreed seller
+balance. It then exports an encrypted grant and verifies the payment through the auditor path.
+Measured (debug build, local monotonic): negotiation 759 ms, permit preparation 17 ms, first
+observed inclusion 81 ms after submission, finalized verification 290 ms after submission,
+delivery 742 ms, proof null (public-bound has no proving stage).
+
+**Independent x402 auditor.** `erebus-disclosure` and `erebus-shielded-disclosure` accept
+`rail: "x402_exact"` in `verify_payment`. From the encrypted grant, auditor key, and public
+configuration alone, the auditor authenticates both pinned canonical runtimes, decodes the
+permit and signature from the finalized transaction input, and requires matching finalized
+target, calldata, transfer, and Permit2 nonce evidence at two endpoints. Tests reject a
+buyer-signed permit paying another recipient, tampered grants, neighboring deals, non-payment
+transactions, and unmined observations (pending, exit 2). No participant state, spending key,
+or prover is needed.
+
+**Stage measurements.** The public-bound agent loop now reports `stages_ms` with negotiation
+(both roles), proof (null for public-bound), signing, submission, first observed inclusion,
+finalized verification, and delivery, all from local monotonic clocks. Block timestamps remain
+diagnostics. No shielded comparison is inferred from public-bound numbers; shielded proof
+timings remain driver-reported.
+
+**Release packages.** `scripts/build-metropolis-registry.py --profile release` produced
+`0.3.0.dev20261004` for macOS arm64 (`source_commit 8a1d365`, `dirty_source: true`), and
+`scripts/check-metropolis-install.py` installed it into a fresh venv outside the repository:
+14 binaries verified, no source imports, self-host relay healthy. The Linux x86_64 leg of
+`.github/workflows/metropolis-registry.yml` is prepared but was **not** verified locally: the
+available x86_64 environment is an emulated colima VM that repeatedly reset under a full
+release build. Linux platform qualification therefore remains CI-only and unexecuted; do not
+claim Linux packages from this run.
+
+**Installed rehearsal with disclosure.** A fresh venv installed only from the local registry
+(`/tmp/erebus-installed`) ran both headless agents against the installed `erebus-mcp-server`,
+with only the venv's `bin` on `PATH` and no binary overrides. The agents negotiated, settled
+once through the lossy proxy, recovered by observation, and retrieved the snapshot; the held
+environment then exported a grant and verified the payment with the installed disclosure
+binary. Result: one raw transaction, seller balance 70, `agreement_verified: true`,
+`payment_verified: true`, `delivery_verified: false`. This is a team-operated rehearsal, not
+independent external acceptance; the environment fixture and Anvil remain operator-held.
+
+**Linux build attempt.** The release registry was copied into the x86_64 colima VM and the
+toolchain was installed there (cargo 1.99.0, uv 0.12.23), but the VM reset its SSH and Docker
+endpoints under load before the build completed. The exact CI job remains the qualification
+path; record the failure honestly rather than substituting a cross-build.
+
+## Review Corrections and Installed x402 Gate (2026-10-04)
+
+The agent driver's `stages_ms` now converts all second-valued durations to milliseconds.
+The calldata decoder rejects oversized offsets, trailing bytes and nonzero ABI padding
+without unchecked range arithmetic. The release workflow runs pytest in the project
+environment and deduplicates matching pure-Python assets before upload.
+
+`check-metropolis-install.py --rehearse-x402` passed against locally built release packages
+`0.3.0.dev2026100401` on macOS arm64. It verifies installed hashes and imports, then runs the
+Anvil fixture with installed negotiation, access-service, buyer-access and auditor binaries.
+The installed access MCP server verifies durable cached retrieval without native overrides
+or source imports. The fixture still orchestrates the local chain from this checkout; this
+is not independent external acceptance or a fresh-machine guide without a fixture.
+
+Measured in that run: negotiation 468 ms, native permit preparation plus failed HTTP 25 ms,
+first observed inclusion 47 ms, finalized verification 139 ms, delivery 319 ms, proof null.
+The permit measurement includes an intentional failed HTTP request; it is not signing-only
+latency. One transaction was sent, the agreed resource was recovered after restart, and the
+independent auditor verified the payment from its grant.
+
+The owner approved publication, and `PoulavBhowmick03/erebus-metropolis` now exists with
+HTTPS Pages enabled. No package assets have been published yet. Render is the requested
+hosting target; account access and paid-plan approval are still needed. No hosted service or
+new Monad transaction is claimed. The prepaid/batch comparison and complete live workflow
+remain open, alongside Linux qualification and external acceptance.

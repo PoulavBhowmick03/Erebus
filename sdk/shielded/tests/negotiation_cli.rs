@@ -33,6 +33,26 @@ use std::{
 
 const OPERATION: [u8; 32] = [63; 32];
 
+fn native_binary(name: &str, fallback: &str) -> PathBuf {
+    match std::env::var_os("EREBUS_TEST_INSTALLED_BIN_DIR") {
+        Some(directory) => {
+            let directory = PathBuf::from(directory).canonicalize().unwrap();
+            let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .canonicalize()
+                .unwrap();
+            assert!(
+                !directory.starts_with(checkout),
+                "installed binaries must be outside the checkout"
+            );
+            let binary = directory.join(name).canonicalize().unwrap();
+            assert!(binary.starts_with(&directory) && binary.is_file());
+            binary
+        }
+        None => fallback.into(),
+    }
+}
+
 fn private(path: &Path, bytes: &[u8]) {
     let mut options = fs::OpenOptions::new();
     options.create_new(true).write(true);
@@ -152,7 +172,11 @@ impl Fixture {
         let suite = template.suite_id;
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("erebus-negotiate");
-        fs::copy(env!("CARGO_BIN_EXE_erebus-negotiate"), &binary).unwrap();
+        fs::copy(
+            native_binary("erebus-negotiate", env!("CARGO_BIN_EXE_erebus-negotiate")),
+            &binary,
+        )
+        .unwrap();
         let address = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -268,6 +292,17 @@ fn copied_commands_freeze_restart_authorize_and_retain_recoverable_seller_notes_
     for suite in [1, 2] {
         for initial_price in [60, 65] {
             let fixture = Fixture::new(suite, initial_price);
+            let publication = fixture.root.path().join("seller/access-evidence");
+            fs::create_dir(&publication).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&publication, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let mut config: Value =
+                serde_json::from_slice(&fs::read(&fixture.seller_config).unwrap()).unwrap();
+            config["access_evidence_root"] = json!(publication);
+            fs::write(&fixture.seller_config, config.to_string()).unwrap();
             let (buyer_frozen, seller_frozen) = fixture.pair(true);
             assert_eq!(buyer_frozen["status"], "frozen");
             assert_eq!(
@@ -280,6 +315,14 @@ fn copied_commands_freeze_restart_authorize_and_retain_recoverable_seller_notes_
             assert_eq!(buyer["agreement_verified"], true);
             assert_eq!(buyer["deal_commitment"], buyer_frozen["deal_commitment"]);
             assert_eq!(buyer["deal_commitment"], seller["deal_commitment"]);
+            let published = publication.join(format!(
+                "{}.evidence",
+                seller["deal_commitment"].as_str().unwrap()
+            ));
+            assert_eq!(
+                fs::read(&published).unwrap(),
+                fs::read(seller["evidence_file"].as_str().unwrap()).unwrap()
+            );
             for response in [&buyer, &seller] {
                 assert_eq!(response["payment_verified"], false);
                 assert_eq!(response["delivery_verified"], false);

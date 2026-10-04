@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: erebus-metropolis-relay
+    runtime: docker
+    repo: https://github.com/PoulavBhowmick03/Erebus
+    branch: metropolis
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: "off"
+    dockerfilePath: packaging/metropolis/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    disk:
+      name: erebus-mailboxes
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: EREBUS_HOSTED_SERVICE
+        value: relay
+      - key: EREBUS_RELAY_TOKEN
+        generateValue: true
+      - key: EREBUS_RELAY_RETENTION
+        value: "604800"

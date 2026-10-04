@@ -16,6 +16,17 @@ usage() { echo "usage: $0 init|up|check|down DIR" >&2; exit 2; }
 [[ $# -eq 2 ]] || usage
 command=$1
 root=$2
+[[ "$root" = /* ]] || { echo "DIR must be absolute" >&2; exit 2; }
+
+load_env() {
+  local line
+  service_env=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" = \#* ]] && continue
+    [[ "$line" =~ ^[A-Z_][A-Z_0-9]*= ]] || { echo "invalid environment entry" >&2; return 1; }
+    service_env+=("$line")
+  done < "$1"
+}
 
 value() { # value FILE NAME DEFAULT: one variable from an env file, without sourcing it
   local found
@@ -37,7 +48,8 @@ start() { # start NAME ENV_FILE_OR_EMPTY BINARY [ARGS...] with extra env already
   fi
   command -v "$binary" >/dev/null || { echo "$name: $binary not on PATH" >&2; return 1; }
   if [[ -n "$envfile" ]]; then
-    env $(grep -E '^[A-Z_]+=' "$envfile" | xargs) "$binary" "$@" >>"$root/logs/$name.log" 2>&1 &
+    load_env "$envfile"
+    env "${service_env[@]}" "$binary" "$@" >>"$root/logs/$name.log" 2>&1 &
   else
     "$binary" "$@" >>"$root/logs/$name.log" 2>&1 &
   fi
@@ -101,7 +113,8 @@ EOF
       kill -0 "$(cat "$root/run/indexer.pid" 2>/dev/null)" 2>/dev/null && echo "indexer: running" || { echo "indexer: not running" >&2; status=1; }
     fi
     if [[ -f "$root/relayer.env" ]]; then
-      reply=$(echo '{"method":"health"}' | env $(grep -E '^[A-Z_]+=' "$root/relayer.env" | xargs) erebus-tx-relayer 2>/dev/null) || true
+      load_env "$root/relayer.env"
+      reply=$(echo '{"method":"health"}' | env "${service_env[@]}" erebus-tx-relayer 2>/dev/null) || true
       if [[ "$reply" == *'"status":"ok"'* ]]; then echo "relayer: configured"; else echo "relayer: configuration rejected" >&2; status=1; fi
     fi
     exit $status

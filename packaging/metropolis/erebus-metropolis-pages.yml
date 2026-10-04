@@ -1,0 +1,93 @@
+# Template for PoulavBhowmick03/erebus-metropolis: copy to .github/workflows/pages.yml in that
+# repository. It builds the hash-pinned PEP 503 index from the release assets and deploys it
+# under the required github-pages environment. The Erebus build workflow dispatches here only
+# when publish=true; this file itself never builds or signs anything.
+name: Metropolis package index
+
+on:
+  repository_dispatch:
+    types: [metropolis-registry]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.3.0.dev20261004"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish-index:
+    name: Build and deploy the index
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    env:
+      TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+    steps:
+      - name: Download the release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p wheels
+          gh release download "$TAG" --repo PoulavBhowmick03/erebus-metropolis \
+            --dir wheels --pattern '*.whl' --pattern 'release-manifest.json'
+      - name: Build the hash-pinned index from the manifest
+        run: |
+          python3 - <<'PY'
+          import hashlib, html, json, pathlib, sys
+
+          manifest = json.loads(pathlib.Path("wheels/release-manifest.json").read_text())
+          if manifest.get("tag") != __import__("os").environ["TAG"]:
+              sys.exit("release manifest tag does not match the dispatched tag")
+          platforms = manifest.get("platforms", {})
+          if len(platforms) < 2:
+              sys.exit(f"expected two platform manifests, found {len(platforms)}")
+          tags = {p: m.get("platform_qualification", {}).get("wheel_tag") for p, m in platforms.items()}
+          if len(set(tags.values())) != len(tags):
+              sys.exit(f"platform qualifications are not distinct: {tags}")
+          base = (
+              "https://github.com/PoulavBhowmick03/erebus-metropolis/releases/download/"
+              + manifest["tag"]
+          )
+
+          projects: dict[str, dict[str, str]] = {}
+          for data in platforms.values():
+              for name, meta in data["wheels"].items():
+                  local = pathlib.Path("wheels") / name
+                  if not local.exists():
+                      sys.exit(f"{name}: missing release asset")
+                  actual = hashlib.sha256(local.read_bytes()).hexdigest()
+                  if actual != meta["sha256"]:
+                      sys.exit(f"{name}: manifest hash does not match the asset")
+                  project = name.split("-")[0].replace("_", "-").lower()
+                  projects.setdefault(project, {})[name] = meta["sha256"]
+
+          site = pathlib.Path("site/simple")
+          site.mkdir(parents=True)
+          (site / "index.html").write_text(
+              "<!doctype html>\n"
+              + "\n".join(f'<a href="{p}/">{p}</a><br>' for p in sorted(projects))
+          )
+          for project, files in projects.items():
+              page = site / project
+              page.mkdir()
+              lines = [
+                  f'<a href="{base}/{html.escape(name, quote=True)}#sha256={digest}">'
+                  f"{html.escape(name)}</a><br>"
+                  for name, digest in sorted(files.items())
+              ]
+              (page / "index.html").write_text("<!doctype html>\n" + "\n".join(lines))
+          print(f"indexed {len(projects)} projects from {len(platforms)} platforms")
+          PY
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        id: pages

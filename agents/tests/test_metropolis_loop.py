@@ -90,12 +90,15 @@ def test_finality_for_another_deal_is_rejected():
         run(buyer, Session(negotiate_deal=[deal()]))
 
 
-def test_latencies_come_from_block_times_and_the_settle_return():
+def test_latency_uses_local_clock_not_chain_timestamp_distance():
     buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[payment("pending")],
                     recover_deal=[FINAL])
     record = run(buyer, Session(negotiate_deal=[deal()]))
-    # settle returned at clock 100, payment verified at 101; inclusion at 101 and anchor at 104.
-    assert record["latency_s"] == {"payment_verified_after": 1, "inclusion": 1, "finality": 3}
+    assert record["latency_s"] == {"first_inclusion_after": 1, "payment_verified_after": 2}
+    assert record["stages_ms"]["proof"] is None
+    assert record["stages_ms"]["first_inclusion_after"] == 1000
+    assert record["stages_ms"]["finalized_verification_after"] == 2000
+    assert record["chain_times"]["finalized_anchor_unix"] == 104
 
 
 def test_failed_delivery_is_retried_by_retrieval_never_by_paying():
@@ -105,6 +108,7 @@ def test_failed_delivery_is_retried_by_retrieval_never_by_paying():
     record = run(buyer, Session(negotiate_deal=[deal()]), deliver=True)
     assert record["delivery"] == {"attempts": 3, "resource_sha256": "ef" * 32, "resource_bytes": 37}
     assert "delivery" in record["latency_s"]
+    assert record["stages_ms"]["delivery"] == record["latency_s"]["delivery"] * 1000
     assert buyer.calls.count("settle_deal") == 1
 
 

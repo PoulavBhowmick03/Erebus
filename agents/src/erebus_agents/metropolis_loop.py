@@ -6,9 +6,10 @@ settlement attempt, never call `settle_deal` again. Uncertainty is resolved with
 which observes and cannot submit. A pending result is not a reason to pay twice. When the buyer's
 server also exposes access, failed delivery is retried by retrieving again, never by paying.
 
-Timings: `inclusion` and `finality` come from block timestamps (whole seconds) against this
-process's clock when `settle_deal` returned, so they are coarse and can read 0 or slightly negative
-on a fast chain. `payment_verified_after` is bounded below by the polling interval.
+Timings use the local monotonic clock from the start of the settlement call to first observed
+inclusion, finalized verification, and delivery. Chain timestamps are diagnostics, not latency.
+`stages_ms` marks a stage null when the mode reports no such stage (public-bound has no proof)
+or when the driver did not report it.
 """
 
 from __future__ import annotations
@@ -50,18 +51,10 @@ async def _call(session: ToolSession, name: str, operation_ref: str) -> dict[str
     return _structured(await session.call_tool(name, {"operation_ref": operation_ref}))
 
 
-def _latencies(times: dict[str, int], submitted: float, verified: float) -> dict[str, float]:
-    latencies = {"payment_verified_after": round(verified - submitted, 3)}
-    if "inclusion_unix" in times:
-        latencies["inclusion"] = round(times["inclusion_unix"] - submitted, 3)
-        latencies["finality"] = times["finalized_anchor_unix"] - times["inclusion_unix"]
-    return latencies
-
-
 async def drive_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str, *,
                      poll_seconds: float = 1.0, max_polls: int = 120, deliver: bool = False,
                      sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-                     clock: Callable[[], float] = time.time) -> dict[str, Any]:
+                     clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     """Negotiate on both sides at once, settle at most once, observe until finalized, then deliver."""
     buyer_deal, seller_deal = await asyncio.gather(_call(buyer, "negotiate_deal", operation_ref),
                                                    _call(seller, "negotiate_deal", operation_ref))
@@ -80,11 +73,19 @@ async def drive_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str
     if not funding.get("ok"):
         raise HarnessError("buyer is not funded for this deal")
 
-    settled = await _call(buyer, "settle_deal", operation_ref)
     submitted = clock()
+    settled = await _call(buyer, "settle_deal", operation_ref)
     record["settle_calls"] = 1
     record["settlement"] = settled.get("result")
     outcome = settled.get("result") or {}
+    first_inclusion: float | None = None
+
+    def note_inclusion(candidate: dict[str, Any]) -> None:
+        nonlocal first_inclusion
+        if first_inclusion is None and (candidate.get("chain_times") or {}).get("inclusion_block") is not None:
+            first_inclusion = round(clock() - submitted, 3)
+
+    note_inclusion(outcome)
     while not outcome.get("payment_verified"):
         if outcome.get("status") == "closed_unpaid":
             raise HarnessError("deal closed unpaid")
@@ -95,16 +96,33 @@ async def drive_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str
         record["recover_calls"] += 1
         # A failed observation call is retried by observation too, never by settling again.
         outcome = observed.get("result") or {}
+        note_inclusion(outcome)
+    verified_after = round(clock() - submitted, 3)
     record.update(payment_verified=True, stage=outcome.get("stage"),
                   winning_commitment=outcome.get("winning_commitment"),
                   measurements_ms=(record["settlement"] or {}).get("measurements_ms", {}),
-                  latency_s=_latencies(outcome.get("chain_times", {}), submitted, clock()))
+                  latency_s={"first_inclusion_after": first_inclusion,
+                             "payment_verified_after": verified_after})
+    record["chain_times"] = outcome.get("chain_times", {})
     if record["winning_commitment"] != commitment:
         raise HarnessError("finalized payment does not match the negotiated deal")
     if deliver:
         record["delivery"] = await _deliver(buyer, Path(buyer_deal["result"]["evidence_file"]).name,
                                             poll_seconds=poll_seconds, max_polls=max_polls, sleep=sleep, clock=clock)
         record["latency_s"]["delivery"] = record["delivery"].pop("seconds")
+    measurements = record["measurements_ms"]
+    record["stages_ms"] = {
+        "negotiation_buyer": record["negotiation_ms"]["buyer"],
+        "negotiation_seller": record["negotiation_ms"]["seller"],
+        "proof": measurements.get("proof_preparation"),
+        "signing": measurements.get("local_signing"),
+        "submission": measurements.get("submission"),
+        "first_inclusion_after": None if first_inclusion is None else round(first_inclusion * 1000, 3),
+        "finalized_verification_after": round(verified_after * 1000, 3),
+        "delivery": None if "delivery" not in record["latency_s"] else round(record["latency_s"]["delivery"] * 1000, 3),
+    }
+    record["stages_note"] = ("null means the mode reports no proving stage (public-bound) or the "
+                             "driver did not report that stage; block timestamps are diagnostics only")
     return record
 
 

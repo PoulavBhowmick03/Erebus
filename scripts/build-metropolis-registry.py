@@ -86,7 +86,15 @@ def package_metadata(source: Path, version: str, binaries: dict[str, Path] | Non
     return "\n".join(lines) + "\n"
 
 
-def build_index(wheels: Path, destination: Path) -> dict[str, list[Path]]:
+def wheel_link(wheel: Path, base_url: str | None) -> str:
+    name = html.escape(wheel.name, quote=True)
+    digest = sha256(wheel)
+    if base_url:
+        return f"{base_url.rstrip('/')}/{name}#sha256={digest}"
+    return f"../../wheels/{name}#sha256={digest}"
+
+
+def build_index(wheels: Path, destination: Path, base_url: str | None = None) -> dict[str, list[Path]]:
     projects: dict[str, list[Path]] = {}
     for wheel in sorted(wheels.glob("*.whl")):
         name = re.sub(r"[-_.]+", "-", wheel.name.split("-")[0]).lower()
@@ -103,13 +111,13 @@ def build_index(wheels: Path, destination: Path) -> dict[str, list[Path]]:
         page = destination / name
         page.mkdir()
         (page / "index.html").write_text("<!doctype html>\n" + "\n".join(
-            f'<a href="../../wheels/{html.escape(wheel.name, quote=True)}#sha256={sha256(wheel)}">'
-            f'{html.escape(wheel.name)}</a><br>' for wheel in files
+            f'<a href="{wheel_link(wheel, base_url)}">{html.escape(wheel.name)}</a><br>'
+            for wheel in files
         ))
     return projects
 
 
-def build(version: str, output: Path, profile: str, build_native: bool) -> dict:
+def build(version: str, output: Path, profile: str, build_native: bool, base_url: str | None = None) -> dict:
     if not DEV_VERSION.fullmatch(version):
         raise ValueError("use a dev prerelease version, for example 0.3.0.dev20261003")
     if output.exists() or profile not in {"debug", "release"}:
@@ -143,7 +151,9 @@ def build(version: str, output: Path, profile: str, build_native: bool) -> dict:
             destination = stage / source.name
             destination.mkdir()
             shutil.copytree(source / "src", destination / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-            native = binaries if relative == "packaging/erebus-cli" else None
+            native = dict(binaries) if relative == "packaging/erebus-cli" else None
+            if native is not None:
+                native["erebus-selfhost"] = ROOT / "scripts/metropolis-selfhost.sh"
             (destination / "pyproject.toml").write_text(package_metadata(source, version, native))
             if native is not None:
                 (destination / "bin").mkdir()
@@ -154,12 +164,19 @@ def build(version: str, output: Path, profile: str, build_native: bool) -> dict:
             environment = {key: value for key, value in os.environ.items() if key not in {"EREBUS_WHEEL_PLATFORM", "PYTHONPATH", "VIRTUAL_ENV"}}
             subprocess.run([uv, "build", "--wheel", "--no-sources", "--out-dir", str(wheels), str(destination)],
                            cwd=stage, env=environment, check=True)
-        build_index(wheels, registry / "simple")
+        build_index(wheels, registry / "simple", base_url)
         manifest = {
             "version": version, "channel": "metropolis-testnet", "published": False,
             "build_profile": profile, "source_commit": source_commit, "dirty_source": dirty,
             "platform": sysconfig.get_platform(), "portability_audit": False,
+            "platform_qualification": {
+                "host": sysconfig.get_platform(),
+                "wheel_tag": sysconfig.get_platform().replace("-", "_").replace(".", "_"),
+                "supported_host": True,
+                "portability_audit": False,
+            },
             "binaries": {name: {"sha256": sha256(path), "bytes": path.stat().st_size} for name, path in sorted(binaries.items())},
+            "launchers": {"erebus-selfhost": {"sha256": sha256(ROOT / "scripts/metropolis-selfhost.sh")}},
             "wheels": {path.name: {"sha256": sha256(path), "bytes": path.stat().st_size} for path in sorted(wheels.glob("*.whl"))},
             "test_only_artifacts_included": False,
         }
@@ -174,9 +191,18 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", choices=["debug", "release"], default="release")
     parser.add_argument("--build", action="store_true", help="build native files first instead of using existing files")
+    parser.add_argument("--base-url", help="absolute base URL for wheel links, e.g. a release download URL")
+    parser.add_argument("--index-only", action="store_true", help="rebuild the index from an existing wheel directory")
+    parser.add_argument("--wheels", type=Path, help="wheel directory for --index-only")
     args = parser.parse_args()
     try:
-        manifest = build(args.version, args.output.resolve(), args.profile, args.build)
+        if args.index_only:
+            if args.wheels is None:
+                raise ValueError("--index-only requires --wheels")
+            build_index(args.wheels, args.output.resolve(), args.base_url)
+            print(json.dumps({"status": "indexed", "output": str(args.output.resolve())}))
+            return
+        manifest = build(args.version, args.output.resolve(), args.profile, args.build, args.base_url)
     except (ValueError, OSError, subprocess.CalledProcessError):
         raise SystemExit("Metropolis registry build failed; no publication was attempted") from None
     print(json.dumps({"status": "built", "channel": manifest["channel"], "version": args.version,

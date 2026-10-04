@@ -19,7 +19,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-struct Process(Child);
+pub(crate) struct Process(pub(crate) Child);
 impl Drop for Process {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -27,7 +27,7 @@ impl Drop for Process {
     }
 }
 
-fn port() -> u16 {
+pub(crate) fn port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -35,7 +35,7 @@ fn port() -> u16 {
         .port()
 }
 
-async fn rpc(client: &reqwest::Client, url: &str, method: &str, params: Value) -> Value {
+pub(crate) async fn rpc(client: &reqwest::Client, url: &str, method: &str, params: Value) -> Value {
     let body: Value = client
         .post(url)
         .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
@@ -49,7 +49,7 @@ async fn rpc(client: &reqwest::Client, url: &str, method: &str, params: Value) -
     body["result"].clone()
 }
 
-async fn send(
+pub(crate) async fn send(
     client: &reqwest::Client,
     url: &str,
     from: &str,
@@ -73,7 +73,7 @@ async fn send(
     panic!("missing receipt");
 }
 
-async fn deploy(
+pub(crate) async fn deploy(
     client: &reqwest::Client,
     url: &str,
     from: &str,
@@ -94,7 +94,7 @@ async fn deploy(
     send(client, url, from, None, code).await
 }
 
-fn private_file(path: &Path, bytes: &[u8]) {
+pub(crate) fn private_file(path: &Path, bytes: &[u8]) {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -129,7 +129,7 @@ fn access_output(request: &Value) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
-fn retrieve_command(request: &Value) -> Value {
+pub(crate) fn retrieve_command(request: &Value) -> Value {
     let output = access_output(request);
     assert!(
         output.status.success(),
@@ -145,14 +145,14 @@ fn access_binary() -> std::ffi::OsString {
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_erebus-access").into())
 }
 
-async fn service(config: &Path, url: &str, client: &reqwest::Client) -> Process {
+pub(crate) async fn service(config: &Path, url: &str, client: &reqwest::Client) -> Process {
     let mut process = Process(
         Command::new(env!("CARGO_BIN_EXE_erebus-access-service"))
             .env_clear()
             .env("EREBUS_ACCESS_CONFIG", config)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap(),
     );
@@ -346,12 +346,13 @@ async fn funded_http_access_recovers_a_lost_response_after_service_restart_witho
         .unwrap()
         .as_secs()
         + 120;
-    let digest = request_digest(&evidence, policy.service_id, [4; 32], expires_at).unwrap();
+    let digest = request_digest(&evidence, policy.service_id, [4; 32], expires_at, None).unwrap();
     let request = AccessRequest {
         deal_commitment: commitment.to_hex(),
         nonce: [4; 32],
         expires_at,
         signature: buyer.sign_digest(&digest).to_vec(),
+        payment: None,
     };
     let mut wrong = request.clone();
     wrong.signature = seller.sign_digest(&digest).to_vec();

@@ -50,7 +50,11 @@ class MetropolisSettings:
         if role not in {"buyer", "seller"} or not isinstance(root, str) or not Path(root).is_absolute():
             raise ConfigError("Metropolis needs a fixed buyer or seller role and absolute state root")
         payment, mode = None, None
-        if role == "buyer":
+        if role == "buyer" and os.environ.get("EREBUS_ACCESS_PAYMENT_RAIL") == "x402-exact":
+            if os.environ.get("EREBUS_PAYMENT_CONFIG") or not os.environ.get("EREBUS_ACCESS_SERVICE_URL"):
+                raise ConfigError("x402 requires an access service and no ordinary payment configuration")
+            mode = "x402-exact"
+        elif role == "buyer":
             payment, selected = _operator_file(os.environ.get("EREBUS_PAYMENT_CONFIG"))
             mode = selected.get("mode", "public-bound")
             if mode not in {"public-bound", "shielded"} or selected.get("state_root") != root:
@@ -66,6 +70,8 @@ class MetropolisSettings:
 
 def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPServer:
     settings = settings or MetropolisSettings.from_env()
+    if settings.mode == "x402-exact" and os.environ.get("EREBUS_ACCESS_PAYMENT_RAIL") != "x402-exact":
+        raise ConfigError("x402 access rail must be explicitly selected by the operator")
     try:
         seam = MetropolisSeam(**vars(settings))
         seam.version()
@@ -79,7 +85,9 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
         "Pending or failed access is not a reason to pay again. "
         "Public-bound settlement exposes the accepted terms and parties. "
         "Shielded proving uses local witnesses and authenticated public artifacts. "
-        "Payment verification does not prove delivery."
+        "Payment verification does not prove delivery. "
+        + ("x402 exact mode exposes negotiation and access only. First retrieval signs one local permit; the seller submits payment. Retries reuse that permit; independent disclosure verifies payment."
+           if settings.mode == "x402-exact" else "")
     ))
 
     def failure() -> dict[str, Any]:
@@ -94,7 +102,7 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
         except MetropolisError:
             return failure()
 
-    if settings.role == "buyer":
+    if settings.role == "buyer" and settings.mode != "x402-exact":
         async def payment(operation_ref: str, method: str) -> dict[str, Any]:
             try:
                 response = await asyncio.to_thread(seam.payment, operation_ref, method=method)
@@ -117,8 +125,12 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             """Observe and reconcile this operation; cannot sign, prove, or submit a payment."""
             return await payment(operation_ref, "observe")
 
+    if settings.role == "buyer":
         if os.environ.get("EREBUS_ACCESS_SERVICE_URL"):
             from erebus_mcp.access import AccessSettings, register_access_tools
+
+            if settings.mode != "x402-exact" and os.environ.get("EREBUS_ACCESS_PAYMENT_RAIL", "observe") != "observe":
+                raise ConfigError("x402 authorization cannot be combined with ordinary settlement tools; use the dedicated access server")
 
             # Negotiation writes buyer evidence only under <state_root>/agent, so that is the
             # evidence directory; a separately configured one could only disagree with it.

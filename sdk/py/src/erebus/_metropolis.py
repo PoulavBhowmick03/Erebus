@@ -30,11 +30,12 @@ class MetropolisSeam:
         paths = [negotiation_config, state_root] + ([payment_config] if payment_config is not None else [])
         if any(not isinstance(path, str) or len(path) > 4096 or not Path(path).is_absolute() for path in paths):
             raise MetropolisError("configure absolute operator paths")
-        if (role == "seller" and payment_config is not None) or (role == "buyer" and (payment_config is None or mode not in {"public-bound", "shielded"})):
+        x402 = role == "buyer" and mode == "x402-exact" and payment_config is None
+        if (role == "seller" and payment_config is not None) or (role == "buyer" and not x402 and (payment_config is None or mode not in {"public-bound", "shielded"})):
             raise MetropolisError("only the configured buyer may use a fixed payment mode")
         self._negotiation = negotiation_binary or shutil.which("erebus-negotiate")
         self._payment = payment_binary or shutil.which("erebus-payment")
-        if not self._negotiation or (role == "buyer" and not self._payment):
+        if not self._negotiation or (role == "buyer" and not x402 and not self._payment):
             raise MetropolisError("install the Metropolis native binaries")
         self._negotiation_config, self._payment_config = negotiation_config, payment_config
         self._state_root, self._role, self._mode, self._timeout = Path(state_root), role, mode, timeout
@@ -61,7 +62,7 @@ class MetropolisSeam:
         expected = {"status": "ok", "protocol_version": 1, "service": "erebus-negotiate", "settlement_submission": False}
         if code != 0 or response != expected or type(response.get("protocol_version")) is not int or type(response.get("settlement_submission")) is not bool:
             raise MetropolisError("negotiation binary protocol mismatch")
-        if self._role == "buyer":
+        if self._role == "buyer" and self._mode != "x402-exact":
             code, response = self._run(self._payment, {"method": "version"})
             expected = {"status": "ok", "protocol_version": 1, "service": "erebus-payment",
                         "modes": ["public-bound", "shielded"], "automatic_rebroadcast": False}
@@ -101,7 +102,7 @@ class MetropolisSeam:
     def payment(self, operation_ref: str, *, method: str) -> dict[str, Any]:
         """Funding checks, first settlement, or observation. No automatic payment retry."""
         self._operation(operation_ref)
-        if self._role != "buyer" or method not in {"funding", "settle", "observe"}:
+        if self._role != "buyer" or self._mode == "x402-exact" or method not in {"funding", "settle", "observe"}:
             raise MetropolisError("payment requires the configured buyer and an allowed method")
         code, response = self._run(self._payment, {"method": method, "config_file": self._payment_config, "operation_ref": operation_ref})
         required = {"status", "mode", "agreement_verified", "payment_verified", "delivery_verified", "operation_ref",

@@ -2,6 +2,20 @@
 
 Guidance for Claude Code working in this repository.
 
+## Metropolis Branch Scope
+
+On `metropolis`, use `docs/metropolis-roadmap.md` and the Metropolis architecture,
+agreement, and milestone decision records as the product specification.
+The STRK20-specific instructions below apply to the legacy Starknet backend only.
+Do not require a STRK20 proof for the EVM public-bound backend or weaken legacy
+Starknet safety checks to implement Monad work.
+
+The Metropolis release gate requires independent participants, finalized Monad
+settlement, scoped disclosure, delivery recovery, installable packages, self-hosting,
+and a fresh-environment external rehearsal. Public-bound payments expose accepted
+terms and identities; local shielded prototype proofs are not a live private release.
+The old MVP definition below describes the pre-existing Starknet product.
+
 ## What this project is
 
 Erebus is private coordination and settlement infrastructure for AI agents, built on Starknet's STRK20 privacy framework. Two agents open an encrypted channel, negotiate as structured state transitions, and settle atomically through the shielded privacy pool, with viewing-key selective disclosure afterwards.

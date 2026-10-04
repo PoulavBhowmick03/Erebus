@@ -160,6 +160,7 @@ pub(super) async fn deploy(lose_broadcast: bool, block_time: Option<u64>) -> Dep
         minimum_log_block: Arc::new(std::sync::Mutex::new(None)),
         corrupt_code: Arc::new(AtomicBool::new(false)),
         corrupt_consumed: corrupt_consumed.clone(),
+        broadcast_hashes: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let peer_url = format!("http://{}", listener.local_addr().unwrap());

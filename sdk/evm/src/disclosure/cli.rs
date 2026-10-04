@@ -12,6 +12,7 @@ use crate::deployment::{parse_lowercase_address, EvmDeployment};
 use crate::disclosure::{
     open_public_bound_disclosure, verify_public_bound_disclosure_resumable, DisclosureObservation,
 };
+use crate::x402::{decode_settle_call, verify_x402_exact, EXACT_PERMIT2_PROXY};
 use erebus_core::ids::ChainNamespace;
 use erebus_core::terms::SettlementMode;
 use erebus_transport::disclosure::{
@@ -466,6 +467,150 @@ pub async fn verify_public_payment(
             ancestry_block,
         }),
     }
+}
+
+/// Whether a `verify_payment` deployment selects the x402 exact rail.
+#[must_use]
+pub fn is_x402_request(deployment: &Value) -> bool {
+    deployment.get("rail").and_then(Value::as_str) == Some("x402_exact")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct X402Deployment {
+    rail: String,
+    namespace: String,
+    rpc_url: String,
+    peer_rpc_url: String,
+    permit2_runtime_hash: String,
+    proxy_runtime_hash: String,
+    transaction_hash: String,
+}
+
+fn lowercase_hash(text: &str, label: &'static str) -> Result<[u8; 32], &'static str> {
+    let digits = text.strip_prefix("0x").unwrap_or(text);
+    if digits.len() != 64
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(label);
+    }
+    hex::decode(digits)
+        .map_err(|_| label)?
+        .try_into()
+        .map_err(|_| label)
+}
+
+/// Independently verifies a finalized x402 exact payment from the encrypted grant alone.
+///
+/// The auditor needs no participant state and no spending key. It authenticates the pinned
+/// canonical Permit2 and exact-proxy runtimes at two configured RPCs, decodes the permit and
+/// signature from the finalized transaction input, and requires matching finalized evidence
+/// at both observers. A pending observation is never a payment claim.
+pub async fn verify_x402_payment(
+    request: PaymentRequest,
+) -> Result<PaymentVerification, &'static str> {
+    let PaymentRequest {
+        grant,
+        recipient,
+        issuer,
+        now,
+        deployment,
+        ..
+    } = request;
+    let issuer: [u8; 20] = issuer
+        .try_into()
+        .map_err(|_| "public-bound participant required")?;
+    let (evidence, agreement) = open_checked(&grant, &recipient, &issuer, now)?;
+    if evidence.terms.settlement_mode != SettlementMode::PublicBound
+        || evidence.terms.suite_id != 1
+        || evidence.terms.fee_policy.fee.get() != 0
+    {
+        return Err("x402 exact disclosure required");
+    }
+    let deployment: X402Deployment =
+        serde_json::from_value(deployment).map_err(|_| "invalid x402 deployment")?;
+    if deployment.rail != "x402_exact" {
+        return Err("invalid x402 deployment");
+    }
+    let permit2 = lowercase_hash(&deployment.permit2_runtime_hash, "invalid x402 deployment")?;
+    let proxy = lowercase_hash(&deployment.proxy_runtime_hash, "invalid x402 deployment")?;
+    let transaction_hash =
+        lowercase_hash(&deployment.transaction_hash, "invalid x402 transaction")?;
+    let namespace =
+        ChainNamespace::parse(&deployment.namespace).map_err(|_| "invalid deployment")?;
+    let configured = EvmDeployment::new(namespace, EXACT_PERMIT2_PROXY, 1, &deployment.rpc_url)
+        .map_err(|_| "invalid deployment")?;
+    configured
+        .matches_domain(&evidence.terms.domain)
+        .map_err(|_| "deployment does not match agreement")?;
+    let peer_deployment = EvmDeployment::new(
+        configured.namespace.clone(),
+        EXACT_PERMIT2_PROXY,
+        1,
+        &deployment.peer_rpc_url,
+    )
+    .map_err(|_| "invalid deployment")?;
+    let primary = EvmChain::connect(configured, Duration::from_secs(15))
+        .await
+        .map_err(|_| "payment verification unavailable")?;
+    let peer = EvmChain::connect(peer_deployment, Duration::from_secs(15))
+        .await
+        .map_err(|_| "payment verification unavailable")?;
+    primary
+        .check_peer(&peer)
+        .map_err(|_| "inconsistent x402 observers")?;
+    primary
+        .authenticate_x402_runtimes(permit2, proxy)
+        .await
+        .map_err(|_| "x402 runtime authentication failed")?;
+    peer.authenticate_x402_runtimes(permit2, proxy)
+        .await
+        .map_err(|_| "peer x402 runtime authentication failed")?;
+    let owner: [u8; 20] = evidence
+        .terms
+        .buyer_authorization_key
+        .as_bytes()
+        .try_into()
+        .map_err(|_| "public-bound participant required")?;
+    let peer_evidence = peer
+        .finalized_x402_evidence(transaction_hash, owner, &agreement.nullifier)
+        .await
+        .map_err(|_| "payment verification unavailable")?;
+    let primary_evidence = primary
+        .finalized_x402_evidence(transaction_hash, owner, &agreement.nullifier)
+        .await
+        .map_err(|_| "payment verification unavailable")?;
+    let (Some(peer_evidence), Some(primary_evidence)) = (peer_evidence, primary_evidence) else {
+        return Ok(PaymentVerification::Pending {
+            agreement,
+            next_log_block: None,
+            ancestry_block: 0,
+        });
+    };
+    let (permit, calldata_owner, signature) = decode_settle_call(&primary_evidence.calldata)
+        .ok_or("payment not independently verified")?;
+    if calldata_owner != owner {
+        return Err("payment not independently verified");
+    }
+    verify_x402_exact(
+        primary.deployment(),
+        &evidence.terms,
+        &permit,
+        &signature,
+        &primary_evidence,
+    )
+    .map_err(|_| "payment not independently verified")?;
+    verify_x402_exact(
+        peer.deployment(),
+        &evidence.terms,
+        &permit,
+        &signature,
+        &peer_evidence,
+    )
+    .map_err(|_| "peer payment not independently verified")?;
+    Ok(PaymentVerification::Finalized(agreement))
 }
 
 fn verification_response(

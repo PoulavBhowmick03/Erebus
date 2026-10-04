@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::EvmChain;
+use crate::x402::{encode_nonce_bitmap_call, transfer_topic, X402ExactEvidence, PERMIT2};
 use crate::{abi, backend::validate_terms, error::EvmError};
 
 mod history;
@@ -249,6 +250,125 @@ impl EvmChain {
         })
     }
 
+    /// Reads owned evidence for one x402 exact settlement from finalized chain state.
+    ///
+    /// The transaction hash is a lookup key, not evidence: the target, calldata, token
+    /// `Transfer`, and Permit2 nonce bit are all read at a pinned finalized anchor and the
+    /// anchors are rechecked afterwards. `Ok(None)` means the transaction is unknown, reverted,
+    /// or not yet finalized: retain state and retry without another payment.
+    pub async fn finalized_x402_evidence(
+        &self,
+        transaction_hash: [u8; 32],
+        owner: [u8; 20],
+        deal: &DealNullifier,
+    ) -> Result<Option<X402ExactEvidence>, EvmError> {
+        self.check_chain().await?;
+        let hash = B256::from(transaction_hash);
+        let first: Option<Receipt> = self
+            .observation_rpc("eth_getTransactionReceipt", (hash,))
+            .await?;
+        let Some(first) = first else {
+            return Ok(None);
+        };
+        let block = self.canonical_block(first.block_number.to()).await?;
+        let final_block = self
+            .observation_block("finalized")
+            .await?
+            .ok_or(EvmError::FinalityUnavailable)?;
+        self.recheck_block(&final_block).await?;
+        if block.number.to::<u64>() > final_block.number.to::<u64>() {
+            return Ok(None);
+        }
+        let (receipt, tx) = self.receipt_pair(hash, &block).await?;
+        if receipt.status != U64::from(1) {
+            return Ok(None);
+        }
+        let transfer = receipt.logs.iter().find(|log| {
+            log.topics().first().map(|topic| topic.0) == Some(transfer_topic())
+                && log.topics().len() == 3
+                && log.topics()[1].0[..12] == [0; 12]
+                && log.topics()[2].0[..12] == [0; 12]
+                && log.topics()[1].0[12..] == owner
+        });
+        let Some(transfer) = transfer else {
+            return Ok(None);
+        };
+        let topics = transfer.topics();
+        let mut transfer_to = [0u8; 20];
+        transfer_to.copy_from_slice(&topics[2].0[12..]);
+        let data = transfer.data().data.clone();
+        if data.len() != 32 || data[..16] != [0; 16] {
+            return Err(inconsistent("Transfer data is not one word"));
+        }
+        let transfer_amount = u128::from_be_bytes(data[16..32].try_into().expect("32-byte word"));
+        let bitmap: Bytes = self
+            .observation_rpc(
+                "eth_call",
+                (
+                    json!({"to": Address::from(PERMIT2),
+                        "data": Bytes::from(encode_nonce_bitmap_call(&owner, deal))}),
+                    json!({"blockHash": final_block.hash, "requireCanonical": true}),
+                ),
+            )
+            .await?;
+        if bitmap.len() != 32 {
+            return Err(inconsistent("nonceBitmap is not one word"));
+        }
+        let mut nonce_bit = [0u8; 32];
+        nonce_bit.copy_from_slice(&bitmap);
+        self.recheck_block(&final_block).await?;
+        self.recheck_block(&block).await?;
+        self.check_chain().await?;
+        Ok(Some(X402ExactEvidence {
+            finalized: true,
+            transaction_to: tx
+                .to()
+                .map(|address| address.0 .0)
+                .ok_or_else(|| inconsistent("settlement has no target"))?,
+            calldata: tx.input().to_vec(),
+            transfer_from: owner,
+            transfer_to,
+            transfer_token: transfer.address().0 .0,
+            transfer_amount,
+            nonce_bit,
+        }))
+    }
+
+    /// Checks independently pinned Permit2 and proxy runtimes at a finalized anchor.
+    pub async fn authenticate_x402_runtimes(
+        &self,
+        permit2_hash: [u8; 32],
+        proxy_hash: [u8; 32],
+    ) -> Result<(), EvmError> {
+        if permit2_hash == [0; 32] || proxy_hash == [0; 32] {
+            return Err(inconsistent("missing x402 runtime pins"));
+        }
+        self.check_chain().await?;
+        let block = self
+            .observation_block("finalized")
+            .await?
+            .ok_or(EvmError::FinalityUnavailable)?;
+        for (target, expected) in [
+            (PERMIT2, permit2_hash),
+            (crate::x402::EXACT_PERMIT2_PROXY, proxy_hash),
+        ] {
+            let code: Bytes = self
+                .observation_rpc(
+                    "eth_getCode",
+                    (
+                        Address::from(target),
+                        json!({"blockHash":block.hash,"requireCanonical":true}),
+                    ),
+                )
+                .await?;
+            if code.is_empty() || keccak256(code).0 != expected {
+                return Err(inconsistent("x402 runtime differs from operator pin"));
+            }
+        }
+        self.recheck_block(&block).await?;
+        self.check_chain().await
+    }
+
     async fn observation_rpc<P, R>(&self, method: &'static str, params: P) -> Result<R, EvmError>
     where
         P: RpcSend,
@@ -434,7 +554,8 @@ impl EvmChain {
         Ok(first)
     }
 
-    fn check_peer(&self, peer: &Self) -> Result<(), EvmError> {
+    /// Requires distinct configured RPC endpoints for the same settlement deployment.
+    pub fn check_peer(&self, peer: &Self) -> Result<(), EvmError> {
         if crate::deployment::normalized_rpc_url(&self.deployment.rpc_url)?
             == crate::deployment::normalized_rpc_url(&peer.deployment.rpc_url)?
             || self.deployment.namespace != peer.deployment.namespace

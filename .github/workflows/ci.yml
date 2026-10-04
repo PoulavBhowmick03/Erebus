@@ -452,7 +452,11 @@ jobs:
           EREBUS_TEST_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: cargo test --locked --test access_http -- --include-ignored
 
-      - name: Negotiate in separate processes and recover a lost payment response
+      - name: Recover seller-facilitated x402 access without another broadcast
+        working-directory: sdk/shielded
+        run: cargo test --locked --test x402_http x402_http_submits_once_recovers_restart_and_rejects_mutations -- --ignored
+
+      - name: Negotiate in separate processes, recover a lost payment response, and audit x402
         working-directory: sdk/shielded
         run: cargo test --locked --test negotiation_cli payment_driver -- --include-ignored
 

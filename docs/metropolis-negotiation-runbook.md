@@ -183,3 +183,15 @@ Both final signatures authorize the disclosed transcript root, not the truth of 
 
 Remaining: combined installed CLI/Python/MCP workflow, funded live private negotiation,
 package distribution, hosted/self-hosted rehearsal, x402, and stage measurements.
+# Seller Access Handoff
+
+For a seller serving paid snapshots, set `access_evidence_root` in its private
+negotiation configuration to the access service's absolute `evidence_root` directory.
+Create that directory with mode `0700` before starting either process.
+The native seller verifies the frozen transcript and both authorizations before
+publishing `<deal_commitment>.evidence` with mode `0600`.
+Publication syncs the file and directory, permits identical retries, and rejects
+conflicting existing evidence. No watcher or Python cryptography is required.
+The access service must still validate its configured seller, service, and payment.
+Buyers cannot configure this publication path. A handoff error is not permission
+to delete state or authorize a new payment; retry the same negotiation operation.

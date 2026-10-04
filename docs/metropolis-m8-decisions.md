@@ -147,8 +147,9 @@ rail's consumed-deal flag, and a second payment for the same deal from the same 
 paid on both rails if an operator switched modes, which is why the mode is fixed per operator.
 
 Exposure: on chain, the buyer and `payTo` addresses, amount, token, and the deal nullifier
-(already public in public-bound mode). The agreement terms, blinding, and signatures are not
-published, unlike `ErebusSettlement`. The deployed proxy emits a data-free `Settled()`, so
+(already public in public-bound mode), plus the Permit2 payment authorization signature.
+The Erebus agreement opening, blinding, and bilateral agreement signatures are not
+published by this rail, unlike `ErebusSettlement`. The deployed proxy emits a data-free `Settled()`, so
 evidence is the token `Transfer` in that transaction, its `settle` input, and the nonce bit
 ([F50](friction.md)).
 

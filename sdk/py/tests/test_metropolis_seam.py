@@ -80,6 +80,20 @@ def test_seller_cannot_pay(monkeypatch):
     assert not seen
 
 
+def test_x402_buyer_negotiates_but_cannot_use_the_ordinary_payment_rail(monkeypatch):
+    seen = fake(monkeypatch, authorized())
+    client = MetropolisSeam(negotiation_config="/operator/negotiation.json", state_root="/operator/state",
+                            role="buyer", mode="x402-exact", negotiation_binary="negotiate")
+    assert client.negotiate(OPERATION) == authorized()
+    for method in ("funding", "settle", "observe"):
+        with pytest.raises(MetropolisError):
+            client.payment(OPERATION, method=method)
+    assert len(seen) == 1
+    with pytest.raises(MetropolisError):
+        MetropolisSeam(negotiation_config="/n.json", state_root="/s", role="buyer", mode="x402-exact",
+                       payment_config="/p.json", negotiation_binary="negotiate")
+
+
 @pytest.mark.parametrize("operation", ["", "0" * 64, "AB" * 32, "ab" * 31, "../" + "a" * 61])
 def test_bad_operation_never_starts_a_process(monkeypatch, operation):
     seen = fake(monkeypatch, authorized())

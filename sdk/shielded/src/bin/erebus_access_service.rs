@@ -10,16 +10,18 @@ use std::{
 
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use erebus_core::ids::{ChainNamespace, KeyBytes};
 use erebus_evm::{
-    chain::{EvmChain, ObservationJournal, ObservationLimits},
+    chain::{Eip1559Fees, EvmChain, ObservationJournal, ObservationLimits, TransactionKey},
     deployment::{parse_lowercase_address, EvmDeployment},
+    x402::EXACT_PERMIT2_PROXY,
 };
 use erebus_shielded_prover::{
+    access::x402::{payment_required_header, verify_payment_header, Facilitator},
     access::{
         AccessBackend, AccessError, AccessIssuer, AccessPolicy, AccessRequest, MAX_RESOURCE_BYTES,
     },
@@ -49,6 +51,18 @@ struct Config {
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 enum Backend {
+    X402Exact {
+        namespace: String,
+        rpc_url: String,
+        peer_rpc_url: String,
+        permit2_runtime_hash: [u8; 32],
+        proxy_runtime_hash: [u8; 32],
+        transaction_key_file: PathBuf,
+        signer_journal_root: PathBuf,
+        gas_limit: u64,
+        max_fee_per_gas: String,
+        max_priority_fee_per_gas: String,
+    },
     PublicBound {
         namespace: String,
         settlement_contract: String,
@@ -72,7 +86,8 @@ enum Backend {
 #[derive(Clone)]
 struct App {
     issuer: Arc<AccessIssuer>,
-    backend: Arc<AccessBackend>,
+    backend: Option<Arc<AccessBackend>>,
+    facilitator: Option<Arc<Facilitator>>,
     evidence_root: PathBuf,
     slots: Arc<Semaphore>,
 }
@@ -108,7 +123,7 @@ fn bounded_file(
 #[tokio::main]
 async fn main() {
     if std::env::args().nth(1).as_deref() == Some("--help") {
-        println!("erebus_access_service: owner-only JSON configuration in EREBUS_ACCESS_CONFIG.\nGET /healthz; POST /v1/access with a short-lived signature from the buyer agreement key.\nListen is loopback-only; place an authenticated TLS gateway in front for remote clients.\nNo endpoint signs, submits, or repeats payments. Store state persistently for delivery recovery.");
+        println!("erebus_access_service: owner-only JSON configuration in EREBUS_ACCESS_CONFIG.\nGET /healthz; POST /v1/access with a short-lived signature from the buyer agreement key.\nListen is loopback-only; place an authenticated TLS gateway in front for remote clients.\nObservation backends cannot submit payments. Explicit x402_exact mode signs and fences one seller-funded transaction for a buyer-authorized permit. Retries observe the persisted transaction without resubmitting.\nStore state persistently for payment and delivery recovery.");
         return;
     }
     if let Err(error) = run().await {
@@ -146,7 +161,73 @@ async fn run() -> Result<(), &'static str> {
         },
     )
     .map_err(|_| "access policy or storage unavailable")?;
+    let mut facilitator = None;
     let backend = match config.backend {
+        Backend::X402Exact {
+            namespace,
+            rpc_url,
+            peer_rpc_url,
+            permit2_runtime_hash,
+            proxy_runtime_hash,
+            transaction_key_file,
+            signer_journal_root,
+            gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        } => {
+            let deployment = |url| {
+                EvmDeployment::new(
+                    ChainNamespace::parse(&namespace).map_err(|_| "invalid chain")?,
+                    EXACT_PERMIT2_PROXY,
+                    1,
+                    url,
+                )
+                .map_err(|_| "invalid x402 deployment")
+            };
+            let primary = EvmChain::connect(deployment(rpc_url)?, Duration::from_secs(15))
+                .await
+                .map_err(|_| "chain unavailable")?;
+            let peer = EvmChain::connect(deployment(peer_rpc_url)?, Duration::from_secs(15))
+                .await
+                .map_err(|_| "peer unavailable")?;
+            // Distinct URLs are configuration hygiene, not proof of independent providers.
+            primary
+                .verified_finalized_nonce_agreed(&peer, [0; 20])
+                .await
+                .map_err(|_| "configure consistent distinct observers")?;
+            primary
+                .authenticate_x402_runtimes(permit2_runtime_hash, proxy_runtime_hash)
+                .await
+                .map_err(|_| "x402 runtime authentication failed")?;
+            peer.authenticate_x402_runtimes(permit2_runtime_hash, proxy_runtime_hash)
+                .await
+                .map_err(|_| "peer runtime authentication failed")?;
+            let bytes = bounded_file(&transaction_key_file, 32, true)?;
+            let key = TransactionKey::from_bytes(
+                bytes.as_slice().try_into().map_err(|_| "invalid gas key")?,
+            )
+            .map_err(|_| "invalid gas key")?;
+            let fees = Eip1559Fees::new(
+                max_fee_per_gas.parse().map_err(|_| "invalid fee cap")?,
+                max_priority_fee_per_gas
+                    .parse()
+                    .map_err(|_| "invalid priority fee")?,
+            )
+            .map_err(|_| "invalid fee policy")?;
+            facilitator = Some(Arc::new(
+                Facilitator::open(
+                    primary,
+                    peer,
+                    key,
+                    config.state_root.join("x402-payments"),
+                    signer_journal_root,
+                    fees,
+                    gas_limit,
+                )
+                .map_err(|_| "x402 state unavailable")?,
+            ));
+            None
+        }
         Backend::PublicBound {
             namespace,
             settlement_contract,
@@ -174,7 +255,7 @@ async fn run() -> Result<(), &'static str> {
                 rpc_url,
             )
             .map_err(|_| "invalid public deployment")?;
-            AccessBackend::PublicBound {
+            Some(AccessBackend::PublicBound {
                 chain: EvmChain::connect(deployment, Duration::from_secs(15))
                     .await
                     .map_err(|_| "chain unavailable")?,
@@ -186,7 +267,7 @@ async fn run() -> Result<(), &'static str> {
                     max_log_queries,
                     max_ancestry,
                 },
-            }
+            })
         }
         Backend::Shielded {
             chain_id,
@@ -209,7 +290,7 @@ async fn run() -> Result<(), &'static str> {
             if rpc.shares_endpoint(&peer_rpc) {
                 return Err("configure distinct pool observers");
             }
-            AccessBackend::Shielded {
+            Some(AccessBackend::Shielded {
                 rpc: Box::new(rpc),
                 peer_rpc: Box::new(peer_rpc),
                 index: IndexStore::new(config.state_root.join("pool-history.json"), domain)
@@ -219,19 +300,23 @@ async fn run() -> Result<(), &'static str> {
                     domain,
                 )
                 .map_err(|_| "invalid peer pool history")?,
-            }
+            })
         }
     };
     let app = App {
         issuer: Arc::new(issuer),
-        backend: Arc::new(backend),
+        backend: backend.map(Arc::new),
+        facilitator,
         evidence_root: config.evidence_root,
         slots: Arc::new(Semaphore::new(16)),
     };
     let router = Router::new()
         .route(
             "/healthz",
-            get(|| async { Json(json!({"status":"ok","payment_submission":false})) }),
+            get({
+                let submits = app.facilitator.is_some();
+                move || async move { Json(json!({"status":"ok","payment_submission":submits})) }
+            }),
         )
         .route("/v1/access", post(access))
         .layer(DefaultBodyLimit::max(8192))
@@ -256,11 +341,13 @@ fn now() -> Result<u64, AccessError> {
 
 async fn access(
     State(app): State<App>,
+    headers: HeaderMap,
     Json(request): Json<AccessRequest>,
-) -> (StatusCode, Json<Value>) {
+) -> (StatusCode, HeaderMap, Json<Value>) {
     let Ok(_slot) = app.slots.try_acquire() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
+            HeaderMap::new(),
             Json(json!({"status":"busy","retry_without_payment":true})),
         );
     };
@@ -295,15 +382,73 @@ async fn access(
         Ok(Err(failure)) => return error(failure, false),
         Err(_) => return error(AccessError::Storage, false),
     };
-    let paid = match app.backend.verify(app.issuer.policy(), evidence).await {
+    let network = evidence.terms.domain.namespace.to_string();
+    let payer = hex::encode(evidence.terms.buyer_authorization_key.as_bytes());
+    if app.facilitator.is_some() {
+        if let Some(payment) = &request.payment {
+            let header = headers
+                .get("PAYMENT-SIGNATURE")
+                .and_then(|value| value.to_str().ok());
+            if header
+                .is_none_or(|value| verify_payment_header(value, &evidence.terms, payment).is_err())
+            {
+                return error(AccessError::Authentication, false);
+            }
+        } else {
+            let Ok(required) = payment_required_header(&evidence.terms) else {
+                return error(AccessError::Agreement, false);
+            };
+            let mut response_headers = HeaderMap::new();
+            let Ok(required) = HeaderValue::from_str(&required) else {
+                return error(AccessError::Agreement, false);
+            };
+            response_headers.insert("PAYMENT-REQUIRED", required);
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                response_headers,
+                Json(
+                    json!({"x402Version":2,"error":"payment_required","retry_without_new_payment":true}),
+                ),
+            );
+        }
+    } else if headers.contains_key("PAYMENT-SIGNATURE") || request.payment.is_some() {
+        return error(AccessError::Agreement, false);
+    }
+    let verified = match (&app.facilitator, &app.backend, &request.payment) {
+        (Some(facilitator), None, Some(payment)) => {
+            facilitator
+                .settle_and_verify(app.issuer.policy(), evidence, payment, now().unwrap_or(0))
+                .await
+        }
+        (None, Some(backend), None) => backend.verify(app.issuer.policy(), evidence).await,
+        _ => Err(AccessError::Agreement),
+    };
+    let paid = match verified {
         Ok(paid) => paid,
         Err(failure) => return error(failure, false),
     };
     let issuer = app.issuer.clone();
+    let mut response_headers = HeaderMap::new();
+    if let Some(facilitator) = &app.facilitator {
+        let Ok(hash) = facilitator.transaction_hash(&request.deal_commitment) else {
+            return error(AccessError::Storage, true);
+        };
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let encoded = STANDARD.encode(
+            json!({"success":true,"transaction":format!("0x{}",hex::encode(hash)),
+            "network":network,"payer":format!("0x{payer}")})
+            .to_string(),
+        );
+        let Ok(value) = HeaderValue::from_str(&encoded) else {
+            return error(AccessError::Storage, true);
+        };
+        response_headers.insert("PAYMENT-RESPONSE", value);
+    }
     let issued = tokio::task::spawn_blocking(move || issuer.issue(&paid, &request, now()?)).await;
     match issued {
         Ok(Ok(issuance)) => (
             StatusCode::OK,
+            response_headers,
             Json(
                 json!({"status":"issued","issuance":issuance,"payload_hex":hex::encode(&app.issuer.policy().payload),"payment_verified":true,"delivery_verified":false}),
             ),
@@ -313,7 +458,7 @@ async fn access(
     }
 }
 
-fn error(failure: AccessError, paid: bool) -> (StatusCode, Json<Value>) {
+fn error(failure: AccessError, paid: bool) -> (StatusCode, HeaderMap, Json<Value>) {
     let status = match failure {
         AccessError::Authentication => StatusCode::UNAUTHORIZED,
         AccessError::Agreement => StatusCode::BAD_REQUEST,
@@ -322,6 +467,7 @@ fn error(failure: AccessError, paid: bool) -> (StatusCode, Json<Value>) {
     };
     (
         status,
+        HeaderMap::new(),
         Json(
             json!({"status":if paid {"paid_but_undelivered"} else if failure==AccessError::Pending {"payment_pending"} else {"unavailable"},"payment_verified":paid,"delivery_verified":false,"retry_without_payment":true,"error":failure.to_string()}),
         ),

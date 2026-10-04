@@ -1,4 +1,4 @@
-"""Access MCP confines paths and never exposes a payment tool."""
+"""Access MCP confines paths and requires operator-selected payment authorization."""
 
 import asyncio
 import json
@@ -16,6 +16,72 @@ from erebus_mcp.config import ConfigError
 
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = ROOT / "sdk/shielded/target/debug/erebus-access"
+
+
+def test_access_result_explains_flags_without_promoting_payment(monkeypatch, tmp_path):
+    from erebus_mcp import access
+
+    class Seam:
+        def __init__(self, **kwargs):
+            pass
+
+        def version(self):
+            return {}
+
+        def retrieve(self, **kwargs):
+            return {"status": "retrieved", "resource_verified": True,
+                    "payment_verified": False, "delivery_verified": False}
+
+    class Server:
+        def tool(self):
+            def register(function):
+                self.retrieve = function
+                return function
+            return register
+
+    monkeypatch.setattr(access, "AccessSeam", Seam)
+    server = Server()
+    access.register_access_tools(server, AccessSettings(tmp_path, tmp_path / "key", "https://example.com/v1/access", "ab" * 32, tmp_path / "cache"))
+    reply = asyncio.run(server.retrieve("deal.evidence"))
+    assert reply["ok"] is True
+    assert reply["result"]["payment_verified"] is False
+    assert reply["result"]["delivery_verified"] is False
+    assert "resource_verified checks the resource hash" in reply["verification_meaning"]
+    assert "recover_deal" in reply["verification_meaning"]
+
+
+def test_x402_tool_uses_only_the_operator_selected_rail(monkeypatch, tmp_path):
+    from erebus_mcp import access
+
+    seen = []
+
+    class Seam:
+        def __init__(self, **kwargs):
+            pass
+
+        def version(self):
+            return {}
+
+        def retrieve(self, **kwargs):
+            seen.append(kwargs)
+            return {"status": "pending", "payment_verified": False,
+                    "resource_verified": False, "delivery_verified": False}
+
+    class Server:
+        def tool(self):
+            def register(function):
+                self.retrieve = function
+                return function
+            return register
+
+    monkeypatch.setattr(access, "AccessSeam", Seam)
+    server = Server()
+    access.register_access_tools(server, AccessSettings(tmp_path, tmp_path / "key",
+        "https://example.com/v1/access", "ab" * 32, tmp_path / "cache", x402_exact=True))
+    asyncio.run(server.retrieve("deal.evidence"))
+    assert seen[0]["x402_exact"] is True
+    assert "signature" not in seen[0] and "payment" not in seen[0]
+    assert "first payment" in server.retrieve.__doc__
 
 
 @pytest.mark.parametrize("name", ["../secret", "/secret", "x/y", ".", "..", "x" * 97])
@@ -39,6 +105,13 @@ def test_configuration_rejects_insecure_paths(monkeypatch, tmp_path):
         AccessSettings.from_env()
     tmp_path.chmod(0o700)
     assert not AccessSettings.from_env().allow_loopback_http
+    assert not AccessSettings.from_env().x402_exact
+    monkeypatch.setenv("EREBUS_ACCESS_PAYMENT_RAIL", "x402-exact")
+    assert AccessSettings.from_env().x402_exact
+    monkeypatch.setenv("EREBUS_ACCESS_PAYMENT_RAIL", "auto")
+    with pytest.raises(ConfigError, match="payment rail"):
+        AccessSettings.from_env()
+    monkeypatch.delenv("EREBUS_ACCESS_PAYMENT_RAIL")
     key.chmod(0o644)
     with pytest.raises(ConfigError, match="owner-only"):
         AccessSettings.from_env()

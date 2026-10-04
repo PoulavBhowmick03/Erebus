@@ -1,15 +1,21 @@
-//! Buyer-local retrieval. No chain signing, transaction submission, or payment retries.
+//! Buyer-local retrieval with an explicit, durable x402 permit mode.
+//! The buyer never submits a transaction or renews a permit after an uncertain payment.
 
 use std::{
     fmt,
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use ark_std::rand::{rngs::OsRng, RngCore};
+use erebus_core::commitment::deal_nullifier;
 use erebus_core::{shielded_auth, suite::SHIELDED_POSEIDON_EDDSA_SUITE_ID};
+use erebus_evm::{
+    deployment::EvmDeployment,
+    x402::{validate_permit_fields, verify_permit_signature, DealPermit, EXACT_PERMIT2_PROXY},
+};
 use erebus_journal::{FaultHook, JournalRecord, NoFaults, Store};
 use erebus_transport::{
     disclosure::{verify_selected_agreement, SelectedAgreement},
@@ -20,7 +26,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
-use super::{issuance_id, request_digest, AccessRequest, Issuance, IssuanceId, MAX_RESOURCE_BYTES};
+use super::{
+    issuance_id, request_digest, AccessRequest, Issuance, IssuanceId, X402Payment,
+    MAX_RESOURCE_BYTES,
+};
 
 const MAX_RESPONSE_BYTES: usize = MAX_RESOURCE_BYTES * 2 + 4096;
 
@@ -137,6 +146,29 @@ impl JournalRecord for CachedResource {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedPermit {
+    version: u32,
+    id: IssuanceId,
+    payment: X402Payment,
+}
+
+impl JournalRecord for SavedPermit {
+    type Id = IssuanceId;
+    const CURRENT_VERSION: u32 = 1;
+    const OLDEST_READABLE_VERSION: u32 = 1;
+    fn version(&self) -> u32 {
+        self.version
+    }
+    fn record_id(&self) -> &Self::Id {
+        &self.id
+    }
+    fn attempt_count(&self) -> usize {
+        1
+    }
+}
+
 /// Trusted endpoint, service identity, and durable buyer cache.
 /// Parent directories must remain under operator control.
 #[derive(Clone)]
@@ -145,6 +177,7 @@ pub struct AccessClient {
     endpoint: Url,
     service_id: [u8; 32],
     store: Arc<Store<CachedResource>>,
+    permits: Arc<Store<SavedPermit>>,
 }
 
 impl fmt::Debug for AccessClient {
@@ -204,8 +237,10 @@ impl AccessClient {
                 return Err(RetrievalError::Storage);
             }
         }
-        let store =
-            Store::open_with_fault_hook(cache, faults).map_err(|_| RetrievalError::Storage)?;
+        let store = Store::open_with_fault_hook(cache.clone(), faults.clone())
+            .map_err(|_| RetrievalError::Storage)?;
+        let permits = Store::open_with_fault_hook(cache.join("x402-authorizations"), faults)
+            .map_err(|_| RetrievalError::Storage)?;
         let client = Client::builder()
             .redirect(Policy::none())
             .timeout(Duration::from_secs(30))
@@ -216,6 +251,7 @@ impl AccessClient {
             endpoint,
             service_id,
             store: Arc::new(store),
+            permits: Arc::new(permits),
         })
     }
 
@@ -268,6 +304,139 @@ impl AccessClient {
         seed: &[u8; 32],
         now: u64,
     ) -> Result<RetrievalReceipt, RetrievalError> {
+        if evidence
+            .terms
+            .domain
+            .settlement_contract
+            .as_ref()
+            .is_some_and(|address| address.as_bytes() == EXACT_PERMIT2_PROXY)
+        {
+            return Err(RetrievalError::Configuration);
+        }
+        self.retrieve_inner(evidence, seed, now, None).await
+    }
+
+    /// Persist one exact authorization before contacting the seller facilitator.
+    /// Repeated calls reuse the same bytes even after expiry; they never extend permission.
+    pub fn prepare_x402_payment(
+        &self,
+        evidence: &SelectedAgreement,
+        seed: &[u8; 32],
+    ) -> Result<X402Payment, RetrievalError> {
+        let commitment = check_agreement(evidence)?;
+        let deployment = EvmDeployment::new(
+            evidence.terms.domain.namespace.clone(),
+            EXACT_PERMIT2_PROXY,
+            evidence.terms.domain.verifier_version,
+            "http://127.0.0.1:1",
+        )
+        .map_err(|_| RetrievalError::Agreement)?;
+        deployment
+            .matches_domain(&evidence.terms.domain)
+            .map_err(|_| RetrievalError::Agreement)?;
+        let identity =
+            AuthorizationIdentity::from_bytes(seed).map_err(|_| RetrievalError::Authentication)?;
+        if identity.address() != evidence.terms.buyer_authorization_key.as_bytes() {
+            return Err(RetrievalError::Authentication);
+        }
+        let id = IssuanceId(issuance_id(&self.service_id, &commitment));
+        let _lock = self
+            .permits
+            .lock_record(&id)
+            .map_err(|_| RetrievalError::Storage)?;
+        let saved = self
+            .permits
+            .read(&id)
+            .map_err(|_| RetrievalError::Storage)?;
+        let payment = if let Some(saved) = saved {
+            saved.payment
+        } else {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| RetrievalError::Authentication)?
+                .as_secs();
+            if now >= evidence.terms.expiry {
+                return Err(RetrievalError::Pending);
+            }
+            let deal = deal_nullifier(&evidence.terms).map_err(|_| RetrievalError::Agreement)?;
+            let permit = DealPermit {
+                token: deployment
+                    .token_address(&evidence.terms.asset)
+                    .map_err(|_| RetrievalError::Agreement)?,
+                amount: evidence.terms.amount.get(),
+                deal,
+                deadline: evidence.terms.expiry.min(now.saturating_add(120)),
+                to: evidence
+                    .terms
+                    .payment_recipient
+                    .as_bytes()
+                    .try_into()
+                    .map_err(|_| RetrievalError::Agreement)?,
+                valid_after: 0,
+            };
+            validate_permit_fields(&deployment, &evidence.terms, &permit)
+                .map_err(|_| RetrievalError::Agreement)?;
+            X402Payment {
+                token: permit.token,
+                amount: permit.amount,
+                deadline: permit.deadline,
+                to: permit.to,
+                valid_after: permit.valid_after,
+                signature: permit.sign(deployment.chain_id, &identity).to_vec(),
+            }
+        };
+        let permit =
+            payment.permit(deal_nullifier(&evidence.terms).map_err(|_| RetrievalError::Agreement)?);
+        validate_permit_fields(&deployment, &evidence.terms, &permit)
+            .map_err(|_| RetrievalError::Agreement)?;
+        verify_permit_signature(
+            &deployment,
+            &evidence.terms,
+            &permit,
+            &payment
+                .signature()
+                .map_err(|_| RetrievalError::Authentication)?,
+        )
+        .map_err(|_| RetrievalError::Authentication)?;
+        self.permits
+            .write(&SavedPermit {
+                version: 1,
+                id,
+                payment: payment.clone(),
+            })
+            .map_err(|_| RetrievalError::Storage)?;
+        Ok(payment)
+    }
+
+    /// Retrieve through the operator-selected exact rail. Signing and persistence precede HTTP.
+    /// Pending or failed retrieval never creates another permit or submits a buyer transaction.
+    pub async fn retrieve_x402(
+        &self,
+        evidence: &SelectedAgreement,
+        seed: &[u8; 32],
+        now: u64,
+    ) -> Result<RetrievalReceipt, RetrievalError> {
+        if let Some(cached) = self.cached(evidence)? {
+            return Ok(cached);
+        }
+        let client = self.clone();
+        let selected = evidence.clone();
+        let secret = Zeroizing::new(*seed);
+        let payment =
+            tokio::task::spawn_blocking(move || client.prepare_x402_payment(&selected, &secret))
+                .await
+                .map_err(|_| RetrievalError::Storage)??;
+        self.retrieve_inner(evidence, seed, now, Some(payment))
+            .await
+    }
+
+    async fn retrieve_inner(
+        &self,
+        evidence: &SelectedAgreement,
+        seed: &[u8; 32],
+        now: u64,
+        payment: Option<X402Payment>,
+    ) -> Result<RetrievalReceipt, RetrievalError> {
         let cached_client = self.clone();
         let cached_evidence = evidence.clone();
         if let Some(cached) =
@@ -287,7 +456,7 @@ impl AccessClient {
                 .try_fill_bytes(&mut nonce)
                 .map_err(|_| RetrievalError::Authentication)?;
             let expires_at = now.checked_add(120).ok_or(RetrievalError::Authentication)?;
-            let digest = request_digest(&selected, service_id, nonce, expires_at)
+            let digest = request_digest(&selected, service_id, nonce, expires_at, payment.as_ref())
                 .map_err(|_| RetrievalError::Agreement)?;
             let (buyer, signature) = if selected.terms.suite_id == SHIELDED_POSEIDON_EDDSA_SUITE_ID
             {
@@ -310,14 +479,21 @@ impl AccessClient {
                 nonce,
                 expires_at,
                 signature,
+                payment,
             };
             Ok::<_, RetrievalError>((commitment, request))
         })
         .await
         .map_err(|_| RetrievalError::Authentication)??;
-        let mut response = self
-            .client
-            .post(self.endpoint.clone())
+        let mut outgoing = self.client.post(self.endpoint.clone());
+        if let Some(payment) = &request.payment {
+            outgoing = outgoing.header(
+                "PAYMENT-SIGNATURE",
+                super::x402::payment_signature_header(&evidence.terms, payment)
+                    .map_err(|_| RetrievalError::Agreement)?,
+            );
+        }
+        let mut response = outgoing
             .json(&request)
             .send()
             .await

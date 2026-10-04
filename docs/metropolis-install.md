@@ -125,7 +125,7 @@ See the [access](metropolis-access-runbook.md), [payment](metropolis-payment-run
 runbooks, and the [M6 runbook](metropolis-m6-runbook.md) for relay, relayer, indexer, and RPC
 failure handling. Hosted and self-hosted deployments run the same binaries.
 [Self-hosting](metropolis-self-hosting.md) covers the storage layout and
-`scripts/metropolis-selfhost.sh`, which starts and checks these services from installed binaries.
+`erebus-selfhost`, included in the Metropolis native wheel, starts and checks services from installed binaries. The source-checkout equivalent is `scripts/metropolis-selfhost.sh`.
 
 ## 9. Agent access over MCP
 
@@ -157,7 +157,7 @@ host-tagged `erebus-cli` wheel, and writes `release.json` with binary and wheel 
 
 ```sh
 uv run --locked python scripts/build-metropolis-registry.py \
-  --version 0.3.0.dev20261003 --profile release --build --output artifacts/metropolis-registry
+  --version 0.3.0.dev20261004 --profile release --build --output artifacts/metropolis-registry
 uv run --locked python scripts/check-metropolis-install.py --registry artifacts/metropolis-registry
 ```
 
@@ -166,10 +166,19 @@ installed binary hashes and native protocols, and starts the installed MCP serve
 seller Metropolis modes. Wheels are tagged for the build host only (macOS arm64 or Linux
 x86_64); there is no portability audit. Nothing is published.
 
+Verified 2026-10-04 on macOS arm64 with `--profile release` at `0.3.0.dev20261004`
+(`source_commit 8a1d365`, `dirty_source: true` because this work is uncommitted): 14 binaries
+verified, no source imports, self-host relay healthy. Linux x86_64 is built by
+`.github/workflows/metropolis-registry.yml`; a local emulated x86_64 VM reset under the release
+build, so Linux is **not** locally qualified. Do not claim Linux wheels from this record.
+
 ## 11. Not yet available
 
 - No published versioned packages; the registry above is built and checked locally only.
 - No hosted testnet deployment of the shared services.
-- No x402 composition yet; the scheme is `exact` ([x402 decision](metropolis-m8-x402.md)).
+- x402 `exact` composition is implemented and locally verified (negotiated two-process test,
+  independent auditor, one-payment fence); it is not live on Monad. See the
+  [x402 decision](metropolis-m8-x402.md) for the prepared Monad harness and prerequisites.
 - The external rehearsal on Monad with only these packages and public documentation has not
-  been run.
+  been run. A team-operated installed-package rehearsal (negotiation, payment, recovery,
+  access, disclosure) passed locally on macOS arm64; it is not independent acceptance.

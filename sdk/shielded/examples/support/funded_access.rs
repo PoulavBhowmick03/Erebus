@@ -159,7 +159,7 @@ pub async fn run(
         .unwrap()
         .as_secs()
         + 300;
-    let digest = request_digest(&evidence, service_id, [4; 32], expires_at).unwrap();
+    let digest = request_digest(&evidence, service_id, [4; 32], expires_at, None).unwrap();
     let seed: [u8; 32] = Sha256::digest(b"EREBUS_M5_BUYER_TEST_ONLY").into();
     let request = AccessRequest {
         deal_commitment: agreement.commitment.to_hex(),
@@ -169,6 +169,7 @@ pub async fn run(
             .unwrap()
             .1
             .to_vec(),
+        payment: None,
     };
     let mut wrong = request.clone();
     wrong.signature = shielded_auth::sign_message(&[7; 32], &digest)
