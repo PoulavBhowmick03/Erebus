@@ -563,3 +563,54 @@ and the pure-Python wheel comparison; starting that workflow is not qualificatio
 **Hosting boundary (owner, 2026-10-04).** Prepare and test the Render deployment files only.
 Do not provision paid services. The hosted-service acceptance gate remains open; a prepared
 blueprint and a local self-hosting test do not close it.
+
+## Qualification, MCP x402, Model Comparison, and Live Rehearsal (2026-10-04)
+
+**Qualification findings.** Registry run 37180669150 (`0.3.0.dev1`, `f4714bb`) passed CI checks but
+is not publishable. Its macOS wheel was tagged `py3-none-macosx_10_9_universal2`, yet all 13
+native binaries are thin arm64 with `minos 11.0`. Hatch had tagged the wheel from the runner's
+universal2 Python. `5a76bbd` tags from the host OS and machine and pins `MACOSX_DEPLOYMENT_TARGET=11.0`.
+Its rebuild, run 37182102672 (`0.3.0.dev2`, `cbfc2e5`), passed both platforms and the comparison. Full
+artifact verification then found **no license file in any wheel**. `171be31` ships Apache-2.0
+`LICENSE` in every wheel and, in the native wheel, `THIRD_PARTY_NOTICES` for all 706 crates linked into
+the binaries. For the 96 crates that publish no license text, the notices give their copyright holders
+and append the canonical texts. Neither `dev1` nor `dev2` was published.
+
+**CI.** The M5 job had failed on every run since at least `191dbf5`. It installed Foundry but never ran
+`forge build`, so `access_http` could not find `contracts/evm/out`, and every later step in the job
+(the x402 HTTP and audit tests) never ran. `cbfc2e5` builds the contracts. Run 37182102674 then passed
+`access_http`, `x402_http`, the x402 audit test, and the MCP agent tests for the first time in CI.
+It failed only where the shielded access request outran the test client's 10 s timeout on a runner
+2.5x slower than local; `44c754a` gives access requests their own bound. The Python job's three
+`scripts/tests/test_demo.py` failures are a stale legacy check: `scripts/check-demo.py` still enforces
+the pre-redesign Starknet landing page (`LeakLedger.tsx`, `Evidence.tsx`, a self-hosted video),
+which the 2026-09-15 web redesign removed. They are unrelated to Metropolis and left unfixed
+pending a decision on what the redesigned site must claim.
+
+**x402 through MCP.** The agent driver has an explicit `x402-exact` profile with no fallback. The buyer's server must
+expose exactly `negotiate_deal` and `retrieve_service_access`; the first retrieval is the paid request, and
+every retry is a retrieval. `two_mcp_agents_pay_over_x402_through_a_dropped_response_and_restarts`
+negotiates and pays through two MCP servers. It drops the response to the first paid request, restarts
+the seller service and the buyer's MCP processes, and then requires one broadcast, one retained permit,
+resource recovery, and independent auditor verification. The installed rehearsal runs it against
+installed servers whose `PATH` holds only installed commands; it passed twice from a fresh environment.
+The driver previously lost `HarnessError` inside the MCP task group (an `ExceptionGroup`), and the x402
+access tool pointed payment verification at a `recover_deal` that x402 mode does not have. Both are fixed.
+
+**Service-model comparison.** Measured on the canonical Permit2, exact, and upto runtimes; see
+[the x402 record](metropolis-m8-x402.md#measured-service-model-comparison-2026-10-04). Prepaid and
+batched are experiments only.
+
+**Operator setup and the live rehearsal.** No product command created participant keys, signed
+descriptors, or the canonical terms template, so neither a third party nor a live rehearsal could
+start from packages. `erebus-negotiate` now has `prepare_operator` and `prepare_terms`, and
+`erebus-settle` has a read-only `address` method. A test negotiates between participants created only
+by these requests. [`scripts/metropolis-monad-rehearsal.py`](metropolis-monad-rehearsal.md) uses them for an
+executable live Monad run. Its read-only `init` and `preflight` passed against Monad testnet and stopped at
+funding; no transaction was sent. On a local chain configured as 10143, the unmodified `run` phase
+completed both rails; that is script validation, not Monad evidence.
+
+**Registry index.** The registry's Pages workflow indexed only the dispatched release, so a second
+version would have made the first uninstallable. `2708983` changes the template to index every
+published release. Applying it to `erebus-metropolis` needs a `gh` token with `workflow` scope; the
+current token has only `repo`.

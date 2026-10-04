@@ -418,6 +418,12 @@ An interrupted service response can recover access without a second charge.
 Mainnet deployment is a separate release decision after review and testnet evidence.
 
 M8 status 2026-10-04: **public-bound live workflow recorded; x402 exact verified locally; complete developer release still open.**
+Later on 2026-10-04: two qualification findings blocked publication of the first artifacts: the macOS wheel was tagged
+universal2 for arm64-only binaries, and no wheel shipped its license. Both are now fixed. The M5 CI job, broken since
+`191dbf5` by a missing contract build, reaches its x402 steps. x402 negotiation and the first paid request now
+run through separate installed MCP servers. The x402 service-model comparison is measured. Participants can be
+created with product commands (`prepare_operator`, `prepare_terms`), and an executable live Monad rehearsal has
+passed its read-only preflight against Monad testnet; it has not been run live.
 The x402 exact rail now has a negotiated two-process end-to-end test with one payment, restart recovery, resource
 verification, and independent auditor verification from the encrypted grant alone. Stage measurements are recorded
 for public-bound and x402. Release packages are built and isolated-install verified on macOS arm64; Linux x86_64 is
