@@ -120,7 +120,7 @@ def init(plan_path: Path, workdir: Path) -> dict:
     bin_dir = Path(plan["bin_dir"]).resolve()
     workdir.mkdir(mode=0o700)
     namespace = f"eip155:{plan['chain_id']}"
-    asset = f"{namespace}/erc20:{plan['token'].lower()}"
+    asset = f"{namespace}/erc20:{plan['asset_contract'].lower()}"
     contract = plan["settlement_contract"].lower() if rail == "public-bound" else EXACT_PROXY
     endpoint = plan["negotiation_endpoint"]
     prepared = {}
@@ -224,17 +224,17 @@ def preflight(workdir: Path) -> dict:
         missing.append("the gas account must differ from both agreement keys")
     price = int(plan["buyer_maximum_price"])
     spender = record["contract"] if record["rail"] == "public-bound" else PERMIT2
-    balance = call(plan["rpc_url"], plan["token"], "0x70a08231" + word(record["buyer"]))
-    allowance = call(plan["rpc_url"], plan["token"], "0xdd62ed3e" + word(record["buyer"]) + word(spender))
+    balance = call(plan["rpc_url"], plan["asset_contract"], "0x70a08231" + word(record["buyer"]))
+    allowance = call(plan["rpc_url"], plan["asset_contract"], "0xdd62ed3e" + word(record["buyer"]) + word(spender))
     native = {who: int(rpc(plan["rpc_url"], "eth_getBalance", [address, "latest"]), 16)
               for who, address in (("buyer", record["buyer"]), ("gas", gas))}
     checks.update({"buyer": record["buyer"], "seller": record["seller"], "gas_account": gas, "token_balance": balance,
                    "allowance": allowance, "allowance_spender": spender, "native_wei": native})
     if balance < price:
-        missing.append(f"mint or transfer at least {price} base units of {plan['token']} to buyer {record['buyer']}")
+        missing.append(f"mint or transfer at least {price} base units of {plan['asset_contract']} to buyer {record['buyer']}")
     if allowance < price:
         missing.append(f"approve {spender} for at least {price} from buyer {record['buyer']} (no product command yet), e.g. "
-                       f"cast send {plan['token']} 'approve(address,uint256)' {spender} {price} --private-key <buyer workdir/buyer/agreement.key> --rpc-url {plan['rpc_url']}")
+                       f"cast send {plan['asset_contract']} 'approve(address,uint256)' {spender} {price} --private-key <buyer workdir/buyer/agreement.key> --rpc-url {plan['rpc_url']}")
     if native["buyer"] == 0 and allowance < price:
         missing.append(f"buyer {record['buyer']} needs native gas only to send that approval")
     if native["gas"] < int(plan.get("minimum_gas_wei", 10**17)):

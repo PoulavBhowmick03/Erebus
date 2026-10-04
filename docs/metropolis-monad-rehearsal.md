@@ -18,7 +18,7 @@ One JSON file describes the operator's real configuration:
  "rpc_url": "https://testnet-rpc.monad.xyz", "peer_rpc_url": "https://rpc-testnet.monadinfra.com",
  "bin_dir": "/path/to/venv/bin",
  "settlement_contract": "0xa5f0c864f434331bef9a7fc5e05450d598d24da4", "deployment_block": 67495473,
- "token": "0x902f79145059910ef875aecf4187c771b204ea14",
+ "asset_contract": "0x902f79145059910ef875aecf4187c771b204ea14",
  "negotiation_endpoint": "127.0.0.1:9431", "access_port": 9432,
  "payload_file": "/path/to/snapshot", "resource": "dataset.snapshot.v1",
  "buyer_start_price": 60, "seller_price": 70, "buyer_maximum_price": 75,
