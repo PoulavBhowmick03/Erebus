@@ -42,10 +42,24 @@ use zeroize::Zeroizing;
 
 const MAX_REQUEST: usize = 16 * 1024;
 
+#[path = "negotiate/operator.rs"]
+mod operator;
+
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Version {},
+    /// Fresh keys and a signed descriptor in a new owner-only directory.
+    PrepareOperator {
+        directory: PathBuf,
+        role: String,
+        endpoint: SocketAddr,
+        namespace: String,
+        assets: Vec<String>,
+        descriptor_lifetime_seconds: u64,
+    },
+    /// The canonical service template, from both verified descriptors.
+    PrepareTerms(Box<operator::TermsRequest>),
     Negotiate {
         config_file: PathBuf,
         operation_ref: String,
@@ -850,6 +864,22 @@ fn main() {
                 operation_ref,
                 freeze_only,
             } => negotiate(&config_file, &operation_ref, freeze_only),
+            Request::PrepareOperator {
+                directory,
+                role,
+                endpoint,
+                namespace,
+                assets,
+                descriptor_lifetime_seconds,
+            } => operator::prepare_operator(
+                &directory,
+                &role,
+                endpoint,
+                &namespace,
+                &assets,
+                descriptor_lifetime_seconds,
+            ),
+            Request::PrepareTerms(request) => operator::prepare_terms(*request),
         }
     })();
     let failed = result.is_err();

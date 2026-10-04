@@ -514,3 +514,131 @@ fn unsafe_operator_config_is_rejected_before_connecting_or_creating_state() {
         assert!(!fixture.root.path().join("buyer/state").exists());
     }
 }
+
+#[test]
+fn operator_prepared_participants_negotiate_without_test_fixtures() {
+    // Only product requests: no test keys, descriptors, or terms are constructed here.
+    let root = tempfile::tempdir().unwrap();
+    let binary = native_binary("erebus-negotiate", env!("CARGO_BIN_EXE_erebus-negotiate"));
+    let endpoint = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let asset = "eip155:10143/erc20:0x902f79145059910ef875aecf4187c771b204ea14";
+    let run = |request: Value| finish(spawn(&binary, root.path(), request));
+    let mut prepared = std::collections::HashMap::new();
+    for role in ["buyer", "seller"] {
+        let (ok, response) = run(
+            json!({"method":"prepare_operator","directory":root.path().join(role),
+            "role":role,"endpoint":endpoint,"namespace":"eip155:10143","assets":[asset],
+            "descriptor_lifetime_seconds":86400}),
+        );
+        assert!(ok, "{response}");
+        assert!(
+            response.get("agreement_key").is_none() && !response.to_string().contains("secret")
+        );
+        prepared.insert(role, response);
+    }
+    let (ok, again) = run(
+        json!({"method":"prepare_operator","directory":root.path().join("buyer"),
+        "role":"buyer","endpoint":endpoint,"namespace":"eip155:10143","assets":[asset],"descriptor_lifetime_seconds":86400}),
+    );
+    assert!(
+        !ok,
+        "an existing operator directory is never overwritten: {again}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [
+            root.path().join("buyer"),
+            root.path().join("buyer/agreement.key"),
+        ] {
+            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
+        }
+    }
+    let delivery = clock() + 7200;
+    let payload_digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+        b"live rehearsal snapshot",
+    ));
+    for (role, peer, price) in [("buyer", "seller", "60"), ("seller", "buyer", "70")] {
+        let directory = root.path().join(role);
+        // Public descriptors travel between operators; nothing private does.
+        fs::copy(
+            prepared[peer]["descriptor_file"].as_str().unwrap(),
+            directory.join(format!("{peer}.descriptor.json")),
+        )
+        .unwrap();
+        let (ok, terms) = run(
+            json!({"method":"prepare_terms","output":directory.join("service.terms"),"role":role,
+            "local_descriptor_file":prepared[role]["descriptor_file"],"peer_descriptor_file":directory.join(format!("{peer}.descriptor.json")),
+            "settlement_contract":"0xa5f0c864f434331bef9a7fc5e05450d598d24da4","verifier_version":1,"asset":asset,
+            "amount":price,"resource":"dataset.snapshot.v1","unit":"snapshot","quantity":"1",
+            "fulfillment_method":"http-access-v1","fulfillment_digest":payload_digest,"delivery_deadline":delivery}),
+        );
+        assert!(ok, "{terms}");
+        assert_eq!(terms["buyer"], prepared["buyer"]["agreement_address"]);
+        assert_eq!(
+            terms["payment_recipient"],
+            prepared["seller"]["agreement_address"]
+        );
+        private(&directory.join("config.json"), json!({"version":1,"role":role,"state_root":directory.join("state"),
+            "transport_key_file":directory.join("transport.key"),"agreement_key_file":directory.join("agreement.key"),
+            "discovery_key_file":null,"local_descriptor_file":prepared[role]["descriptor_file"],
+            "peer_descriptor_file":directory.join(format!("{peer}.descriptor.json")),
+            "terms_template_file":directory.join("service.terms"),"endpoint":endpoint,
+            "maximum_price":"75","minimum_price":"65","max_deal_lifetime_seconds":3600,"timeout_seconds":30,
+            "seller_spend_secret_file":null,"seller_wallet_file":null,"seller_wallet_key_file":null})
+            .to_string().as_bytes());
+    }
+    // A forged peer descriptor and a shared agreement key are both refused.
+    let forged = root.path().join("forged.json");
+    let mut tampered: Value = serde_json::from_slice(
+        &fs::read(prepared["seller"]["descriptor_file"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    tampered["endpoints"] = json!(["tcp://203.0.113.9:1"]);
+    fs::write(&forged, tampered.to_string()).unwrap();
+    for peer in [
+        forged,
+        PathBuf::from(prepared["buyer"]["descriptor_file"].as_str().unwrap()),
+    ] {
+        let (ok, refused) = run(
+            json!({"method":"prepare_terms","output":root.path().join("refused.terms"),"role":"buyer",
+            "local_descriptor_file":prepared["buyer"]["descriptor_file"],"peer_descriptor_file":peer,
+            "settlement_contract":"0xa5f0c864f434331bef9a7fc5e05450d598d24da4","verifier_version":1,"asset":asset,
+            "amount":"60","resource":"dataset.snapshot.v1","unit":"snapshot","quantity":"1",
+            "fulfillment_method":"http-access-v1","fulfillment_digest":payload_digest,"delivery_deadline":delivery}),
+        );
+        assert!(!ok, "{refused}");
+    }
+    assert!(!root.path().join("refused.terms").exists());
+
+    let request = |role: &str| {
+        json!({"method":"negotiate","config_file":root.path().join(role).join("config.json"),
+        "operation_ref":hex::encode(OPERATION)})
+    };
+    let seller = spawn(&binary, root.path(), request("seller"));
+    let buyer = spawn(&binary, root.path(), request("buyer"));
+    let (buyer_ok, buyer) = finish(buyer);
+    let (seller_ok, seller) = finish(seller);
+    assert!(buyer_ok && seller_ok, "buyer {buyer}; seller {seller}");
+    assert_eq!(buyer["status"], "authorized");
+    assert_eq!(buyer["deal_commitment"], seller["deal_commitment"]);
+    let selected =
+        SelectedAgreement::decode(&fs::read(buyer["evidence_file"].as_str().unwrap()).unwrap())
+            .unwrap();
+    verify_selected_agreement(&selected).unwrap();
+    assert_eq!(
+        selected.terms.amount.get(),
+        70,
+        "the seller's counter within the buyer's maximum"
+    );
+    assert_eq!(
+        format!(
+            "0x{}",
+            hex::encode(selected.terms.buyer_authorization_key.as_bytes())
+        ),
+        prepared["buyer"]["agreement_address"]
+    );
+}

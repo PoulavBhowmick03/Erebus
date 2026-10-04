@@ -37,6 +37,11 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Capabilities,
+    /// The address of an owner-only 32-byte gas key, so an operator knows what to fund.
+    /// Reads no chain state and signs nothing.
+    Address {
+        key_file: PathBuf,
+    },
     Funding {
         deployment: Deployment,
         signer_address: String,
@@ -136,6 +141,29 @@ fn finish(result: Result<Value, &'static str>) -> ! {
 
 async fn handle(request: Request) -> Result<Value, &'static str> {
     match request {
+        Request::Address { key_file } => {
+            let metadata =
+                std::fs::symlink_metadata(&key_file).map_err(|_| "key file unavailable")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+                    return Err("key file must be an owner-only regular file");
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = metadata;
+            let seed = zeroize::Zeroizing::new(
+                std::fs::read(&key_file).map_err(|_| "key file unavailable")?,
+            );
+            let seed: &[u8; 32] = seed
+                .as_slice()
+                .try_into()
+                .map_err(|_| "key file must hold 32 raw bytes")?;
+            let key =
+                erebus_evm::chain::TransactionKey::from_bytes(seed).map_err(|_| "invalid key")?;
+            Ok(json!({"status":"ok","address":format!("0x{}", hex::encode(key.address()))}))
+        }
         Request::Capabilities => {
             let capabilities = public_bound_capabilities();
             Ok(json!({
