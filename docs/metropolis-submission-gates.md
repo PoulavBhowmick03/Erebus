@@ -34,7 +34,10 @@ Resource hash verification does not prove independent payment or a delivery audi
 - Independent auditor verification with participant state unavailable. Local evidence now
   covers both rails (public-bound grant verification and the x402 finalized-calldata path);
   the live Monad counterpart is not run.
-- A published Metropolis package channel and an external fresh-environment rehearsal. The
+- An external fresh-environment rehearsal. The package channel now exists: `0.3.0.dev4` is
+  published at `https://poulavbhowmick03.github.io/erebus-metropolis/simple/` and a team-operated
+  public install was verified on macOS arm64 (2026-10-04). The text below records how we got there.
+- Previously: a published Metropolis package channel and an external fresh-environment rehearsal. The
   release registry builds and passes isolated-install checks locally; a team-operated
   installed-package rehearsal (negotiation, one payment, recovery, access, disclosure) passed
   on macOS arm64. Nothing is published, and no third party has run it. Linux x86_64 remains

@@ -25,8 +25,30 @@ private-payment product on Monad.
 The x402 `exact` rail (seller-facilitated Permit2) is implemented and locally verified end to
 end: real discovery and encrypted negotiation, one fenced payment, restart recovery, matching
 resource delivery, and independent auditor verification from the encrypted grant alone. It is
-not live on Monad. Release packages build and pass isolated-install checks on macOS arm64;
-Linux x86_64 is built only by the prepared registry workflow and is not locally qualified.
+not live on Monad.
+
+### Install the published Metropolis packages
+
+`0.3.0.dev4` is published as a prerelease on a separate Metropolis index (the stable Starknet
+index is unrelated). With [uv](https://docs.astral.sh/uv/) and Python 3.11+:
+
+```sh
+uv venv --python 3.11 erebus-metropolis
+uv pip install --python erebus-metropolis/bin/python \
+  --index-url https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  "erebus-mcp-server==0.3.0.dev4"
+```
+
+Use uv, not pip: uv resolves `erebus-cli`, `erebus-sdk`, and `erebus-mcp-server` only from the
+first index that has them, while pip with `--extra-index-url` would accept a higher version of
+those names from PyPI. If downloads from GitHub release assets time out, set
+`UV_HTTP_TIMEOUT=300`. Supported platforms: macOS 11+ on Apple silicon and Linux x86_64 (built on
+GitHub's `ubuntu-latest`; not a manylinux build, so older glibc may not run it). There are no
+Intel macOS, Linux arm64, or Windows wheels. The install puts the native commands, the
+`erebus-mcp-server` entry point, and `erebus-selfhost` in `erebus-metropolis/bin`. Verified
+2026-10-04 from a fresh environment outside any checkout (see the
+[install guide](./docs/metropolis-install.md)).
 
 Recorded Monad testnet payment:
 [`0x1f7ec208…`](https://testnet.monadexplorer.com/tx/0x1f7ec208a7b03b835f224ac989cc59c9aee4c33634a2b04498b8394ddede4c09).

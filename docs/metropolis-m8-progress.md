@@ -614,3 +614,30 @@ completed both rails; that is script validation, not Monad evidence.
 version would have made the first uninstallable. `2708983` changes the template to index every
 published release. Applying it to `erebus-metropolis` needs a `gh` token with `workflow` scope; the
 current token has only `repo`.
+
+## Published Metropolis Packages (2026-10-04)
+
+`v0.3.0.dev4` is published as a prerelease on `PoulavBhowmick03/erebus-metropolis`, served by the
+HTTPS index `https://poulavbhowmick03.github.io/erebus-metropolis/simple/`. It was built from clean
+`e9f10d0` by registry run 37186885901, which passed both platforms, the isolated installed x402
+rehearsals (including the MCP agent test), and the cross-runner pure-wheel comparison.
+`scripts/publish-metropolis-release.py` then re-verified both artifacts locally and published four
+deduplicated wheels plus the combined manifest. It checked source revision, version, clean tree,
+wheel, native, and launcher hashes, architectures, tags, and licenses. Every uploaded asset's
+digest matches the manifest, and the Pages index links each wheel by SHA-256. No earlier version was
+published, and the stable Starknet index was not touched.
+
+Public install, verified from a fresh environment outside the checkout with a fresh uv cache:
+- imports resolve inside the environment;
+- all 14 native binaries and the self-host launcher match the published manifest;
+- the operator setup commands work, and `erebus-selfhost` serves a healthy relay;
+- the installed MCP server exposes the expected tool sets for the seller, the settlement buyer, and
+  the x402 buyer.
+
+Both funded x402 rehearsals also passed against these binaries. They use checkout fixtures, so this
+is team-operated evidence, not independent external acceptance. GitHub release-asset downloads timed
+out repeatedly from this machine during publication; uv's `UV_HTTP_TIMEOUT=300` was needed once.
+
+Open: the registry's Pages workflow still indexes only the dispatched release until a token with
+`workflow` scope applies the all-releases template (`2708983`). A second publication before that
+would drop `0.3.0.dev4` from the index.

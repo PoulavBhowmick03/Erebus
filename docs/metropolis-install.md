@@ -149,11 +149,54 @@ evidence directory is fixed to `<state_root>/agent` and created owner-only if mi
 `EREBUS_NEGOTIATION_CLI`, `EREBUS_PAYMENT_CLI`, and `EREBUS_NATIVE_TIMEOUT_SECONDS` (1-900)
 override binary discovery on `PATH` and the per-call timeout.
 
-## 10. Metropolis prerelease registry (local, unpublished)
+## 10. Published Metropolis packages
 
-Metropolis packages use their own index, separate from the stable release channel. The builder
-stages the three Python packages at a `.devN` version, bundles the native binaries into a
-host-tagged `erebus-cli` wheel, and writes `release.json` with binary and wheel hashes:
+Metropolis packages are published on their own index, separate from the stable Starknet channel:
+`https://poulavbhowmick03.github.io/erebus-metropolis/simple/`. Each version is a GitHub
+prerelease on `PoulavBhowmick03/erebus-metropolis` with a `release-manifest.json` that records the
+source commit, every wheel, native binary, and launcher hash, platform qualifications, and
+licenses. The index links each wheel with its SHA-256.
+
+```sh
+uv venv --python 3.11 erebus-metropolis
+uv pip install --python erebus-metropolis/bin/python \
+  --index-url https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  "erebus-mcp-server==0.3.0.dev4"
+export PATH="$PWD/erebus-metropolis/bin:$PATH"
+printf '%s' '{"method":"version"}' | erebus-negotiate
+```
+
+Use uv: it takes each project only from the first index that has it, so the unclaimed PyPI names
+`erebus-cli`, `erebus-sdk`, and `erebus-mcp-server` cannot shadow these packages; pip with
+`--extra-index-url` would not give that guarantee. Set `UV_HTTP_TIMEOUT=300` if GitHub
+release-asset downloads time out.
+
+| Platform | Wheel tag | Notes |
+|---|---|---|
+| macOS 11+ on Apple silicon | `macosx_11_0_arm64` | binaries declare `minos 11.0` |
+| Linux x86_64 | `linux_x86_64` | built on GitHub `ubuntu-latest`; no manylinux audit, so older glibc may fail |
+
+No Intel macOS, Linux arm64, or Windows build exists. The release manifest keys the macOS platform
+by the build runner's Python (`macosx-10.9-universal2`); its `wheel_tag` is the authoritative value.
+
+Every wheel ships Apache-2.0 `LICENSE`. The `erebus-cli` wheel also ships `THIRD_PARTY_NOTICES`
+for the 706 crates linked into the binaries.
+
+**Verified 2026-10-04 (`0.3.0.dev4`, source `e9f10d0`).** In a fresh environment outside any
+checkout, with a fresh uv cache, the command above installed all three packages from the public
+HTTPS index. Imports resolved inside the environment, and all 14 native binaries plus the
+`erebus-selfhost` launcher matched the published manifest. `prepare_operator` and
+`erebus-settle address` worked from the installed commands, and `erebus-selfhost` brought the relay
+up healthy and stopped it. The installed MCP server exposed `negotiate_deal` to a seller, the four
+settlement tools to a settlement buyer, and exactly `negotiate_deal` and `retrieve_service_access`
+to an x402 buyer, each failing closed on bad input. The funded x402 rehearsals also passed against
+these installed binaries, but they use checkout test fixtures, so they are not independent
+external acceptance.
+
+Releases are built and qualified by `.github/workflows/metropolis-registry.yml` on both platforms,
+then checked again and published with `scripts/publish-metropolis-release.py` (no existing release
+is overwritten). To build a local unpublished index instead:
 
 ```sh
 uv run --locked python scripts/build-metropolis-registry.py \
@@ -161,20 +204,9 @@ uv run --locked python scripts/build-metropolis-registry.py \
 uv run --locked python scripts/check-metropolis-install.py --registry artifacts/metropolis-registry
 ```
 
-The check installs from that index into a fresh environment outside the repository, verifies
-installed binary hashes and native protocols, and starts the installed MCP server in access and
-seller Metropolis modes. Wheels are tagged for the build host only (macOS arm64 or Linux
-x86_64); there is no portability audit. Nothing is published.
-
-Verified 2026-10-04 on macOS arm64 with `--profile release` at `0.3.0.dev20261004`
-(`source_commit 8a1d365`, `dirty_source: true` because this work is uncommitted): 14 binaries
-verified, no source imports, self-host relay healthy. Linux x86_64 is built by
-`.github/workflows/metropolis-registry.yml`; a local emulated x86_64 VM reset under the release
-build, so Linux is **not** locally qualified. Do not claim Linux wheels from this record.
-
 ## 11. Not yet available
 
-- No published versioned packages; the registry above is built and checked locally only.
+- No independent third-party run of the published packages yet.
 - No hosted testnet deployment of the shared services.
 - x402 `exact` composition is implemented and locally verified (negotiated two-process test,
   independent auditor, one-payment fence); it is not live on Monad. See the

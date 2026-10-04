@@ -392,6 +392,9 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
 - [x] Deploy to testnet with reproducible artifacts, configuration, and verified contract identities.
 - [ ] Add CLI onboarding, funding diagnostics, backend selection, and receipt output.
 - [ ] Publish versioned testnet packages and a fresh-install guide covering identity, discovery, funding, settlement, disclosure, recovery, and withdrawal.
+      `0.3.0.dev4` is published on the separate Metropolis index and verified from a fresh public install
+      ([install guide](metropolis-install.md#10-published-metropolis-packages)). Still open: withdrawal (shielded,
+      deferred with the pool by DM8-10), funding without an external approval command, and a third-party run.
 - [ ] Make local proving work from the installed Erebus MCP/SDK package, with automatic hash-checked shared artifact installation; require no source checkout, Circom installation, separate prover service, or operator setup ceremony.
 - [ ] Deploy optional shared testnet services and document their metadata exposure, retention, access limits, and availability behavior.
 - [x] Provide a self-hosting package using the same service implementations, with endpoint configuration and persistent storage instructions.
