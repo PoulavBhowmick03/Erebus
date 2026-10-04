@@ -155,6 +155,13 @@ asyncio.run(check())
                             "negotiated_x402_settles_once_recovers_restart_and_audits_from_the_grant",
                             "--", "--ignored", "--nocapture"],
                            env=fixture_environment, cwd=root, timeout=600, check=True)
+            # Negotiation and the initial paid request through separate installed MCP servers.
+            fixture_environment["EREBUS_TEST_MCP_SERVER"] = str(bins / "erebus-mcp-server")
+            subprocess.run([cargo, "test", "--locked", "--offline", "--manifest-path",
+                            str(checkout / "sdk/shielded/Cargo.toml"), "--test", "negotiation_cli",
+                            "two_mcp_agents_pay_over_x402_through_a_dropped_response_and_restarts",
+                            "--", "--ignored", "--nocapture"],
+                           env=fixture_environment, cwd=root, timeout=900, check=True)
     return {"status": "verified", "version": manifest["version"], "binaries": len(manifest["binaries"]),
             "source_imports": False, "live_payment": False, "published": False,
             "installed_x402_rehearsal": rehearse_x402}

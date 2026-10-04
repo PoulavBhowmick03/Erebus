@@ -99,7 +99,10 @@ def register_access_tools(server: MCPServer, settings: AccessSettings) -> None:
                 allow_loopback_http=settings.allow_loopback_http,
                 **options,
             )
+            payment_source = ("independent disclosure verification (erebus-shielded-disclosure verify_payment); this x402 server has no payment-verification tool"
+                              if settings.x402_exact else "recover_deal")
             return {"ok": response["status"] == "retrieved", "result": response,
-                    "verification_meaning": "resource_verified checks the resource hash; payment_verified comes only from recover_deal; delivery_verified requires a separate delivery audit, not a successful download."}
+                    "verification_meaning": "resource_verified checks the resource hash; seller_reported_payment_finalized is the seller's claim; "
+                    f"payment_verified comes only from {payment_source}; delivery_verified requires a separate delivery audit, not a successful download."}
         except AccessError as error:
             return {"ok": False, "error": {"code": "ACCESS_UNAVAILABLE", "message": str(error), "retry_without_payment": True}}

@@ -48,6 +48,12 @@ def test_access_result_explains_flags_without_promoting_payment(monkeypatch, tmp
     assert reply["result"]["delivery_verified"] is False
     assert "resource_verified checks the resource hash" in reply["verification_meaning"]
     assert "recover_deal" in reply["verification_meaning"]
+    x402 = Server()
+    access.register_access_tools(x402, AccessSettings(tmp_path, tmp_path / "key", "https://example.com/v1/access", "ab" * 32,
+                                                      tmp_path / "cache", x402_exact=True))
+    meaning = asyncio.run(x402.retrieve("deal.evidence"))["verification_meaning"]
+    assert "independent disclosure verification" in meaning and "recover_deal" not in meaning
+    assert "seller's claim" in meaning
 
 
 def test_x402_tool_uses_only_the_operator_selected_rail(monkeypatch, tmp_path):

@@ -10,6 +10,13 @@ Timings use the local monotonic clock from the start of the settlement call to f
 inclusion, finalized verification, and delivery. Chain timestamps are diagnostics, not latency.
 `stages_ms` marks a stage null when the mode reports no such stage (public-bound has no proof)
 or when the driver did not report it.
+
+The operator-selected `x402-exact` profile is separate and has no fallback: the buyer's server
+exposes only `negotiate_deal` and `retrieve_service_access`. The first retrieval signs one local
+Permit2 authorization and the seller submits it; every retry is another retrieval that reuses the
+retained permit. Nothing on that path reports independent payment verification: a verified
+resource hash and the seller's finality claim are not chain evidence. An independent auditor
+verifies payment from the disclosure grant.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from contextlib import AsyncExitStack
@@ -29,6 +37,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 BUYER_TOOLS = {"negotiate_deal", "check_settlement_funding", "settle_deal", "recover_deal"}
 SELLER_TOOLS = {"negotiate_deal"}
 ACCESS_TOOL = "retrieve_service_access"
+X402_BUYER_TOOLS = {"negotiate_deal", ACCESS_TOOL}
 
 
 class HarnessError(RuntimeError):
@@ -142,23 +151,76 @@ async def _deliver(buyer: ToolSession, evidence_name: str, *, poll_seconds: floa
     raise HarnessError("resource not delivered within the polling budget; retrieve again later, do not pay again")
 
 
+async def drive_x402_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str, *,
+                          poll_seconds: float = 1.0, max_polls: int = 120,
+                          sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                          clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+    """Negotiate on both sides, then retrieve; the first retrieval is the payment request.
+
+    Retries never call anything but retrieval, so a dropped response or a seller restart can
+    only reuse the retained permit.
+    """
+    started = clock()
+    buyer_deal, seller_deal = await asyncio.gather(_call(buyer, "negotiate_deal", operation_ref),
+                                                   _call(seller, "negotiate_deal", operation_ref))
+    negotiated = clock()
+    if not (buyer_deal.get("ok") and seller_deal.get("ok")):
+        raise HarnessError("negotiation did not authorize on both sides")
+    commitment = buyer_deal["result"]["deal_commitment"]
+    if seller_deal["result"]["deal_commitment"] != commitment:
+        raise HarnessError("participants authorized different deals")
+    evidence_name = Path(buyer_deal["result"]["evidence_file"]).name
+    states: list[str] = []
+    for attempt in range(1, max_polls + 1):
+        reply = _structured(await buyer.call_tool(ACCESS_TOOL, {"evidence_name": evidence_name}))
+        result = reply.get("result") or {}
+        states.append(result.get("status") or (reply.get("error") or {}).get("code") or "unknown")
+        if reply.get("ok"):
+            receipt = result["result"]
+            if not receipt.get("resource_verified"):
+                raise HarnessError("retrieved resource failed verification")
+            if receipt.get("payment_verified") or receipt.get("delivery_verified"):
+                raise HarnessError("access must not claim independent payment or delivery verification")
+            finished = clock()
+            return {
+                "profile": "x402-exact", "operation_ref": operation_ref, "deal_commitment": commitment,
+                "retrieval_attempts": attempt, "retrieval_states": states,
+                "resource_sha256": receipt["resource_sha256"], "resource_bytes": receipt["resource_bytes"],
+                "seller_reported_payment_finalized": receipt.get("seller_reported_payment_finalized"),
+                "payment_verified": False, "payment_verification": "independent auditor only",
+                "stages_ms": {"negotiation": round((negotiated - started) * 1000),
+                              "first_request_to_resource": round((finished - negotiated) * 1000)},
+            }
+        if reply.get("ok") is False and result.get("retry_without_payment") is False:
+            raise HarnessError("access reported a non-retryable failure")
+        await sleep(poll_seconds)
+    raise HarnessError("resource not delivered within the polling budget; retrieve again later, do not pay again")
+
+
 def server_params(python: str, negotiation_config: str, *, payment_config: str | None = None,
                   negotiation_cli: str | None = None, payment_cli: str | None = None,
-                  access: dict[str, str] | None = None) -> StdioServerParameters:
+                  access: dict[str, str] | None = None, server_command: str | None = None) -> StdioServerParameters:
     """`access` holds the operator's EREBUS_ACCESS_* variables; it adds retrieval to a buyer."""
     env = {"EREBUS_BACKEND": "metropolis", "EREBUS_NEGOTIATION_CONFIG": negotiation_config, **(access or {})}
     for name, value in (("EREBUS_PAYMENT_CONFIG", payment_config), ("EREBUS_NEGOTIATION_CLI", negotiation_cli),
                         ("EREBUS_PAYMENT_CLI", payment_cli)):
         if value is not None:
             env[name] = value
+    if server_command:
+        # An installed server resolves only installed native commands, never a checkout's venv.
+        env["PATH"] = os.pathsep.join([str(Path(server_command).parent), "/usr/bin", "/bin"])
+        return StdioServerParameters(command=server_command, args=[], env=env)
     return StdioServerParameters(command=python, args=["-m", "erebus_mcp.server"], env=env)
 
 
 async def run_over_mcp(buyer_params: StdioServerParameters, seller_params: StdioServerParameters,
-                       operation_ref: str, **options: Any) -> dict[str, Any]:
+                       operation_ref: str, *, profile: str = "settlement", **options: Any) -> dict[str, Any]:
+    if profile not in {"settlement", "x402-exact"}:
+        raise HarnessError("profile must be settlement or x402-exact")
+    buyer_allowed = (X402_BUYER_TOOLS,) if profile == "x402-exact" else (BUYER_TOOLS, BUYER_TOOLS | {ACCESS_TOOL})
     async with AsyncExitStack() as stack:
         sessions = []
-        for params, allowed in ((buyer_params, (BUYER_TOOLS, BUYER_TOOLS | {ACCESS_TOOL})), (seller_params, (SELLER_TOOLS,))):
+        for params, allowed in ((buyer_params, buyer_allowed), (seller_params, (SELLER_TOOLS,))):
             read, write = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
@@ -167,28 +229,50 @@ async def run_over_mcp(buyer_params: StdioServerParameters, seller_params: Stdio
                 raise HarnessError(f"unexpected tool surface: {sorted(tools)}")
             sessions.append((session, tools))
         (buyer, buyer_tools), (seller, _) = sessions
+        if profile == "x402-exact":
+            return await drive_x402_deal(buyer, seller, operation_ref, **options)
         return await drive_deal(buyer, seller, operation_ref, deliver=ACCESS_TOOL in buyer_tools, **options)
+
+
+def _harness_error(error: BaseException) -> HarnessError | None:
+    if isinstance(error, HarnessError):
+        return error
+    if isinstance(error, BaseExceptionGroup):
+        for inner in error.exceptions:
+            if (found := _harness_error(inner)) is not None:
+                return found
+    return None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--operation", required=True)
     parser.add_argument("--buyer-negotiation", required=True)
-    parser.add_argument("--buyer-payment", required=True)
+    parser.add_argument("--buyer-payment", help="ordinary settlement profile only")
+    parser.add_argument("--profile", choices=["settlement", "x402-exact"], default="settlement")
+    parser.add_argument("--server-command", help="installed erebus-mcp-server; default: this Python's module")
     parser.add_argument("--seller-negotiation", required=True)
     parser.add_argument("--negotiation-cli")
     parser.add_argument("--payment-cli")
     parser.add_argument("--max-polls", type=int, default=120)
     parser.add_argument("--buyer-access", help="JSON file of the buyer operator's EREBUS_ACCESS_* variables")
     args = parser.parse_args()
+    if (args.profile == "x402-exact") == bool(args.buyer_payment):
+        parser.error("x402-exact takes --buyer-access and no --buyer-payment; settlement requires --buyer-payment")
     clis = {"negotiation_cli": args.negotiation_cli, "payment_cli": args.payment_cli}
     access = json.loads(Path(args.buyer_access).read_text()) if args.buyer_access else None
-    buyer = server_params(sys.executable, args.buyer_negotiation, payment_config=args.buyer_payment, access=access, **clis)
-    seller = server_params(sys.executable, args.seller_negotiation, negotiation_cli=args.negotiation_cli)
+    buyer = server_params(sys.executable, args.buyer_negotiation, payment_config=args.buyer_payment, access=access,
+                          server_command=args.server_command, **clis)
+    seller = server_params(sys.executable, args.seller_negotiation, negotiation_cli=args.negotiation_cli,
+                           server_command=args.server_command)
     try:
-        record = asyncio.run(run_over_mcp(buyer, seller, args.operation, max_polls=args.max_polls))
-    except HarnessError as error:
-        print(json.dumps({"payment_verified": False, "error": str(error)}))
+        record = asyncio.run(run_over_mcp(buyer, seller, args.operation, profile=args.profile, max_polls=args.max_polls))
+    except BaseException as error:
+        # The MCP sessions' task group wraps a HarnessError in an ExceptionGroup.
+        found = _harness_error(error)
+        if found is None:
+            raise
+        print(json.dumps({"payment_verified": False, "error": str(found)}))
         raise SystemExit(1) from None
     print(json.dumps(record))
 

@@ -118,3 +118,73 @@ def test_unverified_resource_is_not_accepted():
                     retrieve_service_access=[bad])
     with pytest.raises(HarnessError, match="verification"):
         run(buyer, Session(negotiate_deal=[deal()]), deliver=True)
+
+
+def x402_retrieved(**overrides):
+    receipt = {"resource_verified": True, "payment_verified": False, "delivery_verified": False,
+               "resource_sha256": "ef" * 32, "resource_bytes": 37, "seller_reported_payment_finalized": True, **overrides}
+    return {"ok": True, "result": {"status": "retrieved", "result": receipt}}
+
+
+def x402_pending(status="payment_pending"):
+    return {"ok": False, "result": {"status": status, "retry_without_payment": True, "payment_verified": False}}
+
+
+def run_x402(buyer, seller, **options):
+    from erebus_agents.metropolis_loop import drive_x402_deal
+
+    ticks = iter(range(100, 1000))
+    return asyncio.run(drive_x402_deal(buyer, seller, OPERATION, sleep=no_sleep, clock=lambda: float(next(ticks)), **options))
+
+
+def test_x402_first_retrieval_pays_and_retries_only_retrieve():
+    buyer = Session(negotiate_deal=[deal()], retrieve_service_access=[
+        {"ok": False, "error": {"code": "ACCESS_UNAVAILABLE", "retry_without_payment": True}},
+        x402_pending(), x402_pending("paid_but_undelivered"), x402_retrieved()])
+    record = run_x402(buyer, Session(negotiate_deal=[deal()]))
+    assert set(buyer.calls) == {"negotiate_deal", "retrieve_service_access"}
+    assert record["retrieval_attempts"] == 4
+    assert record["retrieval_states"] == ["ACCESS_UNAVAILABLE", "payment_pending", "paid_but_undelivered", "retrieved"]
+    assert record["payment_verified"] is False and record["payment_verification"] == "independent auditor only"
+
+
+@pytest.mark.parametrize("claim", [{"payment_verified": True}, {"delivery_verified": True}, {"resource_verified": False}])
+def test_x402_access_never_becomes_payment_or_delivery_verification(claim):
+    buyer = Session(negotiate_deal=[deal()], retrieve_service_access=[x402_retrieved(**claim)])
+    with pytest.raises(HarnessError):
+        run_x402(buyer, Session(negotiate_deal=[deal()]))
+
+
+def test_x402_stops_on_non_retryable_failure_and_polling_budget():
+    buyer = Session(negotiate_deal=[deal()], retrieve_service_access=[
+        {"ok": False, "result": {"status": "rejected", "retry_without_payment": False}}])
+    with pytest.raises(HarnessError, match="non-retryable"):
+        run_x402(buyer, Session(negotiate_deal=[deal()]))
+    buyer = Session(negotiate_deal=[deal()], retrieve_service_access=[x402_pending()] * 2)
+    with pytest.raises(HarnessError, match="polling budget"):
+        run_x402(buyer, Session(negotiate_deal=[deal()]), max_polls=2)
+
+
+def test_x402_profile_requires_the_exact_tool_surface():
+    from erebus_agents.metropolis_loop import BUYER_TOOLS, X402_BUYER_TOOLS
+
+    assert X402_BUYER_TOOLS == {"negotiate_deal", "retrieve_service_access"}
+    assert not X402_BUYER_TOOLS & (BUYER_TOOLS - {"negotiate_deal"})
+
+
+def test_harness_errors_are_found_inside_task_group_wrappers():
+    from erebus_agents.metropolis_loop import _harness_error
+
+    inner = HarnessError("resource not delivered")
+    wrapped = BaseExceptionGroup("tasks", [ExceptionGroup("inner", [ValueError("x"), inner])])
+    assert _harness_error(wrapped) is inner
+    assert _harness_error(BaseExceptionGroup("tasks", [KeyboardInterrupt()])) is None
+
+
+def test_installed_servers_see_only_installed_commands():
+    from erebus_agents.metropolis_loop import server_params
+
+    params = server_params("/unused/python", "/operator/negotiation.json", server_command="/opt/erebus/bin/erebus-mcp-server")
+    assert params.command == "/opt/erebus/bin/erebus-mcp-server" and params.args == []
+    assert params.env["PATH"].split(":")[0] == "/opt/erebus/bin"
+    assert ".venv" not in params.env["PATH"]

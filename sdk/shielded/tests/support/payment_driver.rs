@@ -29,6 +29,8 @@ mod agent_driver;
 mod native_product;
 #[path = "shielded_driver.rs"]
 mod shielded_driver;
+#[path = "x402_agents.rs"]
+mod x402_agents;
 impl Drop for ServiceProcess {
     fn drop(&mut self) {
         let _ = self.0.kill();
