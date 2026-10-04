@@ -44,8 +44,8 @@ Select the scheme to compose against:
 
 The measured comparison the roadmap asks for must record, per model: latency from request to
 access, proof and submission cost, on-chain accounting, what becomes public, and how an
-interrupted request recovers without a second charge. The owner selected `exact`; the
-comparison against other schemes is still open.
+interrupted request recovers without a second charge. The owner selected `exact`; the measured
+comparison below now exists (local Anvil, real contracts).
 
 ## Composition (DM8-13)
 
@@ -128,6 +128,35 @@ This verifier checks the token's transfer event, not historical recipient balanc
 Use trusted standard ERC-20 assets; fee-on-transfer, rebasing and dishonest event-emitting
 tokens are not qualified by this test evidence.
 
+## Measured service-model comparison (2026-10-04)
+
+Only per-request `exact` is a product rail. The other two models are **experiments**: they exist
+only in `sdk/evm/tests/x402_service_models.rs` and no package, MCP tool, or service ships them.
+
+Method: Anvil (chain 31337, `--block-time 1`), with the canonical Permit2, `x402ExactPermit2Proxy`,
+and `x402UptoPermit2Proxy` runtimes pinned from Monad testnet and installed at their canonical
+addresses. Twenty requests at price 10, debug build, local monotonic clocks.
+
+| | Per-request `exact` | Prepaid allocation | Batched `upto` |
+|---|---|---|---|
+| Status | supported rail | experimental | experimental |
+| On-chain settlements | 20 | 1 (prepays 20 units) | 1 (settles 17 used units) |
+| Gas used | 1,819,836 (90,991 per request) | 89,146 | 110,101 |
+| Gas limit charged at 250,000 per settlement | 5,000,000 | 250,000 | 250,000 |
+| Per-request latency | p50 1,007 ms (submit to receipt, one block) | p50 8 ms (buyer signature, seller recovery, ledger fsync) | p50 3 ms (usage ledger fsync) |
+| One-time latency | none | 1,006 ms prepayment | 756 ms final settlement |
+| Public on chain | each request's amount, payer, recipient, and timing | the prepaid total | total usage; cap and request count stay off chain |
+| Accounting | the chain; each request independently final | seller ledger is authoritative; buyer cannot verify draws | seller ledger sets the charge up to the cap; buyer cannot verify use |
+| Seller crash after 7 requests | 7 paid, 0 outstanding | buyer has prepaid 13 unused units; refund needs the seller | 7-unit seller receivable; the retained permit recovered it before the deadline, and settlement after the deadline reverted |
+
+The batched run also confirmed the canonical `upto` rules on chain: settlement above the cap
+reverts, only the named facilitator can settle, and a permit settles once.
+
+What this does not measure: Monad inclusion or finality latency (Anvil's one-second blocks set the
+per-request number), gas price in currency, or contention between concurrent buyers. Monad charges
+the gas limit, so the limit column, not gas used, is the cost model on Monad. Run:
+`cd contracts/evm && forge build && cd ../../sdk/evm && cargo test --test x402_service_models -- --ignored --nocapture`.
+
 ## Monad x402 harness (prepared, not run)
 
 The local negotiated test is the harness. To run the same rail on Monad testnet, an operator
@@ -148,5 +177,5 @@ operator runs it and records the transaction, permit nonce, and auditor result.
 
 - Decision: `exact`, for now (owner, 2026-10-03). Composition is built against `exact` first.
 - Rationale: _owner_
-- Not yet done: the measured comparison against `upto` and batched settlement. Choosing `exact`
-  first does not complete that roadmap item.
+- The measured comparison against prepaid and batched (`upto`) now exists above. It informs, but
+  does not make, the owner's model decision; the alternatives stay experimental unless selected.

@@ -403,7 +403,10 @@ Dependencies: M2, M6, M7. Full private demonstration also requires M5.
       Local evidence: seller-facilitated `exact` Permit2 with a durable one-permit fence, paired finalized observation,
       an independent auditor that decodes the permit from finalized calldata, and a negotiated two-process test
       (`sdk/shielded/tests/support/payment_driver.rs`) asserting one send and one payment. No live Monad x402 broadcast.
-- [ ] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
+- [x] Compare per-request settlement, prepaid allocation, and batched usage using measured latency, cost, accounting, privacy, and recovery behavior before selecting the x402 service model.
+      Measured on Anvil against the canonical Permit2, exact, and upto runtimes pinned from Monad testnet
+      ([comparison](metropolis-m8-x402.md#measured-service-model-comparison-2026-10-04)); prepaid and batched are
+      experiments in `sdk/evm/tests/x402_service_models.rs`, not product rails. No Monad latency is claimed.
 - [x] Measure negotiation, proof, submission, inclusion, finality, and service delivery separately. Local call durations exist; block timestamps are diagnostics, not measured inclusion or finality latency.
       Public-bound and x402 now report local monotonic `stages_ms` (negotiation, signing, submission, first observed
       inclusion, finalized verification, delivery); proof is explicitly null for public-bound and driver-reported in
