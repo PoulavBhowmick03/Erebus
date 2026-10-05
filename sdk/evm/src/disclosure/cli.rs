@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::chain::{EvmChain, ObservationJournal, ObservationLimits};
+use crate::chain::{EvmChain, ObservationJournal, ObservationLimits, MAX_CONCURRENT_LOG_QUERIES};
 use crate::deployment::{parse_lowercase_address, EvmDeployment};
 use crate::disclosure::{
     open_public_bound_disclosure, verify_public_bound_disclosure_resumable, DisclosureObservation,
@@ -85,6 +85,9 @@ struct Deployment {
     max_log_queries: u64,
     #[serde(default = "default_ancestry")]
     max_ancestry: u64,
+    /// Maximum `eth_getLogs` queries in flight per bounded scan slice.
+    #[serde(default = "default_log_concurrency")]
+    max_concurrent_queries: u64,
     #[serde(default)]
     cache_root: Option<PathBuf>,
 }
@@ -101,6 +104,10 @@ fn default_ancestry() -> u64 {
     64
 }
 
+fn default_log_concurrency() -> u64 {
+    8
+}
+
 const HELP: &str = "erebus-disclosure: one public-bound disclosure request as JSON on stdin.
 Methods: version, keygen, key_info, select, export, verify_agreement, verify_payment.
 Private keys and selected evidence are read from owner-only local files.
@@ -114,7 +121,7 @@ public-cache beside the grant). Pending verification exits 2; repeat the same re
 Output contains verification status and deal identifiers, not plaintext terms or private keys.
 No method submits transactions or generates proofs. Version-2 grants use direct suite-2 signing.
 Shielded payment verification requires the erebus-shielded-disclosure command.
-See docs/metropolis-m7-runbook.md for request schemas and recovery boundaries.";
+See docs/metropolis-operations.md for request schemas and recovery boundaries.";
 
 /// Runs the bounded JSON command protocol with an independent payment verifier.
 pub async fn run<F, Fut>(verify_payment: F)
@@ -408,6 +415,8 @@ pub async fn verify_public_payment(
         || deployment.max_log_queries > 1_024
         || deployment.max_ancestry == 0
         || deployment.max_ancestry > 8_192
+        || deployment.max_concurrent_queries == 0
+        || deployment.max_concurrent_queries > MAX_CONCURRENT_LOG_QUERIES
     {
         return Err("invalid observation budget");
     }
@@ -438,6 +447,7 @@ pub async fn verify_public_payment(
         log_block_range: deployment.log_block_range,
         max_log_queries: deployment.max_log_queries,
         max_ancestry: deployment.max_ancestry,
+        max_concurrent_queries: deployment.max_concurrent_queries,
     };
     let journal = ObservationJournal::open(deployment.cache_root.unwrap_or(default_cache_root))
         .map_err(|_| "public history cache unavailable")?;
