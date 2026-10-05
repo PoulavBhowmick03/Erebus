@@ -19,7 +19,7 @@ def test_repository_demo_contract() -> None:
 def test_stale_privacy_copy_is_rejected(tmp_path: Path) -> None:
     shutil.copytree(ROOT / "web", tmp_path / "web")
     (tmp_path / "strk20.json").write_bytes((ROOT / "strk20.json").read_bytes())
-    path = tmp_path / "web" / "components" / "LeakLedger.tsx"
+    path = tmp_path / "web" / "lib" / "content.ts"
     path.write_text(path.read_text().replace("Readable for one deal", "Readable for one channel"))
 
     assert any("stale copy" in error for error in MODULE.check(tmp_path))
@@ -28,11 +28,11 @@ def test_stale_privacy_copy_is_rejected(tmp_path: Path) -> None:
 def test_pre_canary_video_copy_is_rejected(tmp_path: Path) -> None:
     shutil.copytree(ROOT / "web", tmp_path / "web")
     (tmp_path / "strk20.json").write_bytes((ROOT / "strk20.json").read_bytes())
-    path = tmp_path / "web" / "components" / "Evidence.tsx"
+    path = tmp_path / "web" / "components" / "Proof.tsx"
     path.write_text(
         path.read_text().replace(
-            "Public three-minute walkthrough of the complete mainnet workflow.",
-            "Recorded before the later full mainnet canary; it shows setup and the complete Sepolia workflow.",
+            "Public walkthrough of the complete mainnet",
+            "Recorded before the later full mainnet canary; it shows setup and the complete Sepolia",
         )
     )
 
