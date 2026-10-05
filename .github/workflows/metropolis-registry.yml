@@ -65,7 +65,7 @@ jobs:
         with:
           version: v1.5.1
       - name: Registry unit tests
-        run: uv run --frozen pytest scripts/tests/test_metropolis_registry.py -q
+        run: uv run --frozen pytest scripts/tests/test_metropolis_registry.py scripts/tests/test_metropolis_release_index.py -q
       - name: Build the registry
         run: |
           python3 scripts/build-metropolis-registry.py \

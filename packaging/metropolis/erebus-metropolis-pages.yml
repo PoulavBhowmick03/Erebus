@@ -1,5 +1,6 @@
 # Template for PoulavBhowmick03/erebus-metropolis: copy to .github/workflows/pages.yml in that
-# repository. It builds the hash-pinned PEP 503 index from the release assets and deploys it
+# repository alongside packaging/metropolis/build_index.py as build_index.py.
+# It builds the hash-pinned PEP 503 index from the release assets and deploys it
 # under the required github-pages environment. The Erebus build workflow dispatches here only
 # when publish=true; this file itself never builds or signs anything.
 name: Metropolis package index
@@ -16,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: metropolis-package-index
+  cancel-in-progress: false
+
 jobs:
   publish-index:
     name: Build and deploy the index
@@ -30,6 +35,10 @@ jobs:
     env:
       TAG: ${{ github.event.client_payload.tag || inputs.tag }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Download every published release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -38,60 +47,15 @@ jobs:
           # pinned version uninstallable. Drafts are never indexed.
           gh release list --repo PoulavBhowmick03/erebus-metropolis --limit 1000 \
             --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName' > tags.txt
-          grep -qx "$TAG" tags.txt || { echo "dispatched tag $TAG is not a published release"; exit 1; }
+          grep -Fxq -- "$TAG" tags.txt || { echo "dispatched tag is not a published release"; exit 1; }
           while read -r tag; do
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.dev[0-9]+$ ]] || { echo "invalid release tag"; exit 1; }
             mkdir -p "releases/$tag"
             gh release download "$tag" --repo PoulavBhowmick03/erebus-metropolis \
               --dir "releases/$tag" --pattern '*.whl' --pattern 'release-manifest.json'
           done < tags.txt
       - name: Build the hash-pinned index from the manifests
-        run: |
-          python3 - <<'PY'
-          import hashlib, html, json, pathlib, sys
-
-          projects: dict[str, dict[str, tuple[str, str]]] = {}
-          for release in sorted(pathlib.Path("releases").iterdir()):
-              tag = release.name
-              manifest = json.loads((release / "release-manifest.json").read_text())
-              if manifest.get("tag") != tag:
-                  sys.exit(f"{tag}: release manifest names a different tag")
-              platforms = manifest.get("platforms", {})
-              if len(platforms) < 2:
-                  sys.exit(f"{tag}: expected two platform manifests, found {len(platforms)}")
-              tags = {p: m.get("platform_qualification", {}).get("wheel_tag") for p, m in platforms.items()}
-              if len(set(tags.values())) != len(tags):
-                  sys.exit(f"{tag}: platform qualifications are not distinct: {tags}")
-              base = "https://github.com/PoulavBhowmick03/erebus-metropolis/releases/download/" + tag
-              for data in platforms.values():
-                  for name, meta in data["wheels"].items():
-                      local = release / name
-                      if not local.exists():
-                          sys.exit(f"{tag}/{name}: missing release asset")
-                      if hashlib.sha256(local.read_bytes()).hexdigest() != meta["sha256"]:
-                          sys.exit(f"{tag}/{name}: manifest hash does not match the asset")
-                      project = name.split("-")[0].replace("_", "-").lower()
-                      previous = projects.setdefault(project, {}).get(name)
-                      if previous and previous[1] != meta["sha256"]:
-                          sys.exit(f"{name}: published twice with different contents")
-                      projects[project][name] = (base, meta["sha256"])
-
-          site = pathlib.Path("site/simple")
-          site.mkdir(parents=True)
-          (site / "index.html").write_text(
-              "<!doctype html>\n"
-              + "\n".join(f'<a href="{p}/">{p}</a><br>' for p in sorted(projects))
-          )
-          for project, files in projects.items():
-              page = site / project
-              page.mkdir()
-              lines = [
-                  f'<a href="{base}/{html.escape(name, quote=True)}#sha256={digest}">'
-                  f"{html.escape(name)}</a><br>"
-                  for name, (base, digest) in sorted(files.items())
-              ]
-              (page / "index.html").write_text("<!doctype html>\n" + "\n".join(lines))
-          print(f"indexed {len(projects)} projects from {len(list(pathlib.Path('releases').iterdir()))} releases")
-          PY
+        run: python3 build_index.py --releases releases --output site/simple --tag "$TAG"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

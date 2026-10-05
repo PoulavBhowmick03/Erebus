@@ -33,6 +33,15 @@ def configuration(environment, root):
             candidate = Path(config[field]).resolve()
             if not candidate.is_relative_to(root.resolve()):
                 raise ValueError("access paths must use the persistent disk")
+        if config.get("backend", {}).get("mode") == "x402_exact":
+            backend = config["backend"]
+            for field in ("transaction_key_file", "signer_journal_root"):
+                candidate = Path(backend[field]).resolve()
+                if not candidate.is_relative_to(root.resolve()):
+                    raise ValueError("x402 keys and signer journals must use the persistent disk")
+            key = Path(backend["transaction_key_file"])
+            if key.is_symlink() or not key.is_file() or key.stat().st_mode & 0o077 or key.stat().st_size != 32:
+                raise ValueError("x402 requires an owner-only regular 32-byte transaction key")
         environment["EREBUS_ACCESS_CONFIG"] = str(path)
         routes = "reverse_proxy 127.0.0.1:8081"
         binary = "erebus-access-service"
