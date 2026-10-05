@@ -64,7 +64,9 @@ Recorded Monad testnet payments: the earlier public-bound example
 and the live x402 payment
 [`0x8a0272e6…`](https://testnet.monadexplorer.com/tx/0x8a0272e69188ac3be52783ddfc4d4436496a58f2d5c63d808cd3320a1fa5df43).
 See [dated evidence and remaining gates](./docs/metropolis-status.md).
-The [status and acceptance gates](./docs/metropolis-status.md) records the rubric and mandatory evidence gates.
+The [status and acceptance gates](./docs/metropolis-status.md) record the rubric and mandatory evidence gates.
+An outside developer can run the [external acceptance handoff](./docs/metropolis-external-acceptance.md);
+it has not yet been run by a third party.
 No Metropolis demo video, hosted service, or third-party external rehearsal is claimed complete.
 
 ### Local Monad-Backend Rehearsal

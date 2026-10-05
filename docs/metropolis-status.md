@@ -375,6 +375,8 @@ source.
 
 - [ ] A demo video of at most three minutes shows the product operating and a Monad interaction.
 - [ ] A third party runs the submitted path from the README, without team-held fixtures.
+  The reproducible handoff is [External Acceptance](metropolis-external-acceptance.md);
+  it has not been run by an outside operator yet.
 - [ ] Every release and privacy claim matches reproducible evidence.
 - [ ] Independent external auditor verification with participant state unavailable. A team-operated
   re-verification of the live x402 payment with the participant paths withheld verified
