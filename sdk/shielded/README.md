@@ -143,4 +143,4 @@ The funded local harness passes through separate issuer and auditor CLI processe
 with participant storage unavailable during verification. The auditor needs no note wallet or prover.
 The local RPC fixtures also pass. These checks still require trusted deployment code and verifying keys;
 matching provider responses do not authenticate contract code or prove provider independence.
-See [M7 runbook](../../docs/metropolis-m7-runbook.md) and [M7 decisions](../../docs/metropolis-m7-decisions.md).
+See the [disclosure section](../../docs/metropolis-operations.md#6-disclosure-and-auditor-operations) and the [status decisions appendix](../../docs/metropolis-status.md#decisions-appendix).

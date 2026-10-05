@@ -1,7 +1,7 @@
 # Erebus EVM settlement contracts
 
 Public-bound settlement for one authorized Erebus agreement (Metropolis M3). The normative
-description is [docs/metropolis-m3-decisions.md](../../docs/metropolis-m3-decisions.md); the Rust
+description is [docs/metropolis-status.md](../../docs/metropolis-status.md); the Rust
 adapter that drives these contracts is [sdk/evm](../../sdk/evm).
 
 ## What `ErebusSettlement` does

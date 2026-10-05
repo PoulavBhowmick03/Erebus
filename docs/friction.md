@@ -91,7 +91,7 @@ that carried a random one, would both encode and commit without complaint. There
 vector for a populated root, because the value did not exist at M1.
 
 **Worked around it?** Yes. M2 defines the derivation and the validity rule in
-[M2 decisions](metropolis-m2-decisions.md) DM2-4 (`Hash_suite("EREBUS_TRANSCRIPT_ROOT_V1" ||
+[status decisions appendix](metropolis-status.md#decisions-appendix) DM2-4 (`Hash_suite("EREBUS_TRANSCRIPT_ROOT_V1" ||
 deal_id || head_buyer || head_seller)`, all-zero only when the deal has no messages), so existing
 zero vectors remain valid and no `protocol_version` bump is needed. The transport enforces the
 rule; the agreement crate still treats the field as opaque.
@@ -1966,3 +1966,174 @@ listing. Evidence is now the token `Transfer` in the settling transaction, that 
 **What would have made it easier.** A spec listing generated from the deployed source, or
 a note that the event changed after audit. The `Witness` struct comment already says
 "post-audit: extra removed", so the listing was updated once and the event was missed.
+
+## F51: Honest RPC providers have different tips, and paired observation demanded identical ones (2026-10-04)
+
+**What we were trying to do.** Run one Monad workflow against two independently operated RPC
+providers: authenticate the deployment, agree on a gas-payer nonce, and complete the resumable
+deal-history scan.
+
+**What the stack did instead.** `finalized_deal_evidence_agreed` and the nonce/deployment
+authentication compared the providers' current tips for exact equality. Two honest providers
+lag each other by a block or two routinely; every such run failed with "RPC providers disagree
+on deployment finality" even though both served the same canonical history. The live
+public-bound scan stalled with no safe way to proceed.
+
+**Whether we worked around it.** Yes, in source. The paired paths now derive one shared snapshot
+(lower finalized and lower head of the two providers), require identical canonical blocks at
+those heights, and keep the runtime pin, canonical hash, complete-history, and nonce-agreement
+checks. A falsified nonce or an impossible finalized answer still fails closed. The Anvil test
+`paired_observation_uses_a_shared_snapshot_despite_honest_finality_lag` covers the lag and the
+failure paths. The change is uncommitted and not in `0.3.0.dev4`.
+
+**What would have made it easier.** The paired-read API documenting that "agreement" means a
+shared canonical anchor, not equal tips. The original equality rule looked like a stricter
+consensus check but was rejecting honest infrastructure.
+
+## F52: A live history scan is bounded by two clocks, and the agreement expires first (2026-10-04/05)
+
+**What we were trying to do.** Finish the retained public-bound live rehearsal: complete the
+paired history scan, then sign and broadcast the one authorized payment.
+
+**What the stack did instead.** Monad's public RPC caps `eth_getLogs` at a 100-block range, so
+scanning from the deployment block to the tip is thousands of queries. At observed public-RPC
+rates the retained scan needed about two hours. The harness's `verification_timeout_seconds` was
+3,600 s and its per-call slice was 60 s, so the poll timed out with the scan less than half done.
+By the time the gap was understood, the agreement's six-hour delivery deadline had passed: the
+settlement contract rejects `block.timestamp >= expiry`, so no new payment under those terms is
+possible even though no transaction was ever broadcast. Finalized reads confirmed the deal is
+unconsumed.
+
+**Whether we worked around it.** Partly, in source. The harness now allows a verification window
+up to 86,400 s, retries a killed 600 s call from durable checkpoints, fails closed if a pending
+scan stops advancing, and recovers a timed-out `settle` by observation only. The retained live
+operation still needs a replacement agreement with a fresh deadline; it was not broadcast.
+
+**What would have made it easier.** A documented planning figure for the scan
+(`(tip - deployment_block) / 100` queries and observed RPC rate), and a delivery window sized
+from it rather than a fixed six hours. The failure was silent at first: a pending scan looks the
+same as a slow one.
+
+## F53: A one-hour disclosure grant cannot be re-verified the next day (2026-10-05)
+
+**What we were trying to do.** Strengthen the completed live x402 audit by re-running the
+installed auditor against the retained encrypted grant with the participant directories
+withheld.
+
+**What the stack did instead.** The grant exported during the run had `expires_at = run + 3600`.
+The next day the auditor correctly refused it ("disclosure agreement not verified"): `open`
+rejects `now >= expires_at` by design, and the CLI has no time override. The payment itself is
+permanent and finalized; only the disclosure wrapper had expired.
+
+**Whether we worked around it.** Yes, non-destructively: the seller's retained selected-agreement
+evidence and agreement key sealed a fresh grant for the same deal into a new file
+(`auditor/deal-refresh.grant`), leaving the expired original untouched. The installed dev4
+auditor (byte-identical to the published wheel) then verified `payment_verified: true` with
+buyer, seller, and onboarding paths renamed away. No chain transaction was sent.
+
+**What would have made it easier.** A grant TTL that defaults to the deal's own disclosure
+window, or an operator-visible note that a retained grant is a perishable artifact and an
+auditor re-run needs a fresh seal. The expiry policy is correct; discovering it only at
+re-verification time is the friction.
+
+## F54: Two independent agreement clocks, and the hidden one wins (2026-10-05)
+
+**What we were trying to do.** Run a live public-bound rehearsal whose history scan needs two
+to three hours, then settle under the negotiated agreement.
+
+**What the stack did instead.** The service template (`prepare_terms`) carries a
+`delivery_deadline`, and the harness set that to six hours. But the negotiation command ignores
+the template's expiry for the deal: the buyer's proposal overwrites `terms.expiry` with
+`now + max_deal_lifetime_seconds` from its participant config, and `check_service` only requires
+the result to be within that same lifetime. The harness had hardcoded the participant lifetime
+to 3,600 seconds, so the payment expiry was one hour while the scan took over two. Increasing
+the verification timeout alone changed nothing: the agreement would have expired mid-scan with
+no transaction sent. The two clocks are not validated against each other anywhere.
+
+**Whether we worked around it.** Yes, in the harness. `agreement_lifetime_seconds` is now a plan
+field, it is written to both participant configs, and `init`/`preflight`/`run` reject a lifetime
+shorter than the verification window plus a settlement/delivery margin. `init` supports
+`reuse_from` so a replacement can keep already-funded participants without repeating onboarding.
+The Rust expiry rules are unchanged; the harness simply stops configuring an agreement shorter
+than its own run.
+
+**What would have made it easier.** Either one agreement lifetime in one place, or a validation
+in the negotiation command that rejects a proposal whose expiry is shorter than the operator's
+expected workflow. Silent precedence between a template field and a participant-config field is
+the kind of mismatch that only shows up hours later on a live chain.
+
+## F55: The same two-hour history scan runs three times, sequentially (2026-10-05)
+
+**What we were trying to do.** Complete one public-bound workflow on Monad: the buyer scans
+history before signing, the seller's access service scans before issuing, and the independent
+auditor scans before verifying payment.
+
+**What the stack did instead.** Every role scanned from the deployment block to the head in
+sequential 100-block `eth_getLogs` ranges. On Monad testnet that is about 8,500 queries per role
+at roughly one query per second: about two and a half hours each, three times, in three separate
+caches. The rehearsal's one-hour auditor grant expired during verification, and the buyer's
+per-invocation deployment authentication added dozens of RPC calls on top, so the scan barely
+advanced between checkpoint saves. Longer timeouts alone changed nothing.
+
+**Whether we worked around it.** Yes. The shared bounded scanner now issues a contiguous window
+of ranges concurrently (`max_concurrent_queries`, 1..=32, default 8). The same ranges are
+scanned, nothing is skipped, and a slice checkpoints only after every query in the window
+succeeds, so an error or interruption resumes at the same start block. `max_log_queries` was
+raised so one invocation amortizes the authentication cost. Measured against the Monad public
+RPC, 48 `eth_getLogs` queries took 51.7 s sequentially and 6.4 s at concurrency 16 (8.0x).
+The harness now also rejects a plan whose agreement lifetime, delivery deadline, access-request
+slice, or grant cannot cover the estimated scan.
+
+**What would have made it easier.** A public RPC that allows wider `eth_getLogs` ranges than 100
+blocks, or a documented indexed history endpoint. We did not introduce a hosted indexer, because
+the auditor's independence is the point and a shared cache would need an authentication model
+we do not have. The 100-block cap is the root cause; concurrency only works around it.
+
+## F56: Public RPCs disagree at the moving tip, aborting long scans (2026-10-05)
+
+**What we were trying to do.** Resume the live public-bound scan against two independently
+operated Monad RPC endpoints.
+
+**What the stack did instead.** Paired observation requires both providers to return the same
+canonical block at the lower of their two `latest` heights. Monad produces a block about every
+0.4 seconds, so the tips diverge transiently; roughly one invocation in three failed with
+`paired deployment authentication failed` before the scan started. Each failure aborted the whole
+run, even though the durable checkpoint meant a retry would resume safely.
+
+**Whether we worked around it.** Yes. Read-only polls now retry a transient provider error until
+ten minutes pass with no successful reply, and a killed or failed `settle` call still recovers by
+`observe` only, never by another payment. The 600-second no-progress bound keeps a permanently
+broken endpoint from spinning. The scan's durable checkpoint is unchanged.
+
+**What would have made it easier.** Agreeing on a finalized anchor instead of the moving tip
+would make paired reads stable. The earlier lag fix already uses the lower finalized height; the
+head is what still moves, and the design intentionally scans through it to catch non-final
+settlements.
+
+## F57: Funding freezes the chain; settlement re-opens it and chases the tip (2026-10-05)
+
+**What we were trying to do.** Fund a public-bound deal and then settle it in the next call.
+
+**What the stack did instead.** Funding completes the history scan against a frozen
+finalized/head snapshot and records the snapshot's finalized block as the reusable prefix. The
+next `settle` refreshes to the newer tip, re-scans the log delta, and walks ancestry from the
+new head back to that prefix. The walk was sequential and capped at 64 links per invocation.
+A gap larger than 64 blocks returned `history_pending`, and the rehearsal exited before
+broadcasting. Worse, the walk ran at about one link per second while Monad produces a block
+every 0.4 seconds, so the backlog could grow instead of closing. A `submitted_this_call: false`
+reply did not by itself prove that no broadcast had been attempted.
+
+**Whether we worked around it.** Yes. Ancestry now walks in windows of up to
+`max_concurrent_queries` canonical blocks fetched concurrently, with the same parent-hash and
+timestamp linkage and anchor checks verified locally; the per-invocation `max_ancestry` budget
+still bounds the call and a failed window leaves the checkpoint untouched. A pending-history
+reply now reports the durable `broadcast_attempts` and `stage`, and the rehearsal resumes the
+read-only catch-up only when that count is zero; any attempt or ambiguous submission recovers by
+observation only. The funded `moving_chain_catch_up_resumes_before_broadcast_and_submits_once`
+test mines 128 blocks between funding and settlement and requires exactly one submission.
+
+**What would have made it easier.** The observation API never said that a completed scan is
+invalidated by the next refresh, nor that the catch-up cost is proportional to the time since
+the snapshot. An operator sees only `history_pending`. A documented "the scan is a lease on a
+snapshot; settlement refreshes it" rule, or a scan design that keeps a rolling verified prefix
+closer to the tip, would have made this obvious before a live run.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-host the Metropolis services from installed binaries (the same ones a hosted deployment
-# runs). Everything lives under one owner-only directory. See docs/metropolis-self-hosting.md.
+# runs). Everything lives under one owner-only directory. See docs/metropolis-operations.md.
 #
 #   metropolis-selfhost.sh init  DIR   create the layout and a relay token
 #   metropolis-selfhost.sh up    DIR   start each configured HTTP service and wait for health

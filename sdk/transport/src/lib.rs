@@ -15,7 +15,7 @@
 //! - [`negotiation`]: typed price negotiation and the durable boundary before final signatures.
 //! - [`socket`]: bounded descriptor-authenticated TCP delivery.
 //!
-//! The design and its decisions are specified in `docs/metropolis-m2-decisions.md`. The crate is
+//! The design and its decisions are specified in `docs/metropolis-status.md`. The crate is
 //! chain-neutral: it depends on `erebus-core` for canonical encoding. Transcript hash
 //! version 1 uses Keccak independently of the selected settlement agreement suite.
 //!

@@ -13,7 +13,7 @@ about through it.
 
 **Monad reviewers: start here, not at the Starknet install below.**
 Use the [Metropolis install guide](./docs/metropolis-install.md) and
-[payment runbook](./docs/metropolis-payment-runbook.md). The stable `v0.3.0`
+[operations guide](./docs/metropolis-operations.md). The stable `v0.3.0`
 package and the video below demonstrate the older Starknet product, not Monad.
 
 The verified live Monad path is **public-bound settlement**: accepted agreement,
@@ -24,8 +24,15 @@ private-payment product on Monad.
 
 The x402 `exact` rail (seller-facilitated Permit2) is implemented and locally verified end to
 end: real discovery and encrypted negotiation, one fenced payment, restart recovery, matching
-resource delivery, and independent auditor verification from the encrypted grant alone. It is
-not live on Monad.
+resource delivery, and independent auditor verification from the encrypted grant alone. Published
+`0.3.0.dev4` commands also completed one **team-operated live Monad x402 payment**
+([`0x8a0272e6…`](https://testnet.monadexplorer.com/tx/0x8a0272e69188ac3be52783ddfc4d4436496a58f2d5c63d808cd3320a1fa5df43)),
+including seller restart, resource recovery, and auditor verification. The installed public-bound
+rehearsal also completed on Monad testnet: one payment
+([`0x1ba9ddb3…`](https://testnet.monadexplorer.com/tx/0x1ba9ddb363a0c916f8e41ca8eca7d4c524d1ba4722bf4ea37ed423547700ff73)),
+buyer-finalized observation, seller access across a restart, and independent auditor verification
+(`payment_verified: true`). These are team-operated native CLI runs, not MCP/LLM or third-party
+acceptance, and no shielded payment has run on Monad.
 
 ### Install the published Metropolis packages
 
@@ -35,14 +42,16 @@ index is unrelated). With [uv](https://docs.astral.sh/uv/) and Python 3.11+:
 ```sh
 uv venv --python 3.11 erebus-metropolis
 uv pip install --python erebus-metropolis/bin/python \
-  --index-url https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
-  --extra-index-url https://pypi.org/simple \
+  --no-config \
+  --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
+  --default-index https://pypi.org/simple --index-strategy first-index \
   "erebus-mcp-server==0.3.0.dev4"
 ```
 
-Use uv, not pip: uv resolves `erebus-cli`, `erebus-sdk`, and `erebus-mcp-server` only from the
-first index that has them, while pip with `--extra-index-url` would accept a higher version of
-those names from PyPI. If downloads from GitHub release assets time out, set
+Use uv with the index order above. Metropolis takes priority; PyPI supplies missing dependencies.
+The explicit `first-index` strategy prevents PyPI packages from replacing the three Metropolis packages.
+The default index always has lower priority ([uv index rules](https://docs.astral.sh/uv/concepts/indexes/#index-url-and-extra-index-url)).
+If downloads from GitHub release assets time out, set
 `UV_HTTP_TIMEOUT=300`. Supported platforms: macOS 11+ on Apple silicon and Linux x86_64 (built on
 GitHub's `ubuntu-latest`; not a manylinux build, so older glibc may not run it). There are no
 Intel macOS, Linux arm64, or Windows wheels. The install puts the native commands, the
@@ -50,11 +59,13 @@ Intel macOS, Linux arm64, or Windows wheels. The install puts the native command
 2026-10-04 from a fresh environment outside any checkout (see the
 [install guide](./docs/metropolis-install.md)).
 
-Recorded Monad testnet payment:
-[`0x1f7ec208…`](https://testnet.monadexplorer.com/tx/0x1f7ec208a7b03b835f224ac989cc59c9aee4c33634a2b04498b8394ddede4c09).
-See [dated evidence and remaining gates](./docs/metropolis-m8-progress.md).
-The [submission checklist](./docs/metropolis-submission-gates.md) records the rubric and mandatory evidence gates.
-No Metropolis demo video or package-only external rehearsal is claimed complete.
+Recorded Monad testnet payments: the earlier public-bound example
+[`0x1f7ec208…`](https://testnet.monadexplorer.com/tx/0x1f7ec208a7b03b835f224ac989cc59c9aee4c33634a2b04498b8394ddede4c09)
+and the live x402 payment
+[`0x8a0272e6…`](https://testnet.monadexplorer.com/tx/0x8a0272e69188ac3be52783ddfc4d4436496a58f2d5c63d808cd3320a1fa5df43).
+See [dated evidence and remaining gates](./docs/metropolis-status.md).
+The [status and acceptance gates](./docs/metropolis-status.md) records the rubric and mandatory evidence gates.
+No Metropolis demo video, hosted service, or third-party external rehearsal is claimed complete.
 
 ### Local Monad-Backend Rehearsal
 
@@ -79,7 +90,9 @@ and review of the Metropolis work. AI-generated code requires human review and d
 not establish security or release readiness. The pre-existing Starknet/STRK20
 implementation is prior work; the Metropolis roadmap records the new branch work.
 
-The `metropolis` branch targets a developer/agent product on Monad testnet. This work is planned, not a shipped Monad release.
+The `metropolis` branch targets a developer/agent product on Monad testnet. `0.3.0.dev4` is a
+published prerelease and one team-operated live x402 payment exists, but this is not yet a
+shipped or externally accepted Monad release.
 The goal is for an external developer or marketplace to integrate agents, negotiate privately, settle, disclose one deal, and recover failures.
 The [Metropolis roadmap](./docs/metropolis-roadmap.md) defines the milestones and acceptance criteria.
 
@@ -93,11 +106,14 @@ Public-bound settlement is an intermediate milestone. It does not satisfy the sh
 The release gate requires an independent integration from a fresh environment using documented packages and commands.
 Mainnet activation remains unresolved and requires a separate release decision.
 
-Local development components now include [hash-checked local proving](./docs/metropolis-local-proving-runbook.md),
-[buyer-authenticated snapshot access](./docs/metropolis-access-runbook.md),
-[native private negotiation](./docs/metropolis-negotiation-runbook.md),
-and [durable public-bound payment](./docs/metropolis-payment-runbook.md).
-These have local test evidence, not a published Monad product release.
+Local development components now include [hash-checked local proving](./docs/metropolis-operations.md#7-local-proving),
+[buyer-authenticated snapshot access](./docs/metropolis-operations.md#4-seller-access-service),
+[native private negotiation](./docs/metropolis-operations.md#5-negotiation-command),
+and [durable public-bound payment](./docs/metropolis-operations.md#3-buyer-payment-and-recovery).
+The x402 rail has a published-package live Monad run; the rest have local test evidence or the
+earlier public-bound example. The private/shielded path is not a released Monad product, and the
+RPC-lag and polling fixes described in the M8 progress notes are uncommitted source, not part of
+`0.3.0.dev4`.
 
 ## Four settlements on mainnet
 

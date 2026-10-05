@@ -117,4 +117,4 @@ replacement validation, paired chain reconciliation, note reservations, change r
 durable-boundary crash matrices. These are separate local integration checks, not evidence
 from the synthetic tests in this crate. The relayer uses its own durable coordinator records.
 Installed operator workflows and Monad testnet verification remain M8 gates. See
-[M6 progress](../../docs/metropolis-m6-progress.md) for commands, evidence, and limitations.
+[M6 progress](../../docs/metropolis-status.md) for commands, evidence, and limitations.

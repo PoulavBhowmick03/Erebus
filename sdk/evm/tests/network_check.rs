@@ -1,7 +1,7 @@
 //! Read-only network diagnostics against a local anvil chain.
 //!
 //! These checks must pass on a chain with the same precompiles and block-tag behavior as the
-//! target; the live Monad testnet run is recorded in `docs/metropolis-m8-progress.md`.
+//! target; the live Monad testnet run is recorded in `docs/metropolis-status.md`.
 //! Ignored by default because they spawn anvil.
 
 use std::net::TcpListener;

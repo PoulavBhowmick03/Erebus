@@ -128,7 +128,7 @@ witnesses locally; they do not run a setup ceremony. Artifact download availabil
 CPU/RAM requirements remain explicit operational dependencies.
 M8 now has hash-checked artifact installation and isolated SDK/MCP component proof tests.
 Published platform packages, secure release artifacts, and live verifier authentication remain open.
-See the [local proving runbook](metropolis-local-proving-runbook.md).
+See the [local proving section](metropolis-operations.md#7-local-proving).
 
 ## 4. Agreement representation
 
@@ -149,7 +149,7 @@ There are two hash families, and they are versioned separately:
 
 - **Agreement suite.** Suite 1 hashes canonical bytes with keccak256
   (`"EREBUS_DEAL_COMMITMENT_V1" || Encode(D) || blinding`). Suite 2 uses the typed Poseidon
-  field map in [M4 decisions](metropolis-m4-decisions.md). A suite is not a byte-hash
+  field map in [status decisions appendix](metropolis-status.md#decisions-appendix). A suite is not a byte-hash
   function, so `sdk/core` has no shared `Suite::hash`.
 - **Transport transcript.** Message digests, author chain links, and `transcript_root` use
   keccak256 under `TRANSCRIPT_HASH_VERSION = 1` (`sdk/transport/src/hashing.rs`), whatever
@@ -167,11 +167,11 @@ The M8 negotiation profile freezes that transcript before final authorizations.
 Both peers accept the same draft digest; final signatures remain outside the root they authorize.
 The buyer reserves policy capacity before signing, through the existing coordinator.
 For shielded negotiation, an encrypted descriptor-signed binding authenticates each separate agreement key.
-These are the owner's decisions [DM8-6 and DM8-7](metropolis-m8-decisions.md).
-The [negotiation runbook](metropolis-negotiation-runbook.md) records local evidence and the remaining product integration gates.
+These are the owner's decisions [DM8-6 and DM8-7](metropolis-status.md#m8-decisions-dm8-1dm8-13-and-dm8-15).
+The [negotiation section](metropolis-operations.md#5-negotiation-command) records the command; [status](metropolis-status.md) records evidence and remaining gates.
 Authenticating a shared encryption key alone cannot establish which participant authored a message to an auditor.
 Choose a signature scheme for independently verifiable authorship where disclosure requires it.
-M2 specifies the envelope, the Noise session protocol, the ordering rules, and the transcript-root derivation in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); the transport is implemented in [`sdk/transport`](../sdk/transport).
+M2 specifies the envelope, the Noise session protocol, the ordering rules, and the transcript-root derivation in [status decisions appendix](metropolis-status.md#decisions-appendix); the transport is implemented in [`sdk/transport`](../sdk/transport).
 There must be exactly one deterministic encoding: both participants must compute the same
 commitment from the same terms. Any representation ambiguity — decimals, base units, address
 namespace, field order — is a protocol bug that silently forks the agreement.
@@ -212,7 +212,7 @@ Publishing expiry leaks expiry. A hidden expiry requires an additional proof des
 An agreement proof and a pool proof cannot be unrelated valid proofs.
 They must share constrained payment commitments and transaction context, and execute atomically.
 M4 selected a combined Circom/Groth16 relation for the initial EVM pool; see
-[M4 decisions](metropolis-m4-decisions.md). The seller chooses a spend tag and signs only
+[status decisions appendix](metropolis-status.md#decisions-appendix). The seller chooses a spend tag and signs only
 after checking that it controls the secret. The payment-note salt derives from the signed
 deal nonce, so the seller can reconstruct its output without ciphertext. The M4 harness proves
 this relation locally but does not yet hold funds or maintain a live tree.
@@ -251,7 +251,7 @@ Version-2 grants use a participant's agreement seed locally and a distinct discl
 The auditor verifies the issuer against the disclosed buyer or seller key before observing payment.
 Public-bound version-1 grants remain supported. Neither grant contains spending secrets or parent session keys.
 Public grant headers reveal the issuer identity, recipient public key, deal ID, expiry, and ciphertext size.
-See [M7 decisions](metropolis-m7-decisions.md) for the encoding and [M7 runbook](metropolis-m7-runbook.md) for CLI/MCP commands.
+See [status decisions appendix](metropolis-status.md#decisions-appendix) for the encoding and the [disclosure section](metropolis-operations.md#6-disclosure-and-auditor-operations) for CLI/MCP commands.
 A receipt includes domain, commitment, nullifier, transaction and block identifiers, finality state, and the verified guarantee set.
 The caller rejects a backend that lacks a required guarantee. Never silently downgrade to public settlement.
 
@@ -279,7 +279,7 @@ payment accounting, recovered note state, or finalized signer claims. Incomplete
 provider failure, and disagreement keep reservations held. Broadcast failover does not
 reduce verification to one provider. Each observer uses a separate persistent history cache.
 This is a consistency check, not consensus proof; operators must choose independent providers.
-Honest provider lag can also delay recovery. See [M6 decisions](metropolis-m6-decisions.md#dm6-5-finality-source-and-evidence-quorum).
+Honest provider lag can also delay recovery. See [status decisions appendix](metropolis-status.md#decisions-appendix) (DM6-5).
 
 Keep existing STRK20 codecs and execution behind its adapter.
 Extract shared semantics only after tests describe their current behavior.
@@ -313,10 +313,10 @@ It rejects a different `access_recipient` and binds the request to the service a
 It persists issuance before returning an immutable snapshot.
 Both funded local settlement modes pass restart recovery without another payment.
 This profile does not implement usage accounting, refunds, or an x402 payment scheme.
-See [M8 decisions](metropolis-m8-decisions.md) and the [access runbook](metropolis-access-runbook.md).
+See [status](metropolis-status.md) and the [access section](metropolis-operations.md#4-seller-access-service).
 A private settlement per API call is not the default architecture. M8 must compare it with a
 prepaid service allocation and batched usage, then document capability binding, accounting,
 replay, overspend, refund, expiry, and recovery. Do not call a prepaid or batched adapter x402
 unless the selected x402 scheme supports that flow and passes an end-to-end test.
 
-M0 defaults and implementation gates are recorded in the [decision record](metropolis-decisions.md).
+M0 defaults and implementation gates are recorded in the [status decisions appendix](metropolis-status.md#decisions-appendix).

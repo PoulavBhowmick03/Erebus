@@ -13,7 +13,7 @@ erebus-journal = { path = "../journal" }
 erebus-coordinator = { path = "../coordinator" }
 erebus-transport = { path = "../transport" }
 # The Rust EVM client: JSON-RPC, local transaction signing, nonce and gas filling, receipts.
-# Selected as the maintained successor to ethers-rs (see docs/metropolis-m3-decisions.md).
+# Selected as the maintained successor to ethers-rs (see docs/metropolis-status.md).
 alloy = { version = "1", features = [
     "provider-http",
     "signer-local",

@@ -441,7 +441,7 @@ fn v4_records_reserialize_byte_for_byte() {
 /// CHARACTERIZATION: current behavior, flagged for review: a v1-v3 record touched by current
 /// code keeps its old version number but gains every v4 field (`request`, `channel`, `result`,
 /// `simulation_hash`, `prepared`, `completion`, `receipt`, ...), so the number no longer
-/// describes the shape. docs/metropolis-m6-decisions.md DM6-2 leaves "pin or migrate" open.
+/// describes the shape. docs/metropolis-status.md DM6-2 leaves "pin or migrate" open.
 #[test]
 fn legacy_records_reserialize_with_every_current_field_and_their_old_version() {
     for set in LEGACY_SETS {

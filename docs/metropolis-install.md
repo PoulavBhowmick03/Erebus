@@ -1,7 +1,8 @@
 # Metropolis Fresh-Install Guide
 
-Status: draft for the M8 external rehearsal. It describes the local package surface that
-exists today; no versioned release has been published. Run build commands from the repository root.
+Status: M8 external rehearsal guide. The published `0.3.0.dev4` channel exists
+([section 10](#10-published-metropolis-packages)); the source-build commands below describe the
+local package surface and unreleased changes. Run build commands from the repository root.
 The request examples require operator configuration from the linked runbooks.
 
 Prerequisites: Rust stable, Node 22 and Foundry v1.5+ for the EVM path (Foundry v1.8+ for
@@ -49,7 +50,7 @@ printf '%s\n' '{"manifest_file":"/absolute/release.json","manifest_sha256":"<tru
 Artifacts are verified against the manifest before use; a hash mismatch fails closed. The
 current keys are test-only and require explicit development opt-in.
 Replace the example paths and digest before use. The command has no `install` or `status` positional subcommand.
-See [local proving](metropolis-local-proving-runbook.md) for the manifest format and development options.
+See [local proving](metropolis-operations.md#7-local-proving) for the manifest format and development options.
 
 ## 4. Network readiness
 
@@ -71,7 +72,7 @@ printf '%s\n' '{"method":"negotiate","config_file":"/absolute/buyer/config.json"
 The command freezes the transcript before signatures, retains it durably, and supports
 cold-start private offers. It never submits payment.
 Replace placeholders and start the seller process with its own configuration and the same operation reference.
-See [native negotiation](metropolis-negotiation-runbook.md) for both participant configurations and discovery records.
+See [native negotiation](metropolis-operations.md#5-negotiation-command) for both participant configurations and discovery records.
 
 ## 6. Fund and pay
 
@@ -86,7 +87,7 @@ The shielded path requires an existing funded note wallet and reviewed pool, ver
 It installs transfer artifacts and proves locally when no durable preparation exists.
 Wallet funding, deposit, and withdrawal onboarding are not yet a complete installed workflow.
 The public-bound path requires ERC-20 allowance and balance, not a proof.
-See [payment configuration](metropolis-payment-runbook.md) before running either method.
+See [payment configuration](metropolis-operations.md#3-buyer-payment-and-recovery) before running either method.
 
 `erebus-negotiate` reports `measurements_ms.negotiation` for the whole call. `erebus-payment`
 reports `measurements_ms` for deployment authentication, observation, funding, local signing, and
@@ -104,7 +105,7 @@ A crash before network submission can require explicit operator recovery; retrie
 printf '%s\n' '{"method":"keygen","key_file":"/absolute/auditor.key"}' | erebus-disclosure
 ```
 
-Use the `select`, `export`, and `verify_payment` JSON requests in the [disclosure runbook](metropolis-m7-runbook.md).
+Use the `select`, `export`, and `verify_payment` JSON requests in the [disclosure section](metropolis-operations.md#6-disclosure-and-auditor-operations).
 Use `erebus-shielded-disclosure` for suite-2 grants. Its deployment configuration requires paired RPCs and the pool anchor.
 For public-bound verification, pass `from_block` (the deployment block) and, on RPCs that cap `eth_getLogs`, a smaller
 `log_block_range`; the public Monad endpoint allows 100.
@@ -120,11 +121,12 @@ Each service is one binary with environment configuration and a health surface:
 | Pool indexer | `erebus_pool_indexer` | RPC, pool, cache path, bearer token |
 | Access service | `erebus-access-service` | `EREBUS_ACCESS_CONFIG` file |
 
-See the [access](metropolis-access-runbook.md), [payment](metropolis-payment-runbook.md),
-[proving](metropolis-local-proving-runbook.md), and [negotiation](metropolis-negotiation-runbook.md)
-runbooks, and the [M6 runbook](metropolis-m6-runbook.md) for relay, relayer, indexer, and RPC
+See the [operations guide](metropolis-operations.md) sections for
+[access](metropolis-operations.md#4-seller-access-service), [payment](metropolis-operations.md#3-buyer-payment-and-recovery),
+[proving](metropolis-operations.md#7-local-proving), and [negotiation](metropolis-operations.md#5-negotiation-command)
+runbooks, and the [operations guide](metropolis-operations.md#11-failure-recovery) for relay, relayer, indexer, and RPC
 failure handling. Hosted and self-hosted deployments run the same binaries.
-[Self-hosting](metropolis-self-hosting.md) covers the storage layout and
+[Self-hosting](metropolis-operations.md#8-shared-services-and-self-hosting) covers the storage layout and
 `erebus-selfhost`, included in the Metropolis native wheel, starts and checks services from installed binaries. The source-checkout equivalent is `scripts/metropolis-selfhost.sh`.
 
 ## 9. Agent access over MCP
@@ -144,7 +146,7 @@ The negotiation configuration's `role` selects the tools. A buyer gets `negotiat
 only and refuses a payment configuration. The payment configuration's `mode` and `state_root`
 must match the participant. `recover_deal` observes and never submits. Setting
 `EREBUS_ACCESS_SERVICE_URL` (with the other access variables from the
-[access runbook](metropolis-access-runbook.md)) adds `retrieve_service_access` to a buyer. Its
+[operations guide](metropolis-operations.md#4-seller-access-service)) adds `retrieve_service_access` to a buyer. Its
 evidence directory is fixed to `<state_root>/agent` and created owner-only if missing (DM8-12).
 `EREBUS_NEGOTIATION_CLI`, `EREBUS_PAYMENT_CLI`, and `EREBUS_NATIVE_TIMEOUT_SECONDS` (1-900)
 override binary discovery on `PATH` and the per-call timeout.
@@ -160,17 +162,18 @@ licenses. The index links each wheel with its SHA-256.
 ```sh
 uv venv --python 3.11 erebus-metropolis
 uv pip install --python erebus-metropolis/bin/python \
-  --index-url https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
-  --extra-index-url https://pypi.org/simple \
+  --no-config \
+  --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
+  --default-index https://pypi.org/simple --index-strategy first-index \
   "erebus-mcp-server==0.3.0.dev4"
 export PATH="$PWD/erebus-metropolis/bin:$PATH"
 printf '%s' '{"method":"version"}' | erebus-negotiate
 ```
 
-Use uv: it takes each project only from the first index that has it, so the unclaimed PyPI names
-`erebus-cli`, `erebus-sdk`, and `erebus-mcp-server` cannot shadow these packages; pip with
-`--extra-index-url` would not give that guarantee. Set `UV_HTTP_TIMEOUT=300` if GitHub
-release-asset downloads time out.
+Use uv with the index order above. Metropolis takes priority; PyPI supplies missing dependencies.
+The explicit `first-index` strategy limits each package to the first index that contains it.
+The default index always has lower priority ([uv index rules](https://docs.astral.sh/uv/concepts/indexes/#index-url-and-extra-index-url)).
+Set `UV_HTTP_TIMEOUT=300` if GitHub release-asset downloads time out.
 
 | Platform | Wheel tag | Notes |
 |---|---|---|
@@ -207,10 +210,14 @@ uv run --locked python scripts/check-metropolis-install.py --registry artifacts/
 ## 11. Not yet available
 
 - No independent third-party run of the published packages yet.
-- No hosted testnet deployment of the shared services.
-- x402 `exact` composition is implemented and locally verified (negotiated two-process test,
-  independent auditor, one-payment fence); it is not live on Monad. See the
-  [x402 decision](metropolis-m8-x402.md) for the prepared Monad harness and prerequisites.
+- No hosted testnet deployment of the shared services. Render deployment files are prepared and
+  configuration-tested only; paid provisioning is not authorized.
+- The installed public-bound rehearsal has not completed live. The retained attempt expired
+  before broadcast and needs a replacement agreement; earlier public-bound example transactions
+  predate the package channel. The x402 `exact` rail has one team-operated live Monad
+  payment (`0x8a0272e6…5df43`) with seller restart, resource recovery, and independent auditor
+  verification; see the [status](metropolis-status.md) and
+  [status](metropolis-status.md).
 - The external rehearsal on Monad with only these packages and public documentation has not
-  been run. A team-operated installed-package rehearsal (negotiation, payment, recovery,
-  access, disclosure) passed locally on macOS arm64; it is not independent acceptance.
+  been run. A team-operated installed-package rehearsal passed locally on macOS arm64, and the
+  team-operated live x402 run used these published commands; neither is independent acceptance.

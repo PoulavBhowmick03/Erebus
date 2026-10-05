@@ -2,10 +2,10 @@
 
 Written: 2026-09-20. Status: normative for `erebus-core` at M1. M4 selected a shielded proof
 prototype; suite 2 remains unimplemented in `erebus-core` until M5.
-Roadmap: [metropolis-roadmap.md](metropolis-roadmap.md). Decisions: [metropolis-decisions.md](metropolis-decisions.md), D01-D04.
+Roadmap: [metropolis-roadmap.md](metropolis-roadmap.md). Decisions: [metropolis-status.md](metropolis-status.md#decisions-appendix), D01-D04.
 Implementation: [`sdk/core`](../sdk/core). Vectors: [`sdk/core/tests/fixtures/agreement-v1-vectors.json`](../sdk/core/tests/fixtures/agreement-v1-vectors.json).
 This document specifies the reviewed M1 encoding, suite 1, and policy semantics. The selected
-suite-2 field map and proof are in [M4 decisions](metropolis-m4-decisions.md).
+suite-2 field map and proof are in [status decisions appendix](metropolis-status.md#decisions-appendix).
 
 ## 1. Scope and versioning
 
@@ -49,7 +49,7 @@ Fields are encoded in the order listed. "raw" means no length prefix; "bytes" me
 | 3 | `domain` | nested, section 3.1 | |
 | 4 | `deal_id` | raw 16 bytes | shared by every revision of the deal |
 | 5 | `revision` | `u32` | greater than zero; monotonic within a deal; M2 enforces transcript order |
-| 6 | `transcript_root` | raw 32 bytes | the negotiation transcript root; derivation specified in [M2 decisions](metropolis-m2-decisions.md) DM2-4. All-zero only for a deal with no transcript (legacy wire-v1/v2 and the retained vectors); a revision that concludes an M2-negotiated deal carries the computed root. The field is committed but is not yet constrained by a settlement predicate. |
+| 6 | `transcript_root` | raw 32 bytes | the negotiation transcript root; derivation specified in [status decisions appendix](metropolis-status.md#decisions-appendix) DM2-4. All-zero only for a deal with no transcript (legacy wire-v1/v2 and the retained vectors); a revision that concludes an M2-negotiated deal carries the computed root. The field is committed but is not yet constrained by a settlement predicate. |
 | 7 | `buyer_authorization_key` | bytes 1..=64 | suite 1 requires exactly 20 |
 | 8 | `seller_authorization_key` | bytes 1..=64 | suite 1 requires exactly 20 |
 | 9 | `payment_recipient` | bytes 1..=64 | backend-interpreted; a shielded backend requires a note key the seller controls |
@@ -119,10 +119,10 @@ Both authorization APIs require the opening and recompute `Cdeal` before accepti
 `verify_authorization` then checks expiry; `verify_authorization_signature` preserves audit verification after expiry.
 Keeping the original commitment while changing any term fails with `OpeningMismatch`.
 These functions check one role. A settlement backend must require one valid buyer authorization and one valid seller authorization.
-Suite 2 uses the typed Poseidon field map in [M4 decisions](metropolis-m4-decisions.md); it does
+Suite 2 uses the typed Poseidon field map in [status decisions appendix](metropolis-status.md#decisions-appendix); it does
 not apply the suite-1 byte-hash formula to the canonical encoding. `sdk/core` computes the
 suite-2 commitment, nullifier, and BabyJubJub role authorizations and checks them against pinned
-JS/Circom vectors ([M5 progress](metropolis-m5-progress.md)). The `transcript_root` field is not
+JS/Circom vectors ([status](metropolis-status.md)). The `transcript_root` field is not
 hashed by the suite: it is produced by the transport's own versioned keccak256 derivation.
 
 ## 7. Deal identity and revisions
@@ -133,7 +133,7 @@ Ndeal = Hash_suite("EREBUS_DEAL_NULLIFIER_V1" || encode(domain) || buyer_authori
 
 - Every signed revision shares `deal_id`, `settlement_nonce`, the buyer key, the domain, and the suite. These inputs produce one `Ndeal`.
 - `revision` and other negotiable terms are not inputs. Suite 2 uses the separate Poseidon
-  derivation in [M4 decisions](metropolis-m4-decisions.md). Switching suites requires a new
+  derivation in [status decisions appendix](metropolis-status.md#decisions-appendix). Switching suites requires a new
   authorization and deployment domain; it is not a revision or fallback.
 - The first valid signed revision to settle consumes the deal. A later counteroffer does not revoke earlier signed permission; revisions remain executable until their authorized expiry or deal consumption.
 - Changing the deployment creates a different domain and a different `Ndeal`. This does not promise global cross-chain deal uniqueness.
@@ -219,8 +219,8 @@ Policy enforcement protects a configured operator. It is not a claim that a host
 ## 12. What this specification does not establish
 
 - At M1, no shielded suite or proof relation existed. M4 now specifies and prototypes one
-  in [M4 decisions](metropolis-m4-decisions.md). This M1 crate still rejects suite 2 until M5.
-- No EVM adapter, contract, coordinator, or disclosure package is implemented at M1. Those are M3 and M6. The offchain transport is M2 and is specified separately in [metropolis-m2-decisions.md](metropolis-m2-decisions.md); it populates `transcript_root` but does not change this encoding.
+  in [status decisions appendix](metropolis-status.md#decisions-appendix). This M1 crate still rejects suite 2 until M5.
+- No EVM adapter, contract, coordinator, or disclosure package is implemented at M1. Those are M3 and M6. The offchain transport is M2 and is specified separately in [status decisions appendix](metropolis-status.md#decisions-appendix); it populates `transcript_root` but does not change this encoding.
 - No service delivery is guaranteed by payment. Payment and delivery are separate states by construction.
 
 ## 13. M1 decisions for owner review

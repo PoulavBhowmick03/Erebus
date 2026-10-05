@@ -3,7 +3,7 @@
 //! A domain is part of the authorized agreement and of the authorization digest, so a
 //! signature made for one deployment cannot be replayed against another. Changing a
 //! deployment changes the domain, which changes the commitment and every authorization over
-//! it. The decisions record (`docs/metropolis-decisions.md`, D02) states explicitly that this
+//! it. The decisions record (`docs/metropolis-status.md`, D02) states explicitly that this
 //! does not promise global cross-chain deal uniqueness; it promises domain separation.
 
 use crate::encoding::{EncodingError, Reader, Writer};

@@ -2,7 +2,7 @@
 
 Metropolis development: `EREBUS_BACKEND=disclosure` starts the branch's separate
 disclosure-only surface over `erebus-disclosure`. It needs no Starknet wallet or prover URL.
-See the [M7 runbook](../docs/metropolis-m7-runbook.md#disclosure-only-mcp) for configuration,
+See the [disclosure section](../docs/metropolis-operations.md#6-disclosure-and-auditor-operations) for configuration,
 backup rules, and the current public-bound limitation. This is not part of the published release.
 
 This page describes current `main`, which speaks Protocol 4 and exposes thirteen tools.
