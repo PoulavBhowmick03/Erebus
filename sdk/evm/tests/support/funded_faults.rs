@@ -522,6 +522,7 @@ async fn optional_two_provider_reads_require_matching_anchors_and_hold_on_timeou
                     log_block_range: 1,
                     max_log_queries: 1,
                     max_ancestry: 1,
+                    max_concurrent_queries: 1,
                 },
             )
             .await

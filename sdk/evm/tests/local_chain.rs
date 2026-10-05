@@ -1757,6 +1757,17 @@ enum Fault {
     FalsifyBroadcastHash,
     /// Return an impossible `finalized` block, ahead of the real head.
     FalsifyFinalized,
+    /// Serve a real, older finalized block to model honest provider lag.
+    LagFinalized(u64),
+    /// Return a different account nonce at the requested shared anchor.
+    FalsifyNonce,
+    /// Close the connection for `eth_getLogs` without returning a response.
+    DropLogResponse,
+    /// Close the connection for numeric `eth_getBlockByNumber` queries after the configured
+    /// count, so a test can interrupt the ancestry walk specifically.
+    DropLateBlockQueries,
+    /// Answer the first `n` `eth_getLogs` requests with a JSON-RPC rate-limit error.
+    RateLimitLogs(usize),
 }
 
 /// A TCP JSON-RPC proxy in front of anvil that can drop or falsify responses.
@@ -1764,6 +1775,8 @@ struct FaultProxy {
     url: String,
     fault: Arc<Mutex<Fault>>,
     broadcasts: Arc<AtomicUsize>,
+    block_queries: Arc<AtomicUsize>,
+    drop_block_after: Arc<AtomicUsize>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -1779,6 +1792,12 @@ impl FaultProxy {
         let fault_for_task = Arc::clone(&fault);
         let broadcasts = Arc::new(AtomicUsize::new(0));
         let broadcasts_for_task = Arc::clone(&broadcasts);
+        let block_queries = Arc::new(AtomicUsize::new(0));
+        let block_queries_for_task = Arc::clone(&block_queries);
+        let drop_block_after = Arc::new(AtomicUsize::new(0));
+        let drop_block_after_for_task = Arc::clone(&drop_block_after);
+        let rate_limited = Arc::new(AtomicUsize::new(0));
+        let rate_limited_for_task = Arc::clone(&rate_limited);
         let task = tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
@@ -1787,8 +1806,20 @@ impl FaultProxy {
                 let upstream = upstream.clone();
                 let fault = Arc::clone(&fault_for_task);
                 let broadcasts = Arc::clone(&broadcasts_for_task);
+                let block_queries = Arc::clone(&block_queries_for_task);
+                let drop_block_after = Arc::clone(&drop_block_after_for_task);
+                let rate_limited = Arc::clone(&rate_limited_for_task);
                 tokio::spawn(async move {
-                    handle_proxy_connection(stream, upstream, fault, broadcasts).await;
+                    handle_proxy_connection(
+                        stream,
+                        upstream,
+                        fault,
+                        broadcasts,
+                        block_queries,
+                        drop_block_after,
+                        rate_limited,
+                    )
+                    .await;
                 });
             }
         });
@@ -1796,12 +1827,19 @@ impl FaultProxy {
             url: format!("http://127.0.0.1:{port}"),
             fault,
             broadcasts,
+            block_queries,
+            drop_block_after,
             _task: task,
         }
     }
 
     fn set(&self, fault: Fault) {
         *self.fault.lock().expect("proxy lock") = fault;
+    }
+
+    fn drop_numeric_blocks_after(&self, count: usize) {
+        self.block_queries.store(0, Ordering::SeqCst);
+        self.drop_block_after.store(count, Ordering::SeqCst);
     }
 }
 
@@ -1816,6 +1854,9 @@ async fn handle_proxy_connection(
     upstream: String,
     fault: Arc<Mutex<Fault>>,
     broadcasts: Arc<AtomicUsize>,
+    block_queries: Arc<AtomicUsize>,
+    drop_block_after: Arc<AtomicUsize>,
+    rate_limited: Arc<AtomicUsize>,
 ) {
     use tokio::io::AsyncWriteExt;
 
@@ -1827,6 +1868,15 @@ async fn handle_proxy_connection(
     if is_broadcast {
         broadcasts.fetch_add(1, Ordering::SeqCst);
     }
+    let is_numeric_block = method == "eth_getBlockByNumber"
+        && json["params"][0]
+            .as_str()
+            .is_some_and(|tag| tag.starts_with("0x"));
+    let numeric_block_count = if is_numeric_block {
+        block_queries.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        0
+    };
     let is_finalized =
         method == "eth_getBlockByNumber" && json["params"][0].as_str() == Some("finalized");
     let fault = *fault.lock().expect("proxy lock");
@@ -1866,6 +1916,61 @@ async fn handle_proxy_connection(
                 "transactions": [],
             });
             let _ = stream.write_all(&json_rpc_response(&json, block)).await;
+            return;
+        }
+        Fault::LagFinalized(lag) if is_finalized => {
+            let provider = read_only_provider(&format!("http://{upstream}"));
+            let block: serde_json::Value = provider
+                .raw_request(
+                    "eth_getBlockByNumber".into(),
+                    serde_json::json!(["finalized", false]),
+                )
+                .await
+                .unwrap();
+            let number: U64 = serde_json::from_value(block["number"].clone()).unwrap();
+            let older: serde_json::Value = provider
+                .raw_request(
+                    "eth_getBlockByNumber".into(),
+                    serde_json::json!([
+                        format!("{:#x}", number.to::<u64>().saturating_sub(lag)),
+                        false
+                    ]),
+                )
+                .await
+                .unwrap();
+            let _ = stream.write_all(&json_rpc_response(&json, older)).await;
+            return;
+        }
+        Fault::FalsifyNonce if method == "eth_getTransactionCount" => {
+            let _ = stream
+                .write_all(&json_rpc_response(&json, serde_json::json!("0xffff")))
+                .await;
+            return;
+        }
+        Fault::DropLogResponse if method == "eth_getLogs" => {
+            return;
+        }
+        Fault::DropLateBlockQueries
+            if is_numeric_block
+                && numeric_block_count > drop_block_after.load(Ordering::SeqCst) =>
+        {
+            return;
+        }
+        Fault::RateLimitLogs(limit)
+            if method == "eth_getLogs" && rate_limited.fetch_add(1, Ordering::SeqCst) < limit =>
+        {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": json["id"].clone(),
+                "error": {"code": -32005, "message": "rate limited"},
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
             return;
         }
         _ => {}
@@ -2242,6 +2347,7 @@ async fn historical_observation_resumes_logs_and_old_ancestry_across_restarts() 
         log_block_range: 2,
         max_log_queries: 1,
         max_ancestry: 2,
+        max_concurrent_queries: 1,
     };
     assert!(matches!(
         chain
@@ -2372,6 +2478,7 @@ async fn historical_observation_restarts_nonfinal_work_after_a_reorg() {
         log_block_range: 1,
         max_log_queries: 1,
         max_ancestry: 1,
+        max_concurrent_queries: 1,
     };
     let store = ObservationJournal::open(root.path().join("history")).unwrap();
     for next in [1, 2] {
@@ -2465,6 +2572,7 @@ async fn historical_pair_keeps_completed_anchors_while_its_peer_is_pending() {
         log_block_range: 1,
         max_log_queries: 1,
         max_ancestry: 1,
+        max_concurrent_queries: 1,
     };
     assert!(matches!(
         peer.finalized_deal_evidence_resumable(&peer_journal, &prepared.deal_nullifier, budget)
@@ -2492,6 +2600,436 @@ async fn historical_pair_keeps_completed_anchors_while_its_peer_is_pending() {
         }
     }
     panic!("completed observer kept refreshing while its peer was pending");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn paired_observation_uses_a_shared_snapshot_despite_honest_finality_lag() {
+    use erebus_evm::chain::{HistoricalObservation, ObservationJournal};
+    let fixture = fixture().await;
+    let provider = read_only_provider(&fixture.rpc_url);
+    mine_blocks(&provider, 20).await;
+    let chain = EvmChain::connect(deployment(&fixture), Duration::from_secs(5))
+        .await
+        .unwrap();
+    let mut peer_deployment = deployment(&fixture);
+    peer_deployment.rpc_url = fixture.verification_proxy.url.clone();
+    let peer = EvmChain::connect(peer_deployment, Duration::from_secs(5))
+        .await
+        .unwrap();
+    fixture.verification_proxy.set(Fault::LagFinalized(3));
+    let signer = TransactionKey::from_bytes(&RELAYER_KEY).unwrap().address();
+    let nonce = chain
+        .verified_finalized_nonce_agreed(&peer, signer)
+        .await
+        .unwrap();
+    let runtime =
+        alloy::primitives::keccak256(provider.get_code_at(fixture.settlement).await.unwrap()).0;
+    let first = provider
+        .get_block_by_number(1.into())
+        .await
+        .unwrap()
+        .unwrap()
+        .header
+        .hash
+        .0;
+    let authenticated = chain
+        .authenticate_deployment_runtime_agreed(&peer, runtime, 1, first)
+        .await
+        .unwrap();
+    assert_eq!(nonce.anchor(), authenticated);
+    let root = tempfile::tempdir().unwrap();
+    let primary = ObservationJournal::open(root.path().join("primary")).unwrap();
+    let secondary = ObservationJournal::open(root.path().join("secondary")).unwrap();
+    let prepared = prepared(&fixture);
+    let result = chain
+        .finalized_deal_evidence_resumable_agreed_from(
+            &primary,
+            &peer,
+            &secondary,
+            &prepared.deal_nullifier,
+            1,
+            ObservationLimits::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, HistoricalObservation::Complete { finalized, evidence: DealEvidence::Observed(ref reads), .. }
+        if finalized == authenticated && !reads.consumed_at_final && !reads.consumed_at_head && reads.winner.is_none())
+    );
+    fixture.verification_proxy.set(Fault::FalsifyNonce);
+    assert!(chain
+        .verified_finalized_nonce_agreed(&peer, signer)
+        .await
+        .is_err());
+    fixture.verification_proxy.set(Fault::FalsifyFinalized);
+    assert!(chain
+        .authenticate_deployment_runtime_agreed(&peer, runtime, 1, first)
+        .await
+        .is_err());
+    assert_eq!(
+        fixture.verification_proxy.broadcasts.load(Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn concurrent_history_scan_matches_a_sequential_scan() {
+    use erebus_evm::chain::{
+        HistoricalObservation, ObservationJournal, MAX_CONCURRENT_LOG_QUERIES,
+    };
+    let fixture = fixture().await;
+    let root = tempfile::tempdir().unwrap();
+    let (coordinator, _, prepared, _) = coordinated_setup(&fixture, root.path()).await;
+    let chain = EvmChain::connect(deployment(&fixture), Duration::from_secs(2))
+        .await
+        .unwrap();
+    chain
+        .broadcast_journaled(&coordinator, prepared.operation_ref, now())
+        .await
+        .unwrap();
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 20).await;
+    let sequential = ObservationJournal::open(root.path().join("sequential")).unwrap();
+    let concurrent = ObservationJournal::open(root.path().join("concurrent")).unwrap();
+    let sequential_evidence = loop {
+        if let HistoricalObservation::Complete { evidence, .. } = chain
+            .finalized_deal_evidence_resumable(
+                &sequential,
+                &prepared.deal_nullifier,
+                ObservationLimits {
+                    log_block_range: 2,
+                    max_log_queries: 4,
+                    max_ancestry: 4,
+                    max_concurrent_queries: 1,
+                },
+            )
+            .await
+            .unwrap()
+        {
+            break evidence;
+        }
+    };
+    let concurrent_evidence = loop {
+        if let HistoricalObservation::Complete { evidence, .. } = chain
+            .finalized_deal_evidence_resumable(
+                &concurrent,
+                &prepared.deal_nullifier,
+                ObservationLimits {
+                    log_block_range: 2,
+                    max_log_queries: 16,
+                    max_ancestry: 4,
+                    max_concurrent_queries: 4,
+                },
+            )
+            .await
+            .unwrap()
+        {
+            break evidence;
+        }
+    };
+    assert_eq!(sequential_evidence, concurrent_evidence);
+    assert_eq!(
+        concurrent_evidence,
+        chain
+            .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+            .await
+            .unwrap()
+    );
+    for invalid in [0, MAX_CONCURRENT_LOG_QUERIES + 1] {
+        assert!(matches!(
+            chain
+                .finalized_deal_evidence(
+                    &prepared.deal_nullifier,
+                    ObservationLimits {
+                        log_block_range: 2,
+                        max_log_queries: 1,
+                        max_ancestry: 2,
+                        max_concurrent_queries: invalid,
+                    },
+                )
+                .await,
+            Err(EvmError::ObservationLimit)
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn interrupted_concurrent_scan_does_not_advance_its_checkpoint() {
+    use erebus_evm::chain::{HistoricalObservation, ObservationJournal};
+    let fixture = fixture().await;
+    let root = tempfile::tempdir().unwrap();
+    let (coordinator, _, prepared, _) = coordinated_setup(&fixture, root.path()).await;
+    let honest = EvmChain::connect(deployment(&fixture), Duration::from_secs(2))
+        .await
+        .unwrap();
+    honest
+        .broadcast_journaled(&coordinator, prepared.operation_ref, now())
+        .await
+        .unwrap();
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 20).await;
+    let proxy =
+        FaultProxy::start(fixture.rpc_url.strip_prefix("http://").unwrap().to_owned()).await;
+    let chain = EvmChain::connect(proxied_deployment(&fixture, &proxy), Duration::from_secs(2))
+        .await
+        .unwrap();
+    let journal = ObservationJournal::open(root.path().join("history")).unwrap();
+    let budget = ObservationLimits {
+        log_block_range: 1,
+        max_log_queries: 2,
+        max_ancestry: 4,
+        max_concurrent_queries: 2,
+    };
+    assert!(matches!(
+        chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+            .await
+            .unwrap(),
+        HistoricalObservation::Pending { .. }
+    ));
+    let path = std::fs::read_dir(root.path().join("history"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .unwrap();
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let before_next = before["scan"]["next_log"].clone();
+    assert!(
+        before_next.is_number(),
+        "one slice must leave resumable work"
+    );
+    proxy.set(Fault::DropLogResponse);
+    assert!(chain
+        .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+        .await
+        .is_err());
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["scan"]["next_log"], before_next);
+    // A slow query is the same failure: the whole slice fails and keeps its start.
+    proxy.set(Fault::DelayMethod("eth_getLogs"));
+    assert!(chain
+        .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+        .await
+        .is_err());
+    let slow: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(slow["scan"]["next_log"], before_next);
+    proxy.set(Fault::Pass);
+    let completed = loop {
+        if let HistoricalObservation::Complete { evidence, .. } = chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+            .await
+            .unwrap()
+        {
+            break evidence;
+        }
+    };
+    assert_eq!(
+        completed,
+        chain
+            .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn observation_rpc_retries_a_rate_limited_log_query() {
+    use erebus_evm::chain::{HistoricalObservation, ObservationJournal};
+    let fixture = fixture().await;
+    let root = tempfile::tempdir().unwrap();
+    let (coordinator, _, prepared, _) = coordinated_setup(&fixture, root.path()).await;
+    let honest = EvmChain::connect(deployment(&fixture), Duration::from_secs(2))
+        .await
+        .unwrap();
+    honest
+        .broadcast_journaled(&coordinator, prepared.operation_ref, now())
+        .await
+        .unwrap();
+    mine_blocks(&read_only_provider(&fixture.rpc_url), 20).await;
+    let chain = EvmChain::connect(
+        proxied_deployment(&fixture, &fixture.verification_proxy),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    let journal = ObservationJournal::open(root.path().join("history")).unwrap();
+    let budget = ObservationLimits {
+        log_block_range: 100,
+        max_log_queries: 8,
+        max_ancestry: 64,
+        max_concurrent_queries: 4,
+    };
+    // One rate-limited response must not fail the scan; the read-only request is retried.
+    fixture.verification_proxy.set(Fault::RateLimitLogs(1));
+    let completed = loop {
+        if let HistoricalObservation::Complete { evidence, .. } = chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+            .await
+            .unwrap()
+        {
+            break evidence;
+        }
+    };
+    assert_eq!(
+        completed,
+        honest
+            .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn long_ancestry_catch_up_walks_concurrently_and_matches_sequential() {
+    use erebus_evm::chain::{HistoricalObservation, ObservationJournal};
+    let fixture = fixture().await;
+    let root = tempfile::tempdir().unwrap();
+    let (coordinator, _, prepared, _) = coordinated_setup(&fixture, root.path()).await;
+    let chain = EvmChain::connect(deployment(&fixture), Duration::from_secs(2))
+        .await
+        .unwrap();
+    chain
+        .broadcast_journaled(&coordinator, prepared.operation_ref, now())
+        .await
+        .unwrap();
+    let provider = read_only_provider(&fixture.rpc_url);
+    mine_blocks(&provider, 20).await;
+    let journal = ObservationJournal::open(root.path().join("history")).unwrap();
+    let base = ObservationLimits {
+        log_block_range: 100,
+        max_log_queries: 64,
+        max_ancestry: 8_192,
+        max_concurrent_queries: 1,
+    };
+    loop {
+        if let HistoricalObservation::Complete { .. } = chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, base)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    // The chain advances well past the per-invocation ancestry cap.
+    mine_blocks(&provider, 150).await;
+    let small = ObservationLimits {
+        max_ancestry: 32,
+        ..base
+    };
+    let mut pending = 0;
+    let resumed = loop {
+        match chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, small)
+            .await
+            .unwrap()
+        {
+            HistoricalObservation::Pending { .. } => {
+                pending += 1;
+                assert!(pending < 20, "bounded catch-up must keep advancing");
+            }
+            HistoricalObservation::Complete { evidence, .. } => break evidence,
+        }
+    };
+    assert!(pending >= 3, "150 links need several 32-link invocations");
+    assert_eq!(
+        resumed,
+        chain
+            .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+            .await
+            .unwrap()
+    );
+    // A large per-invocation cap with concurrent fetches completes the next catch-up at once.
+    mine_blocks(&provider, 100).await;
+    let large = ObservationLimits {
+        max_concurrent_queries: 8,
+        ..base
+    };
+    let single = chain
+        .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, large)
+        .await
+        .unwrap();
+    assert!(
+        matches!(single, HistoricalObservation::Complete { .. }),
+        "large-cap catch-up should finish in one invocation: {single:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires anvil from a Foundry install"]
+async fn interrupted_ancestry_keeps_its_completed_checkpoint() {
+    use erebus_evm::chain::{HistoricalObservation, ObservationJournal};
+    let fixture = fixture().await;
+    let root = tempfile::tempdir().unwrap();
+    let (coordinator, _, prepared, _) = coordinated_setup(&fixture, root.path()).await;
+    let honest = EvmChain::connect(deployment(&fixture), Duration::from_secs(2))
+        .await
+        .unwrap();
+    honest
+        .broadcast_journaled(&coordinator, prepared.operation_ref, now())
+        .await
+        .unwrap();
+    let provider = read_only_provider(&fixture.rpc_url);
+    mine_blocks(&provider, 20).await;
+    let journal = ObservationJournal::open(root.path().join("history")).unwrap();
+    let budget = ObservationLimits {
+        log_block_range: 100,
+        max_log_queries: 64,
+        max_ancestry: 8_192,
+        max_concurrent_queries: 4,
+    };
+    loop {
+        if let HistoricalObservation::Complete { .. } = honest
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    let path = std::fs::read_dir(root.path().join("history"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .unwrap();
+    let before: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    mine_blocks(&provider, 100).await;
+    let chain = EvmChain::connect(
+        proxied_deployment(&fixture, &fixture.verification_proxy),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    fixture.verification_proxy.set(Fault::DropLateBlockQueries);
+    fixture.verification_proxy.drop_numeric_blocks_after(8);
+    assert!(chain
+        .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+        .await
+        .is_err());
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        after, before,
+        "a failed catch-up must not advance the checkpoint"
+    );
+    fixture.verification_proxy.set(Fault::Pass);
+    let completed = loop {
+        if let HistoricalObservation::Complete { evidence, .. } = chain
+            .finalized_deal_evidence_resumable(&journal, &prepared.deal_nullifier, budget)
+            .await
+            .unwrap()
+        {
+            break evidence;
+        }
+    };
+    assert_eq!(
+        completed,
+        honest
+            .finalized_deal_evidence(&prepared.deal_nullifier, ObservationLimits::default())
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

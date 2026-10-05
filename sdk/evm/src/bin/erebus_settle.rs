@@ -25,7 +25,10 @@ use erebus_core::deal_state::{
 use erebus_core::ids::{ChainNamespace, SignatureBytes};
 use erebus_core::terms::AgreementTerms;
 use erebus_evm::backend::{public_bound_capabilities, EvmSettlementBackend};
-use erebus_evm::chain::{EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits};
+use erebus_evm::chain::{
+    EvmChain, HistoricalObservation, ObservationJournal, ObservationLimits,
+    MAX_CONCURRENT_LOG_QUERIES,
+};
 use erebus_evm::deployment::{parse_lowercase_address, EvmDeployment};
 use erebus_evm::evidence::SettlementEvidence;
 use serde::Deserialize;
@@ -71,6 +74,8 @@ struct Deployment {
     max_log_queries: u64,
     #[serde(default = "default_ancestry")]
     max_ancestry: u64,
+    #[serde(default = "default_log_concurrency")]
+    max_concurrent_queries: u64,
 }
 
 fn default_log_block_range() -> u64 {
@@ -81,6 +86,9 @@ fn default_log_queries() -> u64 {
 }
 fn default_ancestry() -> u64 {
     64
+}
+fn default_log_concurrency() -> u64 {
+    8
 }
 
 const HELP: &str = "erebus-settle: buyer-side public-bound settlement as JSON on stdin.
@@ -94,7 +102,7 @@ amount plus fee, and the gas payer's native shortfall, before any authorization 
 receipt reads one durable agreement opening and its finalized chain evidence, then reports the
 deal and revision state. It never signs or submits.
 Output excludes the RPC URL, terms, signatures, and keys.
-See docs/metropolis-m8-runbook.md.";
+See docs/metropolis-operations.md.";
 
 #[tokio::main]
 async fn main() {
@@ -185,6 +193,7 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                 log_block_range: deployment.log_block_range,
                 max_log_queries: deployment.max_log_queries,
                 max_ancestry: deployment.max_ancestry,
+                max_concurrent_queries: deployment.max_concurrent_queries,
             };
             if limits.log_block_range == 0
                 || limits.log_block_range > 2_000
@@ -192,6 +201,8 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                 || limits.max_log_queries > 1_024
                 || limits.max_ancestry == 0
                 || limits.max_ancestry > 8_192
+                || limits.max_concurrent_queries == 0
+                || limits.max_concurrent_queries > MAX_CONCURRENT_LOG_QUERIES
             {
                 return Err("invalid observation budget");
             }

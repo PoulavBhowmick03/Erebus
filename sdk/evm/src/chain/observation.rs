@@ -84,7 +84,15 @@ pub struct ObservationLimits {
     pub max_log_queries: u64,
     /// Maximum parent links from head to the oldest required anchor or winner.
     pub max_ancestry: u64,
+    /// Maximum `eth_getLogs` queries in flight in one bounded slice.
+    ///
+    /// Ranges remain contiguous and non-overlapping; a slice is checkpointed only after every
+    /// query in it succeeds, so a failed or interrupted slice resumes from the same start.
+    pub max_concurrent_queries: u64,
 }
+
+/// Hard ceiling on in-flight log queries, independent of caller configuration.
+pub const MAX_CONCURRENT_LOG_QUERIES: u64 = 32;
 
 impl Default for ObservationLimits {
     fn default() -> Self {
@@ -92,6 +100,7 @@ impl Default for ObservationLimits {
             log_block_range: 2_000,
             max_log_queries: 1_024,
             max_ancestry: 8_192,
+            max_concurrent_queries: 8,
         }
     }
 }
@@ -208,6 +217,68 @@ impl EvmChain {
         Ok(finalized.anchor())
     }
 
+    /// Authenticates both immutable runtimes at one block finalized by both providers.
+    /// Different current tips are allowed; different canonical hashes or runtime pins are not.
+    pub async fn authenticate_deployment_runtime_agreed(
+        &self,
+        peer: &Self,
+        expected_runtime_hash: [u8; 32],
+        first_block: u64,
+        first_hash: [u8; 32],
+    ) -> Result<BlockRef, EvmError> {
+        let (finalized, _) = self.common_observation_blocks(peer).await?;
+        for chain in [self, peer] {
+            let authenticated = chain
+                .authenticate_deployment_runtime(expected_runtime_hash, first_block, first_hash)
+                .await?;
+            if authenticated.number < finalized.number.to::<u64>()
+                || keccak256(chain.runtime_at(finalized.hash).await?).0 != expected_runtime_hash
+            {
+                return Err(EvmError::DeploymentMismatch);
+            }
+            chain.recheck_block(&finalized).await?;
+        }
+        Ok(finalized.anchor())
+    }
+
+    async fn common_observation_blocks(&self, peer: &Self) -> Result<(Block, Block), EvmError> {
+        self.check_peer(peer)?;
+        let mut reports = Vec::with_capacity(2);
+        for chain in [self, peer] {
+            chain.check_chain().await?;
+            let finalized = chain
+                .observation_block("finalized")
+                .await?
+                .ok_or(EvmError::FinalityUnavailable)?;
+            let head = chain
+                .observation_block("latest")
+                .await?
+                .ok_or_else(|| inconsistent("head missing"))?;
+            if finalized.number > head.number || finalized.timestamp > head.timestamp {
+                return Err(inconsistent("finalized anchor exceeds head"));
+            }
+            chain.recheck_block(&finalized).await?;
+            chain.recheck_block(&head).await?;
+            reports.push((finalized, head));
+        }
+        let final_number = reports[0].0.number.min(reports[1].0.number).to();
+        let head_number = reports[0].1.number.min(reports[1].1.number).to();
+        let finalized = self.canonical_block(final_number).await?;
+        let head = self.canonical_block(head_number).await?;
+        if peer.canonical_block(final_number).await? != finalized
+            || peer.canonical_block(head_number).await? != head
+            || finalized.timestamp > head.timestamp
+        {
+            return Err(inconsistent(
+                "RPC providers disagree on shared canonical anchors",
+            ));
+        }
+        for chain in [self, peer] {
+            chain.check_chain().await?;
+        }
+        Ok((finalized, head))
+    }
+
     async fn runtime_at(&self, hash: B256) -> Result<Bytes, EvmError> {
         self.observation_rpc(
             "eth_getCode",
@@ -229,7 +300,15 @@ impl EvmChain {
             .observation_block("finalized")
             .await?
             .ok_or(EvmError::FinalityUnavailable)?;
-        self.recheck_block(&block).await?;
+        self.verified_nonce_at(sender, &block).await
+    }
+
+    async fn verified_nonce_at(
+        &self,
+        sender: [u8; 20],
+        block: &Block,
+    ) -> Result<FinalizedNonce, EvmError> {
+        self.recheck_block(block).await?;
         let nonce: U64 = self
             .observation_rpc(
                 "eth_getTransactionCount",
@@ -239,7 +318,7 @@ impl EvmChain {
                 ),
             )
             .await?;
-        self.recheck_block(&block).await?;
+        self.recheck_block(block).await?;
         self.check_chain().await?;
         Ok(FinalizedNonce {
             sender,
@@ -369,15 +448,33 @@ impl EvmChain {
         self.check_chain().await
     }
 
+    /// Reads one observation value with bounded retries. Every request here is read-only and
+    /// idempotent, so a transient rate limit (public providers answer 429 under a burst) or
+    /// transport error can be retried without affecting any payment or reservation. The
+    /// caller still validates every returned value; a retry never widens what is accepted.
     async fn observation_rpc<P, R>(&self, method: &'static str, params: P) -> Result<R, EvmError>
     where
         P: RpcSend,
         R: RpcRecv,
     {
-        tokio::time::timeout(self.timeout, self.provider.client().request(method, params))
+        const ATTEMPTS: u32 = 4;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match tokio::time::timeout(
+                self.timeout,
+                self.provider.client().request(method, params.clone()),
+            )
             .await
-            .map_err(|_| EvmError::Rpc("observation timed out".into()))?
-            .map_err(|_| EvmError::Rpc("observation request failed".into()))
+            {
+                Ok(Ok(value)) => return Ok(value),
+                Ok(Err(_)) if attempt < ATTEMPTS => {}
+                Ok(Err(_)) => return Err(EvmError::Rpc("observation request failed".into())),
+                Err(_) if attempt < ATTEMPTS => {}
+                Err(_) => return Err(EvmError::Rpc("observation timed out".into())),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100 * (1 << (attempt - 1)))).await;
+        }
     }
 
     async fn observation_block(&self, tag: &str) -> Result<Option<Block>, EvmError> {
@@ -537,10 +634,10 @@ impl EvmChain {
         peer: &Self,
         sender: [u8; 20],
     ) -> Result<FinalizedNonce, EvmError> {
-        self.check_peer(peer)?;
+        let (block, _) = self.common_observation_blocks(peer).await?;
         let (first, second) = tokio::join!(
-            self.verified_finalized_nonce(sender),
-            peer.verified_finalized_nonce(sender)
+            self.verified_nonce_at(sender, &block),
+            peer.verified_nonce_at(sender, &block)
         );
         let first = first?;
         if first != second? {
@@ -691,6 +788,102 @@ impl EvmChain {
         abi::decode_bool_word(&data).ok_or_else(|| inconsistent("consumedDeals is not an ABI bool"))
     }
 
+    /// One bounded log range. Returns its start so concurrent results can be reordered.
+    /// The range bounds are rechecked here, before any result can enter evidence.
+    async fn fetch_log_range(
+        &self,
+        from: u64,
+        to: u64,
+        nullifier: &DealNullifier,
+    ) -> Result<(u64, Vec<Log>), EvmError> {
+        let batch: Vec<Log> = self
+            .observation_rpc(
+                "eth_getLogs",
+                (json!({
+                    "address": Address::from(self.deployment.settlement_contract),
+                    "topics": [Some(B256::from(abi::deal_settled_topic())), Option::<B256>::None,
+                        Some(B256::from(*nullifier.as_bytes()))],
+                    "fromBlock": U64::from(from), "toBlock": U64::from(to),
+                }),),
+            )
+            .await?;
+        for log in &batch {
+            if !log.block_number.is_some_and(|n| n >= from && n <= to) {
+                return Err(inconsistent("log outside requested range"));
+            }
+        }
+        Ok((from, batch))
+    }
+
+    /// Runs one window of contiguous, non-overlapping log ranges concurrently.
+    /// Returns the ordered logs, the next un-scanned block (`None` at the head), and the
+    /// number of ranges issued. An error or interruption leaves no partial result: the
+    /// caller's checkpoint only advances after this returns.
+    async fn scan_log_window(
+        &self,
+        nullifier: &DealNullifier,
+        from: u64,
+        head: u64,
+        limits: ObservationLimits,
+    ) -> Result<(Vec<Log>, Option<u64>, u64), EvmError> {
+        if limits.log_block_range == 0
+            || limits.max_log_queries == 0
+            || limits.max_concurrent_queries == 0
+            || limits.max_concurrent_queries > MAX_CONCURRENT_LOG_QUERIES
+        {
+            return Err(EvmError::ObservationLimit);
+        }
+        if from > head {
+            return Ok((Vec::new(), None, 0));
+        }
+        let mut ranges = Vec::new();
+        let mut next = from;
+        for _ in 0..limits.max_concurrent_queries.min(limits.max_log_queries) {
+            let to = next.saturating_add(limits.log_block_range - 1).min(head);
+            ranges.push((next, to));
+            if to >= head {
+                break;
+            }
+            next = to + 1;
+        }
+        let mut tasks = tokio::task::JoinSet::new();
+        for (range_from, range_to) in &ranges {
+            let chain = self.clone();
+            let nullifier = *nullifier;
+            let (range_from, range_to) = (*range_from, *range_to);
+            tasks.spawn(async move {
+                chain
+                    .fetch_log_range(range_from, range_to, &nullifier)
+                    .await
+            });
+        }
+        let mut batches = Vec::with_capacity(ranges.len());
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok(batch)) => batches.push(batch),
+                Ok(Err(error)) => {
+                    tasks.abort_all();
+                    return Err(error);
+                }
+                Err(_) => {
+                    tasks.abort_all();
+                    return Err(inconsistent("log query task failed"));
+                }
+            }
+        }
+        // Results arrive out of order; restore block order before recording logs.
+        batches.sort_by_key(|(range_from, _)| *range_from);
+        let mut logs = Vec::new();
+        for (_, batch) in batches {
+            logs.extend(batch);
+            if logs.len() > 1 {
+                return Err(inconsistent("multiple settlement logs"));
+            }
+        }
+        let last = ranges.last().expect("window is non-empty").1;
+        Ok((logs, (last < head).then(|| last + 1), ranges.len() as u64))
+    }
+
     async fn deal_logs(
         &self,
         nullifier: &DealNullifier,
@@ -702,37 +895,26 @@ impl EvmChain {
         if (head - first) / limits.log_block_range >= limits.max_log_queries {
             return Err(EvmError::ObservationLimit);
         }
-        let mut from = first;
+        let mut next = Some(first);
+        let mut queries = 0;
         let mut logs = Vec::new();
-        loop {
-            let to = from.saturating_add(limits.log_block_range - 1).min(head);
-            let batch = self
-                .observation_rpc::<_, Vec<Log>>(
-                    "eth_getLogs",
-                    (json!({
-                        "address": Address::from(self.deployment.settlement_contract),
-                        "topics": [
-                            Some(B256::from(abi::deal_settled_topic())),
-                            Option::<B256>::None,
-                            Some(B256::from(*nullifier.as_bytes())),
-                        ],
-                        "fromBlock": U64::from(from), "toBlock": U64::from(to),
-                    }),),
-                )
-                .await?;
-            for log in batch {
-                if !log.block_number.is_some_and(|n| n >= from && n <= to) {
-                    return Err(inconsistent("log outside requested range"));
-                }
-                logs.push(log);
-                if logs.len() > 1 {
-                    return Err(inconsistent("multiple settlement logs"));
-                }
+        while let Some(from) = next {
+            let remaining = limits.max_log_queries - queries;
+            if remaining == 0 {
+                return Err(EvmError::ObservationLimit);
             }
-            if to == head {
-                break;
+            let window = ObservationLimits {
+                max_log_queries: remaining,
+                ..limits
+            };
+            let (batch, resumed, used) =
+                self.scan_log_window(nullifier, from, head, window).await?;
+            logs.extend(batch);
+            if logs.len() > 1 {
+                return Err(inconsistent("multiple settlement logs"));
             }
-            from = to + 1;
+            queries += used;
+            next = resumed;
         }
         Ok(logs)
     }

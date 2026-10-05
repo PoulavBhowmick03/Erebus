@@ -14,7 +14,7 @@ mod transaction;
 
 pub use observation::{
     BlockRef, FinalizedNonce, HistoricalObservation, Inclusion, ObservationJournal,
-    ObservationLimits, TxStatus,
+    ObservationLimits, TxStatus, MAX_CONCURRENT_LOG_QUERIES,
 };
 pub use rpc::{Broadcast, BroadcastOutcome, EvmChain, JournaledBroadcastError};
 

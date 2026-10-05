@@ -72,6 +72,8 @@ enum Backend {
         log_block_range: u64,
         max_log_queries: u64,
         max_ancestry: u64,
+        #[serde(default = "default_log_concurrency")]
+        max_concurrent_queries: u64,
     },
     Shielded {
         chain_id: u64,
@@ -81,6 +83,10 @@ enum Backend {
         first_block: u64,
         first_hash: [u8; 32],
     },
+}
+
+fn default_log_concurrency() -> u64 {
+    8
 }
 
 #[derive(Clone)]
@@ -237,6 +243,7 @@ async fn run() -> Result<(), &'static str> {
             log_block_range,
             max_log_queries,
             max_ancestry,
+            max_concurrent_queries,
         } => {
             if log_block_range == 0
                 || log_block_range > 2000
@@ -244,6 +251,8 @@ async fn run() -> Result<(), &'static str> {
                 || max_log_queries > 1024
                 || max_ancestry == 0
                 || max_ancestry > 8192
+                || max_concurrent_queries == 0
+                || max_concurrent_queries > erebus_evm::chain::MAX_CONCURRENT_LOG_QUERIES
             {
                 return Err("invalid observer budget");
             }
@@ -266,6 +275,7 @@ async fn run() -> Result<(), &'static str> {
                     log_block_range,
                     max_log_queries,
                     max_ancestry,
+                    max_concurrent_queries,
                 },
             })
         }

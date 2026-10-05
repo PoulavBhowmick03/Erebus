@@ -350,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log_block_range: 100,
         max_log_queries: 1_024,
         max_ancestry: 8_192,
+        max_concurrent_queries: 8,
     };
     let deadline = Instant::now() + Duration::from_secs(300);
     let assessment = loop {

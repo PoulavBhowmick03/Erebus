@@ -559,6 +559,7 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
         log_block_range: 1,
         max_log_queries: 1,
         max_ancestry: 1,
+        max_concurrent_queries: 1,
     };
     let mut pending_count = 0;
     for _ in 0..100 {
@@ -590,6 +591,75 @@ async fn negotiated_payment_recovers_a_lost_broadcast_without_keys_or_a_second_s
     ] {
         assert!(recovered.get(field).is_none());
     }
+    native_product::finish(fixture, &buyer, &seller, config, client).await;
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
+    deployed.task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil and built EVM artifacts; copied commands submit public-bound test payments"]
+async fn moving_chain_catch_up_resumes_before_broadcast_and_submits_once() {
+    let deployed = deploy_public(None).await;
+    let (buyer, seller) = deployed.fixture.pair(false);
+    assert_eq!(buyer["deal_commitment"], seller["deal_commitment"]);
+    let PublicDeployed {
+        fixture,
+        client,
+        rpc_url,
+        proxy,
+        contract,
+        token,
+        binary,
+        config,
+        config_path,
+        ..
+    } = &deployed;
+    let _ = (contract, token);
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
+    fund_public(&deployed).await;
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
+    // Funding completes the scan against a frozen snapshot.
+    let mut ready = false;
+    for _ in 0..100 {
+        let (ok, reply) = run_payment(binary, fixture.root.path(), config_path, "funding").await;
+        assert!(ok, "{reply}");
+        if reply["status"] == "ready" {
+            ready = true;
+            break;
+        }
+        assert_eq!(reply["history_pending"], true, "{reply}");
+    }
+    assert!(ready, "funding must complete");
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
+    // The chain advances well past the per-invocation ancestry cap.
+    rpc(client, rpc_url, "anvil_mine", json!(["0x80"])).await;
+    // The next settle refreshes to the newer tip and must report bounded pre-submission work
+    // with durable proof that no broadcast was attempted.
+    let (_, first) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
+    assert_eq!(first["history_pending"], true, "{first}");
+    assert_eq!(first["broadcast_attempts"], 0, "{first}");
+    assert!(first.get("stage").is_some(), "{first}");
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 0);
+    // Bounded catch-up resumes from its checkpoint and eventually submits exactly once.
+    let mut submitted = None;
+    for _ in 0..200 {
+        let (_, reply) = run_payment(binary, fixture.root.path(), config_path, "settle").await;
+        if reply["submitted_this_call"] == true {
+            submitted = Some(reply);
+            break;
+        }
+        assert_eq!(reply["history_pending"], true, "{reply}");
+        assert_eq!(reply["broadcast_attempts"], 0, "{reply}");
+    }
+    let submitted = submitted.expect("bounded catch-up eventually submits");
+    assert_eq!(submitted["payment_verified"], false);
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
+    rpc(client, rpc_url, "anvil_mine", json!(["0x3"])).await;
+    let (ok, recovered) = run_payment(binary, fixture.root.path(), config_path, "observe").await;
+    assert!(ok, "{recovered}");
+    assert_eq!(recovered["payment_verified"], true);
+    assert_eq!(recovered["submitted_this_call"], false);
+    assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
     native_product::finish(fixture, &buyer, &seller, config, client).await;
     assert_eq!(proxy.sends.load(Ordering::SeqCst), 1);
     deployed.task.abort();

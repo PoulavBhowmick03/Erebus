@@ -34,6 +34,8 @@ pub struct Broadcast {
 }
 
 /// Unsigned RPC connection. It never fills transaction fields or holds a wallet key.
+/// Cloning shares the same provider handle and deployment pins; it creates no state.
+#[derive(Clone)]
 pub struct EvmChain {
     pub(super) deployment: EvmDeployment,
     pub(super) provider: DynProvider,

@@ -184,22 +184,14 @@ pub(super) async fn run(
     let started = Instant::now();
     let first = chain
         .evm()
-        .authenticate_deployment_runtime(runtime, config.first_block, first_hash)
+        .authenticate_deployment_runtime_agreed(peer.evm(), runtime, config.first_block, first_hash)
         .await
-        .map_err(|_| "primary deployment authentication failed")?;
-    let second = peer
-        .evm()
-        .authenticate_deployment_runtime(runtime, config.first_block, first_hash)
-        .await
-        .map_err(|_| "peer deployment authentication failed")?;
-    if first != second {
-        return Err("RPC providers disagree on deployment finality");
-    }
+        .map_err(|_| "paired deployment authentication failed")?;
     rpc.authenticate_dependencies_at(first.hash, pins)
         .await
         .map_err(|_| "primary pool dependency authentication failed")?;
     peer_rpc
-        .authenticate_dependencies_at(second.hash, pins)
+        .authenticate_dependencies_at(first.hash, pins)
         .await
         .map_err(|_| "peer pool dependency authentication failed")?;
     let mut response = json!({"status":"pending","mode":"shielded","agreement_verified":true,"payment_verified":false,

@@ -44,7 +44,7 @@ local gas-payer key. A durable broadcast attempt disables automatic resubmission
 Observe needs no signing key and never submits. Two distinct RPCs and checkpoint stores
 must agree on finalized evidence. Pending exits 2; errors exit 1 and retain reservations.
 RPC responses, keys, amounts, authorizations, and calldata are excluded from output.
-See docs/metropolis-payment-runbook.md.";
+See docs/metropolis-operations.md.";
 
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
@@ -92,6 +92,12 @@ struct Config {
     log_block_range: u64,
     max_log_queries: u64,
     max_ancestry: u64,
+    #[serde(default = "default_log_concurrency")]
+    max_concurrent_queries: u64,
+}
+
+fn default_log_concurrency() -> u64 {
+    8
 }
 
 fn read(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>, &'static str> {
@@ -293,6 +299,8 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
         || !(1..=2_000).contains(&config.log_block_range)
         || !(1..=1_024).contains(&config.max_log_queries)
         || !(1..=8_192).contains(&config.max_ancestry)
+        || !(1..=erebus_evm::chain::MAX_CONCURRENT_LOG_QUERIES)
+            .contains(&config.max_concurrent_queries)
     {
         return Err("invalid operator policy or observation budget");
     }
@@ -358,17 +366,10 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
         .await
         .map_err(|_| "peer RPC unavailable")?;
     let authentication = Instant::now();
-    let first = chain
-        .authenticate_deployment_runtime(runtime_hash, config.first_block, first_hash)
+    chain
+        .authenticate_deployment_runtime_agreed(&peer, runtime_hash, config.first_block, first_hash)
         .await
-        .map_err(|_| "primary deployment authentication failed")?;
-    let second = peer
-        .authenticate_deployment_runtime(runtime_hash, config.first_block, first_hash)
-        .await
-        .map_err(|_| "peer deployment authentication failed")?;
-    if first != second {
-        return Err("RPC providers disagree on deployment finality");
-    }
+        .map_err(|_| "paired deployment authentication failed")?;
     let authentication_ms = authentication.elapsed().as_millis();
     let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreement")?;
     let commitment = commit_agreement(&terms, &blinding).map_err(|_| "invalid agreement")?;
@@ -388,6 +389,7 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
                 log_block_range: config.log_block_range,
                 max_log_queries: config.max_log_queries,
                 max_ancestry: config.max_ancestry,
+                max_concurrent_queries: config.max_concurrent_queries,
             },
         )
         .await
@@ -402,9 +404,20 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             next_log_block,
             ancestry_block,
         } => {
+            // Pending history is pre-submission work. Report the durable coordinator state so
+            // a caller can prove no broadcast was attempted before resuming; an attempt or an
+            // unknown submission must recover by observation only.
+            let stage = coordinator
+                .diagnostics()
+                .map_err(|_| "operation diagnostic unavailable")?
+                .into_iter()
+                .find(|d| d.operation_ref == operation)
+                .ok_or("missing operation")?;
             response["history_pending"] = json!(true);
             response["next_log_block"] = json!(next_log_block);
             response["ancestry_block"] = json!(ancestry_block);
+            response["broadcast_attempts"] = json!(stage.broadcast_attempts);
+            response["stage"] = json!(format!("{:?}", stage.stage));
             return Ok(response);
         }
         HistoricalObservation::Complete {

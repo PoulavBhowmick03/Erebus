@@ -224,6 +224,7 @@ fn configure() -> Result<(RelayService, String, Option<DurableRelayer>), String>
                 log_block_range: optional_number("EREBUS_RELAYER_LOG_BLOCK_RANGE", 2000)?,
                 max_log_queries: optional_number("EREBUS_RELAYER_LOG_QUERIES", 1024)?,
                 max_ancestry: optional_number("EREBUS_RELAYER_ANCESTRY_LINKS", 8192)?,
+                max_concurrent_queries: optional_number("EREBUS_RELAYER_LOG_CONCURRENCY", 8)?,
             })
             .map_err(|error| error.to_string())?;
             operator

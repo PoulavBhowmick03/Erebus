@@ -18,7 +18,9 @@ pub(super) async fn service(config: &Path, url: &str, client: &reqwest::Client) 
         .spawn()
         .unwrap(),
     );
-    for _ in 0..100 {
+    // An x402 service authenticates two RPCs before it listens; under parallel funded tests
+    // that exceeded the old 2 s. An exited process still fails immediately.
+    for _ in 0..1500 {
         assert!(
             process.0.try_wait().unwrap().is_none(),
             "access service stopped"

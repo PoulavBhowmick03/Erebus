@@ -111,7 +111,12 @@ impl DurableRelayer {
         mut self,
         budget: ObservationLimits,
     ) -> Result<Self, RelayOperationError> {
-        if budget.log_block_range == 0 || budget.max_log_queries == 0 || budget.max_ancestry == 0 {
+        if budget.log_block_range == 0
+            || budget.max_log_queries == 0
+            || budget.max_ancestry == 0
+            || budget.max_concurrent_queries == 0
+            || budget.max_concurrent_queries > crate::chain::MAX_CONCURRENT_LOG_QUERIES
+        {
             return Err(RelayOperationError::Configuration);
         }
         self.observation_budget = budget;

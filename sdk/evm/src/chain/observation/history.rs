@@ -159,8 +159,8 @@ impl EvmChain {
     }
 
     /// Advances two independent checkpoint stores and requires matching completed evidence.
-    /// Either pending scan retains reservations. Exact anchor equality is conservative;
-    /// honest providers at different heights can disagree. Endpoint count is not consensus.
+    /// Either pending scan retains reservations. Both scans use the same finalized and head
+    /// snapshots, even when provider tips differ. Endpoint count is not consensus.
     pub async fn finalized_deal_evidence_resumable_agreed(
         &self,
         journal: &ObservationJournal,
@@ -209,13 +209,29 @@ impl EvmChain {
                 .and_then(|c| c.scan.as_ref())
                 .is_some_and(|scan| !scan.complete)
         };
+        let retained = [&first_cursor, &peer_cursor]
+            .into_iter()
+            .filter_map(|cursor| cursor.as_ref().and_then(|cursor| cursor.scan.as_ref()))
+            .filter(|scan| !scan.complete)
+            .map(|scan| (scan.finalized.clone(), scan.head.clone()))
+            .collect::<Vec<_>>();
+        if retained.windows(2).any(|pair| pair[0] != pair[1]) {
+            return Err(inconsistent(
+                "RPC history checkpoints name different snapshots",
+            ));
+        }
+        let anchors = match retained.first() {
+            Some(anchors) => anchors.clone(),
+            None => self.common_observation_blocks(peer).await?,
+        };
         let (first, second) = tokio::join!(
             self.continue_history(
                 journal,
                 nullifier,
                 budget,
                 !needs_work(&peer_cursor),
-                start_block
+                start_block,
+                Some(anchors.clone())
             ),
             peer.continue_history(
                 peer_journal,
@@ -223,6 +239,7 @@ impl EvmChain {
                 budget,
                 !needs_work(&first_cursor),
                 start_block,
+                Some(anchors),
             ),
         );
         let first = first?;
@@ -263,7 +280,7 @@ impl EvmChain {
         nullifier: &DealNullifier,
         budget: ObservationLimits,
     ) -> Result<HistoricalObservation, EvmError> {
-        self.continue_history(journal, nullifier, budget, true, 0)
+        self.continue_history(journal, nullifier, budget, true, 0, None)
             .await
     }
 
@@ -282,7 +299,7 @@ impl EvmChain {
         start_block: u64,
         budget: ObservationLimits,
     ) -> Result<HistoricalObservation, EvmError> {
-        self.continue_history(journal, nullifier, budget, true, start_block)
+        self.continue_history(journal, nullifier, budget, true, start_block, None)
             .await
     }
 
@@ -293,8 +310,14 @@ impl EvmChain {
         budget: ObservationLimits,
         refresh_completed: bool,
         start_block: u64,
+        anchors: Option<(Block, Block)>,
     ) -> Result<HistoricalObservation, EvmError> {
-        if budget.log_block_range == 0 || budget.max_log_queries == 0 || budget.max_ancestry == 0 {
+        if budget.log_block_range == 0
+            || budget.max_log_queries == 0
+            || budget.max_ancestry == 0
+            || budget.max_concurrent_queries == 0
+            || budget.max_concurrent_queries > MAX_CONCURRENT_LOG_QUERIES
+        {
             return Err(EvmError::ObservationLimit);
         }
         self.check_chain().await?;
@@ -325,15 +348,24 @@ impl EvmChain {
         if let Some(scan) = &cursor.scan {
             self.recheck_block(&scan.finalized).await?;
         }
-        let finalized_now = self
+        let reported_finalized = self
             .observation_block("finalized")
             .await?
             .ok_or(EvmError::FinalityUnavailable)?;
-        let head_now = self
+        let reported_head = self
             .observation_block("latest")
             .await?
             .ok_or_else(|| inconsistent("head missing"))?;
-        if finalized_now.number > head_now.number
+        if reported_finalized.number > reported_head.number
+            || reported_finalized.timestamp > reported_head.timestamp
+        {
+            return Err(inconsistent("history finalized anchor exceeds head"));
+        }
+        let (finalized_now, head_now) =
+            anchors.unwrap_or((reported_finalized.clone(), reported_head.clone()));
+        if finalized_now.number > reported_finalized.number
+            || head_now.number > reported_head.number
+            || finalized_now.number > head_now.number
             || finalized_now.timestamp > head_now.timestamp
             || cursor
                 .scan
@@ -342,6 +374,8 @@ impl EvmChain {
         {
             return Err(inconsistent("history finalized anchor regressed"));
         }
+        self.recheck_block(&finalized_now).await?;
+        self.recheck_block(&head_now).await?;
         let refresh = match &cursor.scan {
             None => true,
             Some(scan) if scan.complete && refresh_completed => {
@@ -395,29 +429,28 @@ impl EvmChain {
         }
         self.recheck_block(&scan.head).await?;
         self.recheck_block(&scan.current).await?;
-        for _ in 0..budget.max_log_queries {
+        let head = scan.head.number.to::<u64>();
+        let mut remaining_queries = budget.max_log_queries;
+        while remaining_queries > 0 {
             let Some(from) = scan.next_log else {
                 break;
             };
-            let to = from
-                .saturating_add(budget.log_block_range - 1)
-                .min(scan.head.number.to());
-            let batch: Vec<Log> = self.observation_rpc("eth_getLogs", (json!({
-                "address": Address::from(self.deployment.settlement_contract),
-                "topics": [Some(B256::from(abi::deal_settled_topic())), Option::<B256>::None,
-                    Some(B256::from(*nullifier.as_bytes()))],
-                "fromBlock": U64::from(from), "toBlock": U64::from(to),
-            }),)).await?;
+            // One contiguous window of concurrent ranges. The checkpoint advances only after
+            // the whole window succeeds, so an error or interruption resumes at `from`.
+            let window = ObservationLimits {
+                max_log_queries: remaining_queries.min(budget.max_log_queries),
+                ..budget
+            };
+            let (batch, resumed, used) =
+                self.scan_log_window(nullifier, from, head, window).await?;
             for log in batch {
-                if !log.block_number.is_some_and(|n| n >= from && n <= to) {
-                    return Err(inconsistent("log outside requested range"));
-                }
                 scan.logs.push(log);
                 if scan.logs.len() > 1 {
                     return Err(inconsistent("multiple settlement logs"));
                 }
             }
-            scan.next_log = (to < scan.head.number.to::<u64>()).then(|| to + 1);
+            scan.next_log = resumed;
+            remaining_queries -= used;
         }
         let mut complete_evidence = None;
         if scan.next_log.is_none() {
@@ -450,8 +483,14 @@ impl EvmChain {
             if scan.current.number < floor {
                 return Err(inconsistent("history ancestry bounds invalid"));
             }
-            let mut links = 0;
-            loop {
+            // Walk parents in bounded concurrent windows. Each fetched block is still the
+            // canonical block at its height, and the same parent-hash and timestamp linkage
+            // is verified locally across the whole window before the cursor advances. The
+            // per-invocation link budget (`max_ancestry`) still bounds this call, so a long
+            // catch-up resumes from the retained checkpoint instead of chasing the tip.
+            let floor_number = floor.to::<u64>();
+            let mut links = 0u64;
+            while scan.current.number != floor {
                 for anchor in [
                     Some(&scan.finalized),
                     winner_block.as_ref(),
@@ -464,23 +503,71 @@ impl EvmChain {
                         return Err(EvmError::AnchorNotCanonical);
                     }
                 }
-                if scan.current.number == floor {
-                    scan.complete = true;
+                if links >= budget.max_ancestry {
                     break;
                 }
-                if links == budget.max_ancestry {
+                let current_number = scan.current.number.to::<u64>();
+                let span = (current_number - floor_number)
+                    .min(budget.max_ancestry - links)
+                    .min(budget.max_concurrent_queries);
+                if span == 0 {
                     break;
                 }
-                let parent = self
-                    .canonical_block(scan.current.number.to::<u64>() - 1)
-                    .await?;
-                if scan.current.parent_hash != parent.hash
-                    || parent.timestamp > scan.current.timestamp
-                {
-                    return Err(EvmError::AnchorNotCanonical);
+                let mut tasks = tokio::task::JoinSet::new();
+                for offset in 1..=span {
+                    let chain = self.clone();
+                    let number = current_number - offset;
+                    tasks.spawn(async move {
+                        chain
+                            .canonical_block(number)
+                            .await
+                            .map(|block| (number, block))
+                    });
                 }
-                scan.current = parent;
-                links += 1;
+                let mut window = Vec::with_capacity(span as usize);
+                while let Some(joined) = tasks.join_next().await {
+                    match joined {
+                        Ok(Ok(block)) => window.push(block),
+                        Ok(Err(error)) => {
+                            tasks.abort_all();
+                            return Err(error);
+                        }
+                        Err(_) => {
+                            tasks.abort_all();
+                            return Err(inconsistent("ancestry task failed"));
+                        }
+                    }
+                }
+                window.sort_by_key(|(number, _)| *number);
+                let mut child = &scan.current;
+                // Descending from the block just below the cursor to the lowest fetched block.
+                for (number, block) in window.iter().rev() {
+                    if child.parent_hash != block.hash || block.timestamp > child.timestamp {
+                        return Err(EvmError::AnchorNotCanonical);
+                    }
+                    for anchor in [
+                        Some(&scan.finalized),
+                        winner_block.as_ref(),
+                        cursor.prefix.as_ref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if anchor.number == *number && anchor != block {
+                            return Err(EvmError::AnchorNotCanonical);
+                        }
+                    }
+                    child = block;
+                }
+                scan.current = window
+                    .first()
+                    .expect("ancestry window is non-empty")
+                    .1
+                    .clone();
+                links += span;
+            }
+            if scan.current.number == floor {
+                scan.complete = true;
             }
             if let Some(block) = &winner_block {
                 self.recheck_block(block).await?;
