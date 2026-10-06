@@ -1984,7 +1984,7 @@ public-bound scan stalled with no safe way to proceed.
 those heights, and keep the runtime pin, canonical hash, complete-history, and nonce-agreement
 checks. A falsified nonce or an impossible finalized answer still fails closed. The Anvil test
 `paired_observation_uses_a_shared_snapshot_despite_honest_finality_lag` covers the lag and the
-failure paths. The change is uncommitted and not in `0.3.0.dev4`.
+failure paths. The change is released in `0.3.0.dev5`.
 
 **What would have made it easier.** The paired-read API documenting that "agreement" means a
 shared canonical anchor, not equal tips. The original equality rule looked like a stricter

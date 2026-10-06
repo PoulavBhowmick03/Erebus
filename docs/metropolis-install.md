@@ -1,6 +1,6 @@
 # Metropolis Fresh-Install Guide
 
-Status: M8 external rehearsal guide. The published `0.3.0.dev4` channel exists
+Status: M8 external rehearsal guide. The published `0.3.0.dev5` channel exists
 ([section 10](#10-published-metropolis-packages)); the source-build commands below describe the
 local package surface and unreleased changes. Run build commands from the repository root.
 The request examples require operator configuration from the linked runbooks.
@@ -165,7 +165,7 @@ uv pip install --python erebus-metropolis/bin/python \
   --no-config \
   --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
   --default-index https://pypi.org/simple --index-strategy first-index \
-  "erebus-mcp-server==0.3.0.dev4"
+  "erebus-mcp-server==0.3.0.dev5"
 export PATH="$PWD/erebus-metropolis/bin:$PATH"
 printf '%s' '{"method":"version"}' | erebus-negotiate
 ```
@@ -186,7 +186,13 @@ by the build runner's Python (`macosx-10.9-universal2`); its `wheel_tag` is the 
 Every wheel ships Apache-2.0 `LICENSE`. The `erebus-cli` wheel also ships `THIRD_PARTY_NOTICES`
 for the 706 crates linked into the binaries.
 
-**Verified 2026-10-04 (`0.3.0.dev4`, source `e9f10d0`).** In a fresh environment outside any
+**Verified 2026-10-06 (`0.3.0.dev5`, source `06a3420`).** Registry run 37372823994 qualified both
+platforms and the pure-Python wheel comparison. The documented command installed all three packages
+from the public HTTPS index into a fresh environment outside any checkout; imports resolved and all
+14 native binaries plus the `erebus-selfhost` launcher matched the published manifest. The cumulative
+index still serves `0.3.0.dev4`.
+
+**Earlier verification 2026-10-04 (`0.3.0.dev4`, source `e9f10d0`).** In a fresh environment outside any
 checkout, with a fresh uv cache, the command above installed all three packages from the public
 HTTPS index. Imports resolved inside the environment, and all 14 native binaries plus the
 `erebus-selfhost` launcher matched the published manifest. `prepare_operator` and

@@ -6,8 +6,8 @@ subprocesses are not independent acceptance; this document is the handoff that a
 operator needs. The gate closes only when someone outside the team completes it and reports the
 evidence below.
 
-Current status: the published packages are `0.3.0.dev4` on the Metropolis index; the next
-prerelease is published after dual-platform qualification. Use the version the
+Current status: `0.3.0.dev5` is published on the Metropolis index and qualified on both
+platforms, and `0.3.0.dev4` remains served by the cumulative index. Use the version the
 [install guide](metropolis-install.md) documents.
 
 ## What the run proves

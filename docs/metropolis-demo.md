@@ -2,8 +2,8 @@
 
 Recording is **pending**: this file is the recording-ready script with real captured output.
 A human operator records it; nothing here is fabricated, and no key material, grant, bearer
-token, or private transcript appears on screen. Every output below was captured from the
-published `0.3.0.dev4` environment on 2026-10-05/06 and is labelled **CURRENT** (a command run
+token, or private transcript appears on screen. Every output below was captured from a
+published Metropolis environment (dev4) on 2026-10-05/06 and is labelled **CURRENT** (a command run
 during recording), **HISTORICAL** (a finalized transaction read back read-only), or **CACHED**
 (a local record from an earlier run).
 
@@ -11,8 +11,8 @@ Target length: 2:30–3:00. Terminal font large enough to read; no browser neede
 
 ## Preconditions
 
-- The published environment at `/tmp/erebus-m8-acceptance.bwHulH/environment/bin` (installed
-  from the public Metropolis index) or any fresh install from the
+- A fresh install from the public index (the dev5 environment used here is
+  `/tmp/erebus-m8-acceptance.bwHulH/dev5-install/bin`) or any install from the
   [install guide](metropolis-install.md).
 - `cast` (Foundry) for read-only chain reads.
 - The live public-bound run record at
@@ -23,7 +23,7 @@ Target length: 2:30–3:00. Terminal font large enough to read; no browser neede
 ## Scene 1 — Installed product, offline (≈ 20 s) — CURRENT
 
 ```sh
-export B=/tmp/erebus-m8-acceptance.bwHulH/environment/bin
+export B=/tmp/erebus-m8-acceptance.bwHulH/dev5-install/bin
 printf '%s' '{"method":"version"}' | "$B/erebus-negotiate"
 printf '%s' '{"method":"version"}' | "$B/erebus-payment"
 ```

@@ -10,13 +10,13 @@ records, the x402 record, the demo plan, and the submission gates into one statu
 
 ## Current status
 
-M8 is **not complete**. `0.3.0.dev4` is published on the separate Metropolis index and was verified
-from a fresh install on macOS arm64, and several team-operated live Monad testnet payments are
-recorded, including the x402 `exact` Permit2 rail and a full public-bound workflow (2026-10-05),
-each with seller restart, resource recovery, and independent auditor `payment_verified: true`. The
-live public-bound run used
-**unreleased source fixes** for concurrent observation, moving-chain catch-up, and agreement-lifetime
-validation that are not part of the published `0.3.0.dev4` artifacts. Shielded settlement has
+M8 is **not complete**. `0.3.0.dev5` is published on the separate Metropolis index, qualified on
+both platforms, and verified from a fresh public install; `0.3.0.dev4` remains served by the
+cumulative index. Team-operated live Monad testnet payments are recorded on both rails, including
+the x402 `exact` Permit2 rail and a full public-bound workflow (2026-10-05), each with seller
+restart, resource recovery, and independent auditor `payment_verified: true`. The live public-bound
+run used the concurrent-observation, moving-chain catch-up, and agreement-lifetime fixes, which are
+now released in `0.3.0.dev5`. Shielded settlement has
 **not run on Monad**: suite-2 settlement, scoped disclosure, and the two-agent MCP delivery loop
 have local Anvil evidence only, with known-entropy test keys and test-only proving artifacts. The
 public-bound and x402 rails expose terms and payment metadata on chain (details below). External
@@ -59,6 +59,7 @@ independent external acceptance.
 
 | Artifact | Identity | Status |
 |---|---|---|
+| `0.3.0.dev5` | Built from clean `06a3420` by registry run 37372823994; both platforms and the comparison passed; fresh public install outside the checkout verified imports and all 14 native binaries plus the launcher against the manifest | Published as a GitHub prerelease on `PoulavBhowmick03/erebus-metropolis`; served by the cumulative HTTPS index, which still serves `0.3.0.dev4` |
 | `0.3.0.dev4` | Built from clean `e9f10d0` by registry run 37186885901; both platforms and the isolated installed x402 rehearsals passed; four deduplicated wheels plus combined `release-manifest.json` | Published as a GitHub prerelease on `PoulavBhowmick03/erebus-metropolis`; HTTPS index `https://poulavbhowmick03.github.io/erebus-metropolis/simple/`; index links each wheel by SHA-256 |
 | `0.3.0.dev1` | `f4714bb`, run 37180669150 | Not publishable: macOS wheel tagged `py3-none-macosx_10_9_universal2` while all 13 native binaries were thin arm64 with `minos 11.0` |
 | `0.3.0.dev2` | `cbfc2e5`, run 37182102672 | Both platforms and the comparison passed, but no wheel shipped a license; not published. `171be31` added Apache-2.0 `LICENSE` to every wheel and `THIRD_PARTY_NOTICES` for all 706 linked crates |
@@ -209,12 +210,12 @@ revocation. Monad deployment and package-only installation remained M8 work.
 **M8 (2026-10-02 to 2026-10-05).** `ErebusSettlement` was deployed to Monad testnet and its identity
 verified against the reviewed artifact. Native negotiation, payment, access, disclosure, local
 proving, MCP, and self-hosting components were built and tested on Anvil, then packaged in a
-separate registry; `0.3.0.dev4` is published and fresh-install verified. Live team-operated runs
+separate registry; `0.3.0.dev5` is published and fresh-install verified, and `0.3.0.dev4` remains installable. Live team-operated runs
 completed the x402 `exact` rail and the full public-bound workflow, both with restart recovery and
 independent auditor payment verification. M8 is still not complete: no independent external
 acceptance, no hosted services (Render files are prepared and tested only; paid provisioning is not
 authorized), no demo video, no live shielded Monad settlement, and the concurrent-observation,
-moving-chain catch-up, and lifetime-validation fixes are uncommitted source, not in `0.3.0.dev4`.
+moving-chain catch-up, and lifetime-validation fixes are released in `0.3.0.dev5`.
 
 ## Decisions appendix
 
@@ -326,8 +327,8 @@ production artifacts; its gate remains open.
 | DM8-11 | x402 `exact` | The x402 scheme is `exact`, for now. |
 | DM8-12 | Buyer evidence directory | Combined MCP mode enables `retrieve_service_access` when `EREBUS_ACCESS_SERVICE_URL` is set and fixes the evidence directory to `<state_root>/agent`; a different `EREBUS_ACCESS_EVIDENCE_DIR` is rejected. |
 | DM8-13 | x402 `exact` over Permit2 | Separate `x402-exact` mode through canonical `x402ExactPermit2Proxy`, seller-facilitated; the Permit2 nonce is the deal nullifier, so `(buyer, deal)` can pay once and cross-rail double payment is prevented by binding the agreement domain to the exact proxy. **Binding implementation choice: owner review pending.** Exposure is listed in the claims boundary below. |
-| DM8-14 | Paired observation uses one shared finalized snapshot | Owner review pending (source fix, 2026-10-04): honest providers may report different current tips and finalized heights while agreeing on canonical history; requiring identical tips stalled the live scan. Paired observation derives one shared snapshot (the lower finalized and lower head of the two providers) and requires identical canonical blocks at those heights. Runtime pins, canonical hashes, complete history, and nonce agreement are unchanged; a falsified nonce, a finalized-ahead-of-head answer, or a different canonical hash still fails closed. The harness also bounds polling and requires the agreement lifetime to cover the verification window plus settlement/delivery. Uncommitted source; not in `0.3.0.dev4`. |
-| DM8-15 | Bounded observation issues contiguous ranges concurrently | Owner review pending (source fix, 2026-10-05): buyer, seller, and auditor each paid a sequential deployment-to-head scan bounded by the public RPC's 100-block `eth_getLogs` cap. `ObservationLimits` gained `max_concurrent_queries` (1..=32, hard ceiling 32, default 8); one window of contiguous, non-overlapping ranges runs concurrently and the durable checkpoint advances only after every query in the window succeeds. The scan start is unchanged, no range is skipped, and a missing response is never absence evidence. Ancestry walks the same canonical blocks in bounded concurrent windows with the same parent-hash, timestamp, and anchor checks. A pending-history reply reports durable `broadcast_attempts` and `stage`; the harness resumes read-only catch-up and calls `settle` again only with zero attempts, and observes only after any attempt, ambiguous submission, or missing diagnostic. The Rust expiry rules, canonical anchors, runtime pins, exact payment binding, and the one-payment fence are unchanged. Measured on the Monad public RPC: 48 queries took 51.7 s sequentially and 6.4 s at concurrency 16, about 21 minutes of log-query time for the live range (authentication, ancestry, retries, seller verification, and auditing are separate). Uncommitted source; not in `0.3.0.dev4`. |
+| DM8-14 | Paired observation uses one shared finalized snapshot | Owner review pending (source fix, 2026-10-04): honest providers may report different current tips and finalized heights while agreeing on canonical history; requiring identical tips stalled the live scan. Paired observation derives one shared snapshot (the lower finalized and lower head of the two providers) and requires identical canonical blocks at those heights. Runtime pins, canonical hashes, complete history, and nonce agreement are unchanged; a falsified nonce, a finalized-ahead-of-head answer, or a different canonical hash still fails closed. The harness also bounds polling and requires the agreement lifetime to cover the verification window plus settlement/delivery. Released in `0.3.0.dev5`. |
+| DM8-15 | Bounded observation issues contiguous ranges concurrently | Owner review pending (source fix, 2026-10-05): buyer, seller, and auditor each paid a sequential deployment-to-head scan bounded by the public RPC's 100-block `eth_getLogs` cap. `ObservationLimits` gained `max_concurrent_queries` (1..=32, hard ceiling 32, default 8); one window of contiguous, non-overlapping ranges runs concurrently and the durable checkpoint advances only after every query in the window succeeds. The scan start is unchanged, no range is skipped, and a missing response is never absence evidence. Ancestry walks the same canonical blocks in bounded concurrent windows with the same parent-hash, timestamp, and anchor checks. A pending-history reply reports durable `broadcast_attempts` and `stage`; the harness resumes read-only catch-up and calls `settle` again only with zero attempts, and observes only after any attempt, ambiguous submission, or missing diagnostic. The Rust expiry rules, canonical anchors, runtime pins, exact payment binding, and the one-payment fence are unchanged. Measured on the Monad public RPC: 48 queries took 51.7 s sequentially and 6.4 s at concurrency 16, about 21 minutes of log-query time for the live range (authentication, ancestry, retries, seller verification, and auditing are separate). Released in `0.3.0.dev5`. |
 
 **Open release decisions:** secure shielded artifacts, ceremony evidence, and authenticated verifier
 deployment; hosting and publishing the Metropolis registry (channel decided in DM8-9), platform
@@ -381,7 +382,7 @@ source.
 - [ ] Independent external auditor verification with participant state unavailable. A team-operated
   re-verification of the live x402 payment with the participant paths withheld verified
   `payment_verified: true` (2026-10-05); the auditor and operator were still the same team.
-- [ ] An external third-party fresh-environment rehearsal. The `0.3.0.dev4` channel exists at
+- [ ] An external third-party fresh-environment rehearsal. The `0.3.0.dev5` channel exists at
   `https://poulavbhowmick03.github.io/erebus-metropolis/simple/` and a team-operated public install
   was verified on macOS arm64 (2026-10-04); no third party has run it. Linux qualification is
   CI-only.

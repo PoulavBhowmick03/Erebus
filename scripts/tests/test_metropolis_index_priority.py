@@ -20,7 +20,7 @@ INDEX = "https://poulavbhowmick03.github.io/erebus-metropolis/simple/"
 
 def documented_install(path):
     lines = path.read_text().replace("\\\n", "").splitlines()
-    line = next(line for line in lines if line.startswith("uv pip install") and "0.3.0.dev4" in line)
+    line = next(line for line in lines if line.startswith("uv pip install") and "erebus-mcp-server==" in line)
     return shlex.split(line)
 
 

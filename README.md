@@ -36,7 +36,7 @@ acceptance, and no shielded payment has run on Monad.
 
 ### Install the published Metropolis packages
 
-`0.3.0.dev4` is published as a prerelease on a separate Metropolis index (the stable Starknet
+`0.3.0.dev5` is published as a prerelease on a separate Metropolis index (the stable Starknet
 index is unrelated). With [uv](https://docs.astral.sh/uv/) and Python 3.11+:
 
 ```sh
@@ -45,7 +45,7 @@ uv pip install --python erebus-metropolis/bin/python \
   --no-config \
   --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
   --default-index https://pypi.org/simple --index-strategy first-index \
-  "erebus-mcp-server==0.3.0.dev4"
+  "erebus-mcp-server==0.3.0.dev5"
 ```
 
 Use uv with the index order above. Metropolis takes priority; PyPI supplies missing dependencies.
@@ -92,8 +92,8 @@ and review of the Metropolis work. AI-generated code requires human review and d
 not establish security or release readiness. The pre-existing Starknet/STRK20
 implementation is prior work; the Metropolis roadmap records the new branch work.
 
-The `metropolis` branch targets a developer/agent product on Monad testnet. `0.3.0.dev4` is a
-published prerelease and one team-operated live x402 payment exists, but this is not yet a
+The `metropolis` branch targets a developer/agent product on Monad testnet. `0.3.0.dev5` is a
+published prerelease and both rails have team-operated live Monad runs, but this is not yet a
 shipped or externally accepted Monad release.
 The goal is for an external developer or marketplace to integrate agents, negotiate privately, settle, disclose one deal, and recover failures.
 The [Metropolis roadmap](./docs/metropolis-roadmap.md) defines the milestones and acceptance criteria.
@@ -112,10 +112,9 @@ Local development components now include [hash-checked local proving](./docs/met
 [buyer-authenticated snapshot access](./docs/metropolis-operations.md#4-seller-access-service),
 [native private negotiation](./docs/metropolis-operations.md#5-negotiation-command),
 and [durable public-bound payment](./docs/metropolis-operations.md#3-buyer-payment-and-recovery).
-The x402 rail has a published-package live Monad run; the rest have local test evidence or the
-earlier public-bound example. The private/shielded path is not a released Monad product, and the
-RPC-lag and polling fixes described in the M8 progress notes are uncommitted source, not part of
-`0.3.0.dev4`.
+Both rails have published-package live Monad runs; the private/shielded path is not a released
+Monad product, and the observation, catch-up, and lifetime fixes described in the
+[status](./docs/metropolis-status.md) are released in `0.3.0.dev5`.
 
 ## Four settlements on mainnet
 
