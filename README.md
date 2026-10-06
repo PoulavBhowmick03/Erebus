@@ -67,6 +67,8 @@ See [dated evidence and remaining gates](./docs/metropolis-status.md).
 The [status and acceptance gates](./docs/metropolis-status.md) record the rubric and mandatory evidence gates.
 An outside developer can run the [external acceptance handoff](./docs/metropolis-external-acceptance.md);
 it has not yet been run by a third party.
+The [demo script](./docs/metropolis-demo.md) is recording-ready with real captured output; the video
+recording is pending and no video is linked until it exists.
 No Metropolis demo video, hosted service, or third-party external rehearsal is claimed complete.
 
 ### Local Monad-Backend Rehearsal

@@ -386,7 +386,8 @@ source.
   `https://poulavbhowmick03.github.io/erebus-metropolis/simple/` and a team-operated public install
   was verified on macOS arm64 (2026-10-04); no third party has run it. Linux qualification is
   CI-only.
-- [ ] A recorded Monad demo, linked from the README and submission.
+- [ ] A recorded Monad demo, linked from the README and submission. The recording-ready script
+  with real captured output is [Demo Script](metropolis-demo.md); the video itself is pending.
 - [ ] Hosted services. Render deployment files are prepared and tested only; paid provisioning is
   not authorized and no hosted service exists.
 - [ ] Inclusion and finality observation timings on live Monad, not differences between block
