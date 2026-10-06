@@ -2137,3 +2137,22 @@ invalidated by the next refresh, nor that the catch-up cost is proportional to t
 the snapshot. An operator sees only `history_pending`. A documented "the scan is a lease on a
 snapshot; settlement refreshes it" rule, or a scan design that keeps a rolling verified prefix
 closer to the tip, would have made this obvious before a live run.
+
+## F58: The Metropolis rail leaves no room for agent-side price policy (2026-10-06)
+
+**What we were trying to do.** Run a procurement scenario where the buyer agent enforces a
+maximum unit price and the supplier agent a floor, over the Metropolis MCP servers.
+
+**What the stack did instead.** `negotiate_deal` takes only an operation ID. The role, price
+policy, and keys come from each operator's owner-only configuration file, and negotiation runs
+in Rust. The agent layer can sequence calls but cannot propose, counter, or reject a price.
+
+**Whether we worked around it.** Partly. The scenario's price logic runs on the mock client
+through the existing offer policies, and the auditor's compliance check (settled, consistent,
+under the buyer's ceiling) is a pure function over a disclosed record. On the Metropolis rail the
+ceiling lives in the operator's file, so the agent has nothing to enforce.
+
+**What would have made it easier.** A way for the agent to pass bounded parameters, such as a
+maximum total, into `negotiate_deal` that Rust checks against the operator policy, or a
+documented statement that price policy is operator-only on this rail.
+
