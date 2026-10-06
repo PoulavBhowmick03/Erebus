@@ -87,6 +87,30 @@ broadcast response, and retrieves the resource. It is a local rehearsal, not a
 live Monad interaction. The live path needs separate participant keys, two RPC
 providers, test-token allowance, faucet gas, and the configuration in the runbooks.
 
+### Use Cases
+
+Both fit the current mechanism: two known parties, one payment from the buyer, an off-chain
+deliverable, and disclosure of one deal.
+
+**Procurement with an audit.** A buyer agent holds a requisition (item, quantity, maximum unit
+price). A supplier agent holds a catalog floor. They negotiate a total, the buyer pays once, and
+the buyer grants an auditor a scoped disclosure of that deal. The auditor passes it only if it
+settled, paid what was agreed, and stayed under the buyer's ceiling.
+
+```sh
+uv run python agents/src/erebus_agents/procurement_demo.py --latency 0
+```
+
+This rehearsal runs on the mock client. On the Metropolis rail each operator's files fix the
+price policy, so the agents there supply only the operation ID; see `docs/friction.md` F58.
+`erebus_agents.metropolis_audit.drive_audit` is the auditor's side over the disclosure MCP server.
+
+**Paid API or compute purchase.** The buyer negotiates a price and retrieves the resource through
+the `x402-exact` profile of `metropolis_loop.py`. The seller submits the payment, and only an
+independent auditor verifies it.
+
+Public-bound payments expose the accepted terms and parties. Neither case proves delivery.
+
 ### AI-Assisted Development
 
 Claude, Codex, and OpenCode have assisted with implementation, tests, documentation,
