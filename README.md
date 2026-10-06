@@ -94,20 +94,32 @@ deliverable, and disclosure of one deal.
 
 **Procurement with an audit.** A buyer agent holds a requisition (item, quantity, maximum unit
 price). A supplier agent holds a catalog floor. They negotiate a total, the buyer pays once, and
-the buyer grants an auditor a scoped disclosure of that deal. The auditor passes it only if it
-settled, paid what was agreed, and stayed under the buyer's ceiling.
+one participant grants an auditor a scoped disclosure of that deal. The auditor passes it only if
+it settled, paid what was agreed, and stayed under the buyer's ceiling.
 
 ```sh
 uv run python agents/src/erebus_agents/procurement_demo.py --latency 0
 ```
 
-This rehearsal runs on the mock client. On the Metropolis rail each operator's files fix the
-price policy, so the agents there supply only the operation ID; see `docs/friction.md` F58.
-`erebus_agents.metropolis_audit.drive_audit` is the auditor's side over the disclosure MCP server.
+That rehearsal runs on the mock client. On the Metropolis rail each operator's files fix the
+price policy, so the deal agents supply only the operation ID (`docs/friction.md` F58). After a
+deal settles, the real disclosure step runs against the participant's durable state:
+
+```sh
+uv run python agents/src/erebus_agents/metropolis_audit.py --operation <op> \
+  --expected-issuer <issuer identity> --expected-commitment <deal commitment> \
+  --issuer-dir <dir> --auditor-dir <fresh dir> --state-root <issuer state> --store-root <store> \
+  --namespace eip155:10143 --issuer-key-file <issuer agreement key> --deployment <deployment.json>
+```
+
+The issuer selects the deal and exports a grant to the auditor's public key. The auditor, with only
+that grant and its own key, verifies the agreement offline and, with `--deployment`, the payment
+against chain data. A payment check that stays pending is not evidence of non-payment, and delivery
+is never verified.
 
 **Paid API or compute purchase.** The buyer negotiates a price and retrieves the resource through
 the `x402-exact` profile of `metropolis_loop.py`. The seller submits the payment, and only an
-independent auditor verifies it.
+independent auditor verifies it, with the same disclosure step.
 
 Public-bound payments expose the accepted terms and parties. Neither case proves delivery.
 

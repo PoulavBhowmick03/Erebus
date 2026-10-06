@@ -37,8 +37,9 @@ seller-authored offer.
 - `procurement.py`. A buyer's `Requisition`, a supplier's `Catalog`, and `review_disclosure`,
 the auditor's check that a disclosed deal settled, paid what was agreed, and stayed under the
 ceiling. `procurement_demo.py` rehearses it on the mock client.
-- `metropolis_audit.py`. `drive_audit()`: the auditor's side over the disclosure MCP server.
-It never reports delivery as verified.
+- `metropolis_audit.py`. The real disclosure step over the disclosure MCP servers: an issuer
+selects and exports one deal to the auditor's key, the auditor verifies the agreement and polls
+the payment check. It never reports delivery as verified. Also a CLI.
 - `demo.py` / `demo_mcp.py`, the two CLI entry points above.
 
 ## Where it sits
