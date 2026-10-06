@@ -115,7 +115,8 @@ uv run python agents/src/erebus_agents/metropolis_audit.py --operation <op> \
 The issuer selects the deal and exports a grant to the auditor's public key. The auditor, with only
 that grant and its own key, verifies the agreement offline and, with `--deployment`, the payment
 against chain data. A payment check that stays pending is not evidence of non-payment, and delivery
-is never verified.
+is never verified. Evidence and grant files are create-new; re-issuing a grant takes fresh
+`--evidence-name` and `--grant-name` values.
 
 **Paid API or compute purchase.** The buyer negotiates a price and retrieves the resource through
 the `x402-exact` profile of `metropolis_loop.py`. The seller submits the payment, and only an

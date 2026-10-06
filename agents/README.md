@@ -35,11 +35,12 @@ seller-authored offer.
 - `intents.py`. Durable mode-`0600` agent intent records. Each record binds one operation ID
   to one canonical MCP write before the call starts.
 - `procurement.py`. A buyer's `Requisition`, a supplier's `Catalog`, and `review_disclosure`,
-the auditor's check that a disclosed deal settled, paid what was agreed, and stayed under the
-ceiling. `procurement_demo.py` rehearses it on the mock client.
+  the auditor's check that a disclosed deal settled, paid what was agreed, and stayed under the
+  ceiling. `procurement_demo.py` rehearses it on the mock client.
 - `metropolis_audit.py`. The real disclosure step over the disclosure MCP servers: an issuer
-selects and exports one deal to the auditor's key, the auditor verifies the agreement and polls
-the payment check. It never reports delivery as verified. Also a CLI.
+  selects and exports one deal to the auditor's key, the auditor verifies the agreement and polls
+  the payment check. It never reports delivery as verified. Evidence and grant files are
+  create-new, so re-issuing takes fresh `--evidence-name`/`--grant-name` values. Also a CLI.
 - `demo.py` / `demo_mcp.py`, the two CLI entry points above.
 
 ## Where it sits

@@ -5,7 +5,8 @@ import asyncio
 import pytest
 
 from erebus_agents.metropolis_audit import (
-    auditor_public_key, disclosure_params, drive_audit, issue_grant)
+    AUDITOR_TOOLS, ISSUER_TOOLS, PAYMENT_TOOL, auditor_public_key, disclosure_params, drive_audit,
+    issue_grant, normalize_commitment, normalize_issuer, require_tool_surface)
 from erebus_agents.metropolis_loop import HarnessError
 
 COMMITMENT = "cd" * 32
@@ -114,3 +115,31 @@ def test_only_the_issuer_server_gets_issuer_settings_and_only_the_auditor_gets_a
     assert "EREBUS_DISCLOSURE_ISSUER_KEY_FILE" not in auditor.env
     assert auditor.env["EREBUS_DISCLOSURE_CLI"] == "/bin/disclosure"
     assert "x402_exact" in auditor.env["EREBUS_DISCLOSURE_DEPLOYMENT"]
+
+
+def test_an_auditor_server_that_exposes_issuer_tools_is_rejected():
+    with pytest.raises(HarnessError, match="issuer tools"):
+        require_tool_surface("auditor", AUDITOR_TOOLS | ISSUER_TOOLS)
+
+
+def test_the_payment_tool_is_required_exactly_when_payment_is_verified():
+    require_tool_surface("auditor", AUDITOR_TOOLS)
+    require_tool_surface("auditor", AUDITOR_TOOLS | {PAYMENT_TOOL}, verify_payment=True)
+    with pytest.raises(HarnessError, match="payment"):
+        require_tool_surface("auditor", AUDITOR_TOOLS, verify_payment=True)
+
+
+def test_an_issuer_server_without_selection_and_export_is_rejected():
+    require_tool_surface("issuer", ISSUER_TOOLS)
+    with pytest.raises(HarnessError, match="missing"):
+        require_tool_surface("issuer", {"select_deal_disclosure"})
+
+
+@pytest.mark.parametrize("pasted", ["cd" * 32, "0x" + "CD" * 32])
+def test_a_pasted_commitment_is_normalized(pasted):
+    assert normalize_commitment(pasted) == COMMITMENT
+
+
+@pytest.mark.parametrize("pasted", ["ab" * 20, "0x" + "AB" * 20])
+def test_a_pasted_issuer_identity_is_normalized(pasted):
+    assert normalize_issuer(pasted) == "0x" + "ab" * 20

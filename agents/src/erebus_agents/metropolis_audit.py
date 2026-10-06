@@ -26,14 +26,50 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from erebus_agents.metropolis_loop import HarnessError, ToolSession, _structured
 
 FLAGS = ("agreement_verified", "payment_verified", "delivery_verified", "deal_commitment")
-ISSUER_TOOLS = {"select_deal_disclosure", "export_deal_disclosure"}
-AUDITOR_TOOLS = {"create_disclosure_key", "disclosure_key_info", "verify_disclosed_agreement"}
+ISSUER_TOOLS = frozenset({"select_deal_disclosure", "export_deal_disclosure"})
+AUDITOR_TOOLS = frozenset({"create_disclosure_key", "disclosure_key_info", "verify_disclosed_agreement"})
+PAYMENT_TOOL = "verify_disclosed_payment"
 
 
 def _result(reply: dict[str, Any], failure: str) -> dict[str, Any]:
     if not reply.get("ok"):
-        raise HarnessError(failure)
+        error = reply.get("error")
+        detail = error.get("message") if isinstance(error, dict) else None
+        raise HarnessError(f"{failure}: {detail}" if detail else failure)
     return reply["result"]
+
+
+def require_tool_surface(role: str, tools: set[str], *, verify_payment: bool = False) -> None:
+    """Fail closed when a server is misconfigured for its side of the disclosure.
+
+    An auditor that exposes issuer tools holds selection and export; that is the issuer's step.
+    """
+    if role == "issuer":
+        missing = ISSUER_TOOLS - tools
+        if missing:
+            raise HarnessError(f"issuer server is missing tools: {sorted(missing)}")
+        return
+    if role != "auditor":
+        raise ValueError("role must be issuer or auditor")
+    exposed = ISSUER_TOOLS & tools
+    if exposed:
+        raise HarnessError(f"auditor server exposes issuer tools: {sorted(exposed)}")
+    required = AUDITOR_TOOLS | ({PAYMENT_TOOL} if verify_payment else set())
+    missing = required - tools
+    if missing:
+        raise HarnessError(f"auditor server is missing tools: {sorted(missing)}")
+
+
+def normalize_commitment(text: str) -> str:
+    """Accept a pasted commitment in either casing, with or without the `0x` prefix."""
+    digits = text[2:] if text[:2].lower() == "0x" else text
+    return digits.lower()
+
+
+def normalize_issuer(text: str) -> str:
+    """Accept a pasted participant identity in either casing, with or without the `0x` prefix."""
+    digits = text[2:] if text[:2].lower() == "0x" else text
+    return f"0x{digits.lower()}"
 
 
 async def drive_audit(auditor: ToolSession, grant_name: str, expected_issuer: str, *,
@@ -100,22 +136,21 @@ def disclosure_params(python: str, directory: str, *, cli: str | None = None, de
 
 async def run_disclosure(issuer_params: StdioServerParameters, auditor_params: StdioServerParameters,
                          operation_ref: str, expected_issuer: str, *, issuer_dir: Path, auditor_dir: Path,
-                         grant_name: str = "deal.grant", verify_payment: bool = False,
-                         expected_commitment: str | None = None, grant_seconds: int = 3600,
-                         **options: Any) -> dict[str, Any]:
+                         grant_name: str = "deal.grant", evidence_name: str | None = None,
+                         verify_payment: bool = False, expected_commitment: str | None = None,
+                         grant_seconds: int = 3600, **options: Any) -> dict[str, Any]:
     async with AsyncExitStack() as stack:
         sessions = []
-        for params, allowed in ((issuer_params, ISSUER_TOOLS), (auditor_params, AUDITOR_TOOLS)):
+        for params, role in ((issuer_params, "issuer"), (auditor_params, "auditor")):
             read, write = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             tools = {tool.name for tool in (await session.list_tools()).tools}
-            if not allowed <= tools:
-                raise HarnessError(f"unexpected tool surface: {sorted(tools)}")
+            require_tool_surface(role, tools, verify_payment=verify_payment)
             sessions.append(session)
         issuer, auditor = sessions
         key = await auditor_public_key(auditor)
-        await issue_grant(issuer, operation_ref, key, evidence_name=f"{operation_ref}.evidence",
+        await issue_grant(issuer, operation_ref, key, evidence_name=evidence_name or f"{operation_ref}.evidence",
                           grant_name=grant_name, grant_seconds=grant_seconds)
         # The grant is the only artifact that crosses from issuer to auditor.
         shutil.copyfile(issuer_dir / grant_name, auditor_dir / grant_name)
@@ -132,6 +167,9 @@ def main() -> None:
     parser.add_argument("--expected-commitment", help="deal commitment printed by the deal run")
     parser.add_argument("--issuer-dir", type=Path, required=True)
     parser.add_argument("--auditor-dir", type=Path, required=True)
+    parser.add_argument("--evidence-name", help="issuer evidence filename; default <operation>.evidence")
+    parser.add_argument("--grant-name", default="deal.grant",
+                        help="grant filename; artifact writers refuse to replace an existing file")
     parser.add_argument("--state-root", required=True)
     parser.add_argument("--store-root", required=True)
     parser.add_argument("--namespace", required=True)
@@ -146,12 +184,15 @@ def main() -> None:
     issuer = {"state_root": args.state_root, "store_root": args.store_root,
               "namespace": args.namespace, "issuer_key_file": args.issuer_key_file}
     common = {"cli": args.disclosure_cli, "server_command": args.server_command}
+    expected_commitment = normalize_commitment(args.expected_commitment) if args.expected_commitment else None
     try:
         report = asyncio.run(run_disclosure(
             disclosure_params(sys.executable, str(args.issuer_dir), issuer=issuer, **common),
             disclosure_params(sys.executable, str(args.auditor_dir), deployment=deployment, **common),
-            args.operation, args.expected_issuer, issuer_dir=args.issuer_dir, auditor_dir=args.auditor_dir,
-            verify_payment=deployment is not None, expected_commitment=args.expected_commitment,
+            args.operation, normalize_issuer(args.expected_issuer),
+            issuer_dir=args.issuer_dir, auditor_dir=args.auditor_dir,
+            evidence_name=args.evidence_name, grant_name=args.grant_name,
+            verify_payment=deployment is not None, expected_commitment=expected_commitment,
             grant_seconds=args.grant_seconds, max_polls=args.max_polls))
     except BaseException as error:
         from erebus_agents.metropolis_loop import _harness_error
@@ -159,7 +200,7 @@ def main() -> None:
         found = _harness_error(error)
         if found is None:
             raise
-        print(json.dumps({"payment_verified": False, "error": str(found)}))
+        print(json.dumps({"payment_verified": False if deployment is not None else None, "error": str(found)}))
         raise SystemExit(1) from None
     print(json.dumps(report))
 
