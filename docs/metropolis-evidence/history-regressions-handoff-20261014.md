@@ -65,3 +65,54 @@ separate follow-up and must not be added as a last-minute release change.
 Incorporate both files into the corrected branch and rerun them there, preserving every
 assertion. If a corrected behavior legitimately changes a pinned classification, record the new
 evidence and adjust the assertion explicitly rather than weakening it silently.
+
+## Addendum 2026-10-14: binary rate bounds and shared-account semantics
+
+Two further scoped test files were added on this branch.
+
+### `sdk/shielded/tests/rate_config_bounds.rs` (`39460561db443e7942e9b01913beda84303c0700ae5cd06ae3a94d129d564fa3`)
+
+Drives the actual `erebus-payment` and `erebus-wallet` binaries with counting mock providers:
+
+- primary and peer rates 0 and 41 are each rejected **before any read, signing or broadcast**
+  (zero requests observed; the payment binary names the rate error, the wallet binary fails
+  config validation);
+- rates 1 and 40, and omitted fields, pass the config gate (the failure that follows is later
+  state, not the rate error), and neither binary signs or broadcasts;
+- default-40 behavior is pinned at the library level in `rate_controls.rs`.
+
+Scope gap recorded: reaching the diagnostics/read path after acceptance needs a funded
+coordinator/wallet state (funded fixtures), so the binary acceptance assertions stop at
+"config gate passed". The binary-level 1..=40 cap is proven for both binaries; the
+omitted-field default (40) is proven at the library level only.
+
+### `sdk/shielded/tests/relayer_shared_account.rs` (`a7ce9a0f3a0603ea6d2ac324204f73b6281969eac9201010df0ac7673fd38fbe`)
+
+- `execution_lock_is_exclusive_per_sponsor_root_and_releases_on_drop`: pins the exclusion
+  mechanism behind `RelayJournal::try_execution_lock` that `SponsoredRelay` maps to
+  `SponsorError::Busy` (HTTP 503, "relay busy; retain the operation"): a second holder on the
+  same sponsor root sees contention, a different root does not, and the lock releases on drop.
+
+Coverage that remains in crate-private unit suites (run and recorded, not duplicated):
+`cargo test --lib relay_` -> 22 passed, including the concurrent-callers one-signer/one-initial
+-send journal behavior, sponsor write-fault fencing and copied-proof conflicts;
+`cargo test --lib relay_http` -> quota persistence across restart, duplicate reservation,
+corruption/deleted-quota fail-closed and bearer authentication.
+
+Scope gap recorded: an end-to-end assertion of one broadcast, one sponsor nonce allocation and
+the HTTP 503 busy state through the installed relayer binary exists only in the unmerged
+relayer-fixture candidate (`sdk/shielded/tests/relayer_binary.rs`, chain-10143 fixture); it is
+not on this branch. No queued/busy semantics were invented; the documented 503 mapping is used
+as-is.
+
+Commands:
+
+```sh
+cargo test --release --locked --manifest-path sdk/shielded/Cargo.toml --test rate_config_bounds
+cargo test --release --locked --manifest-path sdk/shielded/Cargo.toml --test relayer_shared_account
+cargo test --release --locked --manifest-path sdk/shielded/Cargo.toml --lib relay_ -- --test-threads=1
+cargo clippy --release --locked --manifest-path sdk/shielded/Cargo.toml \
+  --test rate_config_bounds --test relayer_shared_account -- -D warnings
+```
+
+Results: 3 passed (63 s), 1 passed, 22 passed, clippy clean.
