@@ -202,7 +202,9 @@ fn version_one_cache_is_rescanned_before_deal_observation() {
         .save_if_unchanged(&index, None)
         .expect("replace cache");
     let new: Value = serde_json::from_slice(&fs::read(&path).expect("new cache")).expect("JSON");
-    assert_eq!(new["version"], 2);
+    // The rescan replaces the v1 cache with the current segmented format.
+    assert_eq!(new["version"], 3);
+    assert!(new["segments"].is_array());
     assert_eq!(
         store.load().expect("reload").tip().expect("tip").number,
         100
