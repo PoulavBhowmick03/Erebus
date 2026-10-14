@@ -617,8 +617,70 @@ class Pool:
     def sender_of(self, transaction: str) -> str:
         return str((rpc(self.chain.url, "eth_getTransactionByHash", [transaction]) or {}).get("from", "")).lower()
 
-    async def main_pair(self, extended: bool) -> dict:
+    async def prior_history(self, blocks: int) -> dict:
+        """WS1: pool history created before the fresh main pair joins (real proofs, separate keys)."""
+        history = self.operators("history")
+        agent = Agent(history["buyer"])
+        try:
+            await agent.start()
+            funding = await self.fund(agent, history["buyer_address"])
+        finally:
+            await agent.stop()
+        rpc(self.chain.url, "anvil_mine", [hex(blocks)])
+        head = int(str(rpc(self.chain.url, "eth_blockNumber", [])), 16)
+        deadline = time.monotonic() + 180
+        while int(str(rpc(self.chain.url, "eth_getBlockByNumber", ["finalized", False])["number"]), 16) <= head:
+            require(time.monotonic() < deadline, "finality did not pass the prior history")
+            time.sleep(0.5)
+        return {"funding_broadcasts": funding["funding_broadcasts"], "empty_blocks": blocks, "head_before_join": head}
+
+    def checkpoint_participants(self, operators: dict) -> dict:
+        """WS1: explicit fresh-participant checkpoints, then the record placed for the seller access state."""
+        result = {}
+        for role in ("buyer", "seller"):
+            directory = operators[role]
+            reply = self.installed.native("erebus-wallet", {"method": "checkpoint", "confirm_fresh_wallet": True,
+                                                            "config_file": str(directory / "wallet.json")}, directory)
+            require(reply.get("status") == "ok", f"{role} checkpoint: {reply}")
+            result[role] = {key: reply["result"][key] for key in ("checkpoint", "checkpoint_block", "leaf_count",
+                                                                 "history_from_block")}
+        # Generated seller configs keep the access service in its own state root. Placing the same
+        # deployment-bound record there is an operator step until packaging creates it (integration gate).
+        access = json.loads((operators["seller"] / "access.json").read_text())
+        wallet = json.loads((operators["seller"] / "wallet.json").read_text())
+        target = Path(access["state_root"]) / "history-checkpoint.json"
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shutil.copyfile(Path(wallet["state_root"]) / "history-checkpoint.json", target)
+        target.chmod(0o600)
+        result["seller_access_record_placed_by_harness"] = True
+        return result
+
+    def checkpoint_coverage(self, operators: dict, blocks: dict) -> dict:
+        """WS1: every cache the main pair wrote is checkpointed at its own participant's block."""
+        caches = {}
+        buyer_state = Path(json.loads((operators["buyer"] / "wallet.json").read_text())["state_root"])
+        seller_state = Path(json.loads((operators["seller"] / "wallet.json").read_text())["state_root"])
+        seller_access = Path(json.loads((operators["seller"] / "access.json").read_text())["state_root"])
+        candidates = [*((path, blocks["buyer"]) for path in sorted(buyer_state.glob("wallet-index/*.json"))),
+                      *((path, blocks["buyer"]) for path in sorted(buyer_state.glob("payment-observation/*.json"))),
+                      *((path, blocks["seller"]) for path in sorted(seller_state.glob("wallet-index/*.json"))),
+                      *((path, blocks["seller"]) for path in sorted(seller_access.glob("pool-*history.json")))]
+        require(candidates, "no participant pool caches were written")
+        for path, checkpoint_block in candidates:
+            stored = json.loads(path.read_text())
+            first = (stored.get("blocks") or [{}])[0].get("number")
+            require(stored.get("version") == 3 and stored.get("checkpoint", {}).get("block_number") == checkpoint_block
+                    and (first is None or first == checkpoint_block + 1), f"{path.name} is not checkpointed")
+            caches[str(path.relative_to(path.parents[2]))] = {"version": 3, "checkpoint_block": checkpoint_block,
+                                                              "first_scanned_block": first}
+        return caches
+
+    async def main_pair(self, extended: bool, checkpoint_history: int | None = None) -> dict:
         operators = self.operators("main")
+        checkpoint = None
+        if checkpoint_history is not None:
+            checkpoint = {"prior_history": await self.prior_history(checkpoint_history),
+                          "participants": self.checkpoint_participants(operators)}
         health = operators["access"].start()
         buyer, seller = Agent(operators["buyer"]), Agent(operators["seller"])
         try:
@@ -629,6 +691,10 @@ class Pool:
             report["funding"] = await self.fund(buyer, operators["buyer_address"])
             report["denials"] = await self.denials(buyer)
             report["deal"] = await self.deal(buyer, seller, operators)
+            if checkpoint is not None:
+                blocks = {role: checkpoint["participants"][role]["checkpoint_block"] for role in ("buyer", "seller")}
+                checkpoint["coverage"] = self.checkpoint_coverage(operators, blocks)
+                report["checkpoint"] = checkpoint
             if extended:
                 report["timeout_and_reservation"] = await self.timeout_deal(buyer, seller, operators)
                 report["backup_restore"] = await self.backup_restore(buyer, operators)
@@ -693,9 +759,13 @@ class Pool:
         require(exported.get("status") == "ok", f"export: {exported}")
         issuer = "0x" + agreement_key.with_name("agreement.public").read_bytes().hex()
         deployment = json.loads((auditor / "disclosure.json").read_text())
-        verified = self.installed.native("erebus-shielded-disclosure", {
-            "method": "verify_payment", "grant_file": str(grant), "key_file": str(auditor / "auditor.key"),
-            "expected_issuer": issuer, "deployment": deployment}, auditor)
+        # A full-history auditor cache advances in bounded scans; "pending" is progress, never a verdict.
+        for _ in range(60):
+            verified = self.installed.native("erebus-shielded-disclosure", {
+                "method": "verify_payment", "grant_file": str(grant), "key_file": str(auditor / "auditor.key"),
+                "expected_issuer": issuer, "deployment": deployment}, auditor)
+            if verified.get("status") != "pending" or verified.get("payment_verified") is True:
+                break
         require(verified.get("agreement_verified") is True and verified.get("payment_verified") is True
                 and verified.get("delivery_verified") is False, f"auditor: {verified}")
         wrong = self.installed.native("erebus-shielded-disclosure", {
@@ -871,7 +941,11 @@ async def workflow(arguments: argparse.Namespace) -> dict:
         report["pools"] = {}
         for index, name in enumerate(arguments.pools):
             pool = Pool(name, installed, chain, deployment, pins, work, dev_keys, prepublication=prepublication)
-            pool.report["main"] = await pool.main_pair(extended=index == 0 and not arguments.demo_main_only)
+            extended = index == 0 and not arguments.demo_main_only
+            # WS1 rehearsal only when requested; the default call is unchanged.
+            checkpoint_history = getattr(arguments, "checkpoint_fresh_participants", None)
+            pool.report["main"] = await (pool.main_pair(extended=extended) if checkpoint_history is None
+                                         else pool.main_pair(extended=extended, checkpoint_history=checkpoint_history))
             if index == 0 and not arguments.demo_main_only:
                 pool.report["deadline"] = await pool.deadline_pair()
             report["pools"][name] = pool.report
@@ -906,6 +980,8 @@ def bootstrap(arguments: argparse.Namespace) -> int:
         command += ["--prepublication-authorization", str(arguments.prepublication_authorization.resolve())]
     if arguments.demo_main_only:
         command += ["--demo-main-only"]
+    if getattr(arguments, "checkpoint_fresh_participants", None) is not None:
+        command += ["--checkpoint-fresh-participants", str(arguments.checkpoint_fresh_participants)]
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("EREBUS_", "VIRTUAL_ENV", "PYTHON"))}
     environment["PATH"] = f"{bins}:{os.environ.get('PATH', '/usr/bin:/bin')}"
     return subprocess.run(command, env=environment, check=False).returncode
@@ -922,6 +998,9 @@ def main() -> int:
     parser.add_argument("--hold-on-failure", action="store_true", help="keep the loopback chain up for diagnosis")
     parser.add_argument("--demo-main-only", action="store_true",
                         help="record the core MCP workflow only; explicitly incomplete and never publication evidence")
+    parser.add_argument("--checkpoint-fresh-participants", type=int, metavar="EMPTY_BLOCKS",
+                        help="WS1 rehearsal: create prior history (one funded pair plus EMPTY_BLOCKS blocks), then "
+                             "checkpoint the fresh main buyer and seller; requires --demo-main-only")
     parser.add_argument("--deployment-journal", type=Path, default=JOURNAL,
                         help="directory with the six signed production deployment transactions (<n>-signed.json)")
     parser.add_argument("--prepublication-authorization", type=Path,
