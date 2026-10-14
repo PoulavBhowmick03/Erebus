@@ -22,7 +22,9 @@ use erebus_evm::{
 };
 use erebus_shielded_prover::{
     artifacts::{ArtifactRelease, InstallOptions, ManifestAuthorization},
+    checkpoint,
     index_store::{IndexDomain, IndexStore},
+    indexer::TreeCheckpoint,
     operations::{
         parse_address, parse_digest32, parse_field, prepare_approve_request, prepare_deposit,
         prepare_unwrap, prepare_withdraw, prepare_wrap, reconcile_finalized_operations,
@@ -42,12 +44,14 @@ mod deposit_requests;
 
 const HELP: &str = "erebus-wallet: explicit installed shielded wallet operations.
 One bounded JSON request on stdin: {\"method\":\"...\", ...}.
-Methods: version, notes, status, sync, approve, wrap, unwrap, deposit, withdraw, resume, replace.
+Methods: version, notes, status, sync, checkpoint, approve, wrap, unwrap, deposit, withdraw, resume, replace.
 Requests use config_file; approve, wrap, unwrap, and deposit also amount; withdraw also commitment and recipient;
 agents must supply operation_ref for approve, wrap, unwrap and deposit and reuse it after interruption;
 resume also identity. Operator configuration pins the chain, pool, asset, artifact manifest
 digest, wallet, signer journal, and two RPC endpoints. Keys and witnesses stay local.
 sync replays verified finalized history and completes observed operations only.
+checkpoint (fresh participants only, confirm_fresh_wallet: true) records a paired, verified finalized
+pool frontier so later scans start after it; it never signs, sends or scans history.
 Exit 2 means history or an operation is still pending/retained; exit 1 is an error.
 No output contains a spend secret, salt, witness, or private key.
 See docs/metropolis-operations.md.";
@@ -64,6 +68,10 @@ enum Request {
     },
     Sync {
         config_file: PathBuf,
+    },
+    Checkpoint {
+        config_file: PathBuf,
+        confirm_fresh_wallet: bool,
     },
     Approve {
         config_file: PathBuf,
@@ -268,7 +276,7 @@ async fn main() {
 fn capabilities() -> Value {
     json!({"protocol":1, "deposit_operation_references":true,
         "funding_operation_references":true, "paired_account_diagnostics":true,
-        "methods":["notes","status","sync","approve","wrap","unwrap","deposit","withdraw","resume","replace"]})
+        "methods":["notes","status","sync","checkpoint","approve","wrap","unwrap","deposit","withdraw","resume","replace"]})
 }
 
 async fn run(request: Request) -> Result<Value, Failure> {
@@ -285,6 +293,18 @@ async fn run(request: Request) -> Result<Value, Failure> {
         Request::Sync { config_file } => {
             let prepared = load(&config_file)?;
             sync(&prepared).await
+        }
+        Request::Checkpoint {
+            config_file,
+            confirm_fresh_wallet,
+        } => {
+            if !confirm_fresh_wallet {
+                return Err(Failure::Error(
+                    "checkpoint requires confirm_fresh_wallet: true for a new participant",
+                ));
+            }
+            let prepared = load(&config_file)?;
+            checkpoint(&prepared).await
         }
         Request::Approve {
             config_file,
@@ -508,12 +528,132 @@ fn index_domain(prepared: &Prepared) -> IndexDomain {
     }
 }
 
+fn recorded_checkpoint(prepared: &Prepared) -> Result<Option<TreeCheckpoint>, Failure> {
+    checkpoint::load(&prepared.config.state_root, index_domain(prepared))
+        .map_err(|_| Failure::Error("history checkpoint record unavailable"))
+}
+
 fn index_store(prepared: &Prepared, name: &str) -> Result<IndexStore, Failure> {
-    IndexStore::new(
+    IndexStore::with_checkpoint(
         prepared.config.state_root.join("wallet-index").join(name),
         index_domain(prepared),
+        recorded_checkpoint(prepared)?,
     )
     .map_err(|_| Failure::Error("wallet index unavailable"))
+}
+
+/// Every store that can hold history for this participant. All must be empty for a checkpoint.
+fn history_bearing_paths(prepared: &Prepared) -> Vec<PathBuf> {
+    let root = &prepared.config.state_root;
+    vec![
+        root.join("wallet-index"),
+        root.join("wallet-operations"),
+        root.join("deposit-requests"),
+        root.join("coordinator"),
+        root.join("payment-observation"),
+        root.join("pool-history.json"),
+        root.join("pool-peer-history.json"),
+        root.join("public-history"),
+        prepared.config.signer_journal_root.clone(),
+    ]
+}
+
+fn require_fresh(prepared: &Prepared) -> Result<(), Failure> {
+    checkpoint::require_fresh_paths(&history_bearing_paths(prepared)).map_err(
+        |error| match error {
+            checkpoint::CheckpointError::NotFresh(reason) => Failure::Error(reason),
+            _ => Failure::Error("participant state could not be inspected"),
+        },
+    )?;
+    let snapshot = wallet(prepared)?
+        .snapshot()
+        .map_err(|_| Failure::Error("encrypted wallet unreadable; refusing checkpoint"))?;
+    if !snapshot.is_empty() {
+        return Err(Failure::Error(
+            "wallet holds notes or reservations; a checkpoint would hide history",
+        ));
+    }
+    Ok(())
+}
+
+fn checkpoint_view(checkpoint: &TreeCheckpoint, persisted: &str) -> Value {
+    json!({
+        "checkpoint": persisted,
+        "checkpoint_block": checkpoint.block_number,
+        "checkpoint_hash": hex::encode(checkpoint.block_hash),
+        "leaf_count": checkpoint.leaf_count,
+        "root": hex::encode(checkpoint.root),
+        "history_from_block": checkpoint.block_number + 1,
+        "scope": "pool events before history_from_block are not indexed; deployment-era absence cannot be shown",
+        "payment_verified": false,
+    })
+}
+
+/// Records a paired, verified finalized frontier for a fresh participant. Never signs or sends.
+async fn checkpoint(prepared: &Prepared) -> Result<Value, Failure> {
+    let pins = prepared.config.runtime_pins.as_ref().ok_or(Failure::Error(
+        "a checkpoint requires trusted pool and verifier runtime pins",
+    ))?;
+    let (pool, dependencies) = pins.parse()?;
+    let pins = PoolRuntimePins {
+        pool,
+        poseidon: dependencies.poseidon,
+        deposit: dependencies.deposit,
+        transfer: dependencies.transfer,
+        withdraw: dependencies.withdraw,
+    };
+    let root = &prepared.config.state_root;
+    std::fs::create_dir_all(root).map_err(|_| Failure::Error("state root unavailable"))?;
+    let lock = checkpoint::InitLock::acquire(root).map_err(|error| match error {
+        checkpoint::CheckpointError::Busy => {
+            Failure::Error("another checkpoint initialization is in progress")
+        }
+        _ => Failure::Error("checkpoint lock unavailable"),
+    })?;
+    if let Some(existing) = recorded_checkpoint(prepared)? {
+        // Idempotent: the record already exists; nothing is read from any provider.
+        return Ok(checkpoint_view(&existing, "existing"));
+    }
+    require_fresh(prepared)?;
+    let paired = |url: &str, rate: Option<u32>, message: &'static str| {
+        PoolRpc::with_timeout(
+            url,
+            prepared.chain_id,
+            prepared.pool,
+            Duration::from_secs(prepared.config.timeout_seconds),
+        )
+        .and_then(|rpc| {
+            rpc.with_max_requests_per_second(
+                rate.unwrap_or(erebus_shielded_prover::rpc::DEFAULT_MAX_REQUESTS_PER_SECOND),
+            )
+        })
+        .map_err(|_| Failure::Error(message))
+    };
+    let rpc = paired(
+        &prepared.config.rpc_url,
+        prepared.config.rpc_requests_per_second,
+        "invalid RPC",
+    )?;
+    let peer_rpc = paired(
+        &prepared.config.peer_rpc_url,
+        prepared.config.peer_rpc_requests_per_second,
+        "invalid peer RPC",
+    )?;
+    let acquired = rpc
+        .acquire_checkpoint_agreed(&peer_rpc, index_domain(prepared), pins)
+        .await
+        .map_err(|_| Failure::Error("paired checkpoint acquisition failed"))?;
+    // Nothing may have started using this state root while providers were read.
+    require_fresh(prepared)?;
+    let persisted = checkpoint::persist(root, index_domain(prepared), acquired, &lock)
+        .map_err(|_| Failure::Error("checkpoint record could not be created"))?;
+    Ok(checkpoint_view(
+        &acquired,
+        match persisted {
+            checkpoint::Persisted::Created => "created",
+            checkpoint::Persisted::Existing => "existing",
+        },
+    ))
 }
 
 fn release(prepared: &Prepared) -> Result<ArtifactRelease, Failure> {
@@ -768,6 +908,7 @@ async fn status(prepared: &Prepared) -> Result<Value, Failure> {
             .load()
             .map_err(|_| Failure::Error("wallet checkpoint unavailable"))?;
         let tip = index.tip();
+        let covered = index.covered_through();
         if let Some(tip) = tip {
             if tip.number > account.anchor.number
                 || rpc
@@ -786,14 +927,14 @@ async fn status(prepared: &Prepared) -> Result<Value, Failure> {
                 ));
             }
         }
-        let next = tip.map_or(store.domain().first_block, |tip| {
-            tip.number.saturating_add(1)
+        let next = covered.map_or(store.domain().first_block, |(number, _)| {
+            number.saturating_add(1)
         });
         checkpoints.push(
-            json!({"source":source, "checkpoint_block":tip.map(|tip|tip.number),
-            "checkpoint_hash":tip.map(|tip|hex::encode(tip.hash)), "next_log_block":next,
+            json!({"source":source, "checkpoint_block":covered.map(|(number, _)|number),
+            "checkpoint_hash":covered.map(|(_, hash)|hex::encode(hash)), "next_log_block":next,
             "blocks_behind":account.anchor.number.saturating_add(1).saturating_sub(next),
-            "caught_up":tip.is_some_and(|tip|tip.number == account.anchor.number)}),
+            "caught_up":covered.is_some_and(|(number, _)|number == account.anchor.number)}),
         );
     }
     let decimal = |word: [u8; 32]| num_bigint::BigUint::from_bytes_be(&word).to_string();
@@ -823,6 +964,16 @@ async fn status(prepared: &Prepared) -> Result<Value, Failure> {
         "anchor_block":account.anchor.number,"anchor_hash":hex::encode(account.anchor.hash),
         "anchor_timestamp":account.anchor.timestamp});
     value["checkpoints"] = json!(checkpoints);
+    let recorded = recorded_checkpoint(prepared)?;
+    value["history_scope"] = json!(if recorded.is_some() {
+        "checkpoint"
+    } else {
+        "deployment"
+    });
+    value["history_from_block"] = json!(recorded
+        .map_or(prepared.config.first_block, |checkpoint| {
+            checkpoint.block_number + 1
+        }));
     value["payment_verified"] = json!(false);
     Ok(value)
 }

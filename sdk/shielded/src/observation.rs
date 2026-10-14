@@ -49,6 +49,10 @@ pub enum ObservationError {
     /// The indexed event and consumed-state reads disagree.
     #[error("shielded pool event and consumed state disagree")]
     Inconsistent,
+    /// The pool's state shows this deal consumed, but its event predates the index checkpoint.
+    /// Neither payment location nor nonpayment can be certified from this index.
+    #[error("deal consumed before this index's checkpoint; history is incomplete")]
+    HistoryIncomplete,
 }
 
 /// Where the pool event that consumed a deal sits on the canonical chain.
@@ -272,7 +276,7 @@ async fn paired_observations(
     max_blocks: u64,
     certify_cached_payment: bool,
 ) -> Result<(AnchoredDealObservation, AnchoredDealObservation), ObservationError> {
-    if index_store.domain() != peer_index.domain()
+    if !index_store.same_history(peer_index)
         || rpc.endpoint() == peer_rpc.endpoint()
         || index_store
             .shares_cache(peer_index)
@@ -498,6 +502,10 @@ fn indexed_evidence(
     consumed_at_head: bool,
 ) -> Result<DealEvidence, ObservationError> {
     let transfer = index.deal_transfer(nullifier.as_bytes());
+    if index.checkpoint().is_some() && transfer.is_none() && (consumed_at_head || consumed_at_final)
+    {
+        return Err(ObservationError::HistoryIncomplete);
+    }
     if consumed_at_head != transfer.is_some()
         || consumed_at_final
             != transfer.is_some_and(|transfer| transfer.block_number <= finalized.number)

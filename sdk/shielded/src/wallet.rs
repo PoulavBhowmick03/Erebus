@@ -503,6 +503,11 @@ impl WalletSnapshot {
         Ok(())
     }
 
+    /// Whether this snapshot holds no note, reservation or retained transfer choice.
+    pub fn is_empty(&self) -> bool {
+        self.notes.is_empty() && self.transfers.is_empty() && self.choices.is_empty()
+    }
+
     /// Read-only note inventory. Each note's secret remains private to this process.
     pub fn notes(&self) -> &[OwnedNote] {
         &self.notes

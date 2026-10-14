@@ -243,10 +243,14 @@ pub(super) async fn run(
         first_block: config.first_block,
         first_hash,
     };
+    // An explicit fresh-participant checkpoint, if recorded, bounds where observation starts.
+    let checkpoint = erebus_shielded_prover::checkpoint::load(&config.state_root, domain)
+        .map_err(|_| "history checkpoint record unavailable")?;
     let index = |name: &str| {
-        IndexStore::new(
+        IndexStore::with_checkpoint(
             config.state_root.join("payment-observation").join(name),
             domain,
+            checkpoint,
         )
         .map_err(|_| "pool checkpoint unavailable")
     };

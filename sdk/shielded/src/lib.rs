@@ -7,6 +7,7 @@
 pub mod access;
 pub mod artifacts;
 pub mod chain;
+pub mod checkpoint;
 pub mod disclosure;
 pub mod index_store;
 pub mod indexer;
@@ -384,7 +385,7 @@ pub fn build_withdraw_witness(
     let inclusion = note
         .inclusion()
         .ok_or(ProverError::Transfer("note not included"))?;
-    if index.leaves().get(inclusion.index as usize) != Some(commitment) {
+    if index.leaf(inclusion.index) != Some(commitment) {
         return Err(ProverError::Transfer("note missing from verified tree"));
     }
     let path = index
@@ -505,7 +506,7 @@ fn build_transfer_witness_with_note(
     let inclusion = note
         .inclusion()
         .ok_or(ProverError::Transfer("note not included"))?;
-    if request.index.leaves().get(inclusion.index as usize) != Some(&note.commitment()) {
+    if request.index.leaf(inclusion.index) != Some(&note.commitment()) {
         return Err(ProverError::Transfer("note missing from verified tree"));
     }
     let path = request

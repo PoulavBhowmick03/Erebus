@@ -409,14 +409,21 @@ async fn run() -> Result<(), &'static str> {
             if rpc.shares_endpoint(&peer_rpc) {
                 return Err("configure distinct pool observers");
             }
+            let checkpoint = erebus_shielded_prover::checkpoint::load(&config.state_root, domain)
+                .map_err(|_| "history checkpoint record unavailable")?;
             Some(AccessBackend::Shielded {
                 rpc: Box::new(rpc),
                 peer_rpc: Box::new(peer_rpc),
-                index: IndexStore::new(config.state_root.join("pool-history.json"), domain)
-                    .map_err(|_| "invalid pool history")?,
-                peer_index: IndexStore::new(
+                index: IndexStore::with_checkpoint(
+                    config.state_root.join("pool-history.json"),
+                    domain,
+                    checkpoint,
+                )
+                .map_err(|_| "invalid pool history")?,
+                peer_index: IndexStore::with_checkpoint(
                     config.state_root.join("pool-peer-history.json"),
                     domain,
+                    checkpoint,
                 )
                 .map_err(|_| "invalid peer pool history")?,
                 runtime: Box::new(runtime),

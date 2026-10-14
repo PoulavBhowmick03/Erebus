@@ -67,7 +67,7 @@ pub async fn recover_finalized_wallet_agreed(
     wallet_store: &WalletStore,
 ) -> Result<RecoveryReport, RecoveryError> {
     if rpc.endpoint() == peer_rpc.endpoint()
-        || index_store.domain() != peer_index.domain()
+        || !index_store.same_history(peer_index)
         || index_store.shares_cache(peer_index)?
     {
         return Err(RecoveryError::Deployment);
@@ -93,7 +93,7 @@ pub async fn recover_finalized_wallet_agreed_bounded(
     max_blocks: u64,
 ) -> Result<RecoveryReport, RecoveryError> {
     if rpc.shares_endpoint(peer_rpc)
-        || index_store.domain() != peer_index.domain()
+        || !index_store.same_history(peer_index)
         || index_store.shares_cache(peer_index)?
     {
         return Err(RecoveryError::Deployment);
@@ -278,7 +278,7 @@ pub async fn sync_public_index_through(
     if rpc.chain_id() != domain.chain_id || rpc.pool() != domain.pool {
         return Err(RecoveryError::Deployment);
     }
-    if through < domain.first_block {
+    if through < domain.first_block || before_checkpoint(index_store, through) {
         return Err(RecoveryError::Confirmations);
     }
     let mut index = index_store.load()?;
@@ -290,7 +290,10 @@ pub async fn sync_public_index_through(
         let count = rpc.sync(&mut index, through, 1_000).await?;
         index_store.save_if_unchanged(&index, prior_tip)?;
         prior_tip = index.tip().map(|tip| tip.hash);
-        if index.tip().is_some_and(|tip| tip.number >= through) {
+        if index
+            .covered_through()
+            .is_some_and(|(number, _)| number >= through)
+        {
             break;
         }
         if count == 0 {
@@ -299,13 +302,7 @@ pub async fn sync_public_index_through(
             )));
         }
     }
-    let tip = index.tip().ok_or(RecoveryError::Confirmations)?;
-    let report = RecoveryReport {
-        through: tip.number,
-        block_hash: tip.hash,
-        root: index.root(),
-        leaves: index.leaves().len(),
-    };
+    let report = covered_report(&index)?;
     Ok((index, report))
 }
 
@@ -324,7 +321,7 @@ pub async fn sync_public_index_step(
     if rpc.chain_id() != domain.chain_id || rpc.pool() != domain.pool {
         return Err(RecoveryError::Deployment);
     }
-    if through < domain.first_block {
+    if through < domain.first_block || before_checkpoint(index_store, through) {
         return Err(RecoveryError::Confirmations);
     }
     if max_blocks == 0 || max_blocks > 1_000 {
@@ -337,20 +334,34 @@ pub async fn sync_public_index_step(
     }
     rpc.sync(&mut index, through, max_blocks).await?;
     index_store.save_if_unchanged(&index, prior_tip)?;
-    let tip = index.tip().ok_or(RecoveryError::Confirmations)?;
-    if tip.number < through {
+    let report = covered_report(&index)?;
+    if report.through < through {
         return Err(RecoveryError::HistoryPending {
-            next_block: tip.number + 1,
+            next_block: report.through + 1,
             through,
         });
     }
-    let report = RecoveryReport {
-        through: tip.number,
-        block_hash: tip.hash,
-        root: index.root(),
-        leaves: index.leaves().len(),
-    };
     Ok((index, report))
+}
+
+/// Whether `through` predates a checkpoint's end state, which this cache cannot represent.
+fn before_checkpoint(index_store: &IndexStore, through: u64) -> bool {
+    index_store
+        .checkpoint()
+        .is_some_and(|checkpoint| through < checkpoint.block_number)
+}
+
+/// The verified end state: the scanned tip, or the checkpoint before any later block is scanned.
+fn covered_report(index: &PoolIndex) -> Result<RecoveryReport, RecoveryError> {
+    let (through, block_hash) = index
+        .covered_through()
+        .ok_or(RecoveryError::Confirmations)?;
+    Ok(RecoveryReport {
+        through,
+        block_hash,
+        root: index.root(),
+        leaves: index.leaf_count() as usize,
+    })
 }
 
 /// Rebuilds a pool prefix only through an explicit RPC-finalized block.
@@ -379,8 +390,8 @@ async fn sync_finalized_public_index_at(
 ) -> Result<(PoolIndex, RecoveryReport), RecoveryError> {
     if index_store
         .load()?
-        .tip()
-        .is_some_and(|tip| tip.number > anchor.number)
+        .covered_through()
+        .is_some_and(|(number, _)| number > anchor.number)
     {
         return Err(RecoveryError::Rpc(RpcError::Evidence(
             "finalized wallet history cannot regress to a lagging anchor",

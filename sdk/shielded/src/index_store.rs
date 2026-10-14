@@ -12,9 +12,11 @@ use erebus_journal::{Boundary, FaultHook, NoFaults, Step};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
-use crate::indexer::{IndexError, PoolBlock, PoolIndex};
+use crate::indexer::{IndexError, PoolBlock, PoolIndex, TreeCheckpoint};
 
 const VERSION: u32 = 2;
+/// Caches that start from a verified checkpoint; older binaries reject them instead of misreading.
+const CHECKPOINT_VERSION: u32 = 3;
 const MAX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Deployment anchor for one public pool event history.
@@ -63,6 +65,8 @@ pub enum IndexStoreError {
 struct StoredIndex {
     version: u32,
     domain: IndexDomain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<TreeCheckpoint>,
     blocks: Vec<PoolBlock>,
 }
 
@@ -71,10 +75,44 @@ pub struct IndexStore {
     path: PathBuf,
     lock_path: PathBuf,
     domain: IndexDomain,
+    // Boxed: the frontier is ~700 bytes and stores are held inline by larger enums.
+    checkpoint: Option<Box<TreeCheckpoint>>,
     faults: Arc<dyn FaultHook>,
 }
 
 impl IndexStore {
+    /// Whether two handles index the same deployment from the same starting state.
+    pub fn same_history(&self, other: &Self) -> bool {
+        self.domain == other.domain && self.checkpoint == other.checkpoint
+    }
+
+    /// Verified starting checkpoint, or `None` when this cache covers deployment-era history.
+    pub fn checkpoint(&self) -> Option<TreeCheckpoint> {
+        self.checkpoint.as_deref().copied()
+    }
+
+    /// Opens a cache that starts after a verified checkpoint instead of at deployment.
+    ///
+    /// The deployment anchor is unchanged; the checkpoint must be at or after it. Passing `None`
+    /// is identical to [`Self::new`].
+    pub fn with_checkpoint(
+        path: impl Into<PathBuf>,
+        domain: IndexDomain,
+        checkpoint: Option<TreeCheckpoint>,
+    ) -> Result<Self, IndexStoreError> {
+        let mut store = Self::new(path, domain)?;
+        if let Some(checkpoint) = checkpoint {
+            if checkpoint.block_number < domain.first_block
+                || (checkpoint.block_number == domain.first_block
+                    && checkpoint.block_hash != domain.first_hash)
+            {
+                return Err(IndexStoreError::Domain);
+            }
+            checkpoint.verify()?;
+        }
+        store.checkpoint = checkpoint.map(Box::new);
+        Ok(store)
+    }
     pub(crate) fn shares_cache(&self, other: &Self) -> Result<bool, IndexStoreError> {
         let identity = |path: &Path| -> Result<PathBuf, IndexStoreError> {
             let parent = path.parent().ok_or(IndexStoreError::Cache)?;
@@ -114,6 +152,7 @@ impl IndexStore {
             path,
             lock_path,
             domain,
+            checkpoint: None,
             faults,
         })
     }
@@ -143,8 +182,13 @@ impl IndexStore {
             return Err(IndexStoreError::Stale);
         }
         let data = serde_json::to_vec(&StoredIndex {
-            version: VERSION,
+            version: if self.checkpoint.is_some() {
+                CHECKPOINT_VERSION
+            } else {
+                VERSION
+            },
             domain: self.domain,
+            checkpoint: self.checkpoint(),
             blocks: index.blocks().to_vec(),
         })
         .map_err(|_| IndexStoreError::Cache)?;
@@ -156,16 +200,41 @@ impl IndexStore {
         Ok(())
     }
 
+    fn empty_index(&self) -> Result<PoolIndex, IndexStoreError> {
+        Ok(match self.checkpoint() {
+            Some(checkpoint) => PoolIndex::from_checkpoint(checkpoint)?,
+            None => PoolIndex::new(self.domain.first_block)?,
+        })
+    }
+
     fn check_index(&self, index: &PoolIndex) -> Result<(), IndexStoreError> {
-        if index.first_block() != self.domain.first_block
-            || index
-                .blocks()
-                .first()
-                .is_some_and(|block| block.hash != self.domain.first_hash)
-        {
+        if index.checkpoint().copied() != self.checkpoint() {
             return Err(IndexStoreError::Domain);
         }
-        let mut rebuilt = PoolIndex::new(self.domain.first_block)?;
+        match self.checkpoint() {
+            // The first scanned block must extend the verified checkpoint block.
+            Some(checkpoint) => {
+                if index.first_block() != checkpoint.block_number + 1
+                    || index
+                        .blocks()
+                        .first()
+                        .is_some_and(|block| block.parent_hash != checkpoint.block_hash)
+                {
+                    return Err(IndexStoreError::Domain);
+                }
+            }
+            None => {
+                if index.first_block() != self.domain.first_block
+                    || index
+                        .blocks()
+                        .first()
+                        .is_some_and(|block| block.hash != self.domain.first_hash)
+                {
+                    return Err(IndexStoreError::Domain);
+                }
+            }
+        }
+        let mut rebuilt = self.empty_index()?;
         for block in index.blocks() {
             rebuilt.apply_block(block.clone())?;
         }
@@ -180,7 +249,7 @@ impl IndexStore {
         let file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return PoolIndex::new(self.domain.first_block).map_err(Into::into)
+                return self.empty_index()
             }
             Err(error) => return Err(error.into()),
         };
@@ -194,18 +263,23 @@ impl IndexStore {
         }
         let stored: StoredIndex =
             serde_json::from_slice(&data).map_err(|_| IndexStoreError::Cache)?;
-        if stored.domain != self.domain {
+        if stored.domain != self.domain || stored.checkpoint != self.checkpoint() {
             return Err(IndexStoreError::Cache);
         }
-        if stored.version == 1 {
+        if stored.version == 1 && self.checkpoint.is_none() {
             // Version 1 discarded deal identities from transfer events. This public cache
             // must be rescanned before it can support settlement observation.
             return PoolIndex::new(self.domain.first_block).map_err(Into::into);
         }
-        if stored.version != VERSION {
+        let expected = if self.checkpoint.is_some() {
+            CHECKPOINT_VERSION
+        } else {
+            VERSION
+        };
+        if stored.version != expected {
             return Err(IndexStoreError::Cache);
         }
-        let mut index = PoolIndex::new(self.domain.first_block)?;
+        let mut index = self.empty_index()?;
         for block in stored.blocks {
             index.apply_block(block)?;
         }

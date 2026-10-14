@@ -778,6 +778,121 @@ impl PoolRpc {
         agreed.ok_or(RpcError::Evidence("account diagnostics unavailable"))
     }
 
+    /// Reads the pool's frontier at one finalized block that both providers agree on.
+    ///
+    /// Both providers must return the same finalized block, authenticate the pinned runtimes there,
+    /// and return identical `nextLeafIndex`, `currentRoot`, `filledSubtrees` and `knownRoots(currentRoot)`
+    /// for exactly that block hash. The frontier must recompute the root locally, and the block must
+    /// still be canonical and finalized afterwards. Agreement between providers is not a cryptographic
+    /// proof of chain state. This never signs, sends or scans history.
+    pub async fn acquire_checkpoint_agreed(
+        &self,
+        peer: &Self,
+        deployment: crate::index_store::IndexDomain,
+        pins: PoolRuntimePins,
+    ) -> Result<crate::indexer::TreeCheckpoint, RpcError> {
+        if deployment.chain_id != self.chain_id
+            || deployment.pool != self.pool
+            || peer.chain_id != self.chain_id
+            || peer.pool != self.pool
+            || deployment.first_hash == [0; 32]
+            || self.shares_endpoint(peer)
+        {
+            return Err(RpcError::Configuration);
+        }
+        let anchor = self.shared_snapshot(peer).await?.finalized;
+        if anchor.number < deployment.first_block {
+            return Err(RpcError::Evidence("checkpoint anchor predates deployment"));
+        }
+        let mut agreed = None;
+        for rpc in [self, peer] {
+            if rpc.canonical_block_hash(deployment.first_block).await? != deployment.first_hash {
+                return Err(RpcError::Evidence("deployment anchor is not canonical"));
+            }
+            rpc.authenticate_runtime_at(deployment.first_hash, pins)
+                .await?;
+            rpc.authenticate_runtime_at(anchor.hash, pins).await?;
+            let state = rpc.frontier_at(anchor).await?;
+            if agreed.is_some_and(|old| old != state) {
+                return Err(RpcError::Evidence(
+                    "RPC providers disagree on the pool checkpoint state",
+                ));
+            }
+            agreed = Some(state);
+        }
+        let checkpoint = agreed.ok_or(RpcError::Evidence("pool checkpoint unavailable"))?;
+        checkpoint.verify().map_err(|_| {
+            RpcError::Evidence("pool checkpoint frontier does not recompute its root")
+        })?;
+        for rpc in [self, peer] {
+            if rpc.canonical_block_hash(anchor.number).await? != anchor.hash {
+                return Err(RpcError::Evidence("checkpoint anchor changed"));
+            }
+            if rpc.finalized_head().await?.number < anchor.number {
+                return Err(RpcError::Evidence("checkpoint finality regressed"));
+            }
+            rpc.check_chain().await?;
+        }
+        Ok(checkpoint)
+    }
+
+    /// One provider's frontier reads, every one bound to the anchor's exact canonical hash.
+    async fn frontier_at(
+        &self,
+        anchor: PoolFinalizedBlock,
+    ) -> Result<crate::indexer::TreeCheckpoint, RpcError> {
+        self.check_chain().await?;
+        let count = self.pool_word_at_hash("nextLeafIndex", anchor.hash).await?;
+        if count[..28].iter().any(|byte| *byte != 0) {
+            return Err(RpcError::Evidence("pool leaf count overflow"));
+        }
+        let root = self.pool_word_at_hash("currentRoot", anchor.hash).await?;
+        let mut filled_subtrees = [[0u8; 32]; erebus_core::shielded::NOTE_TREE_DEPTH];
+        for (level, slot) in filled_subtrees.iter_mut().enumerate() {
+            let mut argument = [0u8; 32];
+            argument[24..].copy_from_slice(&(level as u64).to_be_bytes());
+            *slot = self
+                .pool_call_at_hash("filledSubtrees(uint256)", argument, anchor.hash)
+                .await?;
+        }
+        let known = self
+            .pool_call_at_hash("knownRoots(uint256)", root, anchor.hash)
+            .await?;
+        if known[..31].iter().any(|byte| *byte != 0) || known[31] != 1 {
+            return Err(RpcError::Evidence("pool does not know its current root"));
+        }
+        Ok(crate::indexer::TreeCheckpoint {
+            block_number: anchor.number,
+            block_hash: anchor.hash,
+            leaf_count: u32::from_be_bytes(count[28..].try_into().expect("fixed ABI word")),
+            root,
+            filled_subtrees,
+        })
+    }
+
+    async fn pool_call_at_hash(
+        &self,
+        signature: &'static str,
+        argument: [u8; 32],
+        block_hash: [u8; 32],
+    ) -> Result<[u8; 32], RpcError> {
+        let mut data = Keccak256::digest(signature.as_bytes())[..4].to_vec();
+        data.extend_from_slice(&argument);
+        let value: String = self
+            .call(
+                "eth_call",
+                serde_json::json!([
+                    {
+                        "to": format!("0x{}", hex::encode(self.pool)),
+                        "data": format!("0x{}", hex::encode(data)),
+                    },
+                    canonical_block(block_hash)
+                ]),
+            )
+            .await?;
+        fixed_hex::<32>(&value)
+    }
+
     async fn pool_word_at_hash(
         &self,
         function: &'static str,
@@ -842,7 +957,7 @@ impl PoolRpc {
             return Err(RpcError::Evidence("pool leaf count overflow"));
         }
         let next = u32::from_be_bytes(next[28..].try_into().expect("fixed width"));
-        if root != index.root() || next as usize != index.leaves().len() {
+        if root != index.root() || next != index.leaf_count() {
             return Err(RpcError::Evidence("pool state differs from indexed events"));
         }
         if fixed_hex::<32>(&self.header(tip.number).await?.hash)? != tip.hash {

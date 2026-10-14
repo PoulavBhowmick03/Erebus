@@ -95,6 +95,89 @@ pub struct PoolBlock {
     pub events: Vec<PoolEvent>,
 }
 
+/// Verified tree position at the end of one finalized block (`docs/metropolis-evidence/ws1-checkpoint-design.md`).
+///
+/// `filled_subtrees` and `leaf_count` are the pool's public frontier read at `block_hash`; together they
+/// recompute `root` and are the complete state the pool itself uses to append the next leaf. They do not
+/// contain any earlier leaf, commitment, nullifier or deal event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeCheckpoint {
+    /// Finalized block whose end state was read.
+    pub block_number: u64,
+    /// Hash of that block.
+    pub block_hash: [u8; 32],
+    /// The pool's `nextLeafIndex` after that block.
+    pub leaf_count: u32,
+    /// The pool's `currentRoot` after that block.
+    pub root: [u8; 32],
+    /// The pool's `filledSubtrees` after that block.
+    pub filled_subtrees: [[u8; 32]; NOTE_TREE_DEPTH],
+}
+
+impl TreeCheckpoint {
+    /// Recomputes the root from the frontier and rejects any inconsistency.
+    ///
+    /// This proves only internal consistency of the returned state, not that a provider returned the
+    /// chain's real state; acquisition relies on two independently configured providers for that.
+    pub fn verify(&self) -> Result<(), IndexError> {
+        if self.block_hash == [0; 32] || self.block_number == u64::MAX {
+            return Err(IndexError::Checkpoint);
+        }
+        let (zero, empty_root) = zero_hashes()?;
+        if frontier_root(&self.filled_subtrees, self.leaf_count, &zero, empty_root)? != self.root {
+            return Err(IndexError::Checkpoint);
+        }
+        Ok(())
+    }
+}
+
+fn zero_hashes() -> Result<([[u8; 32]; NOTE_TREE_DEPTH], [u8; 32]), IndexError> {
+    let mut zero_hashes = [[0u8; 32]; NOTE_TREE_DEPTH];
+    let mut zero = [0u8; 32];
+    for item in &mut zero_hashes {
+        *item = zero;
+        zero = note_tree_parent(&zero, &zero).map_err(|_| IndexError::Root)?;
+    }
+    Ok((zero_hashes, zero))
+}
+
+/// Root of a pool tree with `count` leaves, from the contract's frontier alone.
+fn frontier_root(
+    filled: &[[u8; 32]; NOTE_TREE_DEPTH],
+    count: u32,
+    zero: &[[u8; 32]; NOTE_TREE_DEPTH],
+    empty_root: [u8; 32],
+) -> Result<[u8; 32], IndexError> {
+    if count == 0 {
+        // The constructor stores the zero hashes; nothing has overwritten them.
+        return if filled == zero {
+            Ok(empty_root)
+        } else {
+            Err(IndexError::Checkpoint)
+        };
+    }
+    if count >= MAX_LEAVES {
+        // A full tree accepts no insertion; a checkpoint there is useless and unverifiable here.
+        return Err(IndexError::Checkpoint);
+    }
+    let last = count - 1;
+    let lowest = last.trailing_ones() as usize;
+    let mut node = filled[lowest];
+    for level in lowest..NOTE_TREE_DEPTH {
+        node = if (last >> level) & 1 == 0 {
+            // The last insertion wrote its own node here before hashing upward.
+            if filled[level] != node {
+                return Err(IndexError::Checkpoint);
+            }
+            note_tree_parent(&node, &zero[level])
+        } else {
+            note_tree_parent(&filled[level], &node)
+        }
+        .map_err(|_| IndexError::Root)?;
+    }
+    Ok(node)
+}
+
 /// Invalid chain continuity, Merkle transition, or event ordering.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
@@ -107,6 +190,9 @@ pub enum IndexError {
     /// An event has a malformed field element or disagrees with the recomputed root.
     #[error("pool event Merkle root is invalid")]
     Root,
+    /// A checkpoint frontier is inconsistent with its root, or is used outside its coverage.
+    #[error("pool checkpoint is invalid or does not cover this request")]
+    Checkpoint,
     /// A wallet could not apply a verified public event.
     #[error(transparent)]
     Wallet(#[from] WalletError),
@@ -124,17 +210,13 @@ pub struct PoolIndex {
     nullifiers: HashSet<[u8; 32]>,
     deals: HashMap<[u8; 32], DealTransfer>,
     root: [u8; 32],
+    base: Option<TreeCheckpoint>,
 }
 
 impl PoolIndex {
     /// Starts indexing at the pool deployment block, before its first insertion.
     pub fn new(first_block: u64) -> Result<Self, IndexError> {
-        let mut zero_hashes = [[0u8; 32]; NOTE_TREE_DEPTH];
-        let mut zero = [0u8; 32];
-        for item in &mut zero_hashes {
-            *item = zero;
-            zero = note_tree_parent(&zero, &zero).map_err(|_| IndexError::Root)?;
-        }
+        let (zero_hashes, zero) = zero_hashes()?;
         Ok(Self {
             first_block,
             blocks: Vec::new(),
@@ -145,7 +227,44 @@ impl PoolIndex {
             nullifiers: HashSet::new(),
             deals: HashMap::new(),
             root: zero,
+            base: None,
         })
+    }
+
+    /// Starts indexing after a verified checkpoint: logs are expected from `block_number + 1`.
+    ///
+    /// The index then covers only later events. It can build paths only for later leaves and
+    /// knows nothing about earlier commitments, nullifiers or deals.
+    pub fn from_checkpoint(checkpoint: TreeCheckpoint) -> Result<Self, IndexError> {
+        checkpoint.verify()?;
+        let mut index = Self::new(checkpoint.block_number + 1)?;
+        index.filled_subtrees = checkpoint.filled_subtrees;
+        index.root = checkpoint.root;
+        index.base = Some(checkpoint);
+        Ok(index)
+    }
+
+    /// Last block whose end state this index represents: the scanned tip, else the checkpoint.
+    pub fn covered_through(&self) -> Option<(u64, [u8; 32])> {
+        self.blocks
+            .last()
+            .map(|tip| (tip.number, tip.hash))
+            .or_else(|| self.base.map(|base| (base.block_number, base.block_hash)))
+    }
+
+    /// The checkpoint this index starts from, or `None` for deployment-era history.
+    pub fn checkpoint(&self) -> Option<&TreeCheckpoint> {
+        self.base.as_ref()
+    }
+
+    /// Leaf count after the last verified block, including leaves before a checkpoint.
+    pub fn leaf_count(&self) -> u32 {
+        self.leaf_offset() + self.leaves.len() as u32
+    }
+
+    /// Index of the first leaf whose commitment this index holds.
+    pub fn leaf_offset(&self) -> u32 {
+        self.base.map_or(0, |base| base.leaf_count)
     }
 
     /// Last verified block, if any.
@@ -168,23 +287,37 @@ impl PoolIndex {
         self.root
     }
 
-    /// All verified leaves in insertion order.
+    /// Verified leaves in insertion order, starting at [`Self::leaf_offset`].
     pub fn leaves(&self) -> &[[u8; 32]] {
         &self.leaves
     }
 
-    /// Whether the verified prefix contains this note's consumption event.
+    /// Commitment at an absolute leaf index, if this index holds it (never before a checkpoint).
+    pub fn leaf(&self, index: u32) -> Option<&[u8; 32]> {
+        index
+            .checked_sub(self.leaf_offset())
+            .and_then(|offset| self.leaves.get(offset as usize))
+    }
+
+    /// Whether the verified range contains this note's consumption event.
+    ///
+    /// After a checkpoint, `false` says nothing about events before it.
     pub fn is_consumed(&self, nullifier: &[u8; 32]) -> bool {
         self.nullifiers.contains(nullifier)
     }
 
-    /// Indexed transfer for a deal, if it occurred in this verified prefix.
+    /// Indexed transfer for a deal, if it occurred in this verified range.
+    ///
+    /// After a checkpoint, `None` says nothing about transfers before it.
     pub fn deal_transfer(&self, nullifier: &[u8; 32]) -> Option<&DealTransfer> {
         self.deals.get(nullifier)
     }
 
     /// Constructs an inclusion path against the current verified root.
     pub fn path(&self, index: u32) -> Result<NotePath, IndexError> {
+        if let Some(base) = self.base {
+            return self.checkpointed_path(base, index);
+        }
         if index as usize >= self.leaves.len() {
             return Err(IndexError::EventOrder);
         }
@@ -220,6 +353,66 @@ impl PoolIndex {
         })
     }
 
+    fn checkpointed_path(&self, base: TreeCheckpoint, index: u32) -> Result<NotePath, IndexError> {
+        if index < base.leaf_count {
+            return Err(IndexError::Checkpoint);
+        }
+        if index >= self.leaf_count() {
+            return Err(IndexError::EventOrder);
+        }
+        let mut siblings = [[0u8; 32]; NOTE_TREE_DEPTH];
+        for (level, sibling) in siblings.iter_mut().enumerate() {
+            *sibling = self.node(base, level, (u64::from(index) >> level) ^ 1)?;
+        }
+        let offset = (index - base.leaf_count) as usize;
+        let root = note_root_from_path(&self.leaves[offset], index, &siblings)
+            .map_err(|_| IndexError::Root)?;
+        if root != self.root || self.node(base, NOTE_TREE_DEPTH, 0)? != self.root {
+            return Err(IndexError::Root);
+        }
+        Ok(NotePath {
+            index,
+            siblings,
+            root,
+        })
+    }
+
+    /// One tree node after a checkpoint, from frontier ommers and later leaves only.
+    ///
+    /// A complete block entirely before the checkpoint is available only as the ommer the pool itself
+    /// uses for the next insertion; any other request refuses rather than guessing.
+    fn node(&self, base: TreeCheckpoint, level: usize, block: u64) -> Result<[u8; 32], IndexError> {
+        let width = 1u64 << level;
+        let start = block * width;
+        let total = u64::from(self.leaf_count());
+        let boundary = u64::from(base.leaf_count);
+        if start >= total {
+            return if level < NOTE_TREE_DEPTH {
+                Ok(self.zero_hashes[level])
+            } else {
+                Err(IndexError::EventOrder)
+            };
+        }
+        if start + width <= boundary {
+            return if level < NOTE_TREE_DEPTH
+                && (boundary >> level) & 1 == 1
+                && block + 1 == boundary >> level
+            {
+                Ok(base.filled_subtrees[level])
+            } else {
+                Err(IndexError::Checkpoint)
+            };
+        }
+        if level == 0 {
+            return Ok(self.leaves[(start - boundary) as usize]);
+        }
+        note_tree_parent(
+            &self.node(base, level - 1, block * 2)?,
+            &self.node(base, level - 1, block * 2 + 1)?,
+        )
+        .map_err(|_| IndexError::Root)
+    }
+
     /// Checks and applies one consecutive canonical block atomically.
     pub fn apply_block(&mut self, block: PoolBlock) -> Result<(), IndexError> {
         match self.blocks.last() {
@@ -228,7 +421,13 @@ impl PoolIndex {
             {
                 return Err(IndexError::BlockLink);
             }
-            None if block.number != self.first_block => return Err(IndexError::BlockLink),
+            None if block.number != self.first_block
+                || self
+                    .base
+                    .is_some_and(|base| block.parent_hash != base.block_hash) =>
+            {
+                return Err(IndexError::BlockLink)
+            }
             _ => {}
         }
         if block.hash == [0; 32] || block.hash == block.parent_hash {
@@ -236,7 +435,7 @@ impl PoolIndex {
         }
         let mut filled = self.filled_subtrees;
         let mut root = self.root;
-        let mut next = self.leaves.len() as u32;
+        let mut next = self.leaf_count();
         let mut last_log = None;
         let mut additions = Vec::new();
         let mut new_commitments = HashSet::new();
@@ -344,7 +543,10 @@ impl PoolIndex {
             .filter(|block| block.number < height)
             .cloned()
             .collect();
-        let mut rebuilt = Self::new(self.first_block)?;
+        let mut rebuilt = match self.base {
+            Some(base) => Self::from_checkpoint(base)?,
+            None => Self::new(self.first_block)?,
+        };
         for block in retained {
             rebuilt.apply_block(block)?;
         }
