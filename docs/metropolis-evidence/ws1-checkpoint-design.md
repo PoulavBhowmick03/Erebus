@@ -122,16 +122,39 @@ Acquisition alone: 68 requests per provider (31 `eth_call`, 8 headers, 10 `eth_g
 and no header at or below it except the deployment block and its parent (runtime authentication, DM8-8).
 Local numbers do not predict public-RPC catch-up time; no onboarding duration is claimed from them.
 
+## 6a. Live Monad testnet run (2026-10-15)
+
+Freshly onboarded buyer and seller (installed `erebus-init --metropolis` from published `0.3.0.dev2026101307`;
+configs pointed at the WS1 Rust CLIs built from this branch), public Monad RPC as primary and a keyed provider as
+peer, both paced at 25 requests per second. Driven through the two MCP servers.
+
+| Step | Result |
+|---|---|
+| Checkpoints | buyer block 71,206,939 and seller block 71,207,005, about 20 s each; a wallet with history refused with no bytes changed |
+| Funding | wrap, approve, real-proof deposit of 0.003 WMON; spendable after 395 s |
+| Deal 1 | negotiated; funding `ready` in 49 s; one settlement broadcast; buyer restarted before recovery; payment verified by observation; pool token balance unchanged; seller access restarted; resource SHA-256 verified |
+| Deal 2 | spent the post-checkpoint 0.002 WMON change note; one broadcast; payment verified; resource verified |
+| Caches | all six buyer and seller-access caches are version 3 and start at their own checkpoint + 1; no separate payment wallet cache |
+
+Total 1,728 s. Earlier live attempts on the first commit found three defects, fixed in the follow-up commit:
+the payment command replayed pool history twice more in its own caches (it now uses the wallet's finalized
+caches and seeds observation from them); a lost save race on a shared cache was a hard error (now
+`HistoryPending`); and a public provider's 429 throttling exhausted three 100-400 ms retries (now four retries
+with 0.5-4 s backoff or `Retry-After`). Monad charges the gas limit: about 0.31 MON per buyer transaction (3.375 MON over 11) at the
+generated 3,000,000 gas limit.
+
 ## 7. Remaining gates
 
 - **Integration/review:** Rust protocol review (repository rule) of `indexer.rs`, `index_store.rs`, `rpc.rs`,
   `checkpoint.rs`, `recovery.rs`, `observation.rs`; decision that the paired finalized-state trust is acceptable.
 - **Packaging:** generated seller configs keep the access service in a separate `access-state`; the record must be
   created or shared there (the harness placed it). `erebus-init --metropolis` should offer the checkpoint step.
-- **Not exercised end to end:** a repeat spend from a post-checkpoint **change** note (the WMON gate repeats with a
-  second deposited note; the harness performs one transfer); the USDC asset in the end-to-end and harness gates
+- **Not exercised end to end:** the USDC asset in the end-to-end and harness gates
   (acquisition and command gates used the mock ERC-20); MCP exposure (deliberately none: operator command).
 - **Long-lived wallets:** still bounded by the 128 MiB single-file store; segmented storage (separate lane, F1–F3)
   is not part of this change.
-- **Installed/live:** native CI on the candidate, publication, and a live fresh-wallet deposit and payment on Monad
-  testnet remain open; the read-only acquisition does not qualify them.
+- **Installed/live:** native CI on the candidate and publication remain open. The live run (§6a) used published
+  `erebus-init` with unpublished WS1 CLIs, so it qualifies the code path, not a release.
+- **Auditor:** disclosure verification still replays from the deployment block; it has no checkpoint.
+- **Errors:** the MCP layer reports every native wallet failure as `WALLET_UNAVAILABLE`, and the wallet reports
+  provider throttling as `paired wallet recovery failed`; both hide the cause from operators.
