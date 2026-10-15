@@ -329,11 +329,24 @@ pub async fn sync_public_index_step(
     }
     let mut index = index_store.load()?;
     let prior_tip = index.tip().map(|tip| tip.hash);
+    let resume = covered_report(&index)
+        .map(|report| report.through.saturating_add(1))
+        .unwrap_or(domain.first_block);
     if index.tip().is_some_and(|tip| tip.number > through) {
         index.rewind_from(through.saturating_add(1))?;
     }
     rpc.sync(&mut index, through, max_blocks).await?;
-    index_store.save_if_unchanged(&index, prior_tip)?;
+    match index_store.save_if_unchanged(&index, prior_tip) {
+        // Another process saved this shared history first. Its verified progress stands and
+        // this batch is discarded; the caller retries as for any other bounded step.
+        Err(IndexStoreError::Stale) => {
+            return Err(RecoveryError::HistoryPending {
+                next_block: resume,
+                through,
+            })
+        }
+        saved => saved?,
+    }
     let report = covered_report(&index)?;
     if report.through < through {
         return Err(RecoveryError::HistoryPending {

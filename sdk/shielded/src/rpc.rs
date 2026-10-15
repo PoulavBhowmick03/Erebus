@@ -421,7 +421,7 @@ impl PoolRpc {
                 | "eth_getCode"
                 | "eth_getBalance"
         );
-        for attempt in 0..4 {
+        for attempt in 0..5 {
             self.pacer.admit().await;
             let response = self
                 .client
@@ -439,9 +439,19 @@ impl PoolRpc {
                 }
                 Err(_) => return Err(RpcError::Request(method)),
             };
+            // Public providers throttle bursts for seconds, not milliseconds: back off 0.5-4 s,
+            // or the provider's Retry-After when it is at most 10 s.
             let transient = matches!(response.status().as_u16(), 429 | 502 | 503 | 504);
-            if read_only && transient && attempt < 3 {
-                tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
+            if read_only && transient && attempt < 4 {
+                let delay = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .filter(|seconds| *seconds <= 10)
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or(std::time::Duration::from_millis(500 << attempt));
+                tokio::time::sleep(delay).await;
                 continue;
             }
             if !response.status().is_success() {
@@ -1316,7 +1326,8 @@ mod tests {
             rpc.check_chain().await,
             Err(RpcError::Request("eth_chainId"))
         ));
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        // One attempt and four seconds-scale retries, then the error.
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
         server.abort();
 
         for (status, payload) in [

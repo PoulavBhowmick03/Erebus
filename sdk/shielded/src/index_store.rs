@@ -86,6 +86,28 @@ impl IndexStore {
         self.domain == other.domain && self.checkpoint == other.checkpoint
     }
 
+    /// Replaces this cache with `source` when `source` is the same history and covers more of it.
+    ///
+    /// Both caches are fully re-verified on load, so the copy carries no trust beyond what each
+    /// already had; the caller keeps its own anchor and finality checks. Returns whether the cache
+    /// changed. A concurrent writer wins: `Stale` leaves this cache as that writer saved it.
+    pub fn seed_from(&self, source: &Self) -> Result<bool, IndexStoreError> {
+        if !self.same_history(source) {
+            return Err(IndexStoreError::Domain);
+        }
+        let current = self.load()?;
+        let seed = source.load()?;
+        let covered = |index: &PoolIndex| index.covered_through().map(|(number, _)| number);
+        if covered(&seed) <= covered(&current) {
+            return Ok(false);
+        }
+        match self.save_if_unchanged(&seed, current.tip().map(|tip| tip.hash)) {
+            Ok(()) => Ok(true),
+            Err(IndexStoreError::Stale) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Verified starting checkpoint, or `None` when this cache covers deployment-era history.
     pub fn checkpoint(&self) -> Option<TreeCheckpoint> {
         self.checkpoint.as_deref().copied()

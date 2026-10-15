@@ -518,8 +518,12 @@ impl Environment {
     fn wallet_index(&self, name: &str) -> erebus_shielded_prover::index_store::IndexStore {
         let config = self.config_value();
         erebus_shielded_prover::index_store::IndexStore::new(
-            PathBuf::from(config["state_root"].as_str().unwrap())
-                .join(format!("payment-observation/{name}.json")),
+            PathBuf::from(config["state_root"].as_str().unwrap()).join(match name {
+                // The buyer's payment recovery shares the wallet's finalized-only caches.
+                "wallet-primary" => "wallet-index/primary.json".to_owned(),
+                "wallet-peer" => "wallet-index/peer.json".to_owned(),
+                other => format!("payment-observation/{other}.json"),
+            }),
             self.index_domain(),
         )
         .unwrap()
@@ -1688,10 +1692,10 @@ async fn exhausted_wallet_catch_up_retries_retain_progress_and_hold_reservations
     );
     assert_eq!(
         failures(&environment.primary),
-        4,
-        "the retry budget is exactly four attempts"
+        5,
+        "the retry budget is exactly five attempts (one try, four backed-off retries)"
     );
-    assert_eq!(failures(&environment.peer), 4);
+    assert_eq!(failures(&environment.peer), 5);
     assert_eq!(
         environment.wallet_prefix_tip("wallet-primary"),
         primary_after_step,
@@ -1815,8 +1819,8 @@ async fn exhausted_read_retries_after_consumption_never_revive_the_spent_note() 
     assert_ne!(response["submitted_this_call"], true, "{response}");
     assert_eq!(
         failures(&environment.primary),
-        4,
-        "the retry budget is exactly four attempts"
+        5,
+        "the retry budget is exactly five attempts (one try, four backed-off retries)"
     );
     assert_eq!(sends(&environment.primary), 1, "no resend after exhaustion");
     assert_eq!(
@@ -2106,7 +2110,7 @@ async fn auditor_catch_up_keeps_checkpoints_and_pending_is_never_absence() {
     assert!(ok && lagged["payment_verified"] == true, "{lagged}");
     disarm(&environment.peer);
 
-    // Exhausted read retries: exactly four attempts, fail closed, checkpoints preserved.
+    // Exhausted read retries: exactly five attempts, fail closed, checkpoints preserved.
     mine(&client, &environment.deployed.url, 2).await;
     arm(
         &environment.primary,
@@ -2120,8 +2124,8 @@ async fn auditor_catch_up_keeps_checkpoints_and_pending_is_never_absence() {
     assert_ne!(exhausted["payment_verified"], true, "{exhausted}");
     assert_eq!(
         failures(&environment.primary),
-        4,
-        "the retry budget is exactly four attempts"
+        5,
+        "the retry budget is exactly five attempts (one try, four backed-off retries)"
     );
     assert!(
         environment.auditor_cache_tip(&cache, "primary").unwrap() >= settled_primary

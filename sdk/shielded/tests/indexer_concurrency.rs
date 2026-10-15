@@ -9,11 +9,19 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
 use erebus_core::shielded::{note_tree_parent, NOTE_TREE_DEPTH};
 use erebus_shielded_prover::index_store::{IndexDomain, IndexStore};
 use erebus_shielded_prover::indexer::{IndexError, PoolIndex};
-use erebus_shielded_prover::recovery::sync_public_index_through;
+use erebus_shielded_prover::recovery::{
+    sync_public_index_step, sync_public_index_through, RecoveryError,
+};
 use erebus_shielded_prover::rpc::{PoolRpc, RpcError, MAX_LOG_BLOCK_RANGE};
 use serde_json::{json, Value};
 use sha3::{Digest, Keccak256};
@@ -206,6 +214,13 @@ enum Fault {
     LogsReversed,
     /// The endpoint changes chain identity after answering the log request.
     ChainSwitchAfterLogs,
+    /// HTTP 429 for the next `remaining` reads of one header height, with an optional
+    /// `Retry-After` header in seconds.
+    RateLimited {
+        height: u64,
+        remaining: usize,
+        retry_after: Option<&'static str>,
+    },
 }
 
 #[derive(Default)]
@@ -220,6 +235,8 @@ struct Mock {
     log_ranges: Vec<(u64, u64)>,
     started: Vec<Instant>,
     chain_switched: bool,
+    /// Extra latency for every header read.
+    slow: Option<Duration>,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -242,12 +259,37 @@ fn block_at(mock: &Mock, number: u64) -> Option<MockBlock> {
         .cloned()
 }
 
-async fn reply(
-    State(shared): State<Shared>,
-    Json(request): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+async fn reply(State(shared): State<Shared>, Json(request): Json<Value>) -> Response {
     let method = request["method"].as_str().expect("method").to_owned();
     let params = request["params"].clone();
+    {
+        let mut mock = shared.lock().expect("mock");
+        let throttled = match &mut mock.fault {
+            Fault::RateLimited {
+                height,
+                remaining,
+                retry_after,
+            } if method == "eth_getBlockByNumber"
+                && quantity(&params[0]) == *height
+                && *remaining > 0 =>
+            {
+                *remaining -= 1;
+                Some(*retry_after)
+            }
+            _ => None,
+        };
+        if let Some(retry_after) = throttled {
+            *mock.counts.entry("throttled".to_owned()).or_default() += 1;
+            return match retry_after {
+                Some(seconds) => (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(axum::http::header::RETRY_AFTER, seconds)],
+                )
+                    .into_response(),
+                None => StatusCode::TOO_MANY_REQUESTS.into_response(),
+            };
+        }
+    }
     let delay = {
         let mut mock = shared.lock().expect("mock");
         *mock.counts.entry(method.clone()).or_default() += 1;
@@ -261,6 +303,9 @@ async fn reply(
                 // Deterministic scatter so later heights often finish first.
                 delay = Duration::from_millis((number * 7_919) % 23);
             }
+            if let Some(slow) = mock.slow {
+                delay += slow;
+            }
             if matches!(mock.fault, Fault::StallHeader(stalled) if stalled == number) {
                 delay = Duration::from_secs(3);
             }
@@ -270,7 +315,12 @@ async fn reply(
     tokio::time::sleep(delay).await;
     let result = respond(&shared, &method, &params);
     shared.lock().expect("mock").in_flight -= 1;
-    result.map(|result| Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result})))
+    match result {
+        Ok(result) => {
+            Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result})).into_response()
+        }
+        Err(status) => status.into_response(),
+    }
 }
 
 fn respond(shared: &Shared, method: &str, params: &Value) -> Result<Value, StatusCode> {
@@ -715,5 +765,167 @@ async fn the_default_pacer_stays_under_the_public_rate_limit() {
             .expect("rpc")
             .with_max_concurrent_reads(0),
         Err(RpcError::Configuration)
+    ));
+}
+
+fn store_at(path: &std::path::Path, first_hash: [u8; 32]) -> IndexStore {
+    IndexStore::new(
+        path,
+        IndexDomain {
+            chain_id: CHAIN_ID,
+            pool: POOL,
+            first_block: BASE,
+            first_hash,
+        },
+    )
+    .expect("store")
+}
+
+#[tokio::test]
+async fn a_throttled_read_backs_off_and_then_succeeds() {
+    let blocks = chain(40, u64::MAX);
+    let (address, shared) = serve(blocks).await;
+    // Four 429s in a row exhausted the old three retries; Retry-After 0 keeps the test fast.
+    shared.lock().expect("mock").fault = Fault::RateLimited {
+        height: BASE + 17,
+        remaining: 4,
+        retry_after: Some("0"),
+    };
+    let index = full_sync(&rpc(address, 8), BASE + 39, 1_000).await;
+    assert_eq!(index.tip().expect("tip").number, BASE + 39);
+    assert_eq!(shared.lock().expect("mock").counts["throttled"], 4);
+    // Without Retry-After the client waits seconds, not milliseconds, before retrying.
+    shared.lock().expect("mock").fault = Fault::RateLimited {
+        height: BASE + 5,
+        remaining: 1,
+        retry_after: None,
+    };
+    let started = Instant::now();
+    let rpc = rpc(address, 8);
+    rpc.read_block(BASE + 5).await.expect("read after backoff");
+    assert!(started.elapsed() >= Duration::from_millis(500));
+}
+
+#[tokio::test]
+async fn a_persistently_throttled_read_fails_closed_without_committing() {
+    let blocks = chain(40, u64::MAX);
+    let (address, shared) = serve(blocks).await;
+    shared.lock().expect("mock").fault = Fault::RateLimited {
+        height: BASE + 17,
+        remaining: usize::MAX,
+        retry_after: Some("0"),
+    };
+    let mut index = PoolIndex::new(BASE).expect("index");
+    let before = index.clone();
+    assert!(matches!(
+        rpc(address, 8).sync(&mut index, BASE + 39, 1_000).await,
+        Err(RpcError::Request("eth_getBlockByNumber"))
+    ));
+    assert!(unchanged(&index, &before));
+    // One first attempt and four retries, then the error; never an unbounded loop.
+    assert_eq!(shared.lock().expect("mock").counts["throttled"], 5);
+}
+
+#[tokio::test]
+async fn a_concurrently_advanced_shared_cache_is_progress_not_failure() {
+    let blocks = chain(300, u64::MAX);
+    let (address, shared) = serve(blocks.clone()).await;
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("index.json");
+    let theirs = store_at(&path, blocks[0].hash);
+    // Commit a 100-block prefix, then build another process's further verified progress.
+    match sync_public_index_step(
+        &rpc(address, 8),
+        &store_at(&path, blocks[0].hash),
+        BASE + 299,
+        100,
+    )
+    .await
+    {
+        Err(RecoveryError::HistoryPending { next_block, .. }) => assert_eq!(next_block, BASE + 100),
+        other => panic!(
+            "expected progress, got {:?}",
+            other.map(|(_, report)| report.through)
+        ),
+    }
+    let prefix = theirs.load().expect("prefix");
+    let mut ahead = prefix.clone();
+    rpc(address, 8)
+        .sync(&mut ahead, BASE + 249, 1_000)
+        .await
+        .expect("other process scan");
+    // This step loads the prefix, then scans slowly while the other process saves.
+    shared.lock().expect("mock").slow = Some(Duration::from_millis(30));
+    let step = tokio::spawn({
+        let ours = store_at(&path, blocks[0].hash);
+        let rpc = rpc(address, 8);
+        async move { sync_public_index_step(&rpc, &ours, BASE + 299, 100).await }
+    });
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    theirs
+        .save_if_unchanged(&ahead, prefix.tip().map(|tip| tip.hash))
+        .expect("other process saves first");
+    match step.await.expect("step task") {
+        Err(RecoveryError::HistoryPending {
+            next_block,
+            through,
+        }) => {
+            assert_eq!((next_block, through), (BASE + 100, BASE + 299));
+        }
+        other => panic!(
+            "a lost save race must be pending, got {:?}",
+            other.map(|(_, report)| report.through)
+        ),
+    }
+    // The other process's progress stands; the next step continues from it.
+    assert_eq!(
+        theirs.load().expect("load").tip().expect("tip").number,
+        BASE + 249
+    );
+    shared.lock().expect("mock").slow = None;
+    let ours = store_at(&path, blocks[0].hash);
+    let report = loop {
+        match sync_public_index_step(&rpc(address, 8), &ours, BASE + 299, 100).await {
+            Ok((_, report)) => break report,
+            Err(RecoveryError::HistoryPending { .. }) => continue,
+            Err(other) => panic!("shared cache step failed: {other}"),
+        }
+    };
+    assert_eq!(report.through, BASE + 299);
+    assert_same(
+        &ours.load().expect("final"),
+        &full_sync(&rpc(address, 8), BASE + 299, 1_000).await,
+    );
+}
+
+#[tokio::test]
+async fn seeding_copies_only_a_further_verified_cache_of_the_same_history() {
+    let blocks = chain(150, u64::MAX);
+    let (address, _shared) = serve(blocks.clone()).await;
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let wallet = store_at(&dir.path().join("wallet.json"), blocks[0].hash);
+    let observation = store_at(&dir.path().join("observation.json"), blocks[0].hash);
+    let full = full_sync(&rpc(address, 8), BASE + 149, 1_000).await;
+    wallet.save_if_unchanged(&full, None).expect("wallet save");
+    assert!(observation.seed_from(&wallet).expect("seed"));
+    assert_same(&observation.load().expect("seeded"), &full);
+    // Equal coverage: nothing to copy.
+    assert!(!observation.seed_from(&wallet).expect("no-op"));
+    // A cache that is ahead is never replaced by one that is behind.
+    let behind = store_at(&dir.path().join("behind.json"), blocks[0].hash);
+    let prefix = full_sync(&rpc(address, 8), BASE + 99, 1_000).await;
+    behind
+        .save_if_unchanged(&prefix, None)
+        .expect("behind save");
+    assert!(!observation.seed_from(&behind).expect("ahead stays"));
+    assert_eq!(
+        observation.load().expect("load").tip().expect("tip").number,
+        BASE + 149
+    );
+    // A different deployment anchor is refused, not merged.
+    let other = store_at(&dir.path().join("other.json"), [9; 32]);
+    assert!(matches!(
+        other.seed_from(&wallet),
+        Err(erebus_shielded_prover::index_store::IndexStoreError::Domain)
     ));
 }

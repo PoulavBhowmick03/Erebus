@@ -246,16 +246,29 @@ pub(super) async fn run(
     // An explicit fresh-participant checkpoint, if recorded, bounds where observation starts.
     let checkpoint = erebus_shielded_prover::checkpoint::load(&config.state_root, domain)
         .map_err(|_| "history checkpoint record unavailable")?;
-    let index = |name: &str| {
+    let index = |directory: &str, name: &str| {
         IndexStore::with_checkpoint(
-            config.state_root.join("payment-observation").join(name),
+            config.state_root.join(directory).join(name),
             domain,
             checkpoint,
         )
         .map_err(|_| "pool checkpoint unavailable")
     };
-    let primary_index = index("shielded-primary.json")?;
-    let peer_index = index("shielded-peer.json")?;
+    // Wallet recovery shares the wallet's own finalized-only caches, so a buyer replays pool
+    // history once. Observation also tracks the non-final head and keeps its own caches, which
+    // start from the wallet's verified progress whenever they are behind it.
+    let wallet_primary = index("wallet-index", "primary.json")?;
+    let wallet_peer = index("wallet-index", "peer.json")?;
+    let primary_index = index("payment-observation", "shielded-primary.json")?;
+    let peer_index = index("payment-observation", "shielded-peer.json")?;
+    for (observation, wallet) in [
+        (&primary_index, &wallet_primary),
+        (&peer_index, &wallet_peer),
+    ] {
+        observation
+            .seed_from(wallet)
+            .map_err(|_| "pool history caches unavailable")?;
+    }
     let (_, revisions) = coordinator
         .recorded_deal(operation)
         .map_err(|_| "durable revisions unavailable")?;
@@ -294,8 +307,6 @@ pub(super) async fn run(
             .map_err(|_| "wallet key must be 32 raw bytes")?,
     )
     .map_err(|_| "encrypted wallet unavailable")?;
-    let wallet_primary = index("wallet-primary.json")?;
-    let wallet_peer = index("wallet-peer.json")?;
     match recover_finalized_wallet_agreed_bounded(
         &rpc,
         &wallet_primary,
