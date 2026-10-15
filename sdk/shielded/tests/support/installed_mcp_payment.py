@@ -50,7 +50,7 @@ async def main():
                 if "result" in envelope:
                     print(json.dumps(envelope["result"]))
                 else:
-                    assert envelope["error"]["code"] == "METROPOLIS_UNAVAILABLE"
+                    assert envelope["error"]["category"] == "METROPOLIS_UNAVAILABLE"
                     print(json.dumps({"status": "error"}))
 
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from erebus._metropolis import MetropolisError, _digest
+from erebus._metropolis import MetropolisError, _digest, _native_error
 
 
 READS = frozenset({"notes", "sync"})
@@ -94,10 +94,10 @@ class MetropolisWallet:
                 "funding_operation_references":result.get("funding_operation_references") is True,
                 "paired_account_diagnostics":result.get("paired_account_diagnostics") is True}
 
-    def execute(self, method: str, *, amount: str | None = None,
-                operation_ref: str | None = None, commitment: str | None = None,
-                recipient: str | None = None, identity: str | None = None) -> dict[str, Any]:
-        """One explicit invocation, without automatic retry, replacement or cancellation."""
+    def check(self, method: str, *, amount: str | None = None, operation_ref: str | None = None,
+              commitment: str | None = None, recipient: str | None = None,
+              identity: str | None = None) -> set[str]:
+        """Operator-policy validation of one request, without invoking the native wallet."""
         if method not in self._policy.allowed_methods:
             raise MetropolisError("wallet action is not authorized by operator policy")
         args = {"amount": amount, "operation_ref": operation_ref, "commitment": commitment,
@@ -115,6 +115,16 @@ class MetropolisWallet:
                 raise MetropolisError("wallet identifier must be nonzero lowercase hex")
         if recipient is not None and recipient not in self._policy.withdrawal_recipients:
             raise MetropolisError("withdrawal recipient is not authorized")
+        return fields
+
+    def execute(self, method: str, *, amount: str | None = None,
+                operation_ref: str | None = None, commitment: str | None = None,
+                recipient: str | None = None, identity: str | None = None) -> dict[str, Any]:
+        """One explicit invocation, without automatic retry, replacement or cancellation."""
+        fields = self.check(method, amount=amount, operation_ref=operation_ref, commitment=commitment,
+                            recipient=recipient, identity=identity)
+        args = {"amount": amount, "operation_ref": operation_ref, "commitment": commitment,
+                "recipient": recipient, "identity": identity}
         if method == "withdraw":
             notes = self.execute("notes")["result"].get("notes")
             if not isinstance(notes, list):
@@ -133,7 +143,8 @@ class MetropolisWallet:
             raise MetropolisError("wallet response exceeds the bounded public diagnostic size")
         stream = response.stdout if response.returncode == 0 else response.stderr
         if (response.returncode not in {0, 2} or (response.stderr if response.returncode == 0 else response.stdout)):
-            raise MetropolisError("wallet action failed; retain state and sync before any retry")
+            raise MetropolisError("wallet action failed; retain state and sync before any retry",
+                                  native_error=_native_error(response.stderr, response.stdout))
         try:
             envelope = json.loads(stream)
         except (TypeError, ValueError):
@@ -154,11 +165,12 @@ class MetropolisWallet:
         allowed = {"notes", "operations", "commitment", "nullifier", "amount", "asset", "included", "consumed", "reserved",
                    "kind", "identity", "state", "retained", "target", "value", "attempts", "tx_hash", "outcome", "block",
                    "scanned_through", "completed", "reverted", "migration_required", "pending", "nonce_released",
-                   "already_completed", "wrapper", "installation_ms", "proving_ms", "submission", "transaction_hash",
+                   "already_completed", "wrapper", "spender", "installation_ms", "proving_ms", "submission", "transaction_hash",
                    "retry_without_new_payment", "payment_verified", "recipient", "replaced", "resume_required",
                    "history_pending", "next_log_block", "through", "account", "native_balance", "asset_balance",
                    "allowance", "anchor_block", "anchor_hash", "anchor_timestamp", "checkpoints", "source",
-                   "checkpoint_block", "checkpoint_hash", "blocks_behind", "caught_up"}
+                   "checkpoint_block", "checkpoint_hash", "blocks_behind", "caught_up",
+                   "history_scope", "history_from_block"}
         if isinstance(value, dict):
             if not set(value) <= allowed:
                 raise MetropolisError("wallet response contains non-public or unexpected fields")

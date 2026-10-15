@@ -119,7 +119,8 @@ def test_stdio_wallet_mutations_are_explicit_and_over_limit_requests_are_refused
                 assert not {"approve_wallet", "wrap_wallet", "withdraw_wallet", "replace_wallet"} & names
                 response = await session.call_tool("deposit_wallet", {"amount":"101", "operation_ref":"ab" * 32})
                 result = response.structured_content or json.loads(response.content[0].text)
-                assert result["ok"] is False and result["error"]["code"] == "WALLET_UNAVAILABLE"
+                assert result["ok"] is False and result["error"]["code"] == "POLICY_REFUSED"
+                assert result["error"]["category"] == "WALLET_UNAVAILABLE"
                 assert result["error"]["retry_without_new_payment"] is True
     asyncio.run(run())
 
@@ -155,7 +156,8 @@ def test_stdio_tools_follow_the_configured_role(tmp_path, role, tools):
                     response = await session.call_tool(name, {"operation_ref": "../outside"})
                     result = response.structured_content or json.loads(response.content[0].text)
                     assert result["ok"] is False
-                    assert result["error"]["code"] == "METROPOLIS_UNAVAILABLE"
+                    assert result["error"]["code"] == "INVALID_OPERATION_REF"
+                    assert result["error"]["category"] == "METROPOLIS_UNAVAILABLE"
                     assert result["error"]["retry_without_new_payment"] is True
     asyncio.run(run())
 

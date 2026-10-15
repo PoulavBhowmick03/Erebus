@@ -117,11 +117,20 @@ def _access_unavailable(error: AccessError) -> dict[str, Any]:
 
 def _register_retrieval_tool(server: MCPServer, settings: AccessSettings, seam: AccessSeam) -> None:
     @server.tool()
-    async def retrieve_service_access(evidence_name: str) -> dict[str, Any]:
+    async def retrieve_service_access(evidence_name: str | None = None,
+                                      operation_ref: str | None = None) -> dict[str, Any]:
         """Retrieve a resource; operator-selected x402 mode authorizes its first payment.
 
+        Pass the deal's operation_ref, or the evidence_name negotiate_deal returned (exactly one).
         Retries reuse the persisted permit and never authorize a second payment.
         """
+        if (evidence_name is None) == (operation_ref is None):
+            return _access_unavailable(AccessError("pass exactly one of operation_ref or evidence_name"))
+        if operation_ref is not None:
+            if not re.fullmatch(r"[a-f0-9]{64}", operation_ref, flags=re.ASCII):
+                return _access_unavailable(AccessError("operation_ref must be 64 lowercase hex digits"))
+            # Negotiation writes a deal's buyer evidence as <operation_ref>.0.tx.
+            evidence_name = f"{operation_ref}.0.tx"
         try:
             options = {"x402_exact": True} if settings.x402_exact else {}
             response = await asyncio.to_thread(

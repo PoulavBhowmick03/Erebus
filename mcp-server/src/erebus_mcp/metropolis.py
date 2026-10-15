@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,10 @@ from erebus import MetropolisError, MetropolisSeam, MetropolisWallet, WalletPoli
 from mcp.server import MCPServer
 
 from erebus_mcp.config import ConfigError
+from erebus_mcp.metropolis_errors import failure as classified
+from erebus_mcp.metropolis_errors import refused
+from erebus_mcp.metropolis_wallet_tools import DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, _register_wallet_tools, _settled_wallet
+from erebus_mcp.operation_refs import OperationRefs
 
 
 def _operator_file(value: str | None) -> tuple[str, dict[str, Any]]:
@@ -97,9 +102,14 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
            if settings.mode == "x402-exact" else "")
     ))
 
-    def failure() -> dict[str, Any]:
-        return {"ok": False, "error": {"code": "METROPOLIS_UNAVAILABLE",
-                "message": "retain the operation ID and recover by observation", "retry_without_new_payment": True}}
+    refs = OperationRefs(settings.state_root)
+    # One funding or settlement action at a time per participant: they share one signer.
+    writes = asyncio.Lock()
+    wallet: MetropolisWallet | None = None
+    methods: list[str] = []
+
+    def failure(error: MetropolisError) -> dict[str, Any]:
+        return classified(error, "METROPOLIS_UNAVAILABLE")
 
     if os.environ.get("EREBUS_WALLET_CONFIG") or os.environ.get("EREBUS_WALLET_POLICY"):
         wallet_config, wallet_data = _operator_file(os.environ.get("EREBUS_WALLET_CONFIG"))
@@ -118,89 +128,59 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             wallet.version()
         except (MetropolisError, TypeError):
             raise ConfigError("invalid wallet action policy or missing native wallet command") from None
-
-        async def wallet_action(method: str, **arguments: Any) -> dict[str, Any]:
-            try:
-                result = await asyncio.to_thread(wallet.execute, method, **arguments)
-                return {"ok": result["status"] == "ok", "result": result}
-            except MetropolisError:
-                return {"ok": False, "error": {"code": "WALLET_UNAVAILABLE",
-                    "message": "retain wallet operation IDs and sync; do not create another funding action",
-                    "retry_without_new_payment": True}}
-
-        @server.tool()
-        async def wallet_notes() -> dict[str, Any]:
-            """List this configured wallet's public note status without opening keys in Python."""
-            return await wallet_action("notes")
-
-        @server.tool()
-        async def sync_wallet() -> dict[str, Any]:
-            """Resume paired finalized history; never sends a transaction."""
-            return await wallet_action("sync")
-
-        if "status" in methods:
-            @server.tool()
-            async def wallet_status() -> dict[str, Any]:
-                """Read paired finalized balances, pool allowance and checkpoint lag; no spend or sync."""
-                return await wallet_action("status")
-
-        if "approve" in methods:
-            @server.tool()
-            async def approve_wallet(amount: str, operation_ref: str) -> dict[str, Any]:
-                """Explicit bounded approval for this configured pool and asset only."""
-                return await wallet_action("approve", amount=amount, operation_ref=operation_ref)
-
-        if "wrap" in methods:
-            @server.tool()
-            async def wrap_wallet(amount: str, operation_ref: str) -> dict[str, Any]:
-                """Explicit bounded wrapping; retain and reuse the same operation reference."""
-                return await wallet_action("wrap", amount=amount, operation_ref=operation_ref)
-
-        if "deposit" in methods:
-            @server.tool()
-            async def deposit_wallet(amount: str, operation_ref: str) -> dict[str, Any]:
-                """Fund one shielded note under a durable deposit reference; never use a new ID to retry."""
-                return await wallet_action("deposit", amount=amount, operation_ref=operation_ref)
-
-        if "withdraw" in methods:
-            @server.tool()
-            async def withdraw_wallet(commitment: str, recipient: str) -> dict[str, Any]:
-                """Withdraw one bounded note only to an operator-authorized public recipient."""
-                return await wallet_action("withdraw", commitment=commitment, recipient=recipient)
-
-        if "unwrap" in methods:
-            @server.tool()
-            async def unwrap_wallet(amount: str, operation_ref: str) -> dict[str, Any]:
-                """Explicit bounded unwrap; payout address and wrapper come from fixed configuration."""
-                return await wallet_action("unwrap", amount=amount, operation_ref=operation_ref)
-
-        if "resume" in methods:
-            @server.tool()
-            async def resume_wallet(identity: str) -> dict[str, Any]:
-                """Explicitly resend only the retained bytes for this wallet operation."""
-                return await wallet_action("resume", identity=identity)
-
-        if "replace" in methods:
-            @server.tool()
-            async def replace_wallet(identity: str) -> dict[str, Any]:
-                """Explicit fee replacement preserving intent; fees are fixed by native operator policy."""
-                return await wallet_action("replace", identity=identity)
+        _register_wallet_tools(server, wallet, methods, refs, writes)
 
     @server.tool()
-    async def negotiate_deal(operation_ref: str, freeze_only: bool = False) -> dict[str, Any]:
-        """Negotiate and authorize one fixed-policy deal; never submits payment."""
-        try:
-            return {"ok": True, "result": await asyncio.to_thread(seam.negotiate, operation_ref, freeze_only=freeze_only)}
-        except MetropolisError:
-            return failure()
+    async def negotiate_deal(operation_ref: str | None = None, freeze_only: bool = False,
+                             wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any]:
+        """Negotiate and authorize one fixed-policy deal; never submits payment.
+
+        Omit operation_ref to have one created and saved; it is returned, and a retry without one
+        resumes the same unfinished deal. While the counterparty is not connected yet, this keeps
+        listening or reconnecting for up to wait_seconds (0-900) with the same operation_ref.
+        """
+        if type(wait_seconds) is not int or not 0 <= wait_seconds <= MAX_WAIT_SECONDS:
+            return refused("INVALID_REQUEST", "METROPOLIS_UNAVAILABLE", f"wait_seconds must be 0-{MAX_WAIT_SECONDS}")
+        created = False
+        if operation_ref is None:
+            operation_ref, created = refs.resolve("negotiate", None)
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                result = await asyncio.to_thread(seam.negotiate, operation_ref, freeze_only=freeze_only)
+                break
+            except MetropolisError as error:
+                reply = failure(error)
+                if reply["error"]["code"] == "PEER_UNAVAILABLE" and time.monotonic() < deadline:
+                    await asyncio.sleep(2)
+                    continue
+                return {**reply, "operation_ref": operation_ref, "operation_ref_created": created}
+        if settings.role == "seller" and not freeze_only:
+            # A seller's deal ends at authorization; its next omitted reference is a new deal.
+            refs.update(operation_ref, done=True)
+        if isinstance(result.get("evidence_file"), str):
+            result = {**result, "evidence_name": Path(result["evidence_file"]).name}
+        return {"ok": True, "result": result, "operation_ref": operation_ref, "operation_ref_created": created}
 
     if settings.role == "buyer" and settings.mode != "x402-exact":
         async def payment(operation_ref: str, method: str) -> dict[str, Any]:
+            if method in {"funding", "settle"} and wallet is not None:
+                # A deposit or other wallet transaction that is not final yet still holds the
+                # signer; settle only after the wallet has caught up and released it.
+                held = await _settled_wallet(wallet, settings.timeout)
+                if held is not None:
+                    return {**held, "operation_ref": operation_ref}
+            if method in {"settle", "observe"}:
+                refs.update(operation_ref, done=True)
             try:
                 response = await asyncio.to_thread(seam.payment, operation_ref, method=method)
-                return {"ok": response["status"] in {"ok", "ready"}, "result": response}
-            except MetropolisError:
-                return failure()
+            except MetropolisError as error:
+                return {**failure(error), "operation_ref": operation_ref}
+            reply = {"ok": response["status"] in {"ok", "ready"}, "result": response, "operation_ref": operation_ref}
+            if response["status"] == "pending":
+                reply["next_action"] = ("history or settlement is still pending; repeat this call with the same "
+                                        "operation_ref, never a new payment")
+            return reply
 
         @server.tool()
         async def check_settlement_funding(operation_ref: str) -> dict[str, Any]:
@@ -211,12 +191,14 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             @server.tool()
             async def sponsor_shielded_deal(operation_ref: str) -> dict[str, Any]:
                 """Prove locally and delegate to the pinned sponsor; never directly broadcasts."""
-                return await payment(operation_ref, "settle")
+                async with writes:
+                    return await payment(operation_ref, "settle")
         else:
             @server.tool()
             async def settle_deal(operation_ref: str) -> dict[str, Any]:
-                """Prepare, prove if shielded, and submit at most one automatic broadcast attempt."""
-                return await payment(operation_ref, "settle")
+                """Sync the wallet, then prepare, prove if shielded, and submit at most one automatic broadcast."""
+                async with writes:
+                    return await payment(operation_ref, "settle")
 
         @server.tool()
         async def recover_deal(operation_ref: str) -> dict[str, Any]:

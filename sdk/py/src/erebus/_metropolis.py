@@ -11,7 +11,28 @@ from typing import Any
 
 
 class MetropolisError(RuntimeError):
-    """Retain the operation and recover by observation, never by creating another payment."""
+    """Retain the operation and recover by observation, never by creating another payment.
+
+    `native_error` is the native command's own public error text, when it reported one.
+    """
+
+    def __init__(self, message: str, *, native_error: str | None = None) -> None:
+        super().__init__(message)
+        self.native_error = native_error
+
+
+def _native_error(*streams: str) -> str | None:
+    """The `error` field of a native JSON envelope, if it is a short public diagnostic."""
+    for stream in streams:
+        try:
+            envelope = json.loads(stream) if stream and len(stream) <= 32_768 else None
+        except (ValueError, TypeError):
+            continue
+        error = envelope.get("error") if isinstance(envelope, dict) else None
+        if (isinstance(error, str) and 0 < len(error) <= 200 and "://" not in error
+                and re.fullmatch(r"[ -~]+", error, re.ASCII) is not None):
+            return error
+    return None
 
 
 def _digest(value: Any) -> bool:
@@ -50,7 +71,8 @@ class MetropolisSeam:
         except (OSError, subprocess.TimeoutExpired, UnicodeError):
             raise MetropolisError("native operation unavailable; retain its ID and recover by observation") from None
         if completed.returncode not in {0, 2} or completed.stderr or len(completed.stdout) > 32_768:
-            raise MetropolisError("native operation failed; retain its ID and recover by observation")
+            raise MetropolisError("native operation failed; retain its ID and recover by observation",
+                                  native_error=_native_error(completed.stdout, completed.stderr))
         try:
             response = json.loads(completed.stdout)
         except (ValueError, TypeError):
