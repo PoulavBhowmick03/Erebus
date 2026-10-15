@@ -43,6 +43,13 @@ pub enum RecoveryError {
     Wallet(#[from] WalletError),
 }
 
+impl RecoveryError {
+    /// Whether a provider kept throttling reads after every bounded backoff.
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::Rpc(RpcError::RateLimited(_)))
+    }
+}
+
 /// Restores a wallet only through an explicit finalized pool prefix.
 ///
 /// Cached events referring to local notes are re-read from their canonical blocks before

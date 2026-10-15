@@ -1131,6 +1131,11 @@ async fn sync(prepared: &Prepared) -> Result<Value, Failure> {
                 "next_log_block":next_block, "through":through,
                 "retry_without_new_payment":true})));
         }
+        Err(error) if error.is_rate_limited() => {
+            return Err(Failure::Error(
+                "RPC provider rate limited; retry later or lower its requests_per_second",
+            ))
+        }
         Err(_) => return Err(Failure::Error("paired wallet recovery failed")),
     };
     let operations = operations(prepared)?;
@@ -1263,6 +1268,7 @@ async fn approve(
     }
     Ok(json!({
         "kind": "approve",
+        "identity": hex::encode(prepared_call.identity),
         "spender": prepared.config.pool,
         "amount": amount.to_string(),
         "submission": submission_view(&submission),

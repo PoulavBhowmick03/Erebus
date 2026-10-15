@@ -819,7 +819,7 @@ async fn a_persistently_throttled_read_fails_closed_without_committing() {
     let before = index.clone();
     assert!(matches!(
         rpc(address, 8).sync(&mut index, BASE + 39, 1_000).await,
-        Err(RpcError::Request("eth_getBlockByNumber"))
+        Err(RpcError::RateLimited("eth_getBlockByNumber"))
     ));
     assert!(unchanged(&index, &before));
     // One first attempt and four retries, then the error; never an unbounded loop.

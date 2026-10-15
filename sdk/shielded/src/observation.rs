@@ -55,6 +55,17 @@ pub enum ObservationError {
     HistoryIncomplete,
 }
 
+impl ObservationError {
+    /// Whether a provider kept throttling reads after every bounded backoff.
+    pub fn is_rate_limited(&self) -> bool {
+        match self {
+            Self::Rpc(RpcError::RateLimited(_)) => true,
+            Self::Recovery(error) => error.is_rate_limited(),
+            _ => false,
+        }
+    }
+}
+
 /// Where the pool event that consumed a deal sits on the canonical chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

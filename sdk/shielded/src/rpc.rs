@@ -20,6 +20,9 @@ pub enum RpcError {
     /// The endpoint did not return a well-formed successful response.
     #[error("pool RPC request failed during {0}")]
     Request(&'static str),
+    /// The endpoint still answered HTTP 429 after every bounded backoff.
+    #[error("pool RPC provider rate limited {0}")]
+    RateLimited(&'static str),
     /// A log or block header disagrees with its deployment or canonical block.
     #[error("inconsistent pool RPC evidence: {0}")]
     Evidence(&'static str),
@@ -453,6 +456,9 @@ impl PoolRpc {
                     .unwrap_or(std::time::Duration::from_millis(500 << attempt));
                 tokio::time::sleep(delay).await;
                 continue;
+            }
+            if response.status().as_u16() == 429 {
+                return Err(RpcError::RateLimited(method));
             }
             if !response.status().is_success() {
                 return Err(RpcError::Request(method));
@@ -1324,7 +1330,7 @@ mod tests {
         let (rpc, calls, server) = retry_rpc(99, 429, json!({})).await;
         assert!(matches!(
             rpc.check_chain().await,
-            Err(RpcError::Request("eth_chainId"))
+            Err(RpcError::RateLimited("eth_chainId"))
         ));
         // One attempt and four seconds-scale retries, then the error.
         assert_eq!(calls.load(Ordering::SeqCst), 5);

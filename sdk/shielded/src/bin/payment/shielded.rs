@@ -290,6 +290,9 @@ pub(super) async fn run(
         Err(ObservationError::Recovery(error)) if pending(&mut response, &error) => {
             return Ok(response)
         }
+        Err(error) if error.is_rate_limited() => {
+            return Err("RPC provider rate limited; retain reservations and retry later")
+        }
         Err(_) => return Err("paired pool evidence unavailable; retain reservations"),
     };
     response["measurements_ms"]["observation"] = json!(started.elapsed().as_millis());
@@ -319,6 +322,9 @@ pub(super) async fn run(
     {
         Ok(_) => {}
         Err(error) if pending(&mut response, &error) => return Ok(response),
+        Err(error) if error.is_rate_limited() => {
+            return Err("RPC provider rate limited; retain reservations and retry later")
+        }
         Err(_) => return Err("paired finalized wallet recovery failed; retain reservations"),
     }
     let assessment = coordinator
