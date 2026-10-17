@@ -181,6 +181,54 @@ pub(super) struct BindingRequest {
     expires_at: u64,
 }
 
+/// Re-signs `descriptor_file` with its own discovery key for `lifetime` seconds from now.
+///
+/// Every field except the validity window is kept, and the key must be the one the descriptor
+/// names, so renewal can neither change an identity nor claim one. The file is replaced
+/// atomically; peers must re-read it, and bindings and service terms must be re-issued.
+pub(super) fn renew_descriptor(
+    descriptor_file: &Path,
+    discovery_key_file: &Path,
+    lifetime: u64,
+) -> Result<Value, &'static str> {
+    if !descriptor_file.is_absolute() || !discovery_key_file.is_absolute() {
+        return Err("use absolute descriptor and discovery key paths");
+    }
+    if !(3600..=MAX_DESCRIPTOR_LIFETIME).contains(&lifetime) {
+        return Err("descriptor lifetime must be 1 hour to 30 days");
+    }
+    let text = fs::read_to_string(descriptor_file).map_err(|_| "descriptor unavailable")?;
+    let mut descriptor = erebus_transport::descriptor::ServiceDescriptor::from_json(&text)
+        .map_err(|_| "invalid descriptor")?;
+    let identity = AuthorizationIdentity::from_bytes(key(discovery_key_file)?.as_ref())
+        .map_err(|_| "invalid discovery key")?;
+    let issued = now()?.saturating_sub(60);
+    descriptor.issued_at = issued;
+    descriptor.expires = issued + lifetime;
+    descriptor
+        .sign(&identity)
+        .map_err(|_| "discovery key does not match local descriptor")?;
+    descriptor
+        .verify(now()?)
+        .map_err(|_| "renewed descriptor failed verification")?;
+    let encoded = descriptor
+        .to_json()
+        .map_err(|_| "descriptor encoding failed")?;
+    let temporary = descriptor_file.with_extension("json.renew");
+    let _ = fs::remove_file(&temporary);
+    write_new(&temporary, encoded.as_bytes(), false)?;
+    fs::rename(&temporary, descriptor_file).map_err(|_| "descriptor replace failed")?;
+    if let Some(parent) = descriptor_file.parent() {
+        fs::File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| "descriptor directory sync failed")?;
+    }
+    Ok(
+        json!({"protocol_version":1,"status":"ok","descriptor_file":descriptor_file,
+        "descriptor_expires_at":issued + lifetime}),
+    )
+}
+
 fn shielded_domain(
     namespace: ChainNamespace,
     contract: &str,

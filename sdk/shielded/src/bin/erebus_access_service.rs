@@ -141,6 +141,9 @@ enum Backend {
         withdraw_verifier_keccak256: String,
         #[serde(default = "default_log_concurrency")]
         max_concurrent_queries: u64,
+        /// Per-provider request budget for verification reads; background sync uses half.
+        #[serde(default)]
+        requests_per_second: Option<u32>,
     },
 }
 
@@ -378,8 +381,11 @@ async fn run() -> Result<(), &'static str> {
             transfer_verifier_keccak256,
             withdraw_verifier_keccak256,
             max_concurrent_queries,
+            requests_per_second,
         } => {
             let pool = parse_lowercase_address(&pool).ok_or("invalid pool")?;
+            let rate = requests_per_second
+                .unwrap_or(erebus_shielded_prover::rpc::DEFAULT_MAX_REQUESTS_PER_SECOND);
             let runtime = PoolRuntimePins {
                 pool: digest(&runtime_keccak256)?,
                 poseidon: digest(&poseidon_keccak256)?,
@@ -400,17 +406,33 @@ async fn run() -> Result<(), &'static str> {
                 first_block,
                 first_hash,
             };
-            let rpc = PoolRpc::new(&rpc_url, chain_id, pool)
-                .and_then(|rpc| rpc.with_max_concurrent_reads(max_concurrent_queries))
-                .map_err(|_| "invalid pool RPC")?;
-            let peer_rpc = PoolRpc::new(&peer_rpc_url, chain_id, pool)
-                .and_then(|rpc| rpc.with_max_concurrent_reads(max_concurrent_queries))
-                .map_err(|_| "invalid peer pool RPC")?;
+            let observer = |url: &str, rate: u32| {
+                PoolRpc::new(url, chain_id, pool)
+                    .and_then(|rpc| rpc.with_max_concurrent_reads(max_concurrent_queries))
+                    .and_then(|rpc| rpc.with_max_requests_per_second(rate))
+                    .map_err(|_| "invalid pool RPC")
+            };
+            let rpc = observer(&rpc_url, rate)?;
+            let peer_rpc = observer(&peer_rpc_url, rate)?;
             if rpc.shares_endpoint(&peer_rpc) {
                 return Err("configure distinct pool observers");
             }
             let checkpoint = erebus_shielded_prover::checkpoint::load(&config.state_root, domain)
                 .map_err(|_| "history checkpoint record unavailable")?;
+            let store = |name: &str| {
+                IndexStore::with_checkpoint(config.state_root.join(name), domain, checkpoint)
+                    .map_err(|_| "invalid pool history")
+            };
+            // Keep both histories current between requests, so a first delivery after a
+            // quiet period does not replay the gap inside the request.
+            let background = (rate / 2).max(1);
+            tokio::spawn(keep_history_current([
+                (observer(&rpc_url, background)?, store("pool-history.json")?),
+                (
+                    observer(&peer_rpc_url, background)?,
+                    store("pool-peer-history.json")?,
+                ),
+            ]));
             Some(AccessBackend::Shielded {
                 rpc: Box::new(rpc),
                 peer_rpc: Box::new(peer_rpc),
@@ -636,4 +658,45 @@ fn error(failure: AccessError, paid: bool) -> (StatusCode, HeaderMap, Json<Value
             json!({"status":if paid {"paid_but_undelivered"} else if failure==AccessError::Pending {"payment_pending"} else {"unavailable"},"payment_verified":paid,"delivery_verified":false,"retry_without_payment":true,"error":failure.to_string()}),
         ),
     )
+}
+
+/// Advances each verified history cache toward the head in bounded steps, forever.
+///
+/// The request path syncs the same caches; whichever save loses the race is reported as
+/// pending and its verified progress is not lost. Failures are retried after a pause and
+/// never change what a request may accept.
+async fn keep_history_current(pairs: [(PoolRpc, IndexStore); 2]) {
+    let mut reported = [None::<std::time::Instant>; 2];
+    loop {
+        let mut behind = false;
+        for (slot, (rpc, store)) in pairs.iter().enumerate() {
+            let outcome = match rpc.head().await {
+                Ok(head) => erebus_shielded_prover::recovery::sync_public_index_step(
+                    rpc, store, head, 1_000,
+                )
+                .await
+                .map(|_| ()),
+                Err(error) => Err(error.into()),
+            };
+            match outcome {
+                Ok(()) => {}
+                Err(erebus_shielded_prover::recovery::RecoveryError::HistoryPending { .. }) => {
+                    behind = true;
+                }
+                // Public diagnostics only (no URL or key is part of these errors), once a
+                // minute per provider, so a stalled sync is visible in the service log.
+                Err(error) => {
+                    if reported[slot].is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) {
+                        eprintln!(
+                            "{}",
+                            json!({"event":"history_sync_failed","observer":if slot == 0 { "primary" } else { "peer" },
+                                "error":error.to_string()})
+                        );
+                        reported[slot] = Some(std::time::Instant::now());
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(if behind { 1 } else { 10 })).await;
+    }
 }

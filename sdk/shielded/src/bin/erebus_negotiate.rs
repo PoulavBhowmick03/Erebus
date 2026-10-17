@@ -64,6 +64,13 @@ enum Request {
     PrepareBinding(Box<operator::BindingRequest>),
     /// The canonical service template, from both verified descriptors.
     PrepareTerms(Box<operator::TermsRequest>),
+    /// Re-signs an existing descriptor with its own discovery key for a new validity window.
+    /// Keys, endpoints and capabilities are unchanged; bindings and terms must be re-issued.
+    RenewDescriptor {
+        descriptor_file: PathBuf,
+        discovery_key_file: PathBuf,
+        descriptor_lifetime_seconds: u64,
+    },
     Negotiate {
         config_file: PathBuf,
         operation_ref: String,
@@ -891,6 +898,15 @@ fn main() {
             ),
             Request::PrepareBinding(request) => operator::prepare_binding(*request),
             Request::PrepareTerms(request) => operator::prepare_terms(*request),
+            Request::RenewDescriptor {
+                descriptor_file,
+                discovery_key_file,
+                descriptor_lifetime_seconds,
+            } => operator::renew_descriptor(
+                &descriptor_file,
+                &discovery_key_file,
+                descriptor_lifetime_seconds,
+            ),
         }
     })();
     let failed = result.is_err();

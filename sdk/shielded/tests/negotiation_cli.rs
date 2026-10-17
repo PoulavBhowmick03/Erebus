@@ -786,3 +786,60 @@ fn fresh_shielded_operators_bind_private_keys_and_negotiate() {
         note_spend_tag(&secret).unwrap()
     );
 }
+
+#[test]
+fn a_descriptor_renews_with_its_own_keys_and_a_wrong_key_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = native_binary("erebus-negotiate", env!("CARGO_BIN_EXE_erebus-negotiate"));
+    let run = |request: Value| finish(spawn(&binary, root.path(), request));
+    let directory = root.path().join("seller");
+    let (ok, prepared) = run(
+        json!({"method":"prepare_operator","suite_id":2,"directory":directory,
+        "role":"seller","endpoint":"127.0.0.1:9401","namespace":"eip155:31337",
+        "assets":["eip155:31337/erc20:0x1111111111111111111111111111111111111111"],
+        "descriptor_lifetime_seconds":3600}),
+    );
+    assert!(ok, "{prepared}");
+    let file = directory.join("seller.descriptor.json");
+    let before: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    let (ok, renewed) = run(json!({"method":"renew_descriptor","descriptor_file":file,
+        "discovery_key_file":directory.join("discovery.key"),"descriptor_lifetime_seconds":30*24*3600}));
+    assert!(ok, "{renewed}");
+    let after: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    assert!(
+        after["expires"].as_u64().unwrap() > before["expires"].as_u64().unwrap() + 29 * 24 * 3600
+    );
+    for field in [
+        "seller_address",
+        "transport_key",
+        "endpoints",
+        "assets",
+        "suites",
+    ] {
+        assert_eq!(
+            after[field], before[field],
+            "{field} must not change on renewal"
+        );
+    }
+    // The renewed descriptor binds the same agreement key again.
+    let (ok, response) = run(
+        json!({"method":"prepare_binding","output":directory.join("renewed.binding"),
+        "descriptor_file":file,"discovery_key_file":directory.join("discovery.key"),
+        "agreement_key_file":directory.join("agreement.key"),
+        "settlement_contract":"0x2222222222222222222222222222222222222222","verifier_version":2,
+        "expires_at":clock()+7200}),
+    );
+    assert!(ok, "{response}");
+    // Another key can never re-sign this identity, and the file stays as it was.
+    private(&directory.join("other.key"), &[7u8; 32]);
+    let (ok, response) = run(json!({"method":"renew_descriptor","descriptor_file":file,
+        "discovery_key_file":directory.join("other.key"),"descriptor_lifetime_seconds":3600}));
+    assert!(!ok, "{response}");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&file).unwrap()).unwrap(),
+        after
+    );
+    let (ok, _) = run(json!({"method":"renew_descriptor","descriptor_file":file,
+        "discovery_key_file":directory.join("discovery.key"),"descriptor_lifetime_seconds":60}));
+    assert!(!ok, "lifetimes below one hour are refused");
+}
