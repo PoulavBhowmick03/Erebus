@@ -83,7 +83,7 @@ Measured on live Monad testnet (2026-10-16/17; see the roadmap's WS3 entry for t
 
 - `quickstart up` from the installed package to a ready setup: about 77 s, including both
   checkpoints, `doctor` and the access service start.
-- `fund_wallet` (wrap, approve, deposit, spendable note): 211-360 s.
-- A deal from negotiation to verified payment: about 8-10 min. Delivery timing with the
-  background-synced access service is recorded in the roadmap's WS3 entry.
+- `fund_wallet` (wrap, approve, deposit, spendable note): 211-500 s.
+- A deal from negotiation to verified payment: about 8-12 min; delivery about 6 min after the
+  payment is verified (334 s and 357 s in the 2026-10-17 run from `main`).
 - Cost: about 0.31 MON per buyer transaction (Monad charges the gas limit); five per run.

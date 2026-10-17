@@ -360,12 +360,15 @@ published `0.3.0.dev2026101307`; it ships in the next release.
 - [x] **WS2, agent flow** (`main` f2ec69d): stable error codes with `next_action`, created and
   persisted operation IDs, a bounded seller wait, settlement after the wallet settles, retrieval by
   `operation_ref`, and `fund_wallet`. Live on Monad testnet with no operation IDs passed by the agents.
-- [ ] **WS3, one-command testnet quickstart** (branch `feat/ws3-testnet-quickstart`):
+- [x] **WS3, one-command testnet quickstart** (`main` 08e75d4):
   `erebus-init --metropolis quickstart up|start|status|renew|down`, native gas-key generation and
   descriptor renewal, background history sync in the access service, MCP configs and prompts for
-  Claude Code, Codex and Cursor. Local gates pass; a partial live run from the installed package
-  reached a verified payment (up in 77 s, `fund_wallet`, negotiation with a late buyer, settlement).
-  The full two-deal live run from a fresh checkout of `main` follows the merge.
+  Claude Code, Codex and Cursor. Live from a fresh checkout of `main` 08e75d4 (2026-10-17), installed
+  from a rehearsal registry built from it: `quickstart up` ready in 75 s; `fund_wallet` (wrap,
+  approve, deposit) done at 9.7 min; two negotiated deals, the first with a buyer joining 45 s after
+  the seller, the second paid from the first's change note; both payments verified by observation;
+  each resource retrieved by `operation_ref` 334 s and 357 s after its payment, with matching
+  hashes. 47 minutes in all; five buyer transactions costing 1.533 MON, none from the seller.
 - [ ] **Next:** packaging and a published release, qualification and an outside tester using public
   docs only, then many-buyer sellers.
 - Decisions (2026-10-17): **D2**, the next combined release is versioned `0.4.0.devN`, so it sorts
