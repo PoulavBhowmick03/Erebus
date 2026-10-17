@@ -348,6 +348,32 @@ passed on macOS arm64 and Linux x86_64. These are local-chain and installation g
 Completion gate: public docs/packages support the declared workflow without unpublished team helpers.
 Render remains preparation-only. Hosted services are optional unless the release promises them.
 
+### Onboarding Workstreams (2026-10)
+
+Goal: anyone can run two agents on Monad testnet from a fresh machine. None of this is in the
+published `0.3.0.dev2026101307`; it ships in the next release.
+
+- [x] **WS1, fresh-wallet history checkpoint** (`main` d9a3ab9): a fresh wallet starts from a paired
+  finalized frontier instead of replaying the pool's history; the payment command shares the
+  wallet's caches; throttled reads back off. Live on Monad testnet: two freshly onboarded agents,
+  two private payments, the second from a change note.
+- [x] **WS2, agent flow** (`main` f2ec69d): stable error codes with `next_action`, created and
+  persisted operation IDs, a bounded seller wait, settlement after the wallet settles, retrieval by
+  `operation_ref`, and `fund_wallet`. Live on Monad testnet with no operation IDs passed by the agents.
+- [ ] **WS3, one-command testnet quickstart** (branch `feat/ws3-testnet-quickstart`):
+  `erebus-init --metropolis quickstart up|start|status|renew|down`, native gas-key generation and
+  descriptor renewal, background history sync in the access service, MCP configs and prompts for
+  Claude Code, Codex and Cursor. Local gates pass; a partial live run from the installed package
+  reached a verified payment (up in 77 s, `fund_wallet`, negotiation with a late buyer, settlement).
+  The full two-deal live run from a fresh checkout of `main` follows the merge.
+- [ ] **Next:** packaging and a published release, qualification and an outside tester using public
+  docs only, then many-buyer sellers.
+- Decisions (2026-10-17): **D2**, the next combined release is versioned `0.4.0.devN`, so it sorts
+  above Starknet's `0.3.0`. **D3**, many-buyer sellers and descriptors published by URL wait until an
+  outside tester has used the one-to-one flow. **D4**, `fund_wallet` may chain wrap, approve and
+  deposit: it exists only when the operator's policy grants all three, and every step stays capped.
+  WS1-WS3 were reviewed by the repository owner before the merge.
+
 ### M8E. Agent Ergonomics and End-to-End Product Surface
 
 Owners: OpenCode completes delegated production integration and regressions;

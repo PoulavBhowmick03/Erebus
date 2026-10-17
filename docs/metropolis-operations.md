@@ -1056,6 +1056,18 @@ The service listens on `127.0.0.1` only. Put a TLS gateway in front before remot
 The configuration file must be a regular, owner-only file. The evidence directory must be a real
 directory with mode `0700`.
 
+On `main` (not in `0.3.0.dev2026101307`): a shielded service keeps both pool-history caches
+current in the background, in bounded 1,000-block steps, so a request after a quiet period does
+not replay the gap itself (a delivery in the 2026-10-16 WS2 live run waited about 17
+minutes for that). The shielded backend accepts `requests_per_second` (default 40; generated
+configs use 20, as does the quickstart, which also raises `max_concurrent_queries` to 16); the
+background sync uses the same budget on its own client. Monad testnet makes about 3.3 blocks per
+second and a sync costs about two reads per block per provider, so a budget under about 7 per second
+can never catch up from a gap. A sync that loses a save
+race to a request is progress, not an error. The cache stays capped at 128 MiB (about two days of
+Monad history at continuous sync). If the service runs from a checkpointed participant, place the
+seller wallet's `history-checkpoint.json` in the service's `state_root` before the first start.
+
 ### Configuration
 
 Public-bound configuration shape:
@@ -2148,6 +2160,24 @@ built or exercised on Render; configuration tests do not prove hosted operation.
 ---
 
 ## 10. Live Monad rehearsal
+
+For a first live run on one machine, use the [testnet quickstart](metropolis-quickstart.md) (on
+`main`, not yet released). Live traps found on 2026-10-15/16, with fixes on `main`:
+
+- **Public RPC throttling.** ankr's free endpoint answers HTTP 429 under load. Reads now back off
+  for seconds and report `RATE_LIMITED`; pace each provider with `rpc_requests_per_second` /
+  `peer_rpc_requests_per_second` (20 is safe on public endpoints) or use a keyed endpoint (F67).
+- **Finality must agree.** A paired checkpoint needs both providers to name the same finalized
+  block; drpc ran about two blocks ahead and never paired. Official RPC plus ankr does (F70).
+- **Gas.** Monad charges the full gas limit: about 0.31 MON per transaction at the generated
+  limit, with 0.9 MON free at each send. Budget about 2.15 MON for a buyer's first two deals (F69).
+- **Descriptors expire** (one day by default from `init`; 30 days from the quickstart). The
+  negotiation then fails with `DESCRIPTOR_EXPIRED`; `quickstart renew` re-signs with the existing
+  keys. Re-running `init` creates new identities and a new shielded wallet.
+- **One history replay.** The payment command used to keep its own two copies of pool history;
+  it now shares the wallet's finalized caches (F67).
+- **Timeouts.** `negotiate.json` `timeout_seconds` must be 1-300; the MCP per-call timeout is
+  `EREBUS_NATIVE_TIMEOUT_SECONDS` (default 600).
 
 ### 10.1 Monad facts and prerequisites
 

@@ -41,6 +41,13 @@ Keep the index order: the Metropolis index first, PyPI only for dependencies. Th
 `erebus-init --metropolis`, and the [operations guide](./docs/metropolis-operations.md) to run
 them.
 
+**On `main`, not yet released:** a [one-command testnet quickstart](./docs/metropolis-quickstart.md)
+(`erebus-init --metropolis quickstart up`) creates a connected buyer, seller and auditor on one
+machine and writes MCP configs for Claude Code, Codex and Cursor. Fresh wallets start from a
+verified history checkpoint in seconds instead of replaying the pool's history, and agents get
+`fund_wallet`, optional operation IDs and readable error codes. The published
+`0.3.0.dev2026101307` has none of these yet.
+
 ## Install on Starknet
 
 ```sh

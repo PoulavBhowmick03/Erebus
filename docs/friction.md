@@ -2280,3 +2280,70 @@ Resource paths are confined to the configured journal layout. Installed seams pa
 **What would have made it easier.** Adversarial tests inside valid envelopes, not only
 unknown JSON fields and explicit process failure codes. These guards do not protect a
 compromised host or make a malicious replacement binary trustworthy.
+
+## F67: A fresh wallet replayed pool history three times, and throttling ended it (2026-10-15)
+
+**What we tried.** Two freshly onboarded agents on live Monad testnet, each wallet started from
+a paired finalized checkpoint (WS1), paying through the installed MCP servers.
+
+**What happened.** The wallet caught up quickly, but the payment command kept two more private
+copies of the same pool history (deal observation and its own wallet recovery), so a buyer
+caught up three times. Monad testnet produces about 3.3 blocks per second, and the copies fell behind
+for good. Meanwhile ankr's free endpoint answered HTTP 429, the client gave up after three
+retries of 100-400 ms, and the wallet reported only `paired wallet recovery failed`.
+
+**Whether we worked around it.** Fixed on main: payment wallet recovery shares the wallet's
+finalized-only caches, observation seeds its head-tracking caches from them, a lost save race
+on a shared cache is `HistoryPending`, and throttled reads back off for 0.5-4 s or the
+provider's `Retry-After`. A persistent 429 is now its own error (`RATE_LIMITED`). The live run
+then completed two private payments in 29 minutes.
+
+**What would have made it easier.** A live test before calling the checkpoint done: every
+local gate had passed. And one history cache per participant from the start.
+
+## F68: Agent-facing failures hid the actionable cause (2026-10-15)
+
+**What we tried.** Driving the live workflow through the MCP tools only.
+
+**What happened.** Every native failure became `WALLET_UNAVAILABLE` or
+`METROPOLIS_UNAVAILABLE`. A 30 s MCP-side timeout, a `timeout_seconds` above the native limit
+of 300, expired discovery descriptors, and provider throttling all looked the same. A
+successful `approve` was reported as a failure because its reply named a `spender` field the
+Python seam did not allow, so the approval was sent while the agent saw an error.
+
+**Whether we worked around it.** Fixed on main (WS2): stable codes with a `next_action`,
+allowlisted native diagnostics only (F64 still holds), `spender` allowed, `wallet_status`
+accepting the WS1 history fields, and descriptor renewal with the existing keys.
+
+**What would have made it easier.** Treating every distinct native message an operator can act
+on as part of the agent contract, with a test that each mapped message still exists.
+
+## F69: Monad charges the full gas limit (2026-10-16)
+
+**What we tried.** Budgeting a fresh buyer for wrap, approve, deposit and two settlements.
+
+**What happened.** Each transaction cost about 0.31 MON at the generated 3,000,000 gas limit,
+whatever it used, and each send needs gas limit x max fee (0.9 MON) free at submission. Five
+transactions took a 5 MON account to 1.6 MON.
+
+**Whether we worked around it.** The quickstart prints the measured amount (about 2.15 MON for
+the buyer, none for the seller) instead of a guess.
+
+**What would have made it easier.** Per-operation gas limits sized from measured use, which
+would cut the cost several times; not changed yet.
+
+## F70: Two healthy public RPCs could not form a pair (2026-10-16)
+
+**What we tried.** Choosing a default public RPC pair for the quickstart.
+
+**What happened.** drpc passed every single-provider probe, but its `finalized` tag ran about
+two blocks ahead of the official RPC, and paired checkpoint acquisition, which needs both
+providers to name the same finalized block, failed every time. (Inferred from the measured lag:
+the two were otherwise interchangeable.) onfinality failed old-block reads; monadinfra and
+thirdweb failed bursts.
+
+**Whether we worked around it.** The default pair is `testnet-rpc.monad.xyz` with ankr, which
+agree on finality; operators can pass keyed endpoints from files.
+
+**What would have made it easier.** A pairing probe in `doctor` that checks finality agreement
+before any wallet uses the pair.

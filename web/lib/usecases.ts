@@ -35,7 +35,7 @@ export const LOOP: LoopStep[] = [
     tool: "negotiate_deal",
     who: "buyer and seller",
     body:
-      "Both sides negotiate the fixed-policy deal over an encrypted channel and authorize it. The agent passes only an operation ID. The result is a deal commitment, never an amount, and it cannot submit a payment.",
+      "Both sides negotiate the fixed-policy deal over an encrypted channel and authorize it. The agent passes only an operation ID; on main it may omit it, and the tool creates, saves and returns one, and the seller can wait for a late buyer. The result is a deal commitment, never an amount, and it cannot submit a payment.",
     source: "mcp-server/src/erebus_mcp/metropolis.py",
   },
   {
@@ -43,7 +43,7 @@ export const LOOP: LoopStep[] = [
     tool: "settle_deal",
     who: "buyer only",
     body:
-      "After a funding check, the buyer prepares, proves if shielded, and submits at most one broadcast. After a settlement attempt the agent never calls it again.",
+      "After a funding check, the buyer prepares, proves if shielded, and submits at most one broadcast. On main it first waits for the wallet's own pending transactions, and fund_wallet funds the note in one call. After a settlement attempt the agent never calls it again.",
     source: "agents/src/erebus_agents/metropolis_loop.py",
   },
   {
@@ -59,7 +59,7 @@ export const LOOP: LoopStep[] = [
     tool: "retrieve_service_access",
     who: "buyer, when access is configured",
     body:
-      "Fetches the paid resource and checks its hash against the signed agreement. A failed retrieval is retried by retrieving, never by paying. A download is not a delivery audit.",
+      "Fetches the paid resource and checks its hash against the signed agreement. On main the agent names the deal by its operation ID. A failed retrieval is retried by retrieving, never by paying. A download is not a delivery audit.",
     source: "mcp-server/src/erebus_mcp/access.py",
   },
   {

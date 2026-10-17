@@ -27,31 +27,26 @@ The last command prints a JSON line with `"status":"ok"` and both settlement mod
 its signed manifest are on
 [GitHub](https://github.com/PoulavBhowmick03/erebus-metropolis/releases/tag/v0.3.0.dev2026101307).
 
-## 2. The full two-agent flow, without testnet funds
+## 2. The full two-agent flow on Monad testnet
 
-From a checkout of this repository with Rust stable, uv and
-[Foundry](https://book.getfoundry.sh/getting-started/installation):
+On `main` (after the judging deadline, so not part of the submission): the
+[testnet quickstart](docs/metropolis-quickstart.md) runs the whole loop on Monad testnet with one
+setup command. `erebus-init --metropolis quickstart up` creates a connected buyer, seller and
+auditor, prints the one address to fund (about 2.15 testnet MON), takes fresh-wallet history
+checkpoints and starts the seller's access service; two agents then fund, negotiate, settle,
+verify and retrieve from the generated MCP configs. It needs a build of `main`; the published
+`0.3.0.dev2026101307` does not include it.
 
-```sh
-uv sync --all-packages
-forge build --root contracts/evm
-cargo test --locked --manifest-path sdk/shielded/Cargo.toml --test negotiation_cli \
-  two_mcp_agents_negotiate_pay_and_retrieve_public_bound_with_one_send -- --ignored --nocapture
-```
-
-This starts a local chain, has two agents negotiate through two MCP servers, pays once, recovers
-a lost broadcast response, and retrieves the paid resource. It is a local rehearsal, not a live
-Monad transaction.
-
-## 3. Live on Monad testnet
+## 3. Live on Monad testnet with the published release
 
 Follow the [install guide](docs/metropolis-install.md) and the
 [operations guide](docs/metropolis-operations.md). This needs dedicated testnet wallets, faucet
 funds and two independent RPC providers.
 
-Known limitation: a brand new wallet currently cannot make its first private payment until its
-pool history has caught up. For a quick review we recommend steps 1 and 2 together with the
-recorded transactions below.
+Known limitation of the published release: a brand new wallet cannot make its first private
+payment until its pool history has caught up. `main` fixes this with a paired finalized history
+checkpoint (verified live on Monad testnet, two agents and two private payments); it ships in the
+next release.
 
 | | |
 | --- | --- |
