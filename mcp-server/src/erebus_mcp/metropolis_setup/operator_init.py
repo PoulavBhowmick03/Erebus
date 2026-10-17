@@ -15,6 +15,8 @@
                              [--withdrawal-recipient ADDR ...] [--replacement-fees MAX PRIORITY]
     operator_init.py auditor --pool wmon|usdc --directory NEW --bin DIR --pins DIR --deployment FILE
                              --rpc-url URL --peer-rpc-url URL
+    operator_init.py quickstart up|start|status|renew|down --directory DIR [--pins DIR] [...]
+                             (Monad testnet buyer, seller and auditor on one machine; see quickstart.py)
 
 `pins` downloads, over HTTPS only, the package release's `release-manifest.json`, the owner authorization and
 deployment record at that release's source commit, and every authorized pool's hosting manifest and signature,
@@ -66,6 +68,7 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 NAMESPACE_CHAIN = 10143
@@ -641,7 +644,8 @@ def connect(args) -> dict:
                         "first_block": wallet["first_block"], "first_hash": list(bytes.fromhex(wallet["first_hash"][2:])),
                         "runtime_keccak256": pins["pool"], "poseidon_keccak256": pins["poseidon"],
                         "deposit_verifier_keccak256": pins["deposit"], "transfer_verifier_keccak256": pins["transfer"],
-                        "withdraw_verifier_keccak256": pins["withdraw"], "max_concurrent_queries": 4}})
+                        "withdraw_verifier_keccak256": pins["withdraw"], "max_concurrent_queries": 4,
+                        "requests_per_second": 20}})
         written.append("access.json")
         offer_out = directory / "share" / "offer.json"
         private_json(offer_out, offer)
@@ -1231,10 +1235,17 @@ def main(argv=None) -> int:
     third.add_argument("--deployment", type=Path, required=True)
     third.add_argument("--rpc-url", required=True)
     third.add_argument("--peer-rpc-url", required=True)
+    quickstart = load("quickstart")
+    quickstart.add_parser(commands)
     args = parser.parse_args(argv)
     try:
-        result = {"pins": pins, "init": init, "connect": connect, "doctor": doctor, "auditor": auditor,
-                  "wallet-policy": wallet_policy, "endpoints": endpoints}[args.command](args)
+        if args.command == "quickstart":
+            if args.action == "up" and args.pins is None:
+                raise ValueError("quickstart up needs --pins (from `pins --version V`)")
+            result = quickstart.run(args, SimpleNamespace(**globals()))
+        else:
+            result = {"pins": pins, "init": init, "connect": connect, "doctor": doctor, "auditor": auditor,
+                      "wallet-policy": wallet_policy, "endpoints": endpoints}[args.command](args)
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(json.dumps({"status": "error", "error": str(error) if isinstance(error, ValueError) else type(error).__name__}))
         return 2

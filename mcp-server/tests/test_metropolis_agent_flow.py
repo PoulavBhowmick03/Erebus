@@ -231,3 +231,13 @@ def test_waits_are_bounded(tmp_path, value):
         assert (await call("negotiate_deal", wait_seconds=value))["error"]["code"] == "INVALID_REQUEST"
         assert (await call("fund_wallet", amount="1", wait_seconds=value))["error"]["code"] == "INVALID_REQUEST"
     session(env, script)
+
+
+def test_unrecognized_native_text_never_reaches_the_agent():
+    from erebus import MetropolisError
+    from erebus_mcp.metropolis_errors import failure
+    reply = failure(MetropolisError("native operation failed", native_error="private note opening 1234"), "WALLET_UNAVAILABLE")
+    assert reply["error"]["code"] == "WALLET_UNAVAILABLE" and "native_error" not in reply["error"]
+    assert "private" not in json.dumps(reply)
+    known = failure(MetropolisError("x", native_error="negotiation endpoint unavailable"), "METROPOLIS_UNAVAILABLE")
+    assert known["error"]["native_error"] == "negotiation endpoint unavailable"

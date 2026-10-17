@@ -2,7 +2,7 @@
 
 The native commands report one short public diagnostic per failure. This table turns the ones
 an agent can act on into a stable `code` and a `next_action`; anything else keeps the blanket
-category code and still carries the native text. `tests/test_metropolis_errors.py` checks that
+category code. Only messages in this table are forwarded as `native_error` (F64). `tests/test_metropolis_errors.py` checks that
 every mapped message still exists in the Rust source, so a renamed message fails CI instead of
 silently falling back to the blanket code.
 """
@@ -31,8 +31,9 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
         "stop it before retrying", True),
     # Identity material the operator must renew.
     "local discovery descriptor is invalid or expired": (
-        "DESCRIPTOR_EXPIRED", "this participant's discovery descriptor expired; the operator must re-run "
-        "erebus-init --metropolis init and connect, then share the new descriptor", False),
+        "DESCRIPTOR_EXPIRED", "this participant's discovery descriptor expired; the operator renews it with "
+        "erebus-init --metropolis quickstart renew (keys and funds are kept), or for separate machines re-runs "
+        "init and connect and shares the new descriptor", False),
     "peer discovery descriptor is invalid or expired": (
         "DESCRIPTOR_EXPIRED", "the counterparty's descriptor expired; ask its operator for a fresh share", False),
     "invalid operator configuration": (
@@ -87,8 +88,13 @@ def failure(error: MetropolisError, category: str, retry_field: str = "retry_wit
     body: dict[str, Any] = {"code": code, "category": category, "message": str(error),
                             "next_action": next_action, "retry_same_operation_ref": same_ref,
                             retry_field: True}
-    if error.native_error is not None:
+    # Only allowlisted native diagnostics cross into agent context (F64): an unrecognized native
+    # message could carry private details, so it is never forwarded.
+    if error.native_error in _KNOWN:
         body["native_error"] = error.native_error
+    elif error.native_error is not None:
+        body["next_action"] = ("an unrecognized native failure; retain the operation ID and recover by observation; "
+                               "the operator can run the native command directly to see its error")
     return {"ok": False, "error": body}
 
 
