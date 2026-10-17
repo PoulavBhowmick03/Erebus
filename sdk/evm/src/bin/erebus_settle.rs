@@ -45,6 +45,11 @@ enum Request {
     Address {
         key_file: PathBuf,
     },
+    /// Creates a new owner-only 32-byte testnet gas key from the OS random source and returns its
+    /// address. Never replaces an existing file, reads no chain state, and signs nothing.
+    GenerateTestnetKey {
+        key_file: PathBuf,
+    },
     Funding {
         deployment: Deployment,
         signer_address: String,
@@ -171,6 +176,13 @@ async fn handle(request: Request) -> Result<Value, &'static str> {
             let key =
                 erebus_evm::chain::TransactionKey::from_bytes(seed).map_err(|_| "invalid key")?;
             Ok(json!({"status":"ok","address":format!("0x{}", hex::encode(key.address()))}))
+        }
+        Request::GenerateTestnetKey { key_file } => {
+            let address = generate_testnet_key(&key_file)?;
+            Ok(
+                json!({"status":"ok","address":address,"key_file":key_file,"testnet_only":true,
+                "transactions_sent":0}),
+            )
         }
         Request::Capabilities => {
             let capabilities = public_bound_capabilities();
@@ -397,4 +409,46 @@ fn revision_state_name(state: RevisionState) -> &'static str {
         RevisionState::ExpiredUnpaid => "expired_unpaid",
         RevisionState::Unknown => "unknown",
     }
+}
+
+#[cfg(unix)]
+fn generate_testnet_key(key_file: &std::path::Path) -> Result<String, &'static str> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let parent = key_file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or("key file needs an owner-only parent directory")?;
+    let metadata = std::fs::symlink_metadata(parent).map_err(|_| "key directory unavailable")?;
+    // Closed to others; a directory owned by someone else is not writable, so creation fails.
+    if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err("key directory must be an owner-only directory");
+    }
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
+    let key = loop {
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut random| random.read_exact(seed.as_mut()))
+            .map_err(|_| "OS random source unavailable")?;
+        // Out-of-range scalars are astronomically rare; draw again rather than reduce.
+        if let Ok(key) = erebus_evm::chain::TransactionKey::from_bytes(&seed) {
+            break key;
+        }
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(key_file)
+        .map_err(|_| "key file exists or cannot be created; existing keys are never replaced")?;
+    file.write_all(seed.as_ref())
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "key file write failed")?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "key directory sync failed")?;
+    Ok(format!("0x{}", hex::encode(key.address())))
+}
+
+#[cfg(not(unix))]
+fn generate_testnet_key(_key_file: &std::path::Path) -> Result<String, &'static str> {
+    Err("testnet key generation is supported on Unix only")
 }

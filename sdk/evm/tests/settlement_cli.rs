@@ -151,3 +151,42 @@ fn receipt_requires_durable_state_and_a_valid_operation_reference() {
     assert!(!output.status.success());
     assert_eq!(response["error"], "invalid operation reference");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_testnet_gas_key_is_created_owner_only_and_never_replaced() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    std::fs::create_dir(&keys).unwrap();
+    std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let key_file = keys.join("buyer-gas.key");
+    let generate = json!({"method":"generate_testnet_key","key_file":key_file});
+    let (output, created) = request(dir.path(), generate.clone());
+    assert!(output.status.success(), "{created}");
+    let address = created["address"].as_str().unwrap().to_owned();
+    assert!(address.len() == 42 && address.starts_with("0x"));
+    assert_eq!(created["transactions_sent"], 0);
+    let metadata = std::fs::metadata(&key_file).unwrap();
+    assert_eq!(
+        (metadata.permissions().mode() & 0o777, metadata.len()),
+        (0o600, 32)
+    );
+    // The address is the one the key signs for, and a second call never replaces the key.
+    let (_, derived) = request(dir.path(), json!({"method":"address","key_file":key_file}));
+    assert_eq!(derived["address"], address);
+    let before = std::fs::read(&key_file).unwrap();
+    let (output, _) = request(dir.path(), generate);
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&key_file).unwrap(), before);
+    // A directory other users can read is refused before any key is drawn.
+    let shared = dir.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (output, _) = request(
+        dir.path(),
+        json!({"method":"generate_testnet_key","key_file":shared.join("k")}),
+    );
+    assert!(!output.status.success());
+    assert!(!shared.join("k").exists());
+}
