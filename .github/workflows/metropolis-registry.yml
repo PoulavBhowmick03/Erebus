@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Dev prerelease version, for example 0.3.0.dev20261004"
+        description: "Dev prerelease version, for example 0.4.0.dev2026101801"
         required: true
       profile:
         description: "Build profile"
@@ -46,7 +46,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  METROPOLIS_VERSION: ${{ inputs.version || format('0.3.0.dev{0}', github.run_number) }}
+  METROPOLIS_VERSION: ${{ inputs.version || format('0.4.0.dev{0}', github.run_number) }}
 
 jobs:
   public-install:
