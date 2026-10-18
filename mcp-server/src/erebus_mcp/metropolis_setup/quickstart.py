@@ -1,6 +1,7 @@
 """One-command Monad testnet quickstart: a connected buyer, seller and auditor on one machine.
 
-    erebus-init --metropolis quickstart up     --directory NEW --pins DIR [--allow-agent-funding] [...]
+    erebus-init --metropolis quickstart up       --directory NEW [--version V | --pins DIR] [--allow-agent-funding]
+    erebus-init --metropolis quickstart prefetch --directory DIR
     erebus-init --metropolis quickstart start  --directory DIR
     erebus-init --metropolis quickstart status --directory DIR [--offline]
     erebus-init --metropolis quickstart renew  --directory DIR
@@ -68,6 +69,22 @@ def _host(url: str) -> str:
     return url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("@")[-1]
 
 
+def default_bin() -> Path:
+    """The installed native commands: beside this Python (a `uv tool` environment), else on PATH."""
+    here = Path(sys.executable).parent
+    if (here / "erebus-negotiate").is_file():
+        return here
+    found = shutil.which("erebus-negotiate")
+    if found is None:
+        raise ValueError("installed erebus-negotiate not found; pass --bin")
+    return Path(found).parent
+
+
+def installed_version() -> str:
+    from importlib.metadata import version
+    return version("erebus-mcp-server")
+
+
 def _gas_key(ops, bins: Path, role: str, given: Path | None, keys: Path) -> tuple[str, Path]:
     if given is not None:
         path = given.resolve()
@@ -130,9 +147,13 @@ def up(args, ops) -> dict:
     directory = args.directory.resolve()
     if directory.exists():
         raise ValueError("use a new quickstart directory")
-    bins = (args.bin or Path(shutil.which("erebus-negotiate") or "").parent).resolve()
-    pins = args.pins.resolve()
-    deployment = (args.deployment or pins / "monad-testnet-shielded-v2.json").resolve()
+    bins = (args.bin or default_bin()).resolve()
+    directory_pins = None
+    if args.pins is None:
+        # Pin the release this command belongs to, so install -> quickstart up needs no pins step.
+        directory_pins = args.directory.resolve() / "pins"
+    pins = (args.pins or directory_pins).resolve()
+    deployment = (args.deployment or pins / "monad-testnet-shielded-v2.json").resolve() if args.pins else None
     primary = _endpoint(args.rpc_url, args.rpc_url_file, DEFAULT_RPC_URL)
     peer = _endpoint(args.peer_rpc_url, args.peer_rpc_url_file, DEFAULT_PEER_RPC_URL)
     if primary == peer:
@@ -142,6 +163,11 @@ def up(args, ops) -> dict:
     if int(fund) < int(price):
         raise ValueError("--fund-amount must cover at least one --price")
     directory.mkdir(mode=0o700)
+    if directory_pins is not None:
+        ops.pins(SimpleNamespace(version=args.version or installed_version(), directory=directory_pins,
+                                 rehearsal_release=None, rehearsal_release_sha256=None, authorized_pins=None,
+                                 prepublication_release=None, prepublication_release_sha256=None, authorization=None))
+        deployment = (args.deployment or pins / "monad-testnet-shielded-v2.json").resolve()
     keys = directory / "keys"
     keys.mkdir(mode=0o700)
     signers = {role: _gas_key(ops, bins, role, getattr(args, f"{role}_key_file"), keys) for role in ROLES}
@@ -244,6 +270,7 @@ def start(args, ops) -> dict:
     directory = args.directory.resolve()
     state = json.loads((directory / STATE).read_text())
     bins = Path(state["bin"])
+    artifacts = prefetch(SimpleNamespace(directory=directory), ops)["artifacts"]
     checkpoints = {}
     for role in ROLES:
         wallet = _config(directory, role)
@@ -270,8 +297,60 @@ def start(args, ops) -> dict:
     doctors = {role: ops.doctor(SimpleNamespace(directory=directory / role, offline=False)).get("status")
                for role in ROLES}
     service = _start_service(directory, bins, state)
-    return {"status": "started", "checkpoints": checkpoints, "doctor": doctors, "access_service": service,
+    return {"status": "started", "artifacts": {role: f"{entry['cached']}/{entry['of']}" for role, entry in artifacts.items()},
+            "checkpoints": checkpoints, "doctor": doctors, "access_service": service,
             "next": "add agents/buyer and agents/seller MCP configs to two agents and paste their prompt.md"}
+
+
+CIRCUITS = ("deposit", "transfer", "withdraw")
+
+
+def _artifacts(directory: Path, role: str) -> tuple[int, int]:
+    wallet = _config(directory, role)
+    circuits = json.loads(Path(wallet["artifact_manifest_file"]).read_text())["circuits"]
+    wanted = [circuit[field]["sha256"] for circuit in circuits for field in ("wasm", "r1cs", "zkey")]
+    cache = Path(wallet["artifact_cache_root"])
+    return sum((cache / f"{digest}.artifact").exists() for digest in wanted), len(wanted)
+
+
+def prefetch(args, ops, roles=("buyer",)) -> dict:
+    """Download and hash-check the proving artifacts now, one circuit at a time.
+
+    Each circuit is installed by the native `erebus-artifacts`, which checks every file against the
+    signed manifest and skips cached ones; after a timeout, run it again to continue.
+    """
+    directory = args.directory.resolve()
+    state = json.loads((directory / STATE).read_text())
+    bins = Path(state["bin"])
+    report = {}
+    for role in roles:
+        wallet = _config(directory, role)
+        done = []
+        for circuit in CIRCUITS:
+            request = {"manifest_file": wallet["artifact_manifest_file"],
+                       "manifest_sha256": wallet["artifact_manifest_sha256"],
+                       "manifest_authorization": wallet["artifact_manifest_authorization"], "circuit": circuit,
+                       "cache_root": wallet["artifact_cache_root"], "allow_test_artifacts": wallet["allow_test_artifacts"],
+                       "allow_loopback_http": wallet["allow_loopback_artifact_http"]}
+            started = time.monotonic()
+            try:
+                result = subprocess.run([str(bins / "erebus-artifacts")], input=json.dumps(request), capture_output=True,
+                                        text=True, timeout=900, cwd=directory,
+                                        env={"PATH": f"{bins}{os.pathsep}/usr/bin:/bin", "HOME": str(directory)})
+                reply = json.loads(result.stdout)
+            except (subprocess.TimeoutExpired, ValueError):
+                reply = {"status": "error"}
+            if reply.get("status") != "ok":
+                cached, total = _artifacts(directory, role)
+                raise ValueError(f"{role} {circuit} artifacts did not install ({cached} of {total} files cached); "
+                                 "check the network and run `quickstart prefetch` again to continue")
+            entry = {"circuit": circuit, "downloaded_bytes": reply.get("downloaded_bytes", 0),
+                     "cache_hits": reply.get("cache_hits", 0), "seconds": round(time.monotonic() - started, 1)}
+            print(json.dumps({"event": "artifact_installed", "role": role, **entry}), file=sys.stderr, flush=True)
+            done.append(entry)
+        cached, total = _artifacts(directory, role)
+        report[role] = {"circuits": done, "cached": cached, "of": total}
+    return {"status": "prefetched", "artifacts": report}
 
 
 def _pid(directory: Path) -> int | None:
@@ -353,6 +432,8 @@ def status(args, ops) -> dict:
                 entry["balance_mon"] = mon(ops.rpc_balance(url, state["signers"][role]))
             except (OSError, ValueError, KeyError):
                 entry["balance_mon"] = None
+        cached, total = _artifacts(directory, role)
+        entry["artifacts_cached"] = f"{cached}/{total}"
         descriptor = next((directory / role / "keys").glob("*.descriptor.json"))
         expires = json.loads(descriptor.read_text()).get("expires")
         entry["descriptor_expires_in_hours"] = None if expires is None else round((expires - now) / 3600, 1)
@@ -366,6 +447,8 @@ def status(args, ops) -> dict:
         step = "descriptors expire within a day; run quickstart renew"
     elif not buyer_ready:
         step = f"fund the buyer with at least {mon(int(state['buyer_required_wei']))} MON, then run quickstart start"
+    elif roles["buyer"]["artifacts_cached"].split("/")[0] != roles["buyer"]["artifacts_cached"].split("/")[1]:
+        step = "proving artifacts are incomplete; run quickstart prefetch"
     elif service != "running":
         step = "run quickstart start to restart the seller's access service"
     else:
@@ -448,14 +531,16 @@ def _renew_terms(ops, bins: Path, directory: Path, role: str, state: dict) -> No
 
 
 def run(args, ops) -> dict:
-    return {"up": up, "start": start, "status": status, "down": down, "renew": renew}[args.action](args, ops)
+    return {"up": up, "start": start, "status": status, "down": down, "renew": renew,
+            "prefetch": prefetch}[args.action](args, ops)
 
 
 def add_parser(commands) -> None:
     quick = commands.add_parser("quickstart", help="one-command Monad testnet buyer, seller and auditor on this machine")
-    quick.add_argument("action", choices=("up", "start", "status", "renew", "down"))
+    quick.add_argument("action", choices=("up", "start", "status", "prefetch", "renew", "down"))
     quick.add_argument("--directory", type=Path, required=True)
-    quick.add_argument("--pins", type=Path, help="up: release pins directory (from `pins --version V`)")
+    quick.add_argument("--pins", type=Path, help="up: an existing pins directory (default: pin --version)")
+    quick.add_argument("--version", help="up: release to pin (default: the installed erebus-mcp-server version)")
     quick.add_argument("--bin", type=Path, help="up: installed release bin directory (default: where erebus-negotiate is)")
     quick.add_argument("--deployment", type=Path, help="up: deployment record (default: the one in --pins)")
     quick.add_argument("--pool", choices=("wmon", "usdc"), default="wmon")

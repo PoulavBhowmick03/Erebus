@@ -28,6 +28,21 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 '''
+FAKE_ARTIFACTS = r'''#!PYTHON
+import json, os, sys
+from pathlib import Path
+request = json.loads(sys.stdin.read())
+if (Path(request["cache_root"]).parent / f"fail-{request['circuit']}").exists():
+    print(json.dumps({"status": "error", "error": "artifact installation failed"})); sys.exit(1)
+circuits = json.loads(Path(request["manifest_file"]).read_text())["circuits"]
+cache = Path(request["cache_root"]); cache.mkdir(parents=True, exist_ok=True)
+circuit = next(c for c in circuits if c["kind"] == request["circuit"])
+fresh = 0
+for field in ("wasm", "r1cs", "zkey"):
+    path = cache / (circuit[field]["sha256"] + ".artifact")
+    fresh += not path.exists(); path.write_bytes(b"x")
+print(json.dumps({"status": "ok", "downloaded_bytes": fresh, "cache_hits": 3 - fresh}))
+'''
 
 
 def free_port() -> int:
@@ -70,12 +85,13 @@ def natives(world, monkeypatch):
     monkeypatch.setattr(init, "command", fake)
     monkeypatch.setattr(init, "doctor", lambda args: {"status": "ok"})
     monkeypatch.setattr(init, "rpc_balance", lambda url, address, opener=None: 3 * 10**18)
-    service = world.bins / "erebus-access-service"
-    service.write_text(FAKE_SERVICE.replace("#!PYTHON", f"#!{sys.executable}"))
-    service.chmod(0o755)
     release = json.loads((world.pins / "release-manifest.json").read_text())
     platform, = release["platforms"].values()
-    platform["binaries"]["erebus-access-service"]["sha256"] = init.sha256(service)
+    for name, body in (("erebus-access-service", FAKE_SERVICE), ("erebus-artifacts", FAKE_ARTIFACTS)):
+        path = world.bins / name
+        path.write_text(body.replace("#!PYTHON", f"#!{sys.executable}"))
+        path.chmod(0o755)
+        platform["binaries"][name]["sha256"] = init.sha256(path)
     (world.pins / "release-manifest.json").write_text(json.dumps(release))
     (world.bins / "erebus-settle").write_text("#!/bin/sh\n")
     (world.bins / "erebus-settle").chmod(0o755)
@@ -83,7 +99,8 @@ def natives(world, monkeypatch):
 
 
 def quick_args(world, action, **changes):
-    values = dict(action=action, directory=world.root / "qs", pins=world.pins, bin=world.bins, deployment=world.deployment,
+    values = dict(action=action, directory=world.root / "qs", pins=world.pins, version=None, bin=world.bins,
+                  deployment=world.deployment,
                   pool="wmon", rpc_url=None, peer_rpc_url=None, rpc_url_file=None, peer_rpc_url_file=None,
                   buyer_key_file=None, seller_key_file=None, price="1000", fund_amount="3000", resource="sample",
                   payload_file=None, port=free_port(), allow_agent_funding=False, no_wait=True, funding_timeout=0,
@@ -189,6 +206,48 @@ def test_up_refuses_reuse_and_unsafe_amounts(world, natives):
         quick.run(quick_args(world, "up", directory=world.root / "qs3", rpc_url="https://x.example", peer_rpc_url="https://x.example"), ops())
 
 
-def test_cli_refuses_up_without_pins(capsys):
-    assert init.main(["quickstart", "up", "--directory", "/tmp/never-created-quickstart"]) == 2
-    assert "needs --pins" in capsys.readouterr().out
+def test_up_without_pins_pins_the_installed_release_itself(world, natives, monkeypatch):
+    pinned = []
+
+    def pins(args, opener=None):
+        pinned.append(args.version)
+        import shutil
+        shutil.copytree(world.pins, args.directory)
+        (args.directory / "monad-testnet-shielded-v2.json").write_text(world.deployment.read_text())
+        return {"status": "pinned"}
+    monkeypatch.setattr(init, "pins", pins)
+    monkeypatch.setattr(quick, "installed_version", lambda: "0.4.0.dev2026101801")
+    result = quick.run(quick_args(world, "up", pins=None, deployment=None), ops())
+    assert result["status"] == "created" and pinned == ["0.4.0.dev2026101801"]
+    assert (world.root / "qs/pins/release-manifest.json").is_file()
+    quick.run(quick_args(world, "up", directory=world.root / "qs2", pins=None, deployment=None,
+                         version="0.4.0.dev2026101899"), ops())
+    assert pinned[-1] == "0.4.0.dev2026101899"
+
+
+def test_prefetch_installs_each_circuit_and_resumes_after_a_failure(world, natives, monkeypatch):
+    quick.run(quick_args(world, "up"), ops())
+    cache = Path(json.loads((world.root / "qs/buyer/wallet.json").read_text())["artifact_cache_root"])
+    marker = cache.parent / "fail-withdraw"
+    marker.write_text("")
+    with pytest.raises(ValueError, match="6 of 9 files cached.*again to continue"):
+        quick.run(quick_args(world, "prefetch"), ops())
+    marker.unlink()
+    result = quick.run(quick_args(world, "prefetch"), ops())
+    buyer = result["artifacts"]["buyer"]
+    assert (buyer["cached"], buyer["of"]) == (9, 9)
+    # Resumed: the first two circuits were cache hits, only the last downloaded.
+    assert [entry["downloaded_bytes"] for entry in buyer["circuits"]] == [0, 0, 3]
+    assert quick.run(quick_args(world, "status"), ops())["roles"]["buyer"]["artifacts_cached"] == "9/9"
+
+
+def test_default_bin_prefers_the_tool_environment(tmp_path, monkeypatch):
+    tool = tmp_path / "tool" / "bin"
+    tool.mkdir(parents=True)
+    (tool / "erebus-negotiate").write_text("")
+    monkeypatch.setattr(quick.sys, "executable", str(tool / "python"))
+    assert quick.default_bin() == tool
+    monkeypatch.setattr(quick.sys, "executable", str(tmp_path / "elsewhere" / "python"))
+    monkeypatch.setattr(quick.shutil, "which", lambda name: None)
+    with pytest.raises(ValueError, match="pass --bin"):
+        quick.default_bin()

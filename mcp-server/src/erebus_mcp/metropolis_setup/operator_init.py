@@ -1017,7 +1017,8 @@ def doctor(args) -> dict:
         wanted = [circuit[field]["sha256"] for circuit in circuits for field in ("wasm", "r1cs", "zkey")]
         cache = Path(wallet["artifact_cache_root"])
         checks["artifact_cache"] = {"cached": sum((cache / f"{digest}.artifact").exists() for digest in wanted), "of": len(wanted),
-                                    "note": "missing artifacts download over HTTPS on first proof"}
+                                    "note": "missing artifacts download over HTTPS on first proof; "
+                                            "`erebus-init --metropolis quickstart prefetch` (or erebus-artifacts) installs them now"}
     except (OSError, ValueError, KeyError, TypeError):
         problems.append("the pinned artifact manifest is missing or unreadable")
     try:
@@ -1240,8 +1241,6 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "quickstart":
-            if args.action == "up" and args.pins is None:
-                raise ValueError("quickstart up needs --pins (from `pins --version V`)")
             result = quickstart.run(args, SimpleNamespace(**globals()))
         else:
             result = {"pins": pins, "init": init, "connect": connect, "doctor": doctor, "auditor": auditor,
