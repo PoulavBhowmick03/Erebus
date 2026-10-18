@@ -334,26 +334,34 @@ pub async fn sync_public_index_step(
     if max_blocks == 0 || max_blocks > 1_000 {
         return Err(RecoveryError::Rpc(RpcError::Configuration));
     }
-    let mut index = index_store.load()?;
-    let prior_tip = index.tip().map(|tip| tip.hash);
-    let resume = covered_report(&index)
-        .map(|report| report.through.saturating_add(1))
-        .unwrap_or(domain.first_block);
-    if index.tip().is_some_and(|tip| tip.number > through) {
-        index.rewind_from(through.saturating_add(1))?;
-    }
-    rpc.sync(&mut index, through, max_blocks).await?;
-    match index_store.save_if_unchanged(&index, prior_tip) {
-        // Another process saved this shared history first. Its verified progress stands and
-        // this batch is discarded; the caller retries as for any other bounded step.
-        Err(IndexStoreError::Stale) => {
-            return Err(RecoveryError::HistoryPending {
-                next_block: resume,
-                through,
-            })
+    // A shared cache can be advanced by another process (a background sync, a second command)
+    // while this step reads the chain. Losing that save race keeps the winner's verified progress:
+    // reload it and continue from there, a bounded number of times, before reporting progress only.
+    let mut attempts = 0;
+    let index = loop {
+        let mut index = index_store.load()?;
+        let prior_tip = index.tip().map(|tip| tip.hash);
+        let resume = covered_report(&index)
+            .map(|report| report.through.saturating_add(1))
+            .unwrap_or(domain.first_block);
+        if index.tip().is_some_and(|tip| tip.number > through) {
+            index.rewind_from(through.saturating_add(1))?;
         }
-        saved => saved?,
-    }
+        rpc.sync(&mut index, through, max_blocks).await?;
+        match index_store.save_if_unchanged(&index, prior_tip) {
+            Err(IndexStoreError::Stale) if attempts < STALE_RETRIES => attempts += 1,
+            Err(IndexStoreError::Stale) => {
+                return Err(RecoveryError::HistoryPending {
+                    next_block: resume,
+                    through,
+                })
+            }
+            saved => {
+                saved?;
+                break index;
+            }
+        }
+    };
     let report = covered_report(&index)?;
     if report.through < through {
         return Err(RecoveryError::HistoryPending {
@@ -363,6 +371,9 @@ pub async fn sync_public_index_step(
     }
     Ok((index, report))
 }
+
+/// How often a bounded step reloads and continues after another writer saved the same cache first.
+const STALE_RETRIES: u32 = 3;
 
 /// Whether `through` predates a checkpoint's end state, which this cache cannot represent.
 fn before_checkpoint(index_store: &IndexStore, through: u64) -> bool {

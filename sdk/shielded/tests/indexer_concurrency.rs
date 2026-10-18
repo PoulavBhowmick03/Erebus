@@ -827,7 +827,7 @@ async fn a_persistently_throttled_read_fails_closed_without_committing() {
 }
 
 #[tokio::test]
-async fn a_concurrently_advanced_shared_cache_is_progress_not_failure() {
+async fn a_concurrently_advanced_shared_cache_is_continued_not_failed() {
     let blocks = chain(300, u64::MAX);
     let (address, shared) = serve(blocks.clone()).await;
     let dir = tempfile::tempdir().expect("temporary directory");
@@ -865,32 +865,17 @@ async fn a_concurrently_advanced_shared_cache_is_progress_not_failure() {
     theirs
         .save_if_unchanged(&ahead, prefix.tip().map(|tip| tip.hash))
         .expect("other process saves first");
-    match step.await.expect("step task") {
-        Err(RecoveryError::HistoryPending {
-            next_block,
-            through,
-        }) => {
-            assert_eq!((next_block, through), (BASE + 100, BASE + 299));
-        }
+    // The lost save race is not an error: the step reloads the winner's verified progress
+    // (through BASE + 249) and finishes the remaining 50 blocks itself.
+    let report = match step.await.expect("step task") {
+        Ok((_, report)) => report,
         other => panic!(
-            "a lost save race must be pending, got {:?}",
+            "a lost save race must continue from the winner's progress, got {:?}",
             other.map(|(_, report)| report.through)
         ),
-    }
-    // The other process's progress stands; the next step continues from it.
-    assert_eq!(
-        theirs.load().expect("load").tip().expect("tip").number,
-        BASE + 249
-    );
+    };
     shared.lock().expect("mock").slow = None;
     let ours = store_at(&path, blocks[0].hash);
-    let report = loop {
-        match sync_public_index_step(&rpc(address, 8), &ours, BASE + 299, 100).await {
-            Ok((_, report)) => break report,
-            Err(RecoveryError::HistoryPending { .. }) => continue,
-            Err(other) => panic!("shared cache step failed: {other}"),
-        }
-    };
     assert_eq!(report.through, BASE + 299);
     assert_same(
         &ours.load().expect("final"),
