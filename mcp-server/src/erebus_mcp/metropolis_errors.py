@@ -98,10 +98,16 @@ def failure(error: MetropolisError, category: str, retry_field: str = "retry_wit
     return {"ok": False, "error": body}
 
 
+# Server-decided refusals that clear on their own or once the agent finishes the named operation; retrying
+# them with the same operation_ref is the intended next step. Anything else needs a changed request.
+_RETRY_SAME_REF = frozenset({"WALLET_OPERATION_PENDING", "OPERATION_IN_PROGRESS", "FUNDS_REQUIRED"})
+
+
 def refused(code: str, category: str, next_action: str, **extra: Any) -> dict[str, Any]:
     """A failure decided by this server before any native call."""
     return {"ok": False, "error": {"code": code, "category": category, "message": next_action,
-                                   "next_action": next_action, "retry_without_new_payment": True, **extra}}
+                                   "next_action": next_action, "retry_same_operation_ref": code in _RETRY_SAME_REF,
+                                   "retry_without_new_payment": True, **extra}}
 
 
 def known_messages() -> frozenset[str]:

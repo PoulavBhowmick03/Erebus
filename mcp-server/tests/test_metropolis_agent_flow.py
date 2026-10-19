@@ -241,3 +241,10 @@ def test_unrecognized_native_text_never_reaches_the_agent():
     assert "private" not in json.dumps(reply)
     known = failure(MetropolisError("x", native_error="negotiation endpoint unavailable"), "METROPOLIS_UNAVAILABLE")
     assert known["error"]["native_error"] == "negotiation endpoint unavailable"
+
+
+def test_server_refusals_say_whether_the_same_reference_may_be_retried():
+    from erebus_mcp.metropolis_errors import refused
+    assert refused("WALLET_OPERATION_PENDING", "WALLET_UNAVAILABLE", "sync")["error"]["retry_same_operation_ref"] is True
+    assert refused("OPERATION_IN_PROGRESS", "WALLET_UNAVAILABLE", "finish")["error"]["retry_same_operation_ref"] is True
+    assert refused("INVALID_REQUEST", "WALLET_UNAVAILABLE", "fix it")["error"]["retry_same_operation_ref"] is False
