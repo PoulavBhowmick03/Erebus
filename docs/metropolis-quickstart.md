@@ -1,10 +1,8 @@
 # Metropolis Testnet Quickstart
 
-> **Status: on `main`, not in a published release.** The published package is still
-> `0.3.0.dev2026101307`, which has none of the commands on this page: no `quickstart`, no
-> fresh-wallet checkpoint, no `fund_wallet`, and the older error codes. Until the next release,
-> run it from a build of this repository (below). Everything here runs on **Monad testnet**
-> (chain 10143); it is test-only, single-operator and unaudited, like the deployment it uses.
+> **Release `0.4.0.dev2026101801`** (Monad testnet, chain 10143). Test-only, single-operator and unaudited, like
+> the deployment it uses. Releases before `0.4.0` have no `quickstart`, fresh-wallet checkpoint or
+> `fund_wallet`.
 
 One command sets up a buyer, a seller and an auditor on your machine, already connected to each
 other, and writes MCP configs and prompts for two agents. You fund one address; the agents do the
@@ -20,42 +18,26 @@ rest: fund a private note, negotiate, settle, verify the payment and retrieve wh
 
 ## 1. Install
 
-From the next published release (not yet available):
-
 ```sh
-uv venv --python 3.11 erebus-metropolis
-uv pip install --python erebus-metropolis/bin/python --no-config \
+uv tool install --python 3.11 --no-config \
   --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
-  --default-index https://pypi.org/simple --index-strategy first-index "erebus-mcp-server==<next version>"
-export PATH="$PWD/erebus-metropolis/bin:$PATH"
-erebus-init --metropolis pins --version <next version> --directory ./pins
+  --default-index https://pypi.org/simple --index-strategy first-index \
+  "erebus-mcp-server==0.4.0.dev2026101801"
 ```
 
-Until then, from a checkout of `main`: build an unpublished candidate, install it outside the
-checkout, and pin it against the published signed pool manifests. These pins are labelled a
-rehearsal and are never publication evidence.
-
-```sh
-uv run python scripts/build-metropolis-registry.py --version 0.3.0.dev<date>99 --output ./registry \
-  --profile release --build --require-deployment contracts/evm/deployments/monad-testnet-shielded-v2.json \
-  --proving-manifest <published-pins>/manifest-wmon.json --proving-manifest-sha256 <its sha256> \
-  --proving-signature <published-pins>/manifest-wmon.signature.json \
-  --proving-manifest <published-pins>/manifest-usdc.json --proving-manifest-sha256 <its sha256> \
-  --proving-signature <published-pins>/manifest-usdc.signature.json
-# install erebus-mcp-server==0.3.0.dev<date>99 from ./registry into a fresh venv, then:
-erebus-init --metropolis pins --directory ./pins --rehearsal-release ./registry/release.json \
-  --rehearsal-release-sha256 <sha256 of release.json> --authorized-pins <published-pins>
-```
-
-`<published-pins>` is a directory made by `erebus-init --metropolis pins --version 0.3.0.dev2026101307`.
+`uv tool install` puts `erebus-init` and `erebus-mcp-server` on your PATH (run `uv tool update-shell`
+once if it is not) and keeps the native commands inside the tool environment, where quickstart
+finds them. The wheels download from GitHub release assets; if uv reports `operation timed out`,
+run it again with `UV_HTTP_TIMEOUT=300` (uv waits 30 seconds by default). To build an unreleased candidate from a checkout instead, see the install guide's
+"Candidate onboarding before publication".
 
 ## 2. Up
 
 ```sh
-erebus-init --metropolis quickstart up --directory ./erebus --pins ./pins --allow-agent-funding
+erebus-init --metropolis quickstart up --directory ./erebus --allow-agent-funding
 ```
 
-It creates two gas keys with the installed `erebus-settle` (owner-only files; Python never reads
+It pins this release's signed manifests (or pass `--version V` / `--pins DIR`), creates two gas keys with the installed `erebus-settle` (owner-only files; Python never reads
 them), runs the ordinary `init`, `connect`, `wallet-policy` and `auditor` steps for both roles with
 their shares wired together, sets conservative RPC rate limits, and prints:
 
@@ -70,10 +52,12 @@ their shares wired together, sets conservative RPC rate limits, and prints:
 Send the buyer at least that much. `up` waits for the balance (`--funding-timeout`, default 30
 minutes; `--no-wait` to skip), then runs `start`:
 
-1. takes each fresh wallet's paired finalized **history checkpoint**, so the wallets start at the
+1. downloads and hash-checks the proving artifacts (`quickstart prefetch` does it on its own, and
+   continues after a timeout);
+2. takes each fresh wallet's paired finalized **history checkpoint**, so the wallets start at the
    current pool state instead of replaying a million blocks;
-2. runs `doctor` for both roles;
-3. starts the seller's access service in the background. The service keeps its history current
+3. runs `doctor` for both roles;
+4. starts the seller's access service in the background. The service keeps its history current
    between requests, so the first delivery does not wait for a catch-up.
 
 Options:
@@ -130,7 +114,8 @@ What the agents can rely on:
 ## 4. Status, renew, down
 
 ```sh
-erebus-init --metropolis quickstart status --directory ./erebus   # balances, checkpoint lag, service, next step
+erebus-init --metropolis quickstart status   --directory ./erebus  # balances, checkpoint lag, artifacts, service
+erebus-init --metropolis quickstart prefetch --directory ./erebus  # proving artifacts now, resumable
 erebus-init --metropolis quickstart renew  --directory ./erebus   # re-sign descriptors before they expire
 erebus-init --metropolis quickstart down   --directory ./erebus   # stop the access service; keys and funds kept
 erebus-init --metropolis quickstart start  --directory ./erebus   # resume after down

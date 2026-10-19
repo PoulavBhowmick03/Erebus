@@ -351,7 +351,7 @@ Render remains preparation-only. Hosted services are optional unless the release
 ### Onboarding Workstreams (2026-10)
 
 Goal: anyone can run two agents on Monad testnet from a fresh machine. None of this is in the
-published `0.3.0.dev2026101307`; it ships in the next release.
+published `0.3.0.dev2026101307`; it ships in `0.4.0.dev2026101801`.
 
 - [x] **WS1, fresh-wallet history checkpoint** (`main` d9a3ab9): a fresh wallet starts from a paired
   finalized frontier instead of replaying the pool's history; the payment command shares the
@@ -369,8 +369,13 @@ published `0.3.0.dev2026101307`; it ships in the next release.
   the seller, the second paid from the first's change note; both payments verified by observation;
   each resource retrieved by `operation_ref` 334 s and 357 s after its payment, with matching
   hashes. 47 minutes in all; five buyer transactions costing 1.533 MON, none from the seller.
-- [ ] **Next:** packaging and a published release, qualification and an outside tester using public
-  docs only, then many-buyer sellers.
+- [x] **WS4, published release** `0.4.0.dev2026101801` (source `main` 8a2f97b, native qualification
+  run 39197664018 on macOS arm64 and Linux x86_64, published 2026-10-19): one-line `uv tool install`,
+  `quickstart up` pins its own release, resumable `quickstart prefetch`, and background history sync
+  that yields to requests. Candidate run from a clean-HOME install: two deals, the second from the
+  change note, 24 min. Published-package run: install, `quickstart up`, one deal delivered 97 s after
+  the verified payment, 21 min, 1.227 MON buyer gas.
+- [ ] **Next:** an outside tester using public docs only, then many-buyer sellers.
 - Decisions (2026-10-17): **D2**, the next combined release is versioned `0.4.0.devN`, so it sorts
   above Starknet's `0.3.0`. **D3**, many-buyer sellers and descriptors published by URL wait until an
   outside tester has used the one-to-one flow. **D4**, `fund_wallet` may chain wrap, approve and

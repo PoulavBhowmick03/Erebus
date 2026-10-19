@@ -1056,7 +1056,7 @@ The service listens on `127.0.0.1` only. Put a TLS gateway in front before remot
 The configuration file must be a regular, owner-only file. The evidence directory must be a real
 directory with mode `0700`.
 
-On `main` (not in `0.3.0.dev2026101307`): a shielded service keeps both pool-history caches
+From `0.4.0` (not in earlier releases): a shielded service keeps both pool-history caches
 current in the background, in bounded 1,000-block steps, so a request after a quiet period does
 not replay the gap itself (a delivery in the 2026-10-16 WS2 live run waited about 17
 minutes for that). The shielded backend accepts `requests_per_second` (default 40; generated
@@ -2162,7 +2162,7 @@ built or exercised on Render; configuration tests do not prove hosted operation.
 ## 10. Live Monad rehearsal
 
 For a first live run on one machine, use the [testnet quickstart](metropolis-quickstart.md) (on
-`main`, not yet released). Live traps found on 2026-10-15/16, with fixes on `main`:
+`0.4.0`). Live traps found on 2026-10-15/16, fixed from `0.4.0`:
 
 - **Public RPC throttling.** ankr's free endpoint answers HTTP 429 under load. Reads now back off
   for seconds and report `RATE_LIMITED`; pace each provider with `rpc_requests_per_second` /

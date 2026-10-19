@@ -1,13 +1,13 @@
 # Metropolis Fresh-Install Guide
 
-Current release: [0.3.0.dev2026101307](https://github.com/PoulavBhowmick03/erebus-metropolis/releases/tag/v0.3.0.dev2026101307).
+Current release: [0.4.0.dev2026101801](https://github.com/PoulavBhowmick03/erebus-metropolis/releases/tag/v0.4.0.dev2026101801).
 Use [section 10](#10-published-metropolis-packages) for public installation.
 
-**Fastest path (on `main`, not in the published release):** the
+**Fastest path:** `uv tool install` and the
 [testnet quickstart](metropolis-quickstart.md) sets up a connected buyer, seller and auditor on one
 machine with one command, on Monad testnet. It also documents the fresh-wallet history checkpoint,
 `fund_wallet`, optional operation IDs, retrieval by `operation_ref`, and an error-code
-troubleshooting table. None of these are in `0.3.0.dev2026101307`.
+troubleshooting table. None of these are in releases before `0.4.0`.
 Older source-build and candidate records below retain their original scope.
 This release includes installed Metropolis onboarding, wallet SDK/MCP tools and the shielded relayer.
 It remains testnet-only, single-operator and unaudited.
@@ -250,9 +250,9 @@ The negotiation configuration's `role` selects the tools. A buyer gets `negotiat
 `check_settlement_funding`, `settle_deal`, and `recover_deal`; a seller gets `negotiate_deal`
 only and refuses a payment configuration. With a wallet policy, a buyer also gets the wallet tools
 the operator allowed (`wallet_notes`, `sync_wallet`, `wallet_status`, `wrap_wallet`,
-`approve_wallet`, `deposit_wallet`, and, on `main`, `fund_wallet`).
+`approve_wallet`, `deposit_wallet`, and `fund_wallet`).
 
-On `main` (not in `0.3.0.dev2026101307`): `operation_ref` is optional on `negotiate_deal` and the
+From `0.4.0` (not in earlier releases): `operation_ref` is optional on `negotiate_deal` and the
 funding tools, which create, save and return one, and resume it on a retry;
 `negotiate_deal(wait_seconds=N)` waits up to N seconds for the counterparty; `settle_deal` syncs
 the wallet first; `retrieve_service_access` accepts `operation_ref`; and every failure carries a
@@ -279,7 +279,7 @@ uv pip install --python erebus-metropolis/bin/python \
   --no-config \
   --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
   --default-index https://pypi.org/simple --index-strategy first-index \
-  "erebus-mcp-server==0.3.0.dev2026101307"
+  "erebus-mcp-server==0.4.0.dev2026101801"
 export PATH="$PWD/erebus-metropolis/bin:$PATH"
 printf '%s' '{"method":"version"}' | erebus-negotiate
 ```
@@ -343,7 +343,7 @@ It checks the manifests against the authorization. Confirm the publisher address
 
 ```sh
 B="$PWD/erebus-metropolis/bin"
-"$B/erebus-init" --metropolis pins --version 0.3.0.dev2026101307 --directory ./pins
+"$B/erebus-init" --metropolis pins --version 0.4.0.dev2026101801 --directory ./pins
 "$B/erebus-init" --metropolis init --role buyer --pool wmon --directory ./buyer \
   --bin "$B" --pins ./pins --deployment ./pins/monad-testnet-shielded-v2.json \
   --endpoint 127.0.0.1:9101 --rpc-url https://testnet-rpc.monad.xyz --peer-rpc-url https://rpc.ankr.com/monad_testnet \
@@ -407,7 +407,7 @@ EREBUS_ACCESS_CONFIG="$PWD/seller/access.json" "$B/erebus-access-service" &   # 
   --signer-address <buyer gas address> --transaction-key-file <buyer gas key file> --maximum-price <max> "${COMMON[@]}"
 "$B/erebus-init" --metropolis connect --directory ./buyer --peer-share ./seller-share \
   --resource dataset.snapshot.v1 --amount <opening offer>
-#   On main (not in 0.3.0.dev2026101307): a fresh wallet starts from a paired finalized checkpoint
+#   From 0.4.0 (not in earlier releases): a fresh wallet starts from a paired finalized checkpoint
 #   instead of replaying the pool's history. Do this once, before any funding; it signs nothing and is
 #   refused for a wallet that already has history. Sellers do the same and copy the record into the
 #   access service's state root (seller/access-state/history-checkpoint.json).
@@ -422,7 +422,7 @@ for ACTION in wrap approve deposit; do
 done
 #   Public RPCs throttle: wallet.json and payment.json accept rpc_requests_per_second and
 #   peer_rpc_requests_per_second (1-40, default 40; 20 is safe on public endpoints), and the seller's
-#   access.json backend accepts requests_per_second (on main).
+#   access.json backend accepts requests_per_second (from 0.4.0).
 "$B/erebus-init" --metropolis doctor --directory ./buyer
 #   give ./buyer/mcp.json to the buyer agent; its tools are negotiate_deal, check_settlement_funding,
 #   settle_deal, recover_deal and, with a service URL, retrieve_service_access. The seller agent uses ./seller/mcp.json (negotiate_deal).

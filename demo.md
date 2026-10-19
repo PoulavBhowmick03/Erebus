@@ -3,10 +3,8 @@
 Target: a public operating video of no more than three minutes, on **Monad testnet only**.
 Record the terminal and your narration, not a source-code walkthrough or slides.
 
-The flow is the [testnet quickstart](docs/metropolis-quickstart.md). It is on `main` and not yet in
-a published release: the published `0.3.0.dev2026101307` has no `quickstart`, no fresh-wallet
-checkpoint and no `fund_wallet`. Record it from a build of `main` (the quickstart's "until then"
-install path), and say so on screen.
+The flow is the [testnet quickstart](docs/metropolis-quickstart.md) from release `0.4.0.dev2026101801`, installed
+with `uv tool install` and run with `erebus-init --metropolis quickstart up`.
 
 ## What You Can Claim
 
@@ -19,7 +17,7 @@ install path), and say so on screen.
   sender, deposits and withdrawals are public.
 
 Do not claim:
-- that the published release includes this;
+- that releases before `0.4.0` include this;
 - an audit, a production setup, or an outside tester's run;
 - that an autonomous LLM chose the deal terms, if a script drove the agent tools.
 
@@ -53,7 +51,7 @@ providers, so there is no history replay. It prints exactly what to fund."
 Open two terminals, one per agent, started with `demo/agents/<role>/claude-code.mcp.json`, and
 paste each its `prompt.md`. Wait until `/mcp` shows the server connected before pasting (interactive
 Claude Code can otherwise send the prompt first). Start the seller first.
-Keep an on-screen label: `MONAD TESTNET - BUILD OF MAIN (UNRELEASED)`.
+Keep an on-screen label: `MONAD TESTNET - RELEASE 0.4.0.dev2026101801`.
 Edit out waiting; never replace a failed step with output from another run.
 
 Say: "The buyer funds a private note with one tool call. The seller waits for the buyer to connect.
@@ -72,8 +70,8 @@ the amount, or which payment keys paid and received."
 
 ### 2:40-2:55: Scope and close
 
-Say: "This is an experimental, single-operator, unaudited testnet system, built from main ahead of
-its next release. Funding, withdrawals and the outer gas sender remain visible."
+Say: "This is an experimental, single-operator, unaudited testnet system. Funding, withdrawals and
+the outer gas sender remain visible."
 
 Stop before three minutes. Upload to a public video host and test the link while signed out.
 

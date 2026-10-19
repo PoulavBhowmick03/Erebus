@@ -17,7 +17,7 @@ It is experimental and unaudited. Don't put value you care about through it.
 | --- | --- | --- |
 | Network | mainnet | testnet (chain 10143) |
 | Pool | StarkWare's STRK20 privacy pool | Erebus's own shielded pools for WMON and USDC |
-| Release | `v0.3.0` | `0.3.0.dev2026101307` (prerelease) |
+| Release | `v0.3.0` | `0.4.0.dev2026101801` (prerelease) |
 | Guide | [docs/setup.md](./docs/setup.md) | [docs/metropolis-install.md](./docs/metropolis-install.md) |
 
 The agent side is the same on both: negotiate, authorize one agreement, settle once, recover by
@@ -25,28 +25,33 @@ watching the chain instead of paying again, and disclose one deal.
 
 ## Install on Monad
 
-Python 3.11+, [uv](https://docs.astral.sh/uv/), and macOS on Apple silicon or Linux x86_64.
+Python 3.11+, [uv](https://docs.astral.sh/uv/), and macOS on Apple silicon or Linux x86_64. Two
+commands give you a connected buyer, seller and auditor on Monad testnet:
+
+```sh
+uv tool install --python 3.11 --no-config \
+  --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
+  --default-index https://pypi.org/simple --index-strategy first-index \
+  "erebus-mcp-server==0.4.0.dev2026101801"
+erebus-init --metropolis quickstart up --directory ./erebus --allow-agent-funding
+```
+
+`quickstart up` prints the one address to fund (about 2.15 testnet MON from the faucet), waits for
+it, starts each fresh wallet from a verified history checkpoint, and writes MCP configs and prompts
+for Claude Code, Codex and Cursor. Two agents then fund, negotiate, settle and retrieve. See the
+[quickstart](./docs/metropolis-quickstart.md); keep the index order (the Metropolis index first,
+PyPI only for dependencies). To install into a virtual environment instead:
 
 ```sh
 uv venv --python 3.11 erebus-metropolis
-uv pip install --python erebus-metropolis/bin/python \
-  --no-config \
+uv pip install --python erebus-metropolis/bin/python --no-config \
   --index https://poulavbhowmick03.github.io/erebus-metropolis/simple/ \
   --default-index https://pypi.org/simple --index-strategy first-index \
-  "erebus-mcp-server==0.3.0.dev2026101307"
+  "erebus-mcp-server==0.4.0.dev2026101801"
 ```
 
-Keep the index order: the Metropolis index first, PyPI only for dependencies. Then follow the
-[install guide](./docs/metropolis-install.md) to set up a buyer, a seller and an auditor with
-`erebus-init --metropolis`, and the [operations guide](./docs/metropolis-operations.md) to run
-them.
-
-**On `main`, not yet released:** a [one-command testnet quickstart](./docs/metropolis-quickstart.md)
-(`erebus-init --metropolis quickstart up`) creates a connected buyer, seller and auditor on one
-machine and writes MCP configs for Claude Code, Codex and Cursor. Fresh wallets start from a
-verified history checkpoint in seconds instead of replaying the pool's history, and agents get
-`fund_wallet`, optional operation IDs and readable error codes. The published
-`0.3.0.dev2026101307` has none of these yet.
+To run a buyer and a seller on separate machines, follow the
+[install guide](./docs/metropolis-install.md) and the [operations guide](./docs/metropolis-operations.md).
 
 ## Install on Starknet
 
