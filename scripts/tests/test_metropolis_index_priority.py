@@ -18,20 +18,25 @@ ROOT = Path(__file__).resolve().parents[2]
 INDEX = "https://poulavbhowmick03.github.io/erebus-metropolis/simple/"
 
 
-def documented_install(path):
+def documented_installs(path, prefixes=("uv pip install", "uv tool install")):
     lines = path.read_text().replace("\\\n", "").splitlines()
-    line = next(line for line in lines if line.startswith("uv pip install") and "erebus-mcp-server==" in line)
-    return shlex.split(line)
+    return [shlex.split(line) for line in lines if line.startswith(prefixes) and "erebus-mcp-server==" in line]
 
 
-@pytest.mark.parametrize("path", ["README.md", "docs/metropolis-install.md"])
+def documented_install(path):
+    return documented_installs(path, ("uv pip install",))[0]
+
+
+@pytest.mark.parametrize("path", ["README.md", "docs/metropolis-install.md", "docs/metropolis-quickstart.md"])
 def test_public_install_prioritizes_metropolis_over_pypi(path):
-    command = documented_install(ROOT / path)
-    assert command[command.index("--index") + 1] == INDEX
-    assert command[command.index("--default-index") + 1] == "https://pypi.org/simple"
-    assert command[command.index("--index-strategy") + 1] == "first-index"
-    assert "--no-config" in command
-    assert "--extra-index-url" not in command and "--index-url" not in command
+    commands = documented_installs(ROOT / path)
+    assert commands, f"{path} documents no install"
+    for command in commands:
+        assert command[command.index("--index") + 1] == INDEX
+        assert command[command.index("--default-index") + 1] == "https://pypi.org/simple"
+        assert command[command.index("--index-strategy") + 1] == "first-index"
+        assert "--no-config" in command
+        assert "--extra-index-url" not in command and "--index-url" not in command
 
 
 def wheel_index(root, source):
