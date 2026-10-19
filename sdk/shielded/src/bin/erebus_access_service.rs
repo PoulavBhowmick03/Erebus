@@ -670,9 +670,10 @@ async fn keep_history_current(pairs: [(PoolRpc, IndexStore); 2]) {
     loop {
         let mut behind = false;
         for (slot, (rpc, store)) in pairs.iter().enumerate() {
+            // Short steps that yield to requests: a request never waits behind a long scan.
             let outcome = match rpc.head().await {
-                Ok(head) => erebus_shielded_prover::recovery::sync_public_index_step(
-                    rpc, store, head, 1_000,
+                Ok(head) => erebus_shielded_prover::recovery::sync_public_index_step_when_idle(
+                    rpc, store, head, 200,
                 )
                 .await
                 .map(|_| ()),

@@ -324,6 +324,36 @@ pub async fn sync_public_index_step(
     through: u64,
     max_blocks: u64,
 ) -> Result<(PoolIndex, RecoveryReport), RecoveryError> {
+    // One bounded step at a time per cache within this process (for example the access service's
+    // background sync and a request), so two writers never repeat the same reads.
+    let step_lock = step_lock(index_store.path());
+    let _step = step_lock.lock().await;
+    sync_public_index_step_locked(rpc, index_store, through, max_blocks).await
+}
+
+/// One bounded step only if no other step on this cache is running in this process; `Ok(None)`
+/// when one is. Background sync uses it so it always yields to requests.
+pub async fn sync_public_index_step_when_idle(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    through: u64,
+    max_blocks: u64,
+) -> Result<Option<(PoolIndex, RecoveryReport)>, RecoveryError> {
+    let step_lock = step_lock(index_store.path());
+    let Ok(_step) = step_lock.try_lock() else {
+        return Ok(None);
+    };
+    sync_public_index_step_locked(rpc, index_store, through, max_blocks)
+        .await
+        .map(Some)
+}
+
+async fn sync_public_index_step_locked(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    through: u64,
+    max_blocks: u64,
+) -> Result<(PoolIndex, RecoveryReport), RecoveryError> {
     let domain = index_store.domain();
     if rpc.chain_id() != domain.chain_id || rpc.pool() != domain.pool {
         return Err(RecoveryError::Deployment);
@@ -370,6 +400,19 @@ pub async fn sync_public_index_step(
         });
     }
     Ok((index, report))
+}
+
+fn step_lock(path: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(Default::default);
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::sync::Arc::clone(locks.entry(path.to_path_buf()).or_default())
 }
 
 /// How often a bounded step reloads and continues after another writer saved the same cache first.

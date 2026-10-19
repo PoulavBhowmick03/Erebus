@@ -108,6 +108,11 @@ impl IndexStore {
         }
     }
 
+    /// The cache file, which identifies this history within a process.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     /// Verified starting checkpoint, or `None` when this cache covers deployment-era history.
     pub fn checkpoint(&self) -> Option<TreeCheckpoint> {
         self.checkpoint.as_deref().copied()
