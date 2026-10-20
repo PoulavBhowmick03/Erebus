@@ -10,9 +10,10 @@ rest: fund a private note, negotiate, settle, verify the payment and retrieve wh
 
 ## What you need
 
-- macOS arm64 or Linux x86_64, `uv`, and about 2.15 testnet MON for the buyer. The amount is printed
-  for you: Monad charges the full gas limit, measured at about 0.31 MON per transaction, and
-  each send needs 0.9 MON free up front. The seller needs none for this flow.
+- macOS arm64 or Linux x86_64, `uv`, and about 2.15 testnet MON for the buyer (1.83 MON plus 0.3
+  testnet USDC with `--pool usdc`, see below). The amount is printed for you: Monad charges the full
+  gas limit, measured at about 0.31 MON per transaction, and each send needs 0.9 MON free up front.
+  The seller needs none for this flow.
 - Testnet MON from the faucet, <https://faucet.monad.xyz>. Nothing here automates the faucet.
 - Two agents that speak MCP: Claude Code, Codex or Cursor.
 
@@ -68,9 +69,42 @@ Options:
   and paired checkpoint acquisition then fails. Use the `-file` forms for keyed URLs: only the
   host is ever printed.
 - `--buyer-key-file`/`--seller-key-file` use existing owner-only gas keys instead of creating them.
-- `--price`, `--fund-amount`, `--resource`, `--payload-file`, `--port`, and `--pool usdc` (send
-  testnet USDC to the buyer as well).
+- `--price`, `--fund-amount` (base units of the pool's asset; defaults per pool, below), `--resource`,
+  `--payload-file`, `--port`, and `--pool usdc` (see "The USDC pool").
 - Without `--allow-agent-funding` the buyer agent can only read its wallet; fund it yourself.
+
+### The USDC pool
+
+```sh
+erebus-init --metropolis quickstart up --directory ./erebus-usdc --pool usdc --allow-agent-funding
+```
+
+The USDC pool (`0x863f5404…50FB`) settles in the deployed testnet USDC token
+`0x534b2f3A21130d7a60830c2Df862319e593943A3`, which has 6 decimals and is issuer-controlled, not
+Circle USDC. Amounts are base units of that token:
+
+| | WMON pool (default) | USDC pool |
+|---|---|---|
+| `--price` default | `1000000000000000` (0.001 WMON) | `100000` (0.1 USDC) |
+| `--fund-amount` default | `3000000000000000` (0.003 WMON) | `300000` (0.3 USDC) |
+| Buyer transactions | 5: wrap, approve, deposit, two for settlement | 4: approve, deposit, two for settlement |
+| Buyer MON | (5 − 1) × 0.31 + 0.9 + 0.003 wrapped = 2.143 | (4 − 1) × 0.31 + 0.9 = 1.830 |
+| Buyer asset | none: `fund_wallet` wraps MON | at least `--fund-amount` USDC base units, sent to the buyer address |
+
+There is no wrap on this pool, so the buyer must hold the USDC it deposits. This repository does not
+document a faucet for this token: send testnet USDC to the buyer address yourself. `up` prints both
+amounts:
+
+```json
+"buyer": {"address": "0x…", "send_at_least_mon": "1.830", "why": "4 transactions at about 0.310 MON each …",
+          "usdc_token": "0x534b2f3a21130d7a60830c2df862319e593943a3",
+          "send_at_least_usdc_base_units": "300000", "send_at_least_usdc": "0.300000", "also": "…"}
+```
+
+and waits until the buyer holds both the MON and the USDC (finalized `balanceOf`). `status` shows
+`balance_usdc_base_units` for each role. With `--allow-agent-funding` the buyer agent gets approve
+and deposit only; if the USDC is short, `fund_wallet` returns `FUNDS_REQUIRED` with the exact
+`shortfall` in base units and retries with the same `operation_ref` once it arrives.
 
 ## 3. Run two agents
 
@@ -100,8 +134,8 @@ What the agents can rely on:
 - **Operation IDs are optional.** Omit `operation_ref` and the tool creates one, saves it before
   anything is sent, and returns it. Retrying without one resumes the same unfinished action instead
   of sending another; a different amount while one is unfinished is refused.
-- **`fund_wallet(amount)`** wraps (WMON) and approves only if needed, deposits, and waits until the
-  note is spendable. If its wait runs out, call it again with the returned `operation_ref`;
+- **`fund_wallet(amount)`** wraps (WMON pool only) and approves only if needed, deposits, and waits
+  until the note is spendable. If its wait runs out, call it again with the returned `operation_ref`;
   finished steps never repeat.
 - **The seller waits.** `negotiate_deal(wait_seconds=N)` keeps listening up to N seconds (0–900).
 - **Settlement waits for the wallet.** `settle_deal` syncs first, so a deposit that is not yet
@@ -145,7 +179,7 @@ and omits the native text (only the listed messages are forwarded, so private de
 | `ALLOWANCE_REQUIRED` | `deposit allowance insufficient; run approve first` | Approve, wait until it completes, then deposit (`fund_wallet` does this). | yes |
 | `OPERATION_IN_PROGRESS` | `another deposit is retained; …`, or an omitted reference with a different amount | Finish the returned `operation_ref` first. | yes |
 | `WALLET_OPERATION_PENDING` | (settlement waited 5 minutes for the wallet) | `sync_wallet` until nothing is pending, then retry `settle_deal`. | yes |
-| `FUNDS_REQUIRED` | (`fund_wallet` on the USDC pool) | Send testnet USDC to the buyer address. | yes |
+| `FUNDS_REQUIRED` | (`fund_wallet` when the signer holds less than `amount`) | On the USDC pool, send the buyer address the error's `shortfall` (base units of `asset`); on WMON, send WMON or allow wrap. | yes |
 
 A `pending` result is not an error: history or settlement is still catching up. Repeat the same
 call with the same `operation_ref`, never a new payment.
