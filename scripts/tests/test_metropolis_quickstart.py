@@ -241,6 +241,132 @@ def test_prefetch_installs_each_circuit_and_resumes_after_a_failure(world, nativ
     assert quick.run(quick_args(world, "status"), ops())["roles"]["buyer"]["artifacts_cached"] == "9/9"
 
 
+USDC_TOKEN = base.POOLS["usdc"][1]
+
+
+def test_pool_defaults_are_in_each_pools_base_units(world, natives):
+    quick.run(quick_args(world, "up", price=None, fund_amount=None), ops())
+    wmon = json.loads((world.root / "qs" / quick.STATE).read_text())
+    assert (wmon["price"], wmon["fund_amount"]) == (str(10**15), str(3 * 10**15))
+    quick.run(quick_args(world, "up", directory=world.root / "u", pool="usdc", price=None, fund_amount=None), ops())
+    usdc = json.loads((world.root / "u" / quick.STATE).read_text())
+    assert (usdc["price"], usdc["fund_amount"]) == ("100000", "300000")
+    assert quick.usdc(100000) == "0.100000" and quick.usdc(300000) == "0.300000"
+    # Explicit amounts still win on either pool.
+    quick.run(quick_args(world, "up", directory=world.root / "u2", pool="usdc", price="7", fund_amount="21"), ops())
+    assert json.loads((world.root / "u2" / quick.STATE).read_text())["fund_amount"] == "21"
+
+
+def test_usdc_funding_needs_four_transactions_of_gas_and_the_usdc_itself(world, natives):
+    result = quick.run(quick_args(world, "up", pool="usdc", price=None, fund_amount=None, allow_agent_funding=True), ops())
+    buyer = result["funding"]["buyer"]
+    # Approve, deposit, two settlements: no wrap, and no note value sent as MON.
+    assert quick.BUYER_TRANSACTIONS["usdc"] == 4
+    assert quick.buyer_required_wei("usdc", 300000) == 3 * 31 * 10**16 + 9 * 10**17
+    assert buyer["send_at_least_mon"] == "1.830" and buyer["why"].startswith("4 transactions at about 0.310 MON")
+    assert "wrapped" not in buyer["why"]
+    assert (buyer["send_at_least_usdc_base_units"], buyer["send_at_least_usdc"], buyer["usdc_token"]) == (
+        "300000", "0.300000", USDC_TOKEN)
+    assert "300000 base units (0.300000 USDC)" in buyer["also"]
+    state = json.loads((world.root / "qs" / quick.STATE).read_text())
+    assert state["buyer_required_wei"] == str(183 * 10**16)
+    assert (state["asset"], state["buyer_required_asset"]) == (USDC_TOKEN, "300000")
+    policy = json.loads((world.root / "qs/buyer/wallet-policy.json").read_text())
+    assert set(policy["allowed_methods"]) == {"notes", "sync", "status", "approve", "deposit"}
+    assert policy["maximum_amount"] == "300000"
+    prompt = (world.root / "qs/agents/buyer/prompt.md").read_text()
+    assert 'fund_wallet(amount="300000")' in prompt and "0.300000 USDC" in prompt and "0.100000 USDC" in prompt
+    assert "nothing wraps it" in prompt and "FUNDS_REQUIRED" in prompt
+    assert "WMON" not in prompt and "USDC" not in (world.root / "qs/agents/seller/prompt.md").read_text()
+
+
+def test_wmon_funding_and_prompt_are_unchanged(world, natives):
+    result = quick.run(quick_args(world, "up", price=None, fund_amount=None), ops())
+    buyer = result["funding"]["buyer"]
+    fund = 3 * 10**15
+    assert quick.BUYER_TRANSACTIONS["wmon"] == 5
+    assert buyer["send_at_least_mon"] == quick.mon(4 * quick.MEASURED_COST_PER_TRANSACTION + quick.SEND_HEADROOM + fund)
+    assert set(buyer) == {"address", "send_at_least_mon", "why"} and buyer["why"].endswith("MON wrapped into the shielded note")
+    state = json.loads((world.root / "qs" / quick.STATE).read_text())
+    assert "asset" not in state and "buyer_required_asset" not in state
+    prompt = (world.root / "qs/agents/buyer/prompt.md").read_text()
+    assert "USDC" not in prompt and "{asset_note}" not in prompt
+    assert ("ask the operator to fund the wallet instead.)\n2. Call negotiate_deal()" in prompt)
+
+
+def test_funding_waits_for_both_mon_gas_and_usdc(world, natives, monkeypatch):
+    balances = {"mon": 0, "usdc": 0}
+    reads = []
+    fake_ops = SimpleNamespace(rpc_balance=lambda url, address: balances["mon"],
+                               rpc_token_balance=lambda url, token, address: reads.append(token) or balances["usdc"])
+    state = {"signers": {"buyer": "0x" + "aa" * 20}, "buyer_required_wei": str(183 * 10**16),
+             "asset": USDC_TOKEN, "buyer_required_asset": "300000"}
+    assert quick._funded(fake_ops, state, "https://x") is False and reads == []
+    balances["mon"] = 183 * 10**16
+    assert quick._funded(fake_ops, state, "https://x") is False and reads == [USDC_TOKEN]
+    balances["usdc"] = 299999
+    assert quick._funded(fake_ops, state, "https://x") is False
+    balances["usdc"] = 300000
+    assert quick._funded(fake_ops, state, "https://x") is True
+    # WMON waits for MON only and never reads a token balance.
+    wmon = {"signers": state["signers"], "buyer_required_wei": state["buyer_required_wei"]}
+    fake_ops.rpc_token_balance = lambda *a: pytest.fail("WMON must not read a token balance")
+    assert quick._funded(fake_ops, wmon, "https://x") is True
+    monkeypatch.setattr(quick.time, "sleep", lambda seconds: None)
+    balances["usdc"] = 0
+    fake_ops.rpc_token_balance = lambda url, token, address: balances["usdc"]
+    assert quick._wait_for_funding(fake_ops, state, "https://x", 0) is False
+
+
+def test_status_reports_the_usdc_balance_and_what_is_left_to_fund(world, natives, monkeypatch):
+    quick.run(quick_args(world, "up", pool="usdc", price=None, fund_amount=None), ops())
+    monkeypatch.setattr(quick, "_head", lambda url: None)
+    monkeypatch.setattr(init, "rpc_token_balance", lambda url, token, address, opener=None:
+                        {"0x" + "aa" * 20: 300000}.get(address, 0) if token == USDC_TOKEN else pytest.fail(token))
+    status = quick.run(quick_args(world, "status", offline=False), ops())
+    assert status["roles"]["buyer"]["balance_usdc_base_units"] == "300000"
+    assert status["roles"]["seller"]["balance_usdc_base_units"] == "0"
+    assert status["next"] == ("fund the buyer with at least 1.830 MON and 300000 base units (0.300000 USDC) of "
+                              "testnet USDC, then run quickstart start")
+    quick.run(quick_args(world, "up", directory=world.root / "w"), ops())
+    wmon = quick.run(quick_args(world, "status", directory=world.root / "w", offline=False), ops())
+    assert "balance_usdc_base_units" not in wmon["roles"]["buyer"]
+    assert wmon["next"].endswith(" MON, then run quickstart start")
+
+
+def test_rpc_token_balance_reads_finalized_balance_of():
+    sent = []
+
+    class Reply:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, limit):
+            return self.body
+
+    def opener(request, timeout):
+        sent.append(json.loads(request.data))
+        return Reply(json.dumps({"result": "0x" + format(300000, "064x")}).encode())
+    holder = "0x" + "aa" * 20
+    assert init.rpc_token_balance("https://x.example", USDC_TOKEN, holder, opener) == 300000
+    (call, tag), = [request["params"] for request in sent]
+    assert sent[0]["method"] == "eth_call" and tag == "finalized"
+    assert call == {"to": USDC_TOKEN, "data": "0x70a08231" + "0" * 24 + "aa" * 20}
+    with pytest.raises(ValueError):
+        init.rpc_token_balance("https://x.example", "0x12", holder, opener)
+
+    def short(request, timeout):
+        return Reply(b'{"result": "0x"}')
+    with pytest.raises(ValueError, match="one word"):
+        init.rpc_token_balance("https://x.example", USDC_TOKEN, holder, short)
+
+
 def test_default_bin_prefers_the_tool_environment(tmp_path, monkeypatch):
     tool = tmp_path / "tool" / "bin"
     tool.mkdir(parents=True)

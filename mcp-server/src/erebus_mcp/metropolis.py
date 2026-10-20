@@ -128,7 +128,9 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             wallet.version()
         except (MetropolisError, TypeError):
             raise ConfigError("invalid wallet action policy or missing native wallet command") from None
-        _register_wallet_tools(server, wallet, methods, refs, writes)
+        _register_wallet_tools(server, wallet, methods, refs, writes,
+                               {"address": wallet_data.get("asset"), "signer": wallet_data.get("signer_address"),
+                                "wrapper": wallet_data.get("wrapper")})
 
     @server.tool()
     async def negotiate_deal(operation_ref: str | None = None, freeze_only: bool = False,

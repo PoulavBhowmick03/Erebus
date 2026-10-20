@@ -11,11 +11,13 @@
 roles' shares wired to each other, so there is nothing to copy between machines. Gas keys are created by
 the installed `erebus-settle` (or passed in as owner-only files); Python only handles paths. It writes MCP
 configs for Claude Code, Codex and Cursor and ready-to-paste agent prompts, prints exactly what to fund,
-and waits for the buyer's balance. `start` (run by `up` once funded) takes the fresh-wallet history
-checkpoints, runs doctor, and starts the seller's access service in the background.
+and waits for the buyer's balance (MON gas, plus the USDC itself on the USDC pool). `start` (run by `up`
+once funded) takes the fresh-wallet history checkpoints, runs doctor, and starts the seller's access
+service in the background.
 
 Nothing here signs or sends a transaction. Agents may fund the buyer's shielded wallet only if the operator
-passed `--allow-agent-funding`, which grants the policy-capped wrap, approve and deposit tools.
+passed `--allow-agent-funding`, which grants the policy-capped approve and deposit tools, plus wrap on the
+WMON pool. The USDC pool has no wrap: the buyer must already hold the USDC it deposits.
 """
 
 from __future__ import annotations
@@ -46,8 +48,14 @@ ACCESS_CONCURRENT_READS = 16
 MON = 10**18
 MEASURED_COST_PER_TRANSACTION = 31 * 10**16
 SEND_HEADROOM = 9 * 10**17
-# Wrap, approve and deposit once, then two settlements.
-BUYER_TRANSACTIONS = 5
+# WMON: wrap, approve and deposit once, then two settlements. USDC: the buyer already holds the asset, so
+# there is no wrap.
+BUYER_TRANSACTIONS = {"wmon": 5, "usdc": 4}
+# Defaults in each pool's base units: WMON has 18 decimals, the deployed testnet USDC 6, so the WMON defaults
+# (0.001 / 0.003 WMON) would be 1,000,000,000 / 3,000,000,000 USDC. USDC: 0.1 USDC price, 0.3 USDC note.
+POOL_DEFAULTS = {"wmon": {"price": str(10**15), "fund_amount": str(3 * 10**15)},
+                 "usdc": {"price": str(10**5), "fund_amount": str(3 * 10**5)}}
+USDC = 10**6
 LIFETIME = 30 * 24 * 3600
 BINDING_LIFETIME = LIFETIME - 3600
 ROLES = ("buyer", "seller")
@@ -56,6 +64,17 @@ STATE = "quickstart.json"
 
 def mon(value: int) -> str:
     return f"{value / MON:.3f}"
+
+
+def usdc(value: int) -> str:
+    return f"{value // USDC}.{value % USDC:06d}"
+
+
+def buyer_required_wei(pool: str, fund: int) -> int:
+    """MON the buyer's gas address needs: every send but the last is spent, and the last needs SEND_HEADROOM
+    free, which already covers its own cost. Wrapping (WMON only) also sends the note's value as MON."""
+    return ((BUYER_TRANSACTIONS[pool] - 1) * MEASURED_COST_PER_TRANSACTION + SEND_HEADROOM
+            + (fund if pool == "wmon" else 0))
 
 
 def _endpoint(value: str | None, file: Path | None, default: str) -> str:
@@ -125,7 +144,7 @@ BUYER_PROMPT = """You are the buyer agent for an Erebus private deal on Monad te
 1. If the wallet has no spendable note, call fund_wallet(amount="{fund}"). If it returns ok=false with a
    pending status, call fund_wallet again with the operation_ref it returned until it reports complete.
    (Without operator-granted funding tools, ask the operator to fund the wallet instead.)
-2. Call negotiate_deal() with no operation_ref. Keep the operation_ref it returns for every later call.
+{asset_note}2. Call negotiate_deal() with no operation_ref. Keep the operation_ref it returns for every later call.
 3. Call check_settlement_funding(operation_ref). Repeat it while its status is pending.
 4. Call settle_deal(operation_ref) once. A pending reply is normal; never settle a deal twice.
 5. Call recover_deal(operation_ref) until payment_verified is true.
@@ -140,6 +159,11 @@ SELLER_PROMPT = """You are the seller agent for an Erebus private deal on Monad 
 Call negotiate_deal(wait_seconds=600) with no operation_ref, so you wait for the buyer to connect. Report the
 deal_commitment and the operation_ref it returns. If it fails with PEER_UNAVAILABLE, call it again. You never
 pay; the seller's access service delivers the resource once the payment is final.
+"""
+
+USDC_NOTE = """   Amounts are USDC base units (6 decimals): {fund} is {fund_usdc} USDC and the price is {price_usdc} USDC.
+   The buyer must already hold that USDC; nothing wraps it. If fund_wallet returns FUNDS_REQUIRED, ask the
+   operator to send the buyer address the shortfall it names, then call fund_wallet with the same operation_ref.
 """
 
 
@@ -158,8 +182,10 @@ def up(args, ops) -> dict:
     peer = _endpoint(args.peer_rpc_url, args.peer_rpc_url_file, DEFAULT_PEER_RPC_URL)
     if primary == peer:
         raise ValueError("the primary and peer RPC endpoints must differ")
-    fund = ops.require_unsigned(args.fund_amount, "--fund-amount")
-    price = ops.require_unsigned(args.price, "--price")
+    defaults = POOL_DEFAULTS[args.pool]
+    fund = ops.require_unsigned(args.fund_amount if args.fund_amount is not None else defaults["fund_amount"],
+                                "--fund-amount")
+    price = ops.require_unsigned(args.price if args.price is not None else defaults["price"], "--price")
     if int(fund) < int(price):
         raise ValueError("--fund-amount must cover at least one --price")
     directory.mkdir(mode=0o700)
@@ -200,35 +226,41 @@ def up(args, ops) -> dict:
     ops.auditor(SimpleNamespace(pool=args.pool, directory=directory / "auditor", bin=bins, pins=pins,
                                 deployment=deployment, rpc_url=primary, peer_rpc_url=peer))
     _set_rates(ops, directory)
+    asset_note = "" if args.pool == "wmon" else USDC_NOTE.format(
+        fund=fund, fund_usdc=usdc(int(fund)), price_usdc=usdc(int(price)))
     files = []
     for role, prompt in (("buyer", BUYER_PROMPT), ("seller", SELLER_PROMPT)):
-        files += _agent_files(directory, role, prompt.format(server=f"erebus-{role}", fund=fund))
-    # The last send needs SEND_HEADROOM free, which already covers its own cost; the ones before it
-    # are spent. Wrapping also sends the note's value as MON.
-    required = ((BUYER_TRANSACTIONS - 1) * MEASURED_COST_PER_TRANSACTION + SEND_HEADROOM
-                + (int(fund) if args.pool == "wmon" else 0))
+        files += _agent_files(directory, role, prompt.format(server=f"erebus-{role}", fund=fund, asset_note=asset_note))
+    required = buyer_required_wei(args.pool, int(fund))
+    transactions = BUYER_TRANSACTIONS[args.pool]
     state = {"version": 1, "pool": args.pool, "bin": str(bins), "ports": ports, "price": price, "fund_amount": fund,
              "resource": args.resource, "agent_funding": bool(args.allow_agent_funding),
              "signers": {role: signers[role][0] for role in ROLES}, "buyer_required_wei": str(required),
              "rpc_hosts": [_host(primary), _host(peer)], "created": int(time.time()),
              "descriptor_expires_at": int(time.time()) - 60 + LIFETIME}
+    if args.pool != "wmon":
+        # The buyer deposits the asset it already holds; `up` and `status` wait for it as well as for gas.
+        state.update(asset=_config(directory, "buyer")["asset"], buyer_required_asset=fund)
     ops.private_json(directory / STATE, state)
     funding = {
         "faucet": FAUCET_URL,
         "buyer": {"address": signers["buyer"][0], "send_at_least_mon": mon(required),
-                  "why": f"{BUYER_TRANSACTIONS} transactions at about {mon(MEASURED_COST_PER_TRANSACTION)} MON each "
+                  "why": f"{transactions} transactions at about {mon(MEASURED_COST_PER_TRANSACTION)} MON each "
                          f"(Monad charges the full gas limit), with {mon(SEND_HEADROOM)} MON free at each send"
                          + (f", and {mon(int(fund))} MON wrapped into the shielded note" if args.pool == "wmon" else "")},
         "seller": {"address": signers["seller"][0], "send_at_least_mon": "0",
                    "why": "the seller sends nothing in this flow; fund it later only to withdraw earnings"},
     }
     if args.pool == "usdc":
-        funding["buyer"]["also"] = f"send at least {fund} base units of testnet USDC to the buyer address"
+        funding["buyer"].update(
+            usdc_token=state["asset"], send_at_least_usdc_base_units=fund, send_at_least_usdc=usdc(int(fund)),
+            also=f"send at least {fund} base units ({usdc(int(fund))} USDC) of testnet USDC, token {state['asset']}, "
+                 "to the buyer address; nothing here mints or wraps it")
     result = {"status": "created", "directory": str(directory), "rpc_hosts": state["rpc_hosts"],
               "funding": funding, "agent_files": files, "agent_funding": state["agent_funding"]}
     if args.no_wait:
         return {**result, "next": "fund the buyer address, then run quickstart start"}
-    waited = _wait_for_funding(ops, directory, state, primary, args.funding_timeout)
+    waited = _wait_for_funding(ops, state, primary, args.funding_timeout)
     if not waited:
         return {**result, "next": "the buyer is not funded yet; fund it, then run quickstart start"}
     return {**result, **start(SimpleNamespace(directory=directory), ops)}
@@ -247,12 +279,20 @@ def _set_rates(ops, directory: Path) -> None:
     ops.replace_private_json(path, data)
 
 
-def _wait_for_funding(ops, directory: Path, state: dict, url: str, timeout: int) -> bool:
+def _funded(ops, state: dict, url: str) -> bool:
+    """The buyer holds enough MON for gas and, on a non-wrapped pool, enough of the asset to deposit."""
+    buyer = state["signers"]["buyer"]
+    if ops.rpc_balance(url, buyer) < int(state["buyer_required_wei"]):
+        return False
+    needed = int(state.get("buyer_required_asset", "0"))
+    return needed == 0 or ops.rpc_token_balance(url, state["asset"], buyer) >= needed
+
+
+def _wait_for_funding(ops, state: dict, url: str, timeout: int) -> bool:
     deadline = time.monotonic() + timeout
-    required = int(state["buyer_required_wei"])
     while True:
         try:
-            if ops.rpc_balance(url, state["signers"]["buyer"]) >= required:
+            if _funded(ops, state, url):
                 return True
         except (OSError, ValueError, KeyError):
             pass
@@ -432,6 +472,11 @@ def status(args, ops) -> dict:
                 entry["balance_mon"] = mon(ops.rpc_balance(url, state["signers"][role]))
             except (OSError, ValueError, KeyError):
                 entry["balance_mon"] = None
+            if "asset" in state:
+                try:
+                    entry["balance_usdc_base_units"] = str(ops.rpc_token_balance(url, state["asset"], state["signers"][role]))
+                except (OSError, ValueError, KeyError):
+                    entry["balance_usdc_base_units"] = None
         cached, total = _artifacts(directory, role)
         entry["artifacts_cached"] = f"{cached}/{total}"
         descriptor = next((directory / role / "keys").glob("*.descriptor.json"))
@@ -446,7 +491,9 @@ def status(args, ops) -> dict:
     if expiring:
         step = "descriptors expire within a day; run quickstart renew"
     elif not buyer_ready:
-        step = f"fund the buyer with at least {mon(int(state['buyer_required_wei']))} MON, then run quickstart start"
+        step = f"fund the buyer with at least {mon(int(state['buyer_required_wei']))} MON" + (
+            f" and {state['buyer_required_asset']} base units ({usdc(int(state['buyer_required_asset']))} USDC) of "
+            "testnet USDC" if "buyer_required_asset" in state else "") + ", then run quickstart start"
     elif roles["buyer"]["artifacts_cached"].split("/")[0] != roles["buyer"]["artifacts_cached"].split("/")[1]:
         step = "proving artifacts are incomplete; run quickstart prefetch"
     elif service != "running":
@@ -550,13 +597,15 @@ def add_parser(commands) -> None:
     quick.add_argument("--peer-rpc-url-file", type=Path, help="owner-only file holding a keyed peer RPC URL")
     quick.add_argument("--buyer-key-file", type=Path, help="existing owner-only buyer gas key (default: create one)")
     quick.add_argument("--seller-key-file", type=Path, help="existing owner-only seller gas key (default: create one)")
-    quick.add_argument("--price", default=str(10**15), help="deal price in base units")
-    quick.add_argument("--fund-amount", default=str(3 * 10**15), help="shielded note the buyer funds, base units")
+    quick.add_argument("--price", help="deal price in the pool asset's base units (default: 10^15 = 0.001 WMON; "
+                                       "100000 = 0.1 USDC)")
+    quick.add_argument("--fund-amount", help="shielded note the buyer funds, base units (default: 3x10^15 = 0.003 WMON; "
+                                             "300000 = 0.3 USDC)")
     quick.add_argument("--resource", default="quickstart-sample")
     quick.add_argument("--payload-file", type=Path, help="the resource the seller delivers (default: a sample file)")
     quick.add_argument("--port", type=int, default=9311, help="seller negotiation port; buyer +1, access service +2")
     quick.add_argument("--allow-agent-funding", action="store_true",
-                       help="grant the buyer agent policy-capped wrap/approve/deposit (fund_wallet)")
+                       help="grant the buyer agent policy-capped approve/deposit, plus wrap on WMON (fund_wallet)")
     quick.add_argument("--no-wait", action="store_true", help="up: do not wait for the buyer's balance")
     quick.add_argument("--funding-timeout", type=int, default=1800, help="up: seconds to wait for funding")
     quick.add_argument("--offline", action="store_true", help="status: skip RPC reads")

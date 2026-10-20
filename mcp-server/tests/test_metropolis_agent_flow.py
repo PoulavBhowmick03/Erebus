@@ -114,6 +114,68 @@ def test_fund_wallet_skips_steps_already_satisfied_and_resumes_after_its_wait_ru
     session(env, script)
 
 
+USDC_TOKEN = "0x534b2f3a21130d7a60830c2df862319e593943a3"
+BUYER = "0x" + "aa" * 20
+USDC_METHODS = ("approve", "deposit", "notes", "sync", "status")
+
+
+def pool_wallet(tmp_path: Path, wrapper: str | None) -> None:
+    """The wallet.json `init` writes: the pool asset, the gas signer, and a wrapper only on WMON."""
+    operator_file(tmp_path / "wallet.json", {"state_root": str(tmp_path / "state"), "asset": USDC_TOKEN if wrapper is None
+                                             else wrapper, "wrapper": wrapper, "signer_address": BUYER})
+
+
+def test_fund_wallet_on_usdc_approves_and_deposits_without_wrapping(tmp_path):
+    env = environment(tmp_path, methods=USDC_METHODS, FAKE_BALANCE="300000", maximum="300000")
+    pool_wallet(tmp_path, None)
+
+    async def script(call, names):
+        assert "fund_wallet" in names and "wrap_wallet" not in names
+        funded = await call("fund_wallet", amount="300000", wait_seconds=120)
+        assert funded["ok"] is True, funded
+        assert [step["kind"] for step in funded["result"]["steps"]] == ["approve", "deposit"]
+        state = fake_state(tmp_path)
+        assert state["sends"] == 2 and {op["kind"] for op in state["ops"].values()} == {"approve", "deposit"}
+        assert state["balance"] == 0
+    session(env, script)
+
+
+def test_fund_wallet_on_usdc_names_the_exact_shortfall_and_resumes_once_funded(tmp_path):
+    env = environment(tmp_path, methods=USDC_METHODS, FAKE_BALANCE="120000", maximum="300000")
+    pool_wallet(tmp_path, None)
+
+    async def script(call, names):
+        short = await call("fund_wallet", amount="300000", wait_seconds=0)
+        error = short["error"]
+        assert short["ok"] is False and error["code"] == "FUNDS_REQUIRED" and error["retry_same_operation_ref"] is True
+        assert (error["asset"], error["signer"]) == (USDC_TOKEN, BUYER)
+        assert (error["asset_balance"], error["required"], error["shortfall"]) == ("120000", "300000", "180000")
+        assert "180000 more base units" in error["next_action"] and "allow wrap" not in error["next_action"]
+        assert fake_state(tmp_path)["sends"] == 0
+        # The operator sends the shortfall; the same reference then plans approve and deposit only.
+        assert not (tmp_path / "fake.json").exists()
+        (tmp_path / "fake.json").write_text(json.dumps({"sends": 0, "ops": {}, "notes": [], "balance": 300000,
+            "allowance": 0, "negotiate_failures": 0, "settled_with_pending": None, "calls": []}))
+        resumed = await call("fund_wallet", amount="300000", operation_ref=error["operation_ref"], wait_seconds=120)
+        assert resumed["ok"] is True, resumed
+        assert [step["kind"] for step in resumed["result"]["steps"]] == ["approve", "deposit"]
+        assert fake_state(tmp_path)["sends"] == 2
+    session(env, script)
+
+
+def test_fund_wallet_on_wmon_without_wrap_keeps_its_wrap_hint(tmp_path):
+    env = environment(tmp_path, methods=USDC_METHODS, FAKE_BALANCE="10")
+    pool_wallet(tmp_path, "0x" + "fb" * 20)
+
+    async def script(call, names):
+        short = await call("fund_wallet", amount="300", wait_seconds=0)
+        assert short["error"]["code"] == "FUNDS_REQUIRED"
+        assert short["error"]["next_action"] == ("the signer holds 10 of the asset; send at least 290 more, or ask "
+                                                 "the operator to allow wrap")
+        assert "shortfall" not in short["error"]
+    session(env, script)
+
+
 def test_an_omitted_reference_retries_instead_of_sending_again(tmp_path):
     env = environment(tmp_path)
 

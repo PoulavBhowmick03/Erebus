@@ -664,7 +664,10 @@ def connect(args) -> dict:
                                                                           "env": environment}}})
     return {"status": "connected", "role": role, "peer": other, "written": written,
             "next": ("start erebus-access-service with access.json, then the MCP server" if role == "seller"
-                     else "add mcp.json to the agent, fund the wallet (wrap/approve/deposit with erebus-wallet), then negotiate")}
+                     else "add mcp.json to the agent, fund the wallet (wrap/approve/deposit with erebus-wallet), then negotiate"
+                     if operator["pool"] == "wmon" else
+                     "add mcp.json to the agent, send the signer the pool's asset, fund the wallet (approve/deposit with "
+                     "erebus-wallet), then negotiate")}
 
 
 def peer_endpoint(descriptor: Path) -> str:
@@ -718,6 +721,25 @@ def rpc_balance(url: str, address: str, opener=None) -> int:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_getBalance", "params": [address, "finalized"]}).encode()
     with (opener or urllib.request.urlopen)(request(url, body, {"content-type": "application/json"}), timeout=30) as response:
         return int(json.loads(response.read(1 << 16))["result"], 16)
+
+
+# ERC-20 `balanceOf(address)`.
+BALANCE_OF = "0x70a08231"
+
+
+def rpc_token_balance(url: str, token: str, address: str, opener=None) -> int:
+    """A finalized ERC-20 balance read; nothing is signed or sent."""
+    import urllib.request
+    token, address = token.lower(), address.lower()
+    if not ADDRESS.fullmatch(token) or not ADDRESS.fullmatch(address):
+        raise ValueError("token and holder must be 0x-prefixed lowercase addresses")
+    call = {"to": token, "data": BALANCE_OF + "0" * 24 + address[2:]}
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [call, "finalized"]}).encode()
+    with (opener or urllib.request.urlopen)(request(url, body, {"content-type": "application/json"}), timeout=30) as response:
+        word = json.loads(response.read(1 << 16))["result"]
+    if not isinstance(word, str) or not re.fullmatch(r"0x[0-9a-fA-F]{64}", word):
+        raise ValueError("balanceOf did not return one word")
+    return int(word, 16)
 
 
 def network_check(bins: Path, url: str, cwd: Path) -> dict:

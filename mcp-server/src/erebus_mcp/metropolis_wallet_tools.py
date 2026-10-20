@@ -69,7 +69,9 @@ async def _settled_wallet(wallet: MetropolisWallet, timeout: int) -> dict[str, A
 
 
 def _register_wallet_tools(server: MCPServer, wallet: MetropolisWallet, methods: list[str],
-                           refs: OperationRefs, writes: asyncio.Lock) -> None:
+                           refs: OperationRefs, writes: asyncio.Lock, asset: dict[str, Any] | None = None) -> None:
+    """`asset` describes the configured pool asset: its `address`, `signer`, and whether it has a native
+    `wrapper` (WMON). Without one the signer must already hold the asset; fund_wallet never wraps it."""
     async def action(kind: str, amount: str, operation_ref: str | None) -> dict[str, Any]:
         created = False
         if operation_ref is None:
@@ -169,7 +171,7 @@ def _register_wallet_tools(server: MCPServer, wallet: MetropolisWallet, methods:
         @server.tool()
         async def fund_wallet(amount: str, operation_ref: str | None = None,
                               wait_seconds: int = FUND_WAIT_SECONDS) -> dict[str, Any]:
-            """Fund one spendable shielded note: wrap if needed, approve if needed, deposit, then sync.
+            """Fund one spendable shielded note: wrap if needed (WMON only), approve if needed, deposit, then sync.
 
             Each step is an ordinary policy-capped wallet action under its own saved reference, and
             each waits until it is final before the next. If wait_seconds (0-900) runs out, call this
@@ -178,11 +180,26 @@ def _register_wallet_tools(server: MCPServer, wallet: MetropolisWallet, methods:
             if type(wait_seconds) is not int or not 0 <= wait_seconds <= MAX_WAIT_SECONDS:
                 return refused("INVALID_REQUEST", CATEGORY, f"wait_seconds must be 0-{MAX_WAIT_SECONDS}")
             async with writes:
-                return await _fund(wallet, methods, refs, amount, operation_ref, wait_seconds)
+                return await _fund(wallet, methods, refs, amount, operation_ref, wait_seconds, asset)
+
+
+def _shortfall(asset: dict[str, Any] | None, balance: int, wanted: int, operation_ref: str) -> dict[str, Any]:
+    """FUNDS_REQUIRED for a balance below the funding amount."""
+    if asset is None or asset.get("wrapper") is not None:
+        # The wrapped-native pool: the operator can allow wrap instead of sending the asset.
+        return refused("FUNDS_REQUIRED", CATEGORY, f"the signer holds {balance} of the asset; send at least "
+                       f"{wanted - balance} more, or ask the operator to allow wrap", operation_ref=operation_ref)
+    token, signer = asset.get("address"), asset.get("signer")
+    return refused("FUNDS_REQUIRED", CATEGORY,
+                   f"the signer {signer} holds {balance} base units of the pool asset {token} and this funding needs "
+                   f"{wanted}; send the signer at least {wanted - balance} more base units of that token (this pool "
+                   "cannot wrap MON), then call fund_wallet again with this operation_ref",
+                   operation_ref=operation_ref, asset=token, signer=signer, asset_balance=str(balance),
+                   required=str(wanted), shortfall=str(wanted - balance))
 
 
 async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRefs, amount: str,
-                operation_ref: str | None, wait_seconds: int) -> dict[str, Any]:
+                operation_ref: str | None, wait_seconds: int, asset: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         for kind in ("approve", "deposit"):
             wallet.check(kind, amount=amount, operation_ref=_PLACEHOLDER)
@@ -210,8 +227,7 @@ async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRef
         steps = []
         if balance < wanted:
             if "wrap" not in methods:
-                return refused("FUNDS_REQUIRED", CATEGORY, f"the signer holds {balance} of the asset; send at least "
-                               f"{wanted - balance} more, or ask the operator to allow wrap", operation_ref=operation_ref)
+                return _shortfall(asset, balance, wanted, operation_ref)
             steps.append({"kind": "wrap", "amount": str(wanted - balance)})
         if allowance < wanted:
             steps.append({"kind": "approve", "amount": amount})
