@@ -129,8 +129,9 @@ Each agent sees only its own role's server. Start the seller first, and paste ea
 - **Cursor:** copy `cursor.mcp.json` to the project's `.cursor/mcp.json`.
 
 The buyer's flow is: `fund_wallet` → `negotiate_deal` → `check_settlement_funding` →
-`settle_deal` → `recover_deal` → `retrieve_service_access(operation_ref=…)`. The seller calls
-`negotiate_deal(wait_seconds=600)` and waits for the buyer.
+`settle_deal` → `recover_deal` → `retrieve_service_access(operation_ref=…)`. The seller loops:
+`negotiate_deal(wait_seconds=600)`, report the returned `peer` and `deal_commitment`, and call it
+again for the next buyer. `list_peers` shows which buyers the seller is configured for.
 
 What the agents can rely on:
 
@@ -148,6 +149,27 @@ What the agents can rely on:
 - **Errors say what to do.** Every failure has a stable `code`, the native `native_error`, a
   `next_action`, and `retry_same_operation_ref` (see Troubleshooting).
 
+### More buyers
+
+One seller can sell the same resource to several buyers, each at its own price:
+
+```sh
+erebus-init --metropolis quickstart add-buyer --directory ./erebus --name b2 --price 900000000000000 \
+  [--fund-amount 3000000000000000] [--buyer-key-file KEY] [--allow-agent-funding]
+```
+
+This creates a buyer operator under `erebus/buyers/b2/`, a seller peer `erebus/seller/peers/b2/`
+with its handoff in `erebus/seller/outbox/b2/`, and agent files in `erebus/agents/b2/`. It prints
+the new buyer's gas address and how much to fund. It never changes the seller's access service,
+service identity or payload. Fund the address, run `quickstart start` (it checkpoints every funded
+buyer), and give `agents/b2/` to the new buyer agent. The seller agent's loop serves buyers one
+deal at a time, in the order they connect; a buyer that connects while another deal runs is told
+the peer is unavailable and its `negotiate_deal` retries.
+
+`--price` and `--fund-amount` default to the pool's own defaults (see "The USDC pool"). On the USDC
+pool, send the new buyer the printed USDC as well as the MON; `start` checkpoints it only once it
+holds both, and always takes the auditor's checkpoint first.
+
 ## 4. Status, renew, down
 
 ```sh
@@ -158,9 +180,10 @@ erebus-init --metropolis quickstart down   --directory ./erebus   # stop the acc
 erebus-init --metropolis quickstart start  --directory ./erebus   # resume after down
 ```
 
-Descriptors and identity bindings last 30 days. `status` warns a day before they expire, and
-`renew` re-signs both descriptors with their existing keys (the wallets are untouched), re-issues
-the bindings and service terms, and restarts the service.
+Descriptors and identity bindings last 30 days. `status` lists every buyer and warns a day before
+descriptors expire. `renew` re-signs every descriptor with its existing keys (the wallets are
+untouched), re-issues the bindings, gives each buyer fresh service terms with a new delivery
+deadline (the seller's and the buyer's copies match), and restarts the service once.
 
 ## Troubleshooting
 
@@ -171,6 +194,10 @@ and omits the native text (only the listed messages are forwarded, so private de
 | Code | Native message(s) | What to do | Same `operation_ref`? |
 |---|---|---|---|
 | `PEER_UNAVAILABLE` | `negotiation connection deadline exceeded`; `negotiation endpoint unavailable`; `peer connection unavailable or timed out`; `offer delivery uncertain; retain this operation and reconnect` | Start the counterparty's `negotiate_deal`, then retry; or pass a larger `wait_seconds`. | yes |
+| `NO_PEER_CONNECTED` | `no configured peer connected before the deadline` | Seller: no configured buyer connected in time. Retry the same call once a buyer runs `negotiate_deal`. | yes |
+| `PEER_NOT_CONFIGURED` | `negotiation peer is not configured` | Seller: that `peer` is not in the peer table. Call `list_peers`, or add it with `quickstart add-buyer`. | no |
+| `PEER_EXPIRED` | `negotiation peer is expired or disabled` | Seller: that buyer's configuration expired or is disabled. `quickstart renew`, or re-add the buyer. | no |
+| `OPERATION_BOUND_TO_OTHER_PEER` | `operation is bound to another negotiation peer` | Seller: the `operation_ref` belongs to another buyer. Omit it, or pass that buyer's `peer`. | no |
 | `LISTENER_UNAVAILABLE` | `negotiation listener unavailable` | Another process holds the negotiation port; stop it. | yes |
 | `DESCRIPTOR_EXPIRED` | `local discovery descriptor is invalid or expired`; `peer discovery descriptor is invalid or expired` | `quickstart renew` (keys and funds kept); on separate machines re-run `init` and `connect` and share the new descriptor. | no |
 | `OPERATOR_CONFIG_INVALID` | `invalid operator configuration` | The operator must fix the config (for example `timeout_seconds` above 300). | no |
@@ -202,4 +229,13 @@ call with the same `operation_ref`, never a new payment.
 - Public RPCs throttle. ankr's free endpoint returns HTTP 429 under load; reads back off for
   seconds and retry, quickstart paces each provider at 20 requests per second, and a keyed
   endpoint (`--peer-rpc-url-file`) is the reliable fix.
-- One seller serves the one buyer it was connected to. Many-buyer sellers are later work.
+- A seller negotiates with one buyer at a time. Buyers can start together; the others wait and
+  retry until the seller's agent calls `negotiate_deal` again. A concurrent negotiation daemon is
+  later work.
+- Buyers added with `add-buyer` buy the seller's existing resource. Serving several resources from
+  one access service needs a hand-written `resources` list in `access.json` (operations guide §4).
+- Buyers share the seller's negotiation endpoint and access service. A slow or unfinished
+  handshake holds the seller for up to 5 seconds, and one buyer can observe the timing of another's
+  requests there. Access answers are the same for an unknown and another buyer's agreement, and
+  both spend the same signature checks. A hit still also reads, decodes and replays the evidence
+  and hashes the snapshot payload, so a close timer can tell a hit from a miss (operations guide §4).

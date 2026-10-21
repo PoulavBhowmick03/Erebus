@@ -1125,6 +1125,45 @@ For shielded settlement, replace `backend` with:
 
 Use the authenticated deployment block, hash, and independently pinned runtimes, not the
 placeholders. The candidate requires these pins for snapshot and metered profiles.
+
+**Several snapshot resources.** Instead of `resource` and `payload_file`, a snapshot service may
+name a `resources` list of 1 to 64 distinct entries:
+
+```json
+"resources": [
+  {"resource": "dataset.snapshot.v1", "payload_file": "/absolute/path/v1.snapshot", "legacy_issuance": true},
+  {"resource": "dataset.snapshot.v2", "payload_file": "/absolute/path/v2.snapshot"}
+]
+```
+
+Each request is routed by the agreement's signed `service.resource`. Each resource has its own
+issuer and issuance records under `<state_root>/issuance/<sha256(resource) hex>/`; the one entry
+marked `legacy_issuance` (at most one) keeps using `<state_root>/issuance/` itself, so a service that
+served only that resource keeps its earlier issuances. The metered profile still serves one
+`resource`.
+
+**Answers before authentication.** A request whose commitment names no evidence file, an
+undecodable or mis-permissioned one, an agreement for a resource or profile this service does not
+serve, an expired request, and a bad signature all get the same `401` and body. Only the buyer key
+of an agreement learns anything more. This applies to `/v1/access` and `/v1/metered`.
+
+- Request-only checks run before any evidence lookup: a zero nonce, an expiry not within the next
+  300 seconds, and (metered) a status request with a nonzero call index. Their cost cannot depend
+  on whether the commitment exists.
+- After that, every rejection runs exactly one request-signature verification. A miss, and an
+  agreement this profile does not serve, verify two decoy authorizations and the request signature
+  under a fixed public decoy key. A served agreement verifies its two participant authorizations and
+  always the request signature, even when the commitment field does not match it.
+- The remaining difference is on a hit only: reading the evidence file (up to the disclosure size
+  bound), decoding it, replaying its transcript, and, for a snapshot, hashing the payload (up to
+  1 MiB) to compare the fulfillment digest. A caller who times a loopback service closely may tell a
+  hit from a miss by that work. Removing it would mean authenticating before the lookup, which
+  changes the request protocol.
+
+**Per-buyer limits.** After authentication, and before any RPC, each buyer agreement key may have
+at most 2 requests in flight and a burst of 6 requests, refilled at 1 per second. A refused request
+is `429` "busy" with `retry_without_payment`; retry later and never pay again. These apply on top of
+the global limit of 16 requests in flight.
 No secure Monad shielded
 deployment is claimed by this document.
 
@@ -1472,6 +1511,49 @@ Start one seller process, then one buyer process, with their separate configurat
   deal to hide an error.**
 - The command serializes calls for one operator state directory. It is not a concurrent
   marketplace daemon.
+
+#### Many-buyer sellers (configuration version 2)
+
+A seller can hold a table of buyers instead of one `peer_descriptor_file`. Its configuration has
+`"version": 2` and `peers_root` in place of `peer_descriptor_file`, `terms_template_file`,
+`minimum_price` and `max_deal_lifetime_seconds`. Each buyer has an owner-only directory
+`<peers_root>/<id>/`, where `<id>` is 1 to 32 characters of `a-z`, `0-9` and `-`:
+
+```json
+{
+  "version": 1, "id": "b2", "descriptor_file": "descriptor.json", "binding_file": "identity.binding",
+  "terms_template_file": "service.terms", "minimum_price": "65", "max_deal_lifetime_seconds": 3600,
+  "resource": "dataset.snapshot.v1", "expires_at": 1800000000, "enabled": true, "legacy_transport": false
+}
+```
+
+- File names are bare names inside the peer directory. Entries starting with `.` (staging
+  directories) are skipped; any other entry must be a valid peer. At most 256 peers may be enabled,
+  enabled peers must have distinct transport keys, and at most one may be `legacy_transport`.
+  `erebus-init --metropolis connect --peer-id ID` writes a peer through a staging directory and a
+  rename, so it is either complete or absent.
+- Buyers dial with the routed handshake (transport version 2) when the seller's
+  `share/service.json` says `"negotiation_transport": 2`. Their configuration then has
+  `"negotiation_transport": 2`. Message 1 announces the version in clear and is mixed into the
+  handshake hash. The seller selects the buyer after message 3 by its authenticated static key and
+  the descriptor digest it sent encrypted. Removing the announcement makes the handshake fail.
+- A buyer without that field uses version 1, which the seller accepts only from the
+  `legacy_transport` peer. A version 1 seller migrated by `connect --peer-id` keeps its original
+  buyer as `peers/default` with `legacy_transport: true`, and that buyer needs no change.
+- One call accepts connections until a configured buyer authenticates. Each connection gets at most
+  5 seconds to finish its handshake. An unknown, expired, disabled, or other buyer's connection is
+  closed and the call keeps accepting until its deadline, then reports
+  `no configured peer connected before the deadline`.
+- The first buyer to authenticate binds the operation, before its offer is checked against that
+  buyer's terms. A retry with the same `operation_ref` accepts only that buyer. A request may name
+  `"peer": "<id>"` to accept only that buyer. Errors: `negotiation peer is not configured`,
+  `negotiation peer is expired or disabled`, `operation is bound to another negotiation peer`.
+- The authorized reply adds `"peer": "<id>"`. Transcripts live in the `peer-<id>` namespace, or in
+  `agent` for the legacy peer. Operation records gain `peer`; a version 1 record belongs to the
+  legacy peer.
+- `{"method":"list_peers","config_file":…}` reports each peer's id, resource, price, minimum price,
+  expiry, and whether it can connect now, without keys or paths.
+- Negotiation stays sequential: one deal at a time under the operator's identity lease.
 
 An authorized response reports the commitment and a private `evidence_file` path. That journal
 blob contains `SelectedAgreement` bytes, despite the storage engine's `.tx` filename suffix. It
