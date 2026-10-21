@@ -1650,6 +1650,53 @@ artifacts. If observation is pending or unavailable, retain those caches and ret
 request. Never interpret an unavailable result as non-payment. Never submit another payment from
 the auditor command.
 
+#### Auditor history checkpoint
+
+A new, empty shielded auditor cache can start from a paired finalized checkpoint instead of the
+deployment block. `erebus-shielded-disclosure` (not `erebus-disclosure`, which answers that the
+method is unsupported) records it with the same deployment object:
+
+```json
+{"method":"checkpoint","deployment":{ ...as above... },"confirm_new_cache":true}
+```
+
+Both providers must report the same finalized block, run the pinned pool and verifier code there,
+and return the same pool frontier, which must recompute its root. The command writes
+`<cache_root>/history-checkpoint.json` (owner-only, bound to the chain, pool and deployment
+anchor) and reports `checkpoint_block` and `history_from_block`. It never reads logs, signs or
+sends. It refuses without `confirm_new_cache`, refuses a cache whose `primary` or `peer`
+directory exists (a cache that began full history is strictly stronger and is never narrowed),
+and refuses a record for another deployment. Repeating it with the record present returns
+`"checkpoint":"existing"` without contacting either provider. `erebus-init --metropolis auditor`
+defaults to `--history full`: no RPC call at setup, and verification replays from the deployment
+block, which is what an auditor set up after the grant (and so after settlement) needs.
+`--history checkpoint` is the faster opt-in for an auditor set up before the deals it will audit;
+it runs this method and returns `history_from_block`. `quickstart start` takes the auditor's
+checkpoint before either wallet's. `disclosure.json` is the same either way.
+
+With a record, `verify_payment` scans only blocks after the checkpoint. A deal whose nullifier
+both providers show consumed at the checkpoint block itself was settled at or before it: the reply
+is `"status":"settled_before_checkpoint"` with `checkpoint_block`, `payment_verified: false` and a
+`next_action`, exit code `3`. Verify that deal with a cache that starts earlier, for example a
+fresh `cache_root` without a record. A deal consumed now but not at the checkpoint, with no
+settlement event after it, is a provider inconsistency error. If the checkpoint read fails, the
+result stays an incomplete-history error; retain the caches and retry. Without a record,
+verification replays from the deployment block exactly as before.
+
+An auditor checkpoint changes which blocks the auditor scans, not what a verified payment means. A
+payment is reported verified only when both configured providers agree, at a finalized block, that the
+pool runs the pinned code, that the deal's one-time nullifier is consumed, and that the canonical block
+that consumed it emitted the agreement's commitment; the pool lets a deal be consumed only once, so no
+earlier history can hold a different settlement. The checkpoint's tree frontier is read by the auditor
+itself from both providers and only checks later tree updates; it is never evidence of payment. A deal
+settled at or before the checkpoint block is reported as `settled_before_checkpoint`, never as paid or
+unpaid, and must be verified with a cache that starts earlier. The assumption is the same as every
+verification: two independently configured providers that do not collude, and finality that does not
+revert. Provider agreement is not a cryptographic proof of chain state.
+
+Follow-up, not built: a checkpoint at a chosen earlier block (`at_block`) for auditing older deals
+without a full replay.
+
 For incomplete history, the source candidate returns exit code `2` with `next_log_block` progress.
 An indexed authorized payment can be certified from a complete canonical prefix below both providers' finalized tips.
 The tool still verifies its event, consumed state, pool state and runtime pins.

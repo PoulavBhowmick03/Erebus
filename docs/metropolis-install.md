@@ -364,7 +364,11 @@ authorization, so artifacts install over HTTPS on first use.
 A seller runs `connect` with `--payload-file` and `--port`. That writes `access.json` and an `offer.json`
 for the buyer. `connect` re-checks the installed hashes, prepares the terms template, and writes
 `negotiate.json` and `mcp.json` (an `erebus-mcp-server` entry with `EREBUS_BACKEND=metropolis`). `auditor`
-creates an auditor key and the disclosure config.
+creates an auditor key and the disclosure config. By default (`--history full`) verification replays from the
+pool deployment, so an auditor set up after the grant arrives verifies a deal that has already settled.
+`--history checkpoint` is the faster opt-in for an auditor set up before the deals it will audit: it records a
+paired finalized checkpoint so verification scans only later blocks, and a deal settled at or before that block
+verifies as `settled_before_checkpoint`, never as paid or unpaid.
 
 `doctor --directory DIR` is read-only and prints no secrets. It checks:
 
@@ -431,7 +435,7 @@ done
 #   e.g. also allow deposits:  ... --allow deposit
 #   withdrawals need named recipients: --allow withdraw --withdrawal-recipient <address>
 
-# Auditor (after the buyer grants a disclosure)
+# Auditor (after the buyer grants a disclosure). Set up before the deals instead? Add --history checkpoint.
 "$B/erebus-init" --metropolis auditor --pool wmon --directory ./auditor --bin "$B" --pins ./pins \
   --deployment ./pins/monad-testnet-shielded-v2.json \
   --rpc-url https://testnet-rpc.monad.xyz --peer-rpc-url https://rpc.ankr.com/monad_testnet

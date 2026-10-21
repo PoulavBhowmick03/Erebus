@@ -55,11 +55,14 @@ minutes; `--no-wait` to skip), then runs `start`:
 
 1. downloads and hash-checks the proving artifacts (`quickstart prefetch` does it on its own, and
    continues after a timeout);
-2. takes each fresh wallet's paired finalized **history checkpoint**, so the wallets start at the
-   current pool state instead of replaying a million blocks;
+2. takes the auditor's paired finalized **history checkpoint** first, then each fresh wallet's, so
+   the auditor and both wallets start at the current pool state instead of replaying a million
+   blocks, and every deal the two agents make settles after the auditor's checkpoint;
 3. runs `doctor` for both roles;
 4. starts the seller's access service in the background. The service keeps its history current
    between requests, so the first delivery does not wait for a catch-up.
+
+`quickstart status` shows the auditor's `checkpoint_block` and `history_from_block`.
 
 Options:
 
@@ -190,7 +193,10 @@ call with the same `operation_ref`, never a new payment.
   service syncing continuously, that is about two days of Monad history; past it the cache refuses
   to grow and verification stops. Segmented storage is not built yet, so a quickstart is for runs
   of hours to a day or two, not a long-lived seller.
-- The auditor's payment verification still replays from the deployment block.
+- The quickstart auditor verifies only deals settled after its checkpoint block. A deal settled at
+  or before it is reported as `settled_before_checkpoint` (never as paid or unpaid); verify that one
+  with a standalone `erebus-init --metropolis auditor`, which replays from the pool deployment by
+  default. A checkpoint at an earlier block is not offered yet.
 - Public RPCs throttle. ankr's free endpoint returns HTTP 429 under load; reads back off for
   seconds and retry, quickstart paces each provider at 20 requests per second, and a keyed
   endpoint (`--peer-rpc-url-file`) is the reliable fix.

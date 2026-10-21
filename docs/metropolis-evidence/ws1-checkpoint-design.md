@@ -91,7 +91,7 @@ version 3 instead of misreading it.
 | Wallet sync / recovery replay (`recovery.rs`) | Scans from `B + 1`; wallet rewinds only at or after `B + 1`. |
 | Finalized operation reconciliation | Uses receipts of the participant's own operations, all after `B`. |
 | Status | Reports `history_from_block = B + 1` so callers cannot read it as a deployment-era scan. |
-| Auditor disclosure (`erebus-shielded-disclosure`) | Separate cache root, no record: full history, unchanged. |
+| Auditor disclosure (`erebus-shielded-disclosure`) | Separate cache root with its own record, written by the auditor's own `checkpoint` method (WS5; refused once `primary/` or `peer/` exist). Without a record: full history, unchanged. With one, a deal consumed at the checkpoint block is `settled_before_checkpoint` (exit 3), never paid or unpaid; consumed later with no event after the checkpoint is provider inconsistency. See `docs/metropolis-operations.md` §6. |
 | Seller access service (`access-state`) | Honours a record in its own state root. Generated configs place the access service in a separate state root, so today the record must be placed there (the WS1 harness rehearsal copies it). Packaging must create or share it: integration gate. Without it the service scans full history (safe, slow). |
 | Relayer admission, public pool indexer | Unchanged (no participant record). |
 | Backup/restore, endpoint change | The record and caches move together with the state root; a restored cache from another checkpoint fails the domain check. |
@@ -155,6 +155,6 @@ generated 3,000,000 gas limit.
   is not part of this change.
 - **Installed/live:** native CI on the candidate and publication remain open. The live run (§6a) used published
   `erebus-init` with unpublished WS1 CLIs, so it qualifies the code path, not a release.
-- **Auditor:** disclosure verification still replays from the deployment block; it has no checkpoint.
+- **Auditor:** WS5 adds an auditor checkpoint (`erebus-shielded-disclosure checkpoint`; opt-in `--history checkpoint` for `erebus-init --metropolis auditor`, whose default stays full history; taken first by `quickstart start`). Deals settled at or before it are `settled_before_checkpoint`; a historical `at_block` checkpoint is a follow-up.
 - **Errors:** the MCP layer reports every native wallet failure as `WALLET_UNAVAILABLE`, and the wallet reports
   provider throttling as `paired wallet recovery failed`; both hide the cause from operators.
