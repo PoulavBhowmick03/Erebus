@@ -314,10 +314,237 @@ impl JournalRecord for Issued {
     }
 }
 
+/// Domain tag of the public seed behind [`MissDecoy`]. Not key material of any participant.
+const MISS_DECOY_TAG: &[u8] = b"EREBUS_ACCESS_MISS_DECOY_V1";
+
+/// Work spent on a request whose commitment names no usable evidence.
+///
+/// A route must not be a commitment oracle: a caller who does not hold a buyer key must not
+/// learn whether some other buyer's agreement commitment exists at this service. Every
+/// pre-authentication failure therefore gets the same answer, and the miss path spends
+/// comparable signature work. The real path verifies the two agreement authorizations and then
+/// the request signature; the decoy verifies two precomputed valid authorizations under a
+/// fixed public key, then the caller's request signature against that key.
+///
+/// The decoy key is derived from a published constant. It authorizes nothing: its result is
+/// always discarded and the miss path always answers [`AccessError::Authentication`].
+/// Residual difference: a hit also reads and decodes the evidence file, replays its transcript,
+/// and (snapshot) hashes the payload, so a caller timing a loopback service closely can still
+/// tell the paths apart. Closing that would require authenticating before the lookup.
+pub struct MissDecoy {
+    suite_id: u16,
+    key: Vec<u8>,
+    digests: [[u8; 32]; 3],
+    authorizations: [Vec<u8>; 2],
+}
+
+impl fmt::Debug for MissDecoy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MissDecoy")
+            .field("suite_id", &self.suite_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MissDecoy {
+    /// A decoy for one agreement suite, checked to spend full verification work.
+    pub fn new(suite_id: u16) -> Result<Self, AccessError> {
+        let seed = suite::keccak256(&[MISS_DECOY_TAG, &suite_id.to_be_bytes()]);
+        let digests = [0u8, 1, 2].map(|index| {
+            let mut digest = suite::keccak256(&[MISS_DECOY_TAG, &seed, &[index]]);
+            // Inside the BN254 scalar field, so the suite-2 helper parses it as a message.
+            digest[0] &= 0x0f;
+            digest
+        });
+        let sign = |digest: &[u8; 32]| -> Result<(Vec<u8>, Vec<u8>), AccessError> {
+            match suite_id {
+                suite::EVM_SECP256K1_KECCAK_SUITE_ID => {
+                    let identity =
+                        erebus_transport::identity::AuthorizationIdentity::from_bytes(&seed)
+                            .map_err(|_| AccessError::Agreement)?;
+                    Ok((
+                        identity.address().to_vec(),
+                        identity.sign_digest(digest).to_vec(),
+                    ))
+                }
+                SHIELDED_POSEIDON_EDDSA_SUITE_ID => {
+                    let (key, signature) = erebus_core::shielded_auth::sign_message(&seed, digest)
+                        .map_err(|_| AccessError::Agreement)?;
+                    Ok((key.to_vec(), signature.to_vec()))
+                }
+                _ => Err(AccessError::Agreement),
+            }
+        };
+        let (key, first) = sign(&digests[0])?;
+        let (_, second) = sign(&digests[1])?;
+        let decoy = Self {
+            suite_id,
+            key,
+            digests,
+            authorizations: [first, second],
+        };
+        // A decoy whose signatures failed fast would not spend the real path's work.
+        let verifier = suite::suite(suite_id).map_err(|_| AccessError::Agreement)?;
+        for (digest, signature) in decoy.digests.iter().zip(&decoy.authorizations) {
+            verifier
+                .verify_authorization(&decoy.key, digest, signature)
+                .map_err(|_| AccessError::Agreement)?;
+        }
+        Ok(decoy)
+    }
+
+    /// Spends the miss path's work for one request signature and returns the single
+    /// pre-authentication answer, [`AccessError::Authentication`].
+    pub fn reject(&self, request_signature: &[u8]) -> AccessError {
+        if let Ok(verifier) = suite::suite(self.suite_id) {
+            for (digest, signature) in self.digests.iter().zip(&self.authorizations) {
+                let _ = std::hint::black_box(verifier.verify_authorization(
+                    &self.key,
+                    std::hint::black_box(digest),
+                    signature,
+                ));
+            }
+        }
+        let _ = std::hint::black_box(verify_request_signature(
+            self.suite_id,
+            &self.key,
+            &self.digests[2],
+            request_signature,
+        ));
+        AccessError::Authentication
+    }
+}
+
+/// Most requests one authenticated buyer may have in flight at one service.
+pub const MAX_BUYER_IN_FLIGHT: u32 = 2;
+/// Requests one buyer may start in a burst before the refill rate applies.
+pub const BUYER_BURST: u32 = 6;
+/// Requests per second one buyer regains, up to [`BUYER_BURST`].
+pub const BUYER_REFILL_PER_SECOND: u32 = 1;
+/// Most buyers tracked at once; beyond it, idle full buckets are forgotten first.
+const MAX_TRACKED_BUYERS: usize = 4096;
+
+#[derive(Debug)]
+struct BuyerBucket {
+    in_flight: u32,
+    tokens: u32,
+    refilled: std::time::Instant,
+}
+
+/// Per-buyer admission, applied after authentication and before any payment-observer RPC.
+///
+/// It is keyed by the authenticated buyer agreement key, so one buyer cannot spend another's
+/// share of the global request slots, and it runs on top of the service's global limits. A
+/// refusal is "busy": retry later, never pay again. Only an authenticated buyer reaches it,
+/// so it reveals nothing to a caller without a buyer key.
+#[derive(Debug, Default)]
+pub struct BuyerLimiter {
+    buckets: std::sync::Mutex<std::collections::HashMap<Vec<u8>, BuyerBucket>>,
+}
+
+/// One admitted request; dropping it frees the buyer's in-flight slot.
+#[derive(Debug)]
+pub struct BuyerSlot {
+    limiter: Arc<BuyerLimiter>,
+    buyer: Vec<u8>,
+}
+
+impl Drop for BuyerSlot {
+    fn drop(&mut self) {
+        if let Ok(mut buckets) = self.limiter.buckets.lock() {
+            if let Some(bucket) = buckets.get_mut(&self.buyer) {
+                bucket.in_flight = bucket.in_flight.saturating_sub(1);
+            }
+        }
+    }
+}
+
+impl BuyerLimiter {
+    /// Admits one request for `buyer` at `now`, or refuses it as busy.
+    pub fn admit(self: &Arc<Self>, buyer: &[u8], now: std::time::Instant) -> Option<BuyerSlot> {
+        let mut buckets = self.buckets.lock().ok()?;
+        if !buckets.contains_key(buyer) && buckets.len() >= MAX_TRACKED_BUYERS {
+            let refill = |bucket: &BuyerBucket| {
+                now.saturating_duration_since(bucket.refilled).as_secs()
+                    * u64::from(BUYER_REFILL_PER_SECOND)
+                    + u64::from(bucket.tokens)
+                    >= u64::from(BUYER_BURST)
+            };
+            buckets.retain(|_, bucket| bucket.in_flight > 0 || !refill(bucket));
+            if buckets.len() >= MAX_TRACKED_BUYERS {
+                return None;
+            }
+        }
+        let bucket = buckets.entry(buyer.to_vec()).or_insert(BuyerBucket {
+            in_flight: 0,
+            tokens: BUYER_BURST,
+            refilled: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.refilled).as_secs();
+        if elapsed > 0 {
+            let regained = elapsed.saturating_mul(u64::from(BUYER_REFILL_PER_SECOND));
+            bucket.tokens = u64::from(bucket.tokens)
+                .saturating_add(regained)
+                .min(u64::from(BUYER_BURST)) as u32;
+            bucket.refilled = now;
+        }
+        if bucket.in_flight >= MAX_BUYER_IN_FLIGHT || bucket.tokens == 0 {
+            return None;
+        }
+        bucket.in_flight += 1;
+        bucket.tokens -= 1;
+        Some(BuyerSlot {
+            limiter: Arc::clone(self),
+            buyer: buyer.to_vec(),
+        })
+    }
+}
+
+/// Reads `<evidence_root>/<deal_commitment>.evidence`: lowercase hex name, regular owner-only
+/// file, bounded, decodable. Any failure is `None`, so callers cannot tell the causes apart.
+pub fn read_evidence(
+    evidence_root: &std::path::Path,
+    deal_commitment: &str,
+) -> Option<SelectedAgreement> {
+    use std::io::Read;
+    if deal_commitment.len() != 64
+        || !deal_commitment
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let limit = erebus_transport::disclosure::MAX_DISCLOSURE_BYTES;
+    let path = evidence_root.join(format!("{deal_commitment}.evidence"));
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return None;
+        }
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    std::fs::File::open(&path)
+        .ok()?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > limit {
+        return None;
+    }
+    SelectedAgreement::decode(&bytes).ok()
+}
+
 /// A durable access issuer. The caller must control its directory and parent directories.
 pub struct AccessIssuer {
     policy: AccessPolicy,
     store: Store<Issued>,
+    decoy: MissDecoy,
 }
 
 impl AccessPolicy {
@@ -397,6 +624,18 @@ pub fn request_digest(
     payment: Option<&X402Payment>,
 ) -> Result<[u8; 32], AccessError> {
     let agreement = verify_selected_agreement(evidence).map_err(|_| AccessError::Agreement)?;
+    request_digest_for(evidence, &agreement, service_id, nonce, expires_at, payment)
+}
+
+/// [`request_digest`] for an agreement already verified, without replaying it a second time.
+fn request_digest_for(
+    evidence: &SelectedAgreement,
+    agreement: &VerifiedAgreement,
+    service_id: [u8; 32],
+    nonce: [u8; 32],
+    expires_at: u64,
+    payment: Option<&X402Payment>,
+) -> Result<[u8; 32], AccessError> {
     let domain = evidence
         .terms
         .domain
@@ -424,6 +663,35 @@ pub fn request_digest(
     } else {
         Ok(digest)
     }
+}
+
+/// Request fields a route checks before it looks up any evidence: a nonzero nonce and an
+/// expiry within the next [`MAX_REQUEST_LIFETIME`] seconds. Failing them never touches the
+/// evidence directory, so their answer and cost cannot depend on whether a commitment exists.
+#[must_use]
+pub fn request_shape_ok(nonce: &[u8; 32], expires_at: u64, now: u64) -> bool {
+    *nonce != [0; 32] && expires_at > now && expires_at.saturating_sub(now) <= MAX_REQUEST_LIFETIME
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Request-signature verifications run on this thread, real or decoy.
+    pub(crate) static REQUEST_VERIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Verifies one request signature; the one place either path does, so tests can count them.
+pub(crate) fn verify_request_signature(
+    suite_id: u16,
+    key: &[u8],
+    digest: &[u8; 32],
+    signature: &[u8],
+) -> Result<(), AccessError> {
+    #[cfg(test)]
+    REQUEST_VERIFICATIONS.with(|count| count.set(count.get() + 1));
+    suite::suite(suite_id)
+        .map_err(|_| AccessError::Authentication)?
+        .verify_authorization(key, digest, signature)
+        .map_err(|_| AccessError::Authentication)
 }
 
 /// Stable identity for one agreement's issuance at an independently configured service.
@@ -625,8 +893,13 @@ impl AccessIssuer {
                 return Err(AccessError::Storage);
             }
         }
+        let decoy = MissDecoy::new(policy.suite_id)?;
         let store = Store::open_with_fault_hook(root, faults).map_err(|_| AccessError::Storage)?;
-        Ok(Self { policy, store })
+        Ok(Self {
+            policy,
+            store,
+            decoy,
+        })
     }
 
     /// Configured immutable service policy.
@@ -634,7 +907,59 @@ impl AccessIssuer {
         &self.policy
     }
 
+    /// Authenticates a request against the evidence its commitment named, if any, before any
+    /// payment-observer RPC is made.
+    ///
+    /// Every failure is [`AccessError::Authentication`]: missing or undecodable evidence, an
+    /// agreement this profile does not serve, an expired request, and a bad signature are one
+    /// answer, and a miss spends [`MissDecoy`] work. Only the buyer key learns anything more.
+    pub fn authenticate_loaded(
+        &self,
+        evidence: Option<&SelectedAgreement>,
+        request: &AccessRequest,
+        now: u64,
+    ) -> Result<(), AccessError> {
+        // Request-only checks first; a route runs them before its evidence lookup too.
+        if !request_shape_ok(&request.nonce, request.expires_at, now) {
+            return Err(AccessError::Authentication);
+        }
+        let Some(evidence) = evidence else {
+            return Err(self.decoy.reject(&request.signature));
+        };
+        // A profile mismatch can stop before the agreement's signatures are checked: spend the
+        // decoy's work, as a miss does.
+        let Ok(agreement) = self.policy.check(evidence) else {
+            return Err(self.decoy.reject(&request.signature));
+        };
+        // The request signature is always verified, so a commitment named under another file
+        // costs what a bad signature costs.
+        let signed = request_digest_for(
+            evidence,
+            &agreement,
+            self.policy.service_id,
+            request.nonce,
+            request.expires_at,
+            request.payment.as_ref(),
+        )
+        .and_then(|digest| {
+            verify_request_signature(
+                evidence.terms.suite_id,
+                evidence.terms.buyer_authorization_key.as_bytes(),
+                &digest,
+                &request.signature,
+            )
+        });
+        if signed.is_ok() && request.deal_commitment == agreement.commitment.to_hex() {
+            Ok(())
+        } else {
+            Err(AccessError::Authentication)
+        }
+    }
+
     /// Authenticates the request before any payment-observer RPC is made.
+    ///
+    /// The error distinguishes a profile mismatch from a bad signature, so an HTTP route must
+    /// answer through [`AccessIssuer::authenticate_loaded`] instead.
     pub fn authenticate(
         &self,
         evidence: &SelectedAgreement,

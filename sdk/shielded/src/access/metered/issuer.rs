@@ -28,7 +28,7 @@ use super::{
     call_id, entitlement_id, EntitlementId, MeteredOperation, MeteredPolicy, MeteredRequest,
 };
 use crate::{
-    access::{shielded_access_error, AccessBackend, AccessError, CheckedAgreement},
+    access::{shielded_access_error, AccessBackend, AccessError, CheckedAgreement, MissDecoy},
     disclosure::{verify_shielded_payment_certified, PaymentCertificate},
     rpc::PoolRuntimePins,
 };
@@ -60,6 +60,9 @@ pub enum MeteredError {
     /// A payment certificate does not describe this agreement.
     #[error("payment certificate does not match this agreement")]
     CertificateMismatch,
+    /// This buyer has too many requests in flight or exceeded its rate. Retry later.
+    #[error("too many requests from this buyer; retry later without paying again")]
+    Busy,
 }
 
 impl MeteredError {
@@ -73,6 +76,7 @@ impl MeteredError {
             Self::Access(AccessError::Observation | AccessError::Storage) | Self::Resource => 503,
             Self::OutOfOrder => 409,
             Self::AllowanceExhausted => 403,
+            Self::Busy => 429,
         }
     }
 
@@ -89,6 +93,7 @@ impl MeteredError {
             Self::AllowanceExhausted => "allowance_exhausted",
             Self::Resource => "resource_unavailable",
             Self::CertificateMismatch => "certificate_mismatch",
+            Self::Busy => "busy",
         }
     }
 }
@@ -403,6 +408,7 @@ pub struct MeteredIssuer {
     binding: ObserverBinding,
     entitlements: Store<Entitlement>,
     calls: Store<CallRecord>,
+    decoy: MissDecoy,
 }
 
 impl fmt::Debug for MeteredIssuer {
@@ -496,6 +502,7 @@ impl MeteredIssuer {
                 observers,
                 deployment,
             },
+            decoy: MissDecoy::new(policy.suite_id)?,
             policy,
             entitlements,
             calls,
@@ -518,6 +525,45 @@ impl MeteredIssuer {
     ) -> Result<AuthorizedRequest, MeteredError> {
         let checked = self.policy.check_agreement(evidence.clone())?;
         self.policy.authenticate_checked(&checked, request, now)?;
+        self.entitled(checked, request, now)
+    }
+
+    /// [`Self::authorize`] for the evidence a request's commitment named, if any, answering
+    /// every pre-authentication failure with [`AccessError::Authentication`].
+    ///
+    /// Missing or undecodable evidence, an agreement this policy does not serve, an expired
+    /// request, and a bad signature are one answer, and a miss spends [`MissDecoy`] work, so
+    /// the route is not a commitment oracle. Failures after authentication keep their codes.
+    pub fn authorize_loaded(
+        &self,
+        evidence: Option<&SelectedAgreement>,
+        request: &MeteredRequest,
+        now: u64,
+    ) -> Result<AuthorizedRequest, MeteredError> {
+        // Request-only checks first; the route runs them before its evidence lookup too.
+        if !super::metered_request_shape_ok(request, now) {
+            return Err(AccessError::Authentication.into());
+        }
+        let Some(evidence) = evidence else {
+            return Err(self.decoy.reject(&request.signature).into());
+        };
+        // A profile mismatch can stop before the agreement's signatures: spend the decoy's work.
+        let Ok(checked) = self.policy.check_agreement(evidence.clone()) else {
+            return Err(self.decoy.reject(&request.signature).into());
+        };
+        if !self.policy.authenticate_uniformly(&checked, request, now) {
+            return Err(AccessError::Authentication.into());
+        }
+        self.entitled(checked, request, now)
+    }
+
+    /// Reads the entitlement of an authenticated request.
+    fn entitled(
+        &self,
+        checked: CheckedAgreement,
+        request: &MeteredRequest,
+        now: u64,
+    ) -> Result<AuthorizedRequest, MeteredError> {
         let entitlement = entitlement_id(
             &self.policy.service_id,
             checked.agreement().commitment.as_bytes(),

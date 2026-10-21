@@ -112,6 +112,17 @@ pub fn fixture(quantity: u128, max_response_bytes: u32) -> (MeteredPolicy, Selec
     terms.service.fulfillment_digest = policy.profile.profile_digest();
     terms.service.access_recipient = terms.buyer_authorization_key.clone();
     terms.service.delivery_deadline = FAR;
+    let evidence = agreement(terms, BUYER);
+    (policy, evidence)
+}
+
+/// Suite-2 evidence for `terms`, signed by the buyer `buyer` and [`SELLER`].
+///
+/// The buyer and access-recipient keys are set from `buyer`.
+pub fn agreement(mut terms: AgreementTerms, buyer: [u8; 32]) -> SelectedAgreement {
+    terms.buyer_authorization_key =
+        KeyBytes::new(shielded_auth::derive_key(&buyer).unwrap().to_vec()).unwrap();
+    terms.service.access_recipient = terms.buyer_authorization_key.clone();
     let blinding = CommitmentBlinding::from_bytes([0x0a; 32]);
     let commitment = commit_agreement(&terms, &blinding).unwrap();
     let authorization = |role, seed| Authorization {
@@ -129,15 +140,14 @@ pub fn fixture(quantity: u128, max_response_bytes: u32) -> (MeteredPolicy, Selec
         )
         .unwrap(),
     };
-    let evidence = SelectedAgreement {
-        buyer: authorization(Role::Buyer, BUYER),
+    SelectedAgreement {
+        buyer: authorization(Role::Buyer, buyer),
         seller: authorization(Role::Seller, SELLER),
         terms,
         blinding,
         transcript_hash_version: 1,
         messages: Vec::new(),
-    };
-    (policy, evidence)
+    }
 }
 
 pub fn now() -> u64 {
@@ -288,6 +298,22 @@ impl Seller {
             evidence: root,
             deployment: deployment(evidence),
         }
+    }
+
+    /// Writes raw bytes as the owner-only evidence file of `commitment_hex`.
+    pub fn store(&self, commitment_hex: &str, bytes: &[u8]) {
+        let path = self.evidence.join(format!("{commitment_hex}.evidence"));
+        let _ = std::fs::remove_file(&path);
+        private_file(&path, bytes);
+    }
+
+    /// Stores `evidence` under its own commitment, as a seller's negotiation does.
+    pub fn store_evidence(&self, evidence: &SelectedAgreement) -> String {
+        let commitment = commit_agreement(&evidence.terms, &evidence.blinding)
+            .unwrap()
+            .to_hex();
+        self.store(&commitment, &evidence.encode().unwrap());
+        commitment
     }
 
     /// Ledger records written so far: (entitlements, calls).

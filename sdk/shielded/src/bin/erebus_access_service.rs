@@ -28,12 +28,12 @@ use erebus_shielded_prover::{
     },
     access::x402::{payment_required_header, verify_payment_header, Facilitator},
     access::{
-        AccessBackend, AccessError, AccessIssuer, AccessPolicy, AccessRequest, MAX_RESOURCE_BYTES,
+        read_evidence, request_shape_ok, AccessBackend, AccessError, AccessIssuer, AccessPolicy,
+        AccessRequest, BuyerLimiter, MAX_RESOURCE_BYTES,
     },
     index_store::{IndexDomain, IndexStore},
     rpc::{PoolRpc, PoolRuntimePins},
 };
-use erebus_transport::disclosure::{SelectedAgreement, MAX_DISCLOSURE_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
@@ -45,12 +45,18 @@ struct Config {
     service_id: [u8; 32],
     seller_key: Vec<u8>,
     suite_id: u16,
-    resource: String,
+    /// The one resource of a single-resource snapshot or of a metered service.
+    #[serde(default)]
+    resource: Option<String>,
     #[serde(default)]
     profile: Profile,
-    /// Snapshot profile only: the immutable payload.
+    /// Snapshot profile only: the immutable payload of `resource`.
     #[serde(default)]
     payload_file: Option<PathBuf>,
+    /// Snapshot profile only, instead of `resource` and `payload_file`: several resources,
+    /// each with its own payload and issuance state, routed by the agreement's resource.
+    #[serde(default)]
+    resources: Option<Vec<ResourceEntry>>,
     /// Metered profile only: the signed response cap of the v1 profile.
     #[serde(default)]
     max_response_bytes: Option<u32>,
@@ -62,6 +68,21 @@ struct Config {
     port: u16,
     backend: Backend,
 }
+
+/// One snapshot resource of a many-resource service.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceEntry {
+    resource: String,
+    payload_file: PathBuf,
+    /// Keeps this resource's issuance records in `issuance/` itself, where a service that
+    /// served only this resource kept them. At most one entry may set it.
+    #[serde(default)]
+    legacy_issuance: bool,
+}
+
+/// Most snapshot resources one service may serve.
+const MAX_RESOURCES: usize = 64;
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -75,8 +96,28 @@ enum Profile {
 fn check_profile(config: &Config) -> Result<(), &'static str> {
     match config.profile {
         Profile::Snapshot => {
-            if config.payload_file.is_none() {
-                return Err("snapshot profile requires payload_file");
+            match (&config.resource, &config.payload_file, &config.resources) {
+                (Some(_), Some(_), None) => {}
+                (None, None, Some(entries)) => {
+                    let mut names: Vec<&str> = entries
+                        .iter()
+                        .map(|entry| entry.resource.as_str())
+                        .collect();
+                    names.sort_unstable();
+                    names.dedup();
+                    if entries.is_empty()
+                        || entries.len() > MAX_RESOURCES
+                        || names.len() != entries.len()
+                        || entries.iter().filter(|entry| entry.legacy_issuance).count() > 1
+                    {
+                        return Err(
+                            "resources must be 1 to 64 distinct entries, at most one legacy",
+                        );
+                    }
+                }
+                _ => {
+                    return Err("snapshot profile requires resource and payload_file, or resources")
+                }
             }
             if config.max_response_bytes.is_some() || config.feed_file.is_some() {
                 return Err("metered fields require the metered profile");
@@ -90,6 +131,8 @@ fn check_profile(config: &Config) -> Result<(), &'static str> {
                 return Err("metered access requires the shielded backend");
             }
             if config.payload_file.is_some()
+                || config.resources.is_some()
+                || config.resource.is_none()
                 || config.max_response_bytes.is_none()
                 || config.feed_file.is_none()
             {
@@ -173,7 +216,9 @@ fn default_log_concurrency() -> u64 {
 
 #[derive(Clone)]
 struct App {
-    issuer: Arc<AccessIssuer>,
+    /// One issuer per served resource, each with its own payload and issuance directory.
+    issuers: Arc<Vec<AccessIssuer>>,
+    buyers: Arc<BuyerLimiter>,
     backend: Option<Arc<AccessBackend>>,
     facilitator: Option<Arc<Facilitator>>,
     evidence_root: PathBuf,
@@ -239,21 +284,40 @@ async fn run() -> Result<(), &'static str> {
     }
     check_profile(&config)?;
     let seller = KeyBytes::new(config.seller_key).map_err(|_| "invalid seller identity")?;
-    let issuer = match &config.payload_file {
-        Some(payload_file) => Some(
-            AccessIssuer::open(
-                config.state_root.join("issuance"),
-                AccessPolicy {
-                    service_id: config.service_id,
-                    seller: seller.clone(),
-                    suite_id: config.suite_id,
-                    resource: config.resource.clone(),
-                    payload: bounded_file(payload_file, MAX_RESOURCE_BYTES, false)?.to_vec(),
-                },
-            )
-            .map_err(|_| "access policy or storage unavailable")?,
+    let policy = |resource: &str, payload_file: &Path| {
+        Ok::<_, &'static str>(AccessPolicy {
+            service_id: config.service_id,
+            seller: seller.clone(),
+            suite_id: config.suite_id,
+            resource: resource.to_owned(),
+            payload: bounded_file(payload_file, MAX_RESOURCE_BYTES, false)?.to_vec(),
+        })
+    };
+    let open = |root: PathBuf, policy: AccessPolicy| {
+        AccessIssuer::open(root, policy).map_err(|_| "access policy or storage unavailable")
+    };
+    let issuers = match (&config.resource, &config.payload_file, &config.resources) {
+        // The single-resource form keeps its issuance records where it always has.
+        (Some(resource), Some(payload_file), None) => Some(vec![open(
+            config.state_root.join("issuance"),
+            policy(resource, payload_file)?,
+        )?]),
+        (None, None, Some(entries)) => Some(
+            entries
+                .iter()
+                .map(|entry| {
+                    let root = if entry.legacy_issuance {
+                        config.state_root.join("issuance")
+                    } else {
+                        config.state_root.join("issuance").join(hex::encode(
+                            <sha2::Sha256 as sha2::Digest>::digest(entry.resource.as_bytes()),
+                        ))
+                    };
+                    open(root, policy(&entry.resource, &entry.payload_file)?)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         ),
-        None => None,
+        _ => None,
     };
     let mut facilitator = None;
     let mut deployment = None;
@@ -453,11 +517,12 @@ async fn run() -> Result<(), &'static str> {
         }
     };
     let submits = facilitator.is_some();
-    let routes = match (config.profile, issuer) {
-        (Profile::Snapshot, Some(issuer)) => Router::new()
+    let routes = match (config.profile, issuers) {
+        (Profile::Snapshot, Some(issuers)) => Router::new()
             .route("/v1/access", post(access))
             .with_state(App {
-                issuer: Arc::new(issuer),
+                issuers: Arc::new(issuers),
+                buyers: Arc::new(BuyerLimiter::default()),
                 backend: backend.map(Arc::new),
                 facilitator,
                 evidence_root: config.evidence_root,
@@ -483,7 +548,7 @@ async fn run() -> Result<(), &'static str> {
                     service_id: config.service_id,
                     seller,
                     suite_id: config.suite_id,
-                    resource: config.resource,
+                    resource: config.resource.ok_or("metered profile requires resource")?,
                     profile,
                 },
                 observers,
@@ -537,37 +602,53 @@ async fn access(
             Json(json!({"status":"busy","retry_without_payment":true})),
         );
     };
-    if request.deal_commitment.len() != 64
-        || !request
-            .deal_commitment
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return error(AccessError::Authentication, false);
-    }
+    // Before authentication every failure is one answer: this route is not a commitment
+    // oracle. `read_evidence` refuses a commitment that is not lowercase hex before it names
+    // a file, and a miss spends decoy work comparable to a real bad signature.
+    // The agreement's signed resource selects the issuer. Evidence for a resource this
+    // service does not serve is a miss like any other, answered by the decoy.
     let loader = app.clone();
     let checked_request = request.clone();
     let selected = tokio::task::spawn_blocking(move || {
-        let bytes = bounded_file(
-            &loader
-                .evidence_root
-                .join(format!("{}.evidence", checked_request.deal_commitment)),
-            MAX_DISCLOSURE_BYTES,
-            true,
-        )
-        .map_err(|_| AccessError::Agreement)?;
-        let evidence = SelectedAgreement::decode(&bytes).map_err(|_| AccessError::Agreement)?;
-        loader
-            .issuer
-            .authenticate(&evidence, &checked_request, now()?)?;
-        Ok::<_, AccessError>(evidence)
+        let now = now()?;
+        // Request-only checks before the evidence lookup: their answer and cost never depend on
+        // whether the named commitment exists.
+        if !request_shape_ok(&checked_request.nonce, checked_request.expires_at, now) {
+            return Err(AccessError::Authentication);
+        }
+        let evidence = read_evidence(&loader.evidence_root, &checked_request.deal_commitment);
+        let index = evidence.as_ref().and_then(|evidence| {
+            loader
+                .issuers
+                .iter()
+                .position(|issuer| issuer.policy().resource == evidence.terms.service.resource)
+        });
+        let issuer = &loader.issuers[index.unwrap_or(0)];
+        let evidence = evidence.filter(|_| index.is_some());
+        issuer.authenticate_loaded(evidence.as_ref(), &checked_request, now)?;
+        Ok::<_, AccessError>((
+            evidence.ok_or(AccessError::Authentication)?,
+            index.unwrap_or(0),
+        ))
     })
     .await;
-    let evidence = match selected {
-        Ok(Ok(evidence)) => evidence,
+    let (evidence, index) = match selected {
+        Ok(Ok(selected)) => selected,
         Ok(Err(failure)) => return error(failure, false),
         Err(_) => return error(AccessError::Storage, false),
     };
+    // Per-buyer admission, keyed by the key that just authenticated, before any RPC.
+    let Some(_buyer_slot) = app.buyers.admit(
+        evidence.terms.buyer_authorization_key.as_bytes(),
+        std::time::Instant::now(),
+    ) else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            HeaderMap::new(),
+            Json(json!({"status":"busy","retry_without_payment":true})),
+        );
+    };
+    let issuer = Arc::clone(&app.issuers);
     let network = evidence.terms.domain.namespace.to_string();
     let payer = hex::encode(evidence.terms.buyer_authorization_key.as_bytes());
     if app.facilitator.is_some() {
@@ -603,17 +684,22 @@ async fn access(
     let verified = match (&app.facilitator, &app.backend, &request.payment) {
         (Some(facilitator), None, Some(payment)) => {
             facilitator
-                .settle_and_verify(app.issuer.policy(), evidence, payment, now().unwrap_or(0))
+                .settle_and_verify(
+                    issuer[index].policy(),
+                    evidence,
+                    payment,
+                    now().unwrap_or(0),
+                )
                 .await
         }
-        (None, Some(backend), None) => backend.verify(app.issuer.policy(), evidence).await,
+        (None, Some(backend), None) => backend.verify(issuer[index].policy(), evidence).await,
         _ => Err(AccessError::Agreement),
     };
     let paid = match verified {
         Ok(paid) => paid,
         Err(failure) => return error(failure, false),
     };
-    let issuer = app.issuer.clone();
+    let issuers = Arc::clone(&issuer);
     let mut response_headers = HeaderMap::new();
     if let Some(facilitator) = &app.facilitator {
         let Ok(hash) = facilitator.transaction_hash(&request.deal_commitment) else {
@@ -630,13 +716,14 @@ async fn access(
         };
         response_headers.insert("PAYMENT-RESPONSE", value);
     }
-    let issued = tokio::task::spawn_blocking(move || issuer.issue(&paid, &request, now()?)).await;
+    let issued =
+        tokio::task::spawn_blocking(move || issuers[index].issue(&paid, &request, now()?)).await;
     match issued {
         Ok(Ok(issuance)) => (
             StatusCode::OK,
             response_headers,
             Json(
-                json!({"status":"issued","issuance":issuance,"payload_hex":hex::encode(&app.issuer.policy().payload),"payment_verified":true,"delivery_verified":false}),
+                json!({"status":"issued","issuance":issuance,"payload_hex":hex::encode(&issuer[index].policy().payload),"payment_verified":true,"delivery_verified":false}),
             ),
         ),
         Ok(Err(failure)) => error(failure, true),

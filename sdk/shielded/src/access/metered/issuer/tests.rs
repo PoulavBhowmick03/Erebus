@@ -1489,3 +1489,76 @@ fn a_replay_establishes_directory_durability_before_returning_bytes() {
         1
     );
 }
+
+#[test]
+fn metered_hits_and_misses_spend_the_same_request_signature_work() {
+    use crate::access::REQUEST_VERIFICATIONS;
+    let count = |step: &dyn Fn()| {
+        let before = REQUEST_VERIFICATIONS.with(std::cell::Cell::get);
+        step();
+        REQUEST_VERIFICATIONS.with(std::cell::Cell::get) - before
+    };
+    let (policy, evidence) = feed();
+    let root = tempfile::tempdir().unwrap();
+    let issuer = open(root.path(), &policy);
+    let now = FAR - 10_000;
+    let request = signed(&evidence, MeteredOperation::Call, 0, now);
+    let mut other_policy = policy.clone();
+    other_policy.resource = "data.other.v1".into();
+    let other = open(&root.path().join("other"), &other_policy);
+    let mut renamed = request.clone();
+    renamed.deal_commitment = "5a".repeat(32);
+    let mut forged = request.clone();
+    forged.signature[0] ^= 1;
+    let rejected =
+        |issuer: &MeteredIssuer, evidence: Option<&SelectedAgreement>, request: &MeteredRequest| {
+            count(&|| {
+                assert_eq!(
+                    issuer.authorize_loaded(evidence, request, now).err(),
+                    Some(MeteredError::Access(AccessError::Authentication))
+                );
+            })
+        };
+    assert_eq!(rejected(&issuer, None, &request), 1, "miss");
+    assert_eq!(
+        rejected(&other, Some(&evidence), &request),
+        1,
+        "wrong profile"
+    );
+    assert_eq!(
+        rejected(&issuer, Some(&evidence), &renamed),
+        1,
+        "evidence under another name"
+    );
+    assert_eq!(
+        rejected(&issuer, Some(&evidence), &forged),
+        1,
+        "bad signature"
+    );
+    assert_eq!(
+        count(&|| assert!(issuer
+            .authorize_loaded(Some(&evidence), &request, now)
+            .is_ok())),
+        1
+    );
+    let mut zero = request.clone();
+    zero.nonce = [0; 32];
+    let mut status = signed(&evidence, MeteredOperation::Status, 0, now);
+    status.call_index = 1;
+    for shape in [&zero, &status] {
+        assert_eq!(rejected(&issuer, None, shape), 0);
+        assert_eq!(rejected(&issuer, Some(&evidence), shape), 0);
+    }
+    // The same signed request after its expiry: refused before any signature check.
+    for evidence in [None, Some(&evidence)] {
+        assert_eq!(
+            count(&|| {
+                assert_eq!(
+                    issuer.authorize_loaded(evidence, &request, now + 101).err(),
+                    Some(MeteredError::Access(AccessError::Authentication))
+                );
+            }),
+            0
+        );
+    }
+}

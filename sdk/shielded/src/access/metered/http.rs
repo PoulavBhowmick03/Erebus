@@ -14,7 +14,6 @@ use std::{
 };
 
 use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router};
-use erebus_transport::disclosure::{SelectedAgreement, MAX_DISCLOSURE_BYTES};
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
@@ -23,7 +22,7 @@ use super::{
     AuthorizedRequest, MeteredError, MeteredIssuer, MeteredProfile, MeteredReply, MeteredRequest,
     PaymentCertifier, ResourceUnavailable, ResponseSource,
 };
-use crate::access::AccessError;
+use crate::access::{read_evidence, AccessError, BuyerLimiter};
 
 /// Path of the metered route.
 pub const METERED_PATH: &str = "/v1/metered";
@@ -91,6 +90,7 @@ pub struct MeteredService<C, S> {
     source: Arc<S>,
     evidence_root: PathBuf,
     slots: Arc<Semaphore>,
+    buyers: Arc<BuyerLimiter>,
 }
 
 impl<C, S> Clone for MeteredService<C, S> {
@@ -101,6 +101,7 @@ impl<C, S> Clone for MeteredService<C, S> {
             source: Arc::clone(&self.source),
             evidence_root: self.evidence_root.clone(),
             slots: Arc::clone(&self.slots),
+            buyers: Arc::clone(&self.buyers),
         }
     }
 }
@@ -125,6 +126,7 @@ where
             source: Arc::new(source),
             evidence_root: evidence_root.into(),
             slots: Arc::new(Semaphore::new(concurrency)),
+            buyers: Arc::new(BuyerLimiter::default()),
         }
     }
 
@@ -236,16 +238,31 @@ where
 {
     let now = now()?;
     let issuer = Arc::clone(&service.issuer);
-    let path = service
-        .evidence_root
-        .join(format!("{}.evidence", request.deal_commitment));
+    // Request-only checks before the evidence lookup, so their answer and cost never depend on
+    // whether the named commitment exists.
+    if !super::metered_request_shape_ok(&request, now) {
+        return Err(AccessError::Authentication.into());
+    }
+    let root = service.evidence_root.clone();
+    // One answer for every pre-authentication failure: the route is not a commitment oracle.
     let mut authorized: AuthorizedRequest = blocking(move || {
-        let bytes =
-            read_bounded(&path, MAX_DISCLOSURE_BYTES, true).ok_or(AccessError::Agreement)?;
-        let evidence = SelectedAgreement::decode(&bytes).map_err(|_| AccessError::Agreement)?;
-        issuer.authorize(&evidence, &request, now)
+        let evidence = read_evidence(&root, &request.deal_commitment);
+        issuer.authorize_loaded(evidence.as_ref(), &request, now)
     })
     .await?;
+    // Per-buyer admission, keyed by the key that just authenticated, before any RPC.
+    let _buyer_slot = service
+        .buyers
+        .admit(
+            authorized
+                .checked()
+                .evidence()
+                .terms
+                .buyer_authorization_key
+                .as_bytes(),
+            std::time::Instant::now(),
+        )
+        .ok_or(MeteredError::Busy)?;
     if authorized.needs_certificate() {
         // Pending or unavailable observation returns here, before anything is written.
         let certificate = service.certifier.certify(authorized.checked()).await?;
@@ -263,7 +280,7 @@ where
 
 fn failure(error: MeteredError) -> (StatusCode, Json<Value>) {
     let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
-    let retryable = matches!(error.status(), 202 | 503);
+    let retryable = matches!(error.status(), 202 | 429 | 503);
     let mut body = json!({
         "status": if error == MeteredError::Access(AccessError::Pending) {
             "payment_pending"

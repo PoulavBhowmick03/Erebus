@@ -268,6 +268,38 @@ impl MeteredPolicy {
         self.authenticate_checked(&self.check_agreement(evidence.clone())?, request, now)
     }
 
+    /// [`Self::authenticate_checked`] without early exits: the request signature is verified
+    /// whatever else fails, so a mismatched commitment costs what a bad signature costs.
+    pub(crate) fn authenticate_uniformly(
+        &self,
+        checked: &CheckedAgreement,
+        request: &MeteredRequest,
+        now: u64,
+    ) -> bool {
+        let (evidence, agreement) = (checked.evidence(), checked.agreement());
+        let signed = agreement_digest(
+            evidence,
+            agreement,
+            self.service_id,
+            request.operation,
+            request.call_index,
+            &PARAMS_DIGEST_V1,
+            request.nonce,
+            request.expires_at,
+        )
+        .and_then(|digest| {
+            crate::access::verify_request_signature(
+                evidence.terms.suite_id,
+                evidence.terms.buyer_authorization_key.as_bytes(),
+                &digest,
+                &request.signature,
+            )
+        });
+        signed.is_ok()
+            && metered_request_shape_ok(request, now)
+            && request.deal_commitment == agreement.commitment.to_hex()
+    }
+
     /// [`Self::authenticate`] for an agreement this policy already checked, without verifying
     /// the agreement's participant signatures a second time. Freshness and the request
     /// signature are checked exactly as there.
@@ -411,6 +443,14 @@ fn verify_buyer_signature(
             signature,
         )
         .map_err(|_| AccessError::Authentication)
+}
+
+/// Request fields a route checks before any evidence lookup: [`crate::access::request_shape_ok`],
+/// and a status request names call index zero.
+#[must_use]
+pub fn metered_request_shape_ok(request: &MeteredRequest, now: u64) -> bool {
+    crate::access::request_shape_ok(&request.nonce, request.expires_at, now)
+        && (request.operation != MeteredOperation::Status || request.call_index == 0)
 }
 
 /// Computes the domain-separated metered request digest, not a payment authorization.

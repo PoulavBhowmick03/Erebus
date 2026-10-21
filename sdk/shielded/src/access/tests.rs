@@ -807,3 +807,168 @@ async fn an_unreachable_observer_never_turns_a_checked_agreement_into_access() {
     assert!(backend.verify_checked(checked).await.is_err());
     assert!(backend.verify(&policy, paid.evidence).await.is_err());
 }
+
+#[test]
+fn the_miss_decoy_spends_full_verifications_in_both_suites() {
+    for suite in [1, 2] {
+        let decoy = MissDecoy::new(suite).unwrap();
+        let verifier = suite::suite(suite).unwrap();
+        // Valid signatures: each decoy verification runs to completion, never a fast reject.
+        for (digest, signature) in decoy.digests.iter().zip(&decoy.authorizations) {
+            verifier
+                .verify_authorization(&decoy.key, digest, signature)
+                .unwrap();
+        }
+        assert_eq!(decoy.reject(&[0; 96]), AccessError::Authentication);
+        assert_eq!(
+            decoy.reject(&decoy.authorizations[0]),
+            AccessError::Authentication
+        );
+    }
+    assert_eq!(MissDecoy::new(7).unwrap_err(), AccessError::Agreement);
+}
+
+#[test]
+fn every_pre_authentication_failure_is_one_answer() {
+    for suite in [1, 2] {
+        let (policy, paid, request) = fixture(suite);
+        let root = tempfile::tempdir().unwrap();
+        let issuer = AccessIssuer::open(root.path(), policy.clone()).unwrap();
+        assert!(issuer
+            .authenticate_loaded(Some(&paid.evidence), &request, 1000)
+            .is_ok());
+        assert_eq!(
+            issuer.authenticate_loaded(None, &request, 1000),
+            Err(AccessError::Authentication)
+        );
+        // A profile mismatch is distinct through the library call, never through the route.
+        let mut other = policy.clone();
+        other.resource = "data.other.v1".into();
+        let other = AccessIssuer::open(root.path().join("other"), other).unwrap();
+        assert_eq!(
+            other.authenticate(&paid.evidence, &request, 1000),
+            Err(AccessError::Agreement)
+        );
+        assert_eq!(
+            other.authenticate_loaded(Some(&paid.evidence), &request, 1000),
+            Err(AccessError::Authentication)
+        );
+        let mut forged = request.clone();
+        forged.signature = signature(suite, [9; 32], &[3; 32]);
+        assert_eq!(
+            issuer.authenticate_loaded(Some(&paid.evidence), &forged, 1000),
+            Err(AccessError::Authentication)
+        );
+        assert_eq!(
+            issuer.authenticate_loaded(Some(&paid.evidence), &request, 1100),
+            Err(AccessError::Authentication)
+        );
+    }
+}
+
+#[test]
+fn evidence_is_read_only_from_owner_only_hex_named_files() {
+    let (_, paid, request) = fixture(2);
+    let root = tempfile::tempdir().unwrap();
+    let path = root
+        .path()
+        .join(format!("{}.evidence", request.deal_commitment));
+    std::fs::write(&path, paid.evidence.encode().unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_evidence(root.path(), &request.deal_commitment).is_none());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(read_evidence(root.path(), &request.deal_commitment).is_some());
+    assert!(read_evidence(root.path(), &request.deal_commitment.to_uppercase()).is_none());
+    assert!(read_evidence(root.path(), "../x").is_none());
+    assert!(read_evidence(root.path(), &"00".repeat(32)).is_none());
+}
+
+#[test]
+fn each_buyer_has_its_own_in_flight_and_rate_budget() {
+    let limiter = Arc::new(BuyerLimiter::default());
+    let start = std::time::Instant::now();
+    let first = limiter.admit(b"buyer-a", start).unwrap();
+    let second = limiter.admit(b"buyer-a", start).unwrap();
+    assert!(limiter.admit(b"buyer-a", start).is_none(), "two in flight");
+    // Another buyer is not affected by buyer-a's load.
+    assert!(limiter.admit(b"buyer-b", start).is_some());
+    drop(first);
+    drop(second);
+    for _ in 0..(BUYER_BURST - 2) {
+        drop(limiter.admit(b"buyer-a", start).unwrap());
+    }
+    assert!(limiter.admit(b"buyer-a", start).is_none(), "burst spent");
+    let later = start + std::time::Duration::from_secs(1);
+    drop(limiter.admit(b"buyer-a", later).unwrap());
+    assert!(limiter.admit(b"buyer-a", later).is_none());
+    let much_later = start + std::time::Duration::from_secs(3600);
+    for _ in 0..MAX_BUYER_IN_FLIGHT {
+        std::mem::forget(limiter.admit(b"buyer-a", much_later).unwrap());
+    }
+    assert!(limiter.admit(b"buyer-a", much_later).is_none());
+}
+
+/// Request-signature verifications `step` ran on this thread.
+fn verifications(step: impl FnOnce()) -> usize {
+    let before = REQUEST_VERIFICATIONS.with(std::cell::Cell::get);
+    step();
+    REQUEST_VERIFICATIONS.with(std::cell::Cell::get) - before
+}
+
+#[test]
+fn hits_and_misses_spend_the_same_request_signature_work_before_answering() {
+    let (policy, paid, request) = fixture(2);
+    let root = tempfile::tempdir().unwrap();
+    let issuer = AccessIssuer::open(root.path(), policy.clone()).unwrap();
+    let mut other = policy.clone();
+    other.resource = "data.other.v1".into();
+    let other = AccessIssuer::open(root.path().join("other"), other).unwrap();
+    let evidence = Some(&paid.evidence);
+    let rejected =
+        |issuer: &AccessIssuer, evidence: Option<&SelectedAgreement>, request: &AccessRequest| {
+            verifications(|| {
+                assert_eq!(
+                    issuer.authenticate_loaded(evidence, request, 1000),
+                    Err(AccessError::Authentication)
+                );
+            })
+        };
+    let mut renamed = request.clone();
+    renamed.deal_commitment = "5a".repeat(32);
+    let mut forged = request.clone();
+    forged.signature = signature(2, [9; 32], &[3; 32]);
+    // Every answer after the request-only checks runs exactly one request-signature check.
+    assert_eq!(rejected(&issuer, None, &request), 1, "miss");
+    assert_eq!(rejected(&other, evidence, &request), 1, "wrong profile");
+    assert_eq!(
+        rejected(&issuer, evidence, &renamed),
+        1,
+        "evidence under another name"
+    );
+    assert_eq!(rejected(&issuer, evidence, &forged), 1, "bad signature");
+    assert_eq!(
+        verifications(|| assert!(issuer.authenticate_loaded(evidence, &request, 1000).is_ok())),
+        1
+    );
+    // Request-only failures answer before any signature check, with or without evidence.
+    let mut zero = request.clone();
+    zero.nonce = [0; 32];
+    let mut expired = request.clone();
+    expired.expires_at = 1000;
+    let mut distant = request.clone();
+    distant.expires_at = 1000 + MAX_REQUEST_LIFETIME + 1;
+    for shape in [&zero, &expired, &distant] {
+        assert_eq!(rejected(&issuer, None, shape), 0);
+        assert_eq!(rejected(&issuer, evidence, shape), 0);
+    }
+    assert!(!request_shape_ok(&[0; 32], 1100, 1000));
+    assert!(request_shape_ok(
+        &[1; 32],
+        1000 + MAX_REQUEST_LIFETIME,
+        1000
+    ));
+}

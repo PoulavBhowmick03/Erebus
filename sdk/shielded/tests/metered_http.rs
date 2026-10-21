@@ -18,10 +18,125 @@ use std::{
 #[path = "support/metered.rs"]
 mod metered_support;
 
+use erebus_shielded_prover::access::metered::{metered_request_digest, sign_metered_request};
 use metered_support::{
-    body, call, fixture, post, private_file, signed, start, status, write_feed, Certifier, Feed,
-    Seller, RESOURCE, SELLER, SERVICE_ID,
+    agreement, body, call, fixture, now, post, private_file, signed, start, status, write_feed,
+    Certifier, Feed, Seller, BUYER, RESOURCE, SELLER, SERVICE_ID,
 };
+
+/// A second buyer of the same seller. It holds a real agreement of its own.
+const OTHER_BUYER: [u8; 32] = [9; 32];
+
+/// Requests that must all get the single pre-authentication answer, each probing whether some
+/// commitment exists at the service. `victim` is stored; `own` is the prober's own agreement.
+fn oracle_probes(
+    seller: &Seller,
+    victim: &SelectedAgreement,
+    own: &SelectedAgreement,
+) -> Vec<(&'static str, Value)> {
+    let victim_commitment = seller.store_evidence(victim);
+    seller.store_evidence(own);
+    let random = "5a".repeat(32);
+    let undecodable = "6b".repeat(32);
+    seller.store(&undecodable, b"not evidence");
+    let misnamed = "7c".repeat(32);
+    seller.store(&misnamed, &victim.encode().unwrap());
+    let nonce = |byte: u8| [byte; 32];
+    // Signs with any seed, as a prober would; the library signer refuses a foreign key.
+    let sign = |evidence: &SelectedAgreement, seed: &[u8; 32], nonce: [u8; 32], expires: u64| {
+        let digest = metered_request_digest(
+            evidence,
+            SERVICE_ID,
+            MeteredOperation::Call,
+            0,
+            nonce,
+            expires,
+        )
+        .unwrap();
+        let commitment =
+            erebus_core::commitment::commit_agreement(&evidence.terms, &evidence.blinding)
+                .unwrap()
+                .to_hex();
+        json!({
+            "deal_commitment": commitment,
+            "operation": "call",
+            "call_index": 0,
+            "nonce": nonce.to_vec(),
+            "expires_at": expires,
+            "signature": shielded_auth::sign_message(seed, &digest).unwrap().1.to_vec(),
+        })
+    };
+    // The prober's own valid request, retargeted at another commitment.
+    let retarget = |commitment: &str| {
+        let mut request = sign(own, &OTHER_BUYER, nonce(3), now() + 120);
+        request["deal_commitment"] = json!(commitment);
+        request
+    };
+    vec![
+        (
+            "other buyer's commitment, own signature",
+            retarget(&victim_commitment),
+        ),
+        ("random commitment", retarget(&random)),
+        ("undecodable evidence", retarget(&undecodable)),
+        ("evidence under another name", retarget(&misnamed)),
+        (
+            "other buyer's commitment, digest signed by the prober",
+            sign(victim, &OTHER_BUYER, nonce(3), now() + 120),
+        ),
+        (
+            "other buyer's own key, expired request",
+            sign(victim, &BUYER, nonce(3), now()),
+        ),
+    ]
+}
+
+/// Every probe gets byte-identical status and body.
+fn assert_one_answer(answers: &[(&'static str, (u16, Value))]) {
+    let (_, first) = &answers[0];
+    assert_eq!(first.0, 401, "{}", first.1);
+    for (name, answer) in answers {
+        assert_eq!(answer, first, "{name} answered differently");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_metered_route_is_not_a_commitment_oracle() {
+    let (policy, victim) = fixture(2, 64);
+    let own = agreement(victim.terms.clone(), OTHER_BUYER);
+    let seller = Seller::new(&victim);
+    let certifier = Certifier::new();
+    let feed = Feed::new();
+    let server = start(&seller, &policy, &certifier, feed.clone()).await;
+    let mut answers = Vec::new();
+    for (name, probe) in oracle_probes(&seller, &victim, &own) {
+        answers.push((name, post(&server.url, &probe).await));
+    }
+    assert_one_answer(&answers);
+    assert_eq!(certifier.calls(), 0);
+    assert_eq!(seller.records(), (0, 0));
+    // The prober's own request still authenticates and reaches payment certification.
+    let own_request = signed_by(&own, &OTHER_BUYER);
+    let (code, reply) = post(&server.url, &own_request).await;
+    assert_eq!(code, 200, "{reply}");
+    assert_eq!(certifier.calls(), 1);
+}
+
+fn signed_by(evidence: &SelectedAgreement, seed: &[u8; 32]) -> Value {
+    serde_json::to_value(
+        sign_metered_request(
+            evidence,
+            SERVICE_ID,
+            MeteredOperation::Call,
+            0,
+            [8; 32],
+            now() + 120,
+            seed,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sequential_calls_replay_identically_and_status_lists_them() {
@@ -446,6 +561,260 @@ async fn the_metered_profile_serves_only_the_metered_route() {
         "{reply}"
     );
     assert_eq!(seller.records(), (0, 0));
+}
+
+/// The snapshot route of the service binary answers every probe identically, too. Startup and
+/// these requests never reach the closed observer ports.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_snapshot_route_is_not_a_commitment_oracle() {
+    let (_, metered) = fixture(1, 64);
+    let payload = b"snapshot payload".to_vec();
+    let mut terms = metered.terms.clone();
+    terms.service.quantity = erebus_core::ids::BaseUnits::new(1);
+    terms.service.unit = "snapshot".into();
+    terms.service.fulfillment_method = "http-access-v1".into();
+    terms.service.fulfillment_digest = {
+        use sha2::Digest;
+        sha2::Sha256::digest(&payload).into()
+    };
+    let victim = agreement(terms.clone(), BUYER);
+    let own = agreement(terms, OTHER_BUYER);
+    let seller = Seller::new(&victim);
+    let payload_file = seller.state.with_file_name("payload.bin");
+    std::fs::write(&payload_file, &payload).unwrap();
+    let port = port();
+    let config = configure(
+        &seller,
+        port,
+        json!({"payload_file": payload_file}),
+        shielded_backend(&victim),
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    let mut process = service(&config);
+    healthy(&mut process, &url).await;
+    let sign = |evidence: &SelectedAgreement, seed: &[u8; 32], expires_at: u64| {
+        let digest = erebus_shielded_prover::access::request_digest(
+            evidence, SERVICE_ID, [3; 32], expires_at, None,
+        )
+        .unwrap();
+        let signature = shielded_auth::sign_message(seed, &digest)
+            .unwrap()
+            .1
+            .to_vec();
+        let commitment =
+            erebus_core::commitment::commit_agreement(&evidence.terms, &evidence.blinding)
+                .unwrap()
+                .to_hex();
+        json!({"deal_commitment": commitment, "nonce": vec![3u8; 32], "expires_at": expires_at, "signature": signature})
+    };
+    let victim_commitment = seller.store_evidence(&victim);
+    seller.store_evidence(&own);
+    seller.store(&"6b".repeat(32), b"not evidence");
+    seller.store(&"7c".repeat(32), &victim.encode().unwrap());
+    let retarget = |commitment: String| {
+        let mut request = sign(&own, &OTHER_BUYER, metered_support::now() + 120);
+        request["deal_commitment"] = json!(commitment);
+        request
+    };
+    let probes = [
+        (
+            "other buyer's commitment, own signature",
+            retarget(victim_commitment),
+        ),
+        ("random commitment", retarget("5a".repeat(32))),
+        ("undecodable evidence", retarget("6b".repeat(32))),
+        ("evidence under another name", retarget("7c".repeat(32))),
+        (
+            "other buyer's digest signed by the prober",
+            sign(&victim, &OTHER_BUYER, metered_support::now() + 120),
+        ),
+        (
+            "other buyer's key, expired request",
+            sign(&victim, &BUYER, metered_support::now()),
+        ),
+        // A metered agreement this snapshot profile does not serve.
+        ("agreement of another profile", {
+            let mut request = sign(&victim, &OTHER_BUYER, metered_support::now() + 120);
+            request["deal_commitment"] = json!(seller.store_evidence(&metered));
+            request
+        }),
+    ];
+    let client = reqwest::Client::new();
+    let mut answers = Vec::new();
+    for (name, probe) in probes {
+        let response = client
+            .post(format!("{url}/v1/access"))
+            .json(&probe)
+            .send()
+            .await
+            .unwrap();
+        let code = response.status().as_u16();
+        answers.push((name, (code, response.json::<Value>().await.unwrap())));
+    }
+    assert_one_answer(&answers);
+    // The prober's own request authenticates and reaches observation, which is closed here.
+    let response = client
+        .post(format!("{url}/v1/access"))
+        .json(&sign(&own, &OTHER_BUYER, metered_support::now() + 120))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 503);
+}
+
+/// A snapshot agreement for `payload` of `resource`, signed by `buyer`.
+fn snapshot_agreement(resource: &str, payload: &[u8], buyer: [u8; 32]) -> SelectedAgreement {
+    let (_, metered) = fixture(1, 64);
+    let mut terms = metered.terms;
+    terms.service.resource = resource.into();
+    terms.service.quantity = erebus_core::ids::BaseUnits::new(1);
+    terms.service.unit = "snapshot".into();
+    terms.service.fulfillment_method = "http-access-v1".into();
+    terms.service.fulfillment_digest = {
+        use sha2::Digest;
+        sha2::Sha256::digest(payload).into()
+    };
+    agreement(terms, buyer)
+}
+
+fn snapshot_request(evidence: &SelectedAgreement, seed: &[u8; 32], nonce: u8) -> Value {
+    let expires_at = metered_support::now() + 120;
+    let digest = erebus_shielded_prover::access::request_digest(
+        evidence,
+        SERVICE_ID,
+        [nonce; 32],
+        expires_at,
+        None,
+    )
+    .unwrap();
+    let commitment = erebus_core::commitment::commit_agreement(&evidence.terms, &evidence.blinding)
+        .unwrap()
+        .to_hex();
+    json!({"deal_commitment": commitment, "nonce": vec![nonce; 32], "expires_at": expires_at,
+        "signature": shielded_auth::sign_message(seed, &digest).unwrap().1.to_vec()})
+}
+
+/// One service serves two resources, each from its own issuance state, routed by the
+/// agreement's signed resource; an unserved resource is a miss; each buyer has its own burst.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snapshot_service_routes_by_resource_and_limits_each_buyer() {
+    let first = snapshot_agreement("data.first.v1", b"first payload", BUYER);
+    let second = snapshot_agreement("data.second.v1", b"second payload", OTHER_BUYER);
+    let unserved = snapshot_agreement("data.third.v1", b"third payload", OTHER_BUYER);
+    let seller = Seller::new(&first);
+    seller.store_evidence(&second);
+    let unserved_commitment = seller.store_evidence(&unserved);
+    let first_payload = seller.state.with_file_name("first.bin");
+    let second_payload = seller.state.with_file_name("second.bin");
+    std::fs::write(&first_payload, b"first payload").unwrap();
+    std::fs::write(&second_payload, b"second payload").unwrap();
+    let port = port();
+    let config = configure(
+        &seller,
+        port,
+        json!({"resources": [
+            {"resource": "data.first.v1", "payload_file": first_payload, "legacy_issuance": true},
+            {"resource": "data.second.v1", "payload_file": second_payload},
+        ]}),
+        shielded_backend(&first),
+    );
+    // `configure` always names one resource; the many-resource form names none.
+    let mut value: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("resource");
+    std::fs::remove_file(&config).unwrap();
+    private_file(&config, &serde_json::to_vec(&value).unwrap());
+    let url = format!("http://127.0.0.1:{port}");
+    let mut process = service(&config);
+    healthy(&mut process, &url).await;
+    let state = seller.state.parent().unwrap().join("issuance");
+    assert!(state.is_dir());
+    let routed = state.join(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+        b"data.second.v1",
+    )));
+    assert!(
+        routed.is_dir(),
+        "the second resource has its own issuance state"
+    );
+    let client = reqwest::Client::new();
+    let post = |body: Value| {
+        let client = client.clone();
+        let url = format!("{url}/v1/access");
+        async move {
+            let response = client.post(url).json(&body).send().await.unwrap();
+            let code = response.status().as_u16();
+            (code, response.json::<Value>().await.unwrap())
+        }
+    };
+    // Both served resources authenticate and reach observation, which is closed here.
+    assert_eq!(post(snapshot_request(&first, &BUYER, 1)).await.0, 503);
+    assert_eq!(
+        post(snapshot_request(&second, &OTHER_BUYER, 1)).await.0,
+        503
+    );
+    // A real agreement for a resource this service does not serve answers like a random one.
+    let mut random = snapshot_request(&unserved, &OTHER_BUYER, 1);
+    let unserved_answer = post(random.clone()).await;
+    random["deal_commitment"] = json!("5a".repeat(32));
+    assert_eq!(unserved_answer, post(random).await);
+    assert_eq!(unserved_answer.0, 401);
+    let _ = unserved_commitment;
+    // Concurrent requests from one buyer: at most two are in flight, the rest are busy; the
+    // other buyer is admitted meanwhile.
+    let burst = (2..8).map(|nonce| post(snapshot_request(&first, &BUYER, nonce)));
+    let (codes, other) = tokio::join!(futures_util::future::join_all(burst), async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        post(snapshot_request(&second, &OTHER_BUYER, 2)).await
+    });
+    let codes: Vec<u16> = codes.into_iter().map(|(code, _)| code).collect();
+    assert!(
+        codes.iter().filter(|code| **code == 429).count() >= 4,
+        "{codes:?}"
+    );
+    assert!(
+        codes.iter().filter(|code| **code == 503).count() <= 2,
+        "{codes:?}"
+    );
+    assert_eq!(other.0, 503);
+}
+
+#[test]
+fn invalid_resource_lists_are_refused_at_startup() {
+    let evidence = snapshot_agreement("data.first.v1", b"payload", BUYER);
+    let seller = Seller::new(&evidence);
+    let payload = seller.state.with_file_name("payload.bin");
+    std::fs::write(&payload, b"payload").unwrap();
+    let entry = |resource: &str, legacy: bool| json!({"resource": resource, "payload_file": payload, "legacy_issuance": legacy});
+    for (profile, keep_resource) in [
+        (json!({"resources": []}), false),
+        (
+            json!({"resources": [entry("a", false), entry("a", false)]}),
+            false,
+        ),
+        (
+            json!({"resources": [entry("a", true), entry("b", true)]}),
+            false,
+        ),
+        (json!({"resources": [entry("a", false)]}), true),
+        (
+            json!({"resources": [entry("a", false)], "payload_file": payload}),
+            false,
+        ),
+    ] {
+        let config = configure(
+            &seller,
+            port(),
+            profile.clone(),
+            shielded_backend(&evidence),
+        );
+        if !keep_resource {
+            let mut value: Value =
+                serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove("resource");
+            std::fs::remove_file(&config).unwrap();
+            private_file(&config, &serde_json::to_vec(&value).unwrap());
+        }
+        assert!(!refused(&config).is_empty(), "{profile}");
+    }
 }
 
 #[test]
