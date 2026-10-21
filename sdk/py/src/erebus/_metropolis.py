@@ -39,6 +39,11 @@ def _digest(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value, re.ASCII) is not None and value != "0" * 64
 
 
+def _peer_id(value: Any) -> bool:
+    """A seller peer id's shape, `[a-z0-9-]{1,32}`; whether it is configured is native."""
+    return isinstance(value, str) and re.fullmatch(r"[a-z0-9-]{1,32}", value, re.ASCII) is not None
+
+
 class MetropolisSeam:
     """Operator-fixed configurations, role, and mode; agents supply only operation IDs."""
 
@@ -104,17 +109,31 @@ class MetropolisSeam:
         if not _digest(operation_ref):
             raise MetropolisError("operation ID must be 64 nonzero lowercase hex digits")
 
-    def negotiate(self, operation_ref: str, *, freeze_only: bool = False) -> dict[str, Any]:
-        """Negotiate against the fixed service policy. This cannot submit a payment."""
+    def negotiate(self, operation_ref: str, *, freeze_only: bool = False, peer: str | None = None) -> dict[str, Any]:
+        """Negotiate against the fixed service policy. This cannot submit a payment.
+
+        A seller with a configured peer table may name the one `peer` to accept; its reply then
+        names the peer the operation is bound to. Peer selection itself is native.
+        """
         self._operation(operation_ref)
         if type(freeze_only) is not bool:
             raise MetropolisError("freeze_only must be a boolean")
-        code, response = self._run(self._negotiation, {"method": "negotiate", "config_file": self._negotiation_config,
-                                                       "operation_ref": operation_ref, "freeze_only": freeze_only})
+        if peer is not None and (self._role != "seller" or not _peer_id(peer)):
+            raise MetropolisError("peer must be a configured seller peer id")
+        request = {"method": "negotiate", "config_file": self._negotiation_config,
+                   "operation_ref": operation_ref, "freeze_only": freeze_only}
+        if peer is not None:
+            request["peer"] = peer
+        code, response = self._run(self._negotiation, request)
         status = "frozen" if freeze_only else "authorized"
         fields = {"protocol_version", "status", "operation_ref", "deal_id", "deal_commitment", "deal_nullifier", "payment_verified", "delivery_verified", "measurements_ms"}
         if not freeze_only:
             fields |= {"agreement_verified", "evidence_file"}
+        # The one optional field: only a seller reports a peer, and only the one it was asked for.
+        if "peer" in response and self._role == "seller":
+            if not _peer_id(response["peer"]) or (peer is not None and response["peer"] != peer):
+                raise MetropolisError("invalid negotiation result or verification claims")
+            fields |= {"peer"}
         expected_file = self._state_root / "agent" / f"{operation_ref}.0.tx"
         if (code != 0 or set(response) != fields or response.get("status") != status
             or type(response.get("protocol_version")) is not int or response["protocol_version"] != 1
@@ -127,6 +146,27 @@ class MetropolisSeam:
             or type(response["measurements_ms"]["negotiation"]) is not int or not 0 <= response["measurements_ms"]["negotiation"] <= 2**64 - 1):
             raise MetropolisError("invalid negotiation result or verification claims")
         return response
+
+    def list_peers(self) -> list[dict[str, Any]]:
+        """The seller's configured negotiation peers and their policy, without key material."""
+        if self._role != "seller":
+            raise MetropolisError("only a seller lists negotiation peers")
+        code, response = self._run(self._negotiation, {"method": "list_peers", "config_file": self._negotiation_config})
+        fields = {"peer", "enabled", "expired", "live", "resource", "price", "minimum_price", "expires_at", "legacy_transport"}
+        peers = response.get("peers")
+        if (code != 0 or set(response) != {"protocol_version", "status", "config_version", "peers"}
+                or response.get("status") != "ok" or response.get("protocol_version") != 1
+                or response.get("config_version") not in {1, 2} or not isinstance(peers, list) or len(peers) > 1024
+                or any(not isinstance(entry, dict) or set(entry) != fields for entry in peers)
+                or any((entry["peer"] is not None and not _peer_id(entry["peer"]))
+                       or any(type(entry[name]) is not bool for name in ("enabled", "expired", "live", "legacy_transport"))
+                       or not isinstance(entry["resource"], str)
+                       or any(not isinstance(entry[name], str) or re.fullmatch(r"0|[1-9][0-9]{0,38}", entry[name], re.ASCII) is None
+                              for name in ("price", "minimum_price"))
+                       or (entry["expires_at"] is not None and type(entry["expires_at"]) is not int)
+                       for entry in peers)):
+            raise MetropolisError("invalid peer listing")
+        return peers
 
     def payment(self, operation_ref: str, *, method: str) -> dict[str, Any]:
         """Funding checks, first settlement, or observation. No automatic payment retry."""

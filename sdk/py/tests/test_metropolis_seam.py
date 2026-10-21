@@ -209,3 +209,53 @@ def test_sponsored_sdk_rejects_direct_broadcast_claim(monkeypatch):
     fake(monkeypatch, settled())
     with pytest.raises(MetropolisError, match="direct buyer"):
         client.payment(OPERATION, method="settle")
+
+
+def test_a_seller_names_one_peer_and_its_reply_names_the_bound_peer(monkeypatch):
+    seen = fake(monkeypatch, {**authorized(), "peer": "b2"}, {**authorized(), "peer": "b1"})
+    assert seam("seller").negotiate(OPERATION, peer="b2")["peer"] == "b2"
+    assert json.loads(seen[0][1]["input"])["peer"] == "b2"
+    # A seller that named no peer accepts whichever configured peer bound the operation.
+    assert seam("seller").negotiate(OPERATION)["peer"] == "b1"
+    assert "peer" not in json.loads(seen[1][1]["input"])
+
+
+@pytest.mark.parametrize("reply", [{"peer": "b1"}, {"peer": "B1"}, {"peer": 7}])
+def test_a_peer_reply_that_differs_or_is_malformed_is_refused(monkeypatch, reply):
+    fake(monkeypatch, {**authorized(), **reply})
+    with pytest.raises(MetropolisError):
+        seam("seller").negotiate(OPERATION, peer="b2")
+
+
+def test_a_buyer_neither_names_nor_reports_a_peer(monkeypatch):
+    calls = fake(monkeypatch, {**authorized(), "peer": "b1"})
+    with pytest.raises(MetropolisError):
+        seam().negotiate(OPERATION, peer="b1")
+    assert calls == []
+    with pytest.raises(MetropolisError):
+        seam().negotiate(OPERATION)
+    with pytest.raises(MetropolisError):
+        seam("seller").negotiate(OPERATION, peer="../b1")
+
+
+def listing():
+    return {"protocol_version": 1, "status": "ok", "config_version": 2, "peers": [
+        {"peer": "b1", "enabled": True, "expired": False, "live": True, "resource": "data.snapshot.v1",
+         "price": "70", "minimum_price": "65", "expires_at": 1, "legacy_transport": False}]}
+
+
+def test_a_seller_lists_peers_through_the_native_command(monkeypatch):
+    seen = fake(monkeypatch, listing())
+    assert seam("seller").list_peers() == listing()["peers"]
+    assert json.loads(seen[0][1]["input"]) == {"method": "list_peers", "config_file": "/operator/negotiation.json"}
+    with pytest.raises(MetropolisError):
+        seam().list_peers()
+
+
+@pytest.mark.parametrize("change", [{"key": "00"}, {"price": "07"}, {"live": 1}, {"peer": "B"}])
+def test_an_unexpected_peer_listing_is_refused(monkeypatch, change):
+    bad = listing()
+    bad["peers"][0].update(change)
+    fake(monkeypatch, bad)
+    with pytest.raises(MetropolisError):
+        seam("seller").list_peers()
