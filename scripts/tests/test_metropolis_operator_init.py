@@ -159,16 +159,18 @@ def test_full_setup_writes_exactly_the_strict_rust_schemas(world):
     expected = {
         buyer / "wallet.json": rust_fields(f"{shielded}/erebus_wallet.rs", "struct Config"),
         buyer / "payment.json": rust_fields(f"{shielded}/payment/shielded.rs", "struct ShieldedConfig"),
-        buyer / "negotiate.json": rust_fields(f"{shielded}/erebus_negotiate.rs", "struct Config")
+        buyer / "negotiate.json": rust_fields(f"{shielded}/negotiate/peers.rs", "struct ConfigV1")
         - {"seller_spend_secret_file", "seller_wallet_file", "seller_wallet_key_file", "access_evidence_root"},
-        seller / "negotiate.json": rust_fields(f"{shielded}/erebus_negotiate.rs", "struct Config"),
+        seller / "negotiate.json": rust_fields(f"{shielded}/negotiate/peers.rs", "struct ConfigV2"),
+        seller / "peers" / "default" / "peer.json": rust_fields(f"{shielded}/negotiate/peers.rs", "struct PeerFile"),
         seller / "access.json": rust_fields(f"{shielded}/erebus_access_service.rs", "struct Config")
         - {"profile", "max_response_bytes", "feed_file"},
     }
     optional = {buyer / "wallet.json": (f"{shielded}/erebus_wallet.rs", "struct Config"),
                 buyer / "payment.json": (f"{shielded}/payment/shielded.rs", "struct ShieldedConfig"),
-                buyer / "negotiate.json": (f"{shielded}/erebus_negotiate.rs", "struct Config"),
-                seller / "negotiate.json": (f"{shielded}/erebus_negotiate.rs", "struct Config"),
+                buyer / "negotiate.json": (f"{shielded}/negotiate/peers.rs", "struct ConfigV1"),
+                seller / "negotiate.json": (f"{shielded}/negotiate/peers.rs", "struct ConfigV2"),
+                seller / "peers" / "default" / "peer.json": (f"{shielded}/negotiate/peers.rs", "struct PeerFile"),
                 seller / "access.json": (f"{shielded}/erebus_access_service.rs", "struct Config")}
     for path, fields in expected.items():
         keys = set(json.loads(path.read_text()))
@@ -188,6 +190,100 @@ def test_full_setup_writes_exactly_the_strict_rust_schemas(world):
     assert sorted(p.name for p in (seller / "share").iterdir()) == ["identity.binding", "offer.json", "seller.descriptor.json",
                                                                     "service.json"]
     assert not list((buyer / "share").glob("*.key"))
+    # The seller advertises routed negotiation, and its first buyer is the peer table's `default`.
+    assert json.loads((seller / "share" / "service.json").read_text())["negotiation_transport"] == 2
+    assert json.loads((buyer / "negotiate.json").read_text())["negotiation_transport"] == 2
+    negotiate = json.loads((seller / "negotiate.json").read_text())
+    assert negotiate["version"] == 2 and negotiate["peers_root"] == str(seller / "peers")
+    peer = json.loads((seller / "peers" / "default" / "peer.json").read_text())
+    assert (peer["id"], peer["enabled"], peer["legacy_transport"]) == ("default", True, False)
+    assert sorted(p.name for p in (seller / "peers" / "default").iterdir()) == [
+        "connect.json", "descriptor.json", "identity.binding", "peer.json", "service.terms"]
+    assert all(owner_only(path) for path in (seller / "peers").rglob("*"))
+
+
+def init_second_buyer(world, name="buyer2", port=9103):
+    init.init(init_args(world, "buyer", directory=world.root / name, endpoint=f"127.0.0.1:{port}"))
+    return world.root / name
+
+
+def tree(directory: Path) -> dict:
+    return {str(path.relative_to(directory)): path.read_bytes() for path in sorted(directory.rglob("*")) if path.is_file()}
+
+
+def test_a_second_buyer_adds_a_peer_and_an_outbox_without_touching_the_service(world):
+    for role in ("buyer", "seller"):
+        init.init(init_args(world, role))
+    init.connect(connect_args(world, "seller"))
+    init.connect(connect_args(world, "buyer"))
+    seller = world.root / "seller"
+    second = init_second_buyer(world)
+    kept = {name: (seller / name).read_bytes() for name in ("access.json", "payload", "share/service.json", "share/offer.json")}
+    default = tree(seller / "peers" / "default")
+    with pytest.raises(ValueError, match="--peer-id"):
+        init.connect(connect_args(world, "seller", peer_share=second / "share"))
+    added = init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="650"))
+    assert added["written"] == ["peers/b2/", "outbox/b2/"]
+    assert {name: (seller / name).read_bytes() for name in kept} == kept
+    assert tree(seller / "peers" / "default") == default
+    outbox = seller / "outbox" / "b2"
+    assert sorted(p.name for p in outbox.iterdir()) == ["identity.binding", "offer.json", "seller.descriptor.json",
+                                                       "service.json"]
+    assert json.loads((outbox / "offer.json").read_text())["price"] == "650"
+    assert (outbox / "service.json").read_bytes() == kept["share/service.json"]
+    peer = json.loads((seller / "peers" / "b2" / "peer.json").read_text())
+    assert peer["minimum_price"] == "650" and peer["legacy_transport"] is False
+    # The same buyer again under the same id changes nothing; different inputs or a reused buyer are refused.
+    before = tree(seller)
+    again = init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="650"))
+    assert again["repeated"] is True and tree(seller) == before
+    with pytest.raises(ValueError, match="different inputs"):
+        init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="651"))
+    with pytest.raises(ValueError, match="another --peer-id"):
+        init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b3"))
+    with pytest.raises(ValueError, match="another resource"):
+        init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b4", resource="other"))
+    with pytest.raises(ValueError, match="--peer-id must be"):
+        init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="B_4"))
+    assert tree(seller) == before
+    assert not list((seller / "peers").glob(".staging-*"))
+    # The second buyer connects against its outbox and dials with the routed handshake.
+    init.connect(connect_args(world, "buyer", directory=second, peer_share=outbox, amount="650"))
+    negotiate = json.loads((second / "negotiate.json").read_text())
+    assert negotiate["negotiation_transport"] == 2
+
+
+def test_a_version_1_seller_migrates_its_buyer_to_a_legacy_default_peer(world):
+    for role in ("buyer", "seller"):
+        init.init(init_args(world, role))
+    init.connect(connect_args(world, "seller"))
+    init.connect(connect_args(world, "buyer"))
+    seller = world.root / "seller"
+    # Rewrite the seller as a version 1 connection, as an earlier release left it.
+    peer = json.loads((seller / "peers" / "default" / "peer.json").read_text())
+    v2 = json.loads((seller / "negotiate.json").read_text())
+    v1 = {key: value for key, value in v2.items() if key != "peers_root"} | {
+        "version": 1, "peer_descriptor_file": str(world.root / "buyer" / "share" / "buyer.descriptor.json"),
+        "terms_template_file": str(seller / "peers" / "default" / "service.terms"), "minimum_price": peer["minimum_price"],
+        "max_deal_lifetime_seconds": peer["max_deal_lifetime_seconds"]}
+    import shutil
+    terms = (seller / "peers" / "default" / "service.terms").read_bytes()
+    shutil.rmtree(seller / "peers")
+    (seller / "keys" / "service.terms").write_bytes(terms)
+    v1["terms_template_file"] = str(seller / "keys" / "service.terms")
+    (seller / "negotiate.json").unlink()
+    init.private_json(seller / "negotiate.json", v1)
+    access = (seller / "access.json").read_bytes()
+    second = init_second_buyer(world)
+    init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2"))
+    migrated = json.loads((seller / "negotiate.json").read_text())
+    assert migrated["version"] == 2 and set(migrated) == rust_fields(
+        "sdk/shielded/src/bin/negotiate/peers.rs", "struct ConfigV2")
+    default = json.loads((seller / "peers" / "default" / "peer.json").read_text())
+    assert default["legacy_transport"] is True and default["binding_file"] is None
+    assert (seller / "peers" / "default" / "service.terms").read_bytes() == terms
+    assert (seller / "access.json").read_bytes() == access
+    assert sorted(p.name for p in (seller / "peers").iterdir()) == ["b2", "default"]
 
 
 def test_init_refuses_tampered_binaries_unpinned_manifests_and_bad_inputs(world):

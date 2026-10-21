@@ -225,7 +225,7 @@ def test_the_seller_waits_for_the_buyer_with_one_reference_and_returns_the_evide
     env = environment(tmp_path, role="seller", FAKE_NEGOTIATE_FAILURES="2")
 
     async def script(call, names):
-        assert names == {"negotiate_deal"}
+        assert names == {"negotiate_deal", "list_peers"}
         deal = await call("negotiate_deal", wait_seconds=30)
         assert deal["ok"] is True, deal
         assert deal["result"]["evidence_name"] == f"{deal['operation_ref']}.0.tx"
@@ -310,3 +310,96 @@ def test_server_refusals_say_whether_the_same_reference_may_be_retried():
     assert refused("WALLET_OPERATION_PENDING", "WALLET_UNAVAILABLE", "sync")["error"]["retry_same_operation_ref"] is True
     assert refused("OPERATION_IN_PROGRESS", "WALLET_UNAVAILABLE", "finish")["error"]["retry_same_operation_ref"] is True
     assert refused("INVALID_REQUEST", "WALLET_UNAVAILABLE", "fix it")["error"]["retry_same_operation_ref"] is False
+
+
+def seller_environment(tmp_path: Path, **extra: str) -> dict:
+    return environment(tmp_path, role="seller", FAKE_PEERS="b1,b2", **extra)
+
+
+def test_a_seller_negotiates_with_each_connecting_buyer_in_turn(tmp_path):
+    env = seller_environment(tmp_path, FAKE_CONNECTING="b2,b1")
+
+    async def script(call, names):
+        assert {"negotiate_deal", "list_peers"} <= names
+        listed = await call("list_peers")
+        assert [peer["peer"] for peer in listed["result"]["peers"]] == ["b1", "b2"]
+        first = await call("negotiate_deal", wait_seconds=0)
+        second = await call("negotiate_deal", wait_seconds=0)
+        assert (first["ok"], second["ok"]) == (True, True), (first, second)
+        assert (first["result"]["peer"], second["result"]["peer"]) == ("b2", "b1")
+        assert first["operation_ref"] != second["operation_ref"]
+        assert first["result"]["deal_commitment"] != second["result"]["deal_commitment"]
+        # Nobody else is connecting: a retryable answer for the same, new reference.
+        idle = await call("negotiate_deal", wait_seconds=0)
+        assert idle["ok"] is False and idle["error"]["code"] == "NO_PEER_CONNECTED", idle
+        assert idle["error"]["retry_same_operation_ref"] is True
+        assert idle["error"]["native_error"] == "no configured peer connected before the deadline"
+        again = await call("negotiate_deal", wait_seconds=0)
+        assert again["operation_ref"] == idle["operation_ref"] and again["operation_ref_created"] is False
+    session(env, script)
+
+
+def test_seller_peer_errors_are_stable_and_not_retryable(tmp_path):
+    env = seller_environment(tmp_path, FAKE_CONNECTING="b1")
+
+    async def script(call, names):
+        unknown = await call("negotiate_deal", peer="b9", wait_seconds=0)
+        assert unknown["error"]["code"] == "PEER_NOT_CONFIGURED"
+        assert unknown["error"]["retry_same_operation_ref"] is False
+        malformed = await call("negotiate_deal", peer="../b1", wait_seconds=0)
+        assert malformed["error"]["code"] == "PEER_NOT_CONFIGURED"
+        bound = await call("negotiate_deal", wait_seconds=0)
+        assert bound["ok"] is True and bound["result"]["peer"] == "b1"
+        other = await call("negotiate_deal", operation_ref=bound["operation_ref"], peer="b2", wait_seconds=0)
+        assert other["error"]["code"] == "OPERATION_BOUND_TO_OTHER_PEER"
+        assert other["error"]["retry_same_operation_ref"] is False
+    session(env, script)
+
+
+def test_omitted_references_resume_per_peer(tmp_path):
+    # b1 connects first, binds its operation natively, and the exchange is then uncertain.
+    env = seller_environment(tmp_path, FAKE_CONNECTING="b1,b2", FAKE_UNCERTAIN="b1")
+
+    async def script(call, names):
+        uncertain = await call("negotiate_deal", wait_seconds=0)
+        assert uncertain["error"]["code"] == "PEER_UNAVAILABLE", uncertain
+        first_ref = uncertain["operation_ref"]
+        # A call for b2 does not take b1's operation: it gets a new one.
+        second = await call("negotiate_deal", peer="b2", wait_seconds=0)
+        assert second["ok"] is True and second["result"]["peer"] == "b2", second
+        assert second["operation_ref"] != first_ref
+        # A call for b2 again resumes nothing of b1's and finds no b2 connecting.
+        idle = await call("negotiate_deal", peer="b2", wait_seconds=0)
+        assert idle["error"]["code"] == "NO_PEER_CONNECTED" and idle["operation_ref"] not in {first_ref, second["operation_ref"]}
+        # A call naming no peer resumes b1's original operation.
+        resumed = await call("negotiate_deal", wait_seconds=0)
+        assert resumed["ok"] is True and resumed["operation_ref"] == first_ref, resumed
+        assert resumed["result"]["peer"] == "b1"
+    session(env, script)
+
+
+def test_a_buyer_has_no_peer_tools(tmp_path):
+    env = environment(tmp_path)
+
+    async def script(call, names):
+        assert "list_peers" not in names
+        reply = await call("negotiate_deal", wait_seconds=0)
+        assert reply["ok"] is True and "peer" not in reply["result"]
+    session(env, script)
+
+
+def test_seller_references_resolve_by_peer(tmp_path):
+    refs = OperationRefs(str(tmp_path))
+    unbound, created = refs.resolve_peer("negotiate", None)
+    assert created and refs.resolve_peer("negotiate", "b1") == (unbound, False)
+    refs.update(unbound, peer="b1")
+    for_b2, created = refs.resolve_peer("negotiate", "b2")
+    assert created and for_b2 != unbound
+    assert refs.resolve_peer("negotiate", "b1") == (unbound, False)
+    # With no peer named, the oldest bound unfinished entry wins.
+    assert refs.resolve_peer("negotiate", None) == (unbound, False)
+    refs.update(unbound, done=True)
+    assert refs.resolve_peer("negotiate", None) == (for_b2, False)
+    refs.update(for_b2, peer_unknown=True)
+    assert refs.resolve_peer("negotiate", "b2")[1] is True
+    assert refs.resolve_peer("negotiate", None) == (for_b2, False)

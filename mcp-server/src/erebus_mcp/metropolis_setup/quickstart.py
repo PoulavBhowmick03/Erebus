@@ -6,6 +6,12 @@
     erebus-init --metropolis quickstart status --directory DIR [--offline]
     erebus-init --metropolis quickstart renew  --directory DIR
     erebus-init --metropolis quickstart down   --directory DIR
+    erebus-init --metropolis quickstart add-buyer --directory DIR [--name bN] [--price P] [--fund-amount F]
+                                                  [--buyer-key-file K] [--allow-agent-funding]
+
+`add-buyer` adds another buyer of the same resource, at its own price, to the seller: a new buyer operator
+under buyers/<name>/, a seller peer peers/<name>/ and outbox/<name>/, and agents/<name>/ files. The seller
+still negotiates one deal at a time; its agent loops over negotiate_deal.
 
 `up` runs the ordinary `init`, `connect`, `wallet-policy` and `auditor` steps for both roles, with the two
 roles' shares wired to each other, so there is nothing to copy between machines. Gas keys are created by
@@ -126,9 +132,9 @@ def _toml(value: str) -> str:
     return json.dumps(value)
 
 
-def _agent_files(directory: Path, role: str, operation_hint: str) -> list[str]:
+def _agent_files(directory: Path, role: str, operation_hint: str, operator: Path | None = None) -> list[str]:
     """One MCP config per client plus a prompt; each agent sees only its own role's server."""
-    settings = json.loads((directory / role / "mcp.json").read_text())
+    settings = json.loads(((operator or directory / role) / "mcp.json").read_text())
     (name, entry), = settings["mcpServers"].items()
     out = directory / "agents" / role
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -158,9 +164,12 @@ retry_same_operation_ref is true; never start a new payment because something is
 
 SELLER_PROMPT = """You are the seller agent for an Erebus private deal on Monad testnet. Use only the {server} MCP tools.
 
-Call negotiate_deal(wait_seconds=600) with no operation_ref, so you wait for the buyer to connect. Report the
-deal_commitment and the operation_ref it returns. If it fails with PEER_UNAVAILABLE, call it again. You never
-pay; the seller's access service delivers the resource once the payment is final.
+You may sell to several buyers, one deal at a time. Repeat this loop:
+1. Call negotiate_deal(wait_seconds=600) with no operation_ref, so you wait for the next buyer to connect.
+2. Report the peer, deal_commitment and operation_ref it returns.
+3. If it fails with PEER_UNAVAILABLE or NO_PEER_CONNECTED, call it again; otherwise follow its next_action.
+Call list_peers to see which buyers are configured. You never pay; the seller's access service delivers each
+resource once that buyer's payment is final.
 """
 
 USDC_NOTE = """   Amounts are USDC base units (6 decimals): {fund} is {fund_usdc} USDC and the price is {price_usdc} USDC.
@@ -238,6 +247,7 @@ def up(args, ops) -> dict:
     required = buyer_required_wei(args.pool, int(fund))
     transactions = BUYER_TRANSACTIONS[args.pool]
     state = {"version": 1, "pool": args.pool, "bin": str(bins), "ports": ports, "price": price, "fund_amount": fund,
+             "pins": str(pins), "deployment": str(deployment), "buyers": {},
              "resource": args.resource, "agent_funding": bool(args.allow_agent_funding),
              "signers": {role: signers[role][0] for role in ROLES}, "buyer_required_wei": str(required),
              "rpc_hosts": [_host(primary), _host(peer)], "created": int(time.time()),
@@ -290,6 +300,14 @@ def _funded(ops, state: dict, url: str) -> bool:
         return False
     needed = int(state.get("buyer_required_asset", "0"))
     return needed == 0 or ops.rpc_token_balance(url, state["asset"], buyer) >= needed
+
+
+def _signer_funded(ops, state: dict, url: str, signer: str, required_wei: str, required_asset: str) -> bool:
+    """One buyer's gas address holds enough MON and, on a non-wrapped pool, enough of the asset."""
+    if ops.rpc_balance(url, signer) < int(required_wei):
+        return False
+    needed = int(required_asset)
+    return needed == 0 or ops.rpc_token_balance(url, state["asset"], signer) >= needed
 
 
 def _wait_for_funding(ops, state: dict, url: str, timeout: int) -> bool:
@@ -345,17 +363,29 @@ def start(args, ops) -> dict:
     state = json.loads((directory / STATE).read_text())
     bins = Path(state["bin"])
     artifacts = prefetch(SimpleNamespace(directory=directory), ops)["artifacts"]
+    # The auditor first, so its checkpoint precedes every participant's and every deal they can make.
     checkpoints = {"auditor": _auditor_checkpoint(ops, bins, directory)}
-    for role in ROLES:
-        wallet = _config(directory, role)
+    url = _config(directory, "buyer")["rpc_url"]
+    for role, path in _participants(directory, state):
+        wallet = json.loads((path / "wallet.json").read_text())
         record = Path(wallet["state_root"]) / "history-checkpoint.json"
         if record.is_file():
             checkpoints[role] = "existing"
             continue
+        added = state.get("buyers", {}).get(role)
+        if added is not None:
+            # An added buyer is checkpointed once it is funded; until then `start` leaves it for later.
+            try:
+                funded = _signer_funded(ops, state, url, added["signer"], added["buyer_required_wei"],
+                                        added.get("buyer_required_asset", "0"))
+            except (OSError, ValueError, KeyError):
+                funded = False
+            if not funded:
+                checkpoints[role] = "waiting for funding"
+                continue
         try:
             reply = ops.command(bins, "erebus-wallet", {"method": "checkpoint", "confirm_fresh_wallet": True,
-                                                        "config_file": str(directory / role / "wallet.json")},
-                                directory / role)
+                                                        "config_file": str(path / "wallet.json")}, path)
         except ValueError:
             raise ValueError(f"the {role}'s fresh-wallet checkpoint failed: both RPC providers must answer and agree "
                              "on the same finalized block; retry `quickstart start`, or run `up` again with another "
@@ -368,8 +398,8 @@ def start(args, ops) -> dict:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         shutil.copyfile(Path(_config(directory, "seller")["state_root"]) / "history-checkpoint.json", target)
         target.chmod(0o600)
-    doctors = {role: ops.doctor(SimpleNamespace(directory=directory / role, offline=False)).get("status")
-               for role in ROLES}
+    doctors = {role: ops.doctor(SimpleNamespace(directory=path, offline=False)).get("status")
+               for role, path in _participants(directory, state)}
     service = _start_service(directory, bins, state)
     return {"status": "started", "artifacts": {role: f"{entry['cached']}/{entry['of']}" for role, entry in artifacts.items()},
             "checkpoints": checkpoints, "doctor": doctors, "access_service": service,
@@ -379,8 +409,14 @@ def start(args, ops) -> dict:
 CIRCUITS = ("deposit", "transfer", "withdraw")
 
 
-def _artifacts(directory: Path, role: str) -> tuple[int, int]:
-    wallet = _config(directory, role)
+def _participants(directory: Path, state: dict) -> list[tuple[str, Path]]:
+    """Every operator directory: the first buyer, the seller, then each added buyer."""
+    return [(role, directory / role) for role in ROLES] + [
+        (name, directory / "buyers" / name) for name in sorted(state.get("buyers", {}))]
+
+
+def _artifacts(directory: Path, role: str, path: Path | None = None) -> tuple[int, int]:
+    wallet = json.loads(((path or directory / role) / "wallet.json").read_text())
     circuits = json.loads(Path(wallet["artifact_manifest_file"]).read_text())["circuits"]
     wanted = [circuit[field]["sha256"] for circuit in circuits for field in ("wasm", "r1cs", "zkey")]
     cache = Path(wallet["artifact_cache_root"])
@@ -500,27 +536,32 @@ def status(args, ops) -> dict:
     head = None if args.offline else _head(url)
     now = int(time.time())
     roles = {}
-    for role in ROLES:
-        wallet = _config(directory, role)
+    for role, path in _participants(directory, state):
+        wallet = json.loads((path / "wallet.json").read_text())
         root = Path(wallet["state_root"])
         record = root / "history-checkpoint.json"
         checkpoint = json.loads(record.read_text())["checkpoint"]["block_number"] if record.is_file() else None
         tip = _tip(root / "wallet-index" / "primary.json") or checkpoint
-        entry = {"address": state["signers"][role], "checkpoint_block": checkpoint, "history_through": tip,
+        address = state["signers"][role] if role in ROLES else state["buyers"][role]["signer"]
+        entry = {"address": address, "checkpoint_block": checkpoint, "history_through": tip,
                  "blocks_behind": None if head is None or tip is None else max(0, head - tip)}
         if not args.offline:
             try:
-                entry["balance_mon"] = mon(ops.rpc_balance(url, state["signers"][role]))
+                entry["balance_mon"] = mon(ops.rpc_balance(url, address))
             except (OSError, ValueError, KeyError):
                 entry["balance_mon"] = None
             if "asset" in state:
                 try:
-                    entry["balance_usdc_base_units"] = str(ops.rpc_token_balance(url, state["asset"], state["signers"][role]))
+                    entry["balance_usdc_base_units"] = str(ops.rpc_token_balance(url, state["asset"], address))
                 except (OSError, ValueError, KeyError):
                     entry["balance_usdc_base_units"] = None
-        cached, total = _artifacts(directory, role)
+        if role in state.get("buyers", {}):
+            entry |= {"peer": role, "price": state["buyers"][role]["price"]}
+        elif role == "buyer":
+            entry |= {"peer": "default", "price": state["price"]}
+        cached, total = _artifacts(directory, role, path)
         entry["artifacts_cached"] = f"{cached}/{total}"
-        descriptor = next((directory / role / "keys").glob("*.descriptor.json"))
+        descriptor = next((path / "keys").glob("*.descriptor.json"))
         expires = json.loads(descriptor.read_text()).get("expires")
         entry["descriptor_expires_in_hours"] = None if expires is None else round((expires - now) / 3600, 1)
         roles[role] = entry
@@ -559,25 +600,62 @@ def down(args, ops) -> dict:
             "kept": "keys, wallets, history and funds are untouched; quickstart start resumes"}
 
 
+DELIVERY_SECONDS = 21600
+
+
+def _buyers(directory: Path, state: dict) -> list[tuple[str, Path, Path, str]]:
+    """(peer id, buyer directory, the seller share it connected against, its price) for every buyer."""
+    seller = directory / "seller"
+    entries = [("default", directory / "buyer", seller / "share", state["price"])]
+    for name, added in sorted(state.get("buyers", {}).items()):
+        entries.append((name, directory / "buyers" / name, seller / "outbox" / name, added["price"]))
+    return entries
+
+
+def _prepare_terms(ops, bins: Path, operator_dir: Path, role: str, peer_share: Path, offer: dict, amount: str,
+                   output: Path) -> None:
+    operator = json.loads((operator_dir / "operator.json").read_text())
+    files = operator["operator"]
+    fresh = output.with_name(output.name + ".renew")
+    fresh.unlink(missing_ok=True)
+    namespace = "eip155:10143"
+    ops.command(bins, "erebus-negotiate", {
+        "method": "prepare_terms", "suite_id": 2, "output": str(fresh), "role": role,
+        "local_descriptor_file": files["descriptor_file"],
+        "peer_descriptor_file": str(next(peer_share.glob("*.descriptor.json"))),
+        "local_binding_file": str(operator_dir / "keys" / "identity.binding"),
+        "peer_binding_file": str(peer_share / "identity.binding"), "settlement_contract": operator["settlement_contract"],
+        "verifier_version": 2, "asset": f"{namespace}/erc20:{operator['asset']}", "amount": amount,
+        "resource": offer["resource"], "unit": offer["unit"], "quantity": offer["quantity"],
+        "fulfillment_method": offer["fulfillment_method"], "fulfillment_digest": offer["fulfillment_digest"],
+        "delivery_deadline": offer["delivery_deadline"]}, operator_dir)
+    os.replace(fresh, output)
+
+
 def renew(args, ops) -> dict:
-    """Re-sign both descriptors with their own keys, re-issue bindings and terms, and restart the service."""
+    """Re-sign every descriptor with its own keys, re-issue bindings, and give every buyer fresh terms.
+
+    Each buyer's offer gets a new delivery_deadline, written identically into the seller's peer terms and the
+    buyer's own terms; the access service is restarted once at the end.
+    """
     directory = args.directory.resolve()
     state = json.loads((directory / STATE).read_text())
     bins = Path(state["bin"])
     running = _pid(directory) is not None
     if running:
         down(args, ops)
+    participants = _participants(directory, state)
     expiry = None
-    for role in ROLES:
-        operator = json.loads((directory / role / "operator.json").read_text())["operator"]
+    for _, path in participants:
+        operator = json.loads((path / "operator.json").read_text())["operator"]
         reply = ops.command(bins, "erebus-negotiate", {
             "method": "renew_descriptor", "descriptor_file": operator["descriptor_file"],
             "discovery_key_file": operator["discovery_key_file"], "descriptor_lifetime_seconds": LIFETIME}, directory)
-        expiry = reply["descriptor_expires_at"]
-        shutil.copyfile(operator["descriptor_file"], directory / role / "share" / Path(operator["descriptor_file"]).name)
-    for role in ROLES:
-        operator = json.loads((directory / role / "operator.json").read_text())
-        files, binding = operator["operator"], directory / role / "keys" / "identity.binding"
+        expiry = reply["descriptor_expires_at"] if expiry is None else min(expiry, reply["descriptor_expires_at"])
+        shutil.copyfile(operator["descriptor_file"], path / "share" / Path(operator["descriptor_file"]).name)
+    for _, path in participants:
+        operator = json.loads((path / "operator.json").read_text())
+        files, binding = operator["operator"], path / "keys" / "identity.binding"
         fresh = binding.with_name("identity.binding.renew")
         fresh.unlink(missing_ok=True)
         ops.command(bins, "erebus-negotiate", {
@@ -586,46 +664,133 @@ def renew(args, ops) -> dict:
             "settlement_contract": operator["settlement_contract"], "verifier_version": 2,
             "expires_at": expiry - 3600}, directory)
         os.replace(fresh, binding)
-        shutil.copyfile(binding, directory / role / "share" / "identity.binding")
-        (directory / role / "share" / "identity.binding").chmod(0o600)
-    for role in ROLES:
-        _renew_terms(ops, bins, directory, role, state)
+        shutil.copyfile(binding, path / "share" / "identity.binding")
+        (path / "share" / "identity.binding").chmod(0o600)
+    seller = directory / "seller"
+    routed = json.loads((seller / "negotiate.json").read_text()).get("version") == 2
+    deadlines = {}
+    for identifier, buyer, share, price in _buyers(directory, state):
+        if share != seller / "share":
+            # The outbox carries the seller's renewed public files to this buyer.
+            for source in sorted((seller / "share").glob("*.descriptor.json")) + [seller / "share" / "identity.binding"]:
+                shutil.copyfile(source, share / source.name)
+                (share / source.name).chmod(0o600)
+        peer = seller / "peers" / identifier
+        record = peer / "connect.json"
+        source = json.loads(record.read_text()) if record.is_file() else {}
+        offer = json.loads((share / "offer.json").read_text())
+        offer["delivery_deadline"] = int(time.time()) + int(source.get("delivery_seconds", DELIVERY_SECONDS))
+        ops.replace_private_json(share / "offer.json", offer)
+        deadlines[identifier] = offer["delivery_deadline"]
+        if routed:
+            # The seller's copy of this buyer's renewed public files, and terms for the new deadline.
+            descriptor = next(buyer.joinpath("share").glob("*.descriptor.json"))
+            shutil.copyfile(descriptor, peer / "descriptor.json")
+            shutil.copyfile(buyer / "share" / "identity.binding", peer / "identity.binding")
+            for name in ("descriptor.json", "identity.binding"):
+                (peer / name).chmod(0o600)
+            _prepare_terms(ops, bins, seller, "seller", buyer / "share", offer, price, peer / "service.terms")
+            settings = json.loads((peer / "peer.json").read_text())
+            settings["expires_at"] = ops.descriptor_expiry(peer / "descriptor.json")
+            ops.replace_private_json(peer / "peer.json", settings)
+            if source:
+                source.update(descriptor_sha256=ops.sha256(descriptor),
+                              binding_sha256=ops.sha256(buyer / "share" / "identity.binding"))
+                ops.replace_private_json(record, source)
+        else:
+            _prepare_terms(ops, bins, seller, "seller", buyer / "share", offer, price, seller / "keys" / "service.terms")
+        _prepare_terms(ops, bins, buyer, "buyer", share, offer, price, buyer / "keys" / "service.terms")
     state["descriptor_expires_at"] = expiry
     ops.replace_private_json(directory / STATE, state)
     restarted = _start_service(directory, bins, state) if running else "not running"
-    return {"status": "renewed", "descriptor_expires_at": expiry, "access_service": restarted}
+    return {"status": "renewed", "descriptor_expires_at": expiry, "delivery_deadlines": deadlines,
+            "access_service": restarted}
 
 
-def _renew_terms(ops, bins: Path, directory: Path, role: str, state: dict) -> None:
-    other = "seller" if role == "buyer" else "buyer"
-    operator = json.loads((directory / role / "operator.json").read_text())
-    files = operator["operator"]
-    offer = json.loads((directory / "seller" / "share" / "offer.json").read_text())
-    peer = directory / other / "share"
-    terms = directory / role / "keys" / "service.terms"
-    fresh = terms.with_name("service.terms.renew")
-    fresh.unlink(missing_ok=True)
-    namespace = "eip155:10143"
-    ops.command(bins, "erebus-negotiate", {
-        "method": "prepare_terms", "suite_id": 2, "output": str(fresh), "role": role,
-        "local_descriptor_file": files["descriptor_file"], "peer_descriptor_file": str(next(peer.glob("*.descriptor.json"))),
-        "local_binding_file": str(directory / role / "keys" / "identity.binding"),
-        "peer_binding_file": str(peer / "identity.binding"), "settlement_contract": operator["settlement_contract"],
-        "verifier_version": 2, "asset": f"{namespace}/erc20:{operator['asset']}", "amount": state["price"],
-        "resource": offer["resource"], "unit": offer["unit"], "quantity": offer["quantity"],
-        "fulfillment_method": offer["fulfillment_method"], "fulfillment_digest": offer["fulfillment_digest"],
-        "delivery_deadline": offer["delivery_deadline"]}, directory)
-    os.replace(fresh, terms)
+def add_buyer(args, ops) -> dict:
+    """Add one buyer of the seller's resource at its own price, wired like `up` wires the first one."""
+    directory = args.directory.resolve()
+    state = json.loads((directory / STATE).read_text())
+    buyers = state.setdefault("buyers", {})
+    name = args.name or f"b{len(buyers) + 2}"
+    if not ops.PEER_ID.fullmatch(name) or name in {"default", "buyer", "seller", "auditor"} or name in buyers:
+        raise ValueError("--name must be a new buyer name of a-z, 0-9 and - (at most 32), not default/buyer/seller")
+    target = directory / "buyers" / name
+    if target.exists():
+        raise ValueError(f"buyers/{name} already exists; choose another --name")
+    bins = Path(state["bin"])
+    defaults = POOL_DEFAULTS[state["pool"]]
+    fund = ops.require_unsigned(args.fund_amount if args.fund_amount is not None else defaults["fund_amount"],
+                                "--fund-amount")
+    price = ops.require_unsigned(args.price if args.price is not None else defaults["price"], "--price")
+    if int(fund) < int(price):
+        raise ValueError("--fund-amount must cover at least one --price")
+    pins = Path(state.get("pins") or directory / "pins")
+    deployment = Path(state.get("deployment") or pins / "monad-testnet-shielded-v2.json")
+    wallet = _config(directory, "seller")
+    used = set(state["ports"].values()) | {entry["port"] for entry in buyers.values()}
+    port = max(used) + 1
+    keys = directory / "keys"
+    signer, key_file = _gas_key(ops, bins, name, args.buyer_key_file, keys)
+    (directory / "buyers").mkdir(mode=0o700, exist_ok=True)
+    ops.init(SimpleNamespace(
+        role="buyer", pool=state["pool"], directory=target, bin=bins, pins=pins, deployment=deployment,
+        endpoint=f"127.0.0.1:{port}", rpc_url=wallet["rpc_url"], peer_rpc_url=wallet["peer_rpc_url"],
+        signer_address=signer, transaction_key_file=key_file, maximum_price=price, relay_url=None, relay_identity=None,
+        relay_sponsor=None, relay_auth_key_file=None, relay_timeout_seconds=60,
+        descriptor_lifetime_seconds=LIFETIME, binding_lifetime_seconds=BINDING_LIFETIME))
+    base = dict(resource=state["resource"], amount=price, minimum_price=None, unit="snapshot", quantity="1",
+                delivery_seconds=DELIVERY_SECONDS)
+    ops.connect(SimpleNamespace(directory=directory / "seller", peer_share=target / "share", payload_file=None,
+                                port=None, service_url=None, allow_loopback_access_http=False, peer_id=name, **base))
+    ops.connect(SimpleNamespace(directory=target, peer_share=directory / "seller" / "outbox" / name, payload_file=None,
+                                port=None, service_url=f"http://127.0.0.1:{state['ports']['access']}/v1/access",
+                                allow_loopback_access_http=True, peer_id=None, **base))
+    allow = ["status"] + (["wrap", "approve", "deposit"] if state["pool"] == "wmon" else ["approve", "deposit"]) \
+        if args.allow_agent_funding else ["status"]
+    ops.wallet_policy(SimpleNamespace(directory=target, maximum_amount=fund, allow=allow, withdrawal_recipient=[],
+                                      replacement_fees=None))
+    for relative in ("wallet.json", "payment.json"):
+        path = target / relative
+        data = json.loads(path.read_text())
+        data.update(rpc_requests_per_second=REQUESTS_PER_SECOND, peer_rpc_requests_per_second=REQUESTS_PER_SECOND)
+        ops.replace_private_json(path, data)
+    pool = state["pool"]
+    asset_note = "" if pool == "wmon" else USDC_NOTE.format(
+        fund=fund, fund_usdc=usdc(int(fund)), price_usdc=usdc(int(price)))
+    files = _agent_files(directory, name, BUYER_PROMPT.format(server="erebus-buyer", fund=fund, asset_note=asset_note),
+                         operator=target)
+    required = buyer_required_wei(pool, int(fund))
+    transactions = BUYER_TRANSACTIONS[pool]
+    buyers[name] = {"port": port, "price": price, "fund_amount": fund, "signer": signer,
+                    "buyer_required_wei": str(required), "agent_funding": bool(args.allow_agent_funding),
+                    "created": int(time.time())}
+    if pool != "wmon":
+        # This buyer deposits the asset it already holds; `start` waits for it as well as for gas.
+        buyers[name]["buyer_required_asset"] = fund
+    ops.replace_private_json(directory / STATE, state)
+    funding = {"address": signer, "send_at_least_mon": mon(required), "faucet": FAUCET_URL,
+               "why": f"{transactions} transactions at about {mon(MEASURED_COST_PER_TRANSACTION)} MON each"
+                      + (f", and {mon(int(fund))} MON wrapped into the shielded note" if pool == "wmon" else "")}
+    if pool != "wmon":
+        funding.update(usdc_token=state["asset"], send_at_least_usdc_base_units=fund, send_at_least_usdc=usdc(int(fund)),
+                       also=f"send at least {fund} base units ({usdc(int(fund))} USDC) of testnet USDC, token "
+                            f"{state['asset']}, to the buyer address; nothing here mints or wraps it")
+    return {"status": "added", "buyer": name, "peer": name, "price": price, "directory": str(target),
+            "funding": funding, "agent_files": files,
+            "next": f"fund {signer}, run quickstart start, then give agents/{name} to the new buyer agent; the "
+                    "seller agent's negotiate_deal loop serves it in turn"}
 
 
 def run(args, ops) -> dict:
     return {"up": up, "start": start, "status": status, "down": down, "renew": renew,
-            "prefetch": prefetch}[args.action](args, ops)
+            "prefetch": prefetch, "add-buyer": add_buyer}[args.action](args, ops)
 
 
 def add_parser(commands) -> None:
     quick = commands.add_parser("quickstart", help="one-command Monad testnet buyer, seller and auditor on this machine")
-    quick.add_argument("action", choices=("up", "start", "status", "prefetch", "renew", "down"))
+    quick.add_argument("action", choices=("up", "start", "status", "prefetch", "renew", "down", "add-buyer"))
+    quick.add_argument("--name", help="add-buyer: the new buyer's name and seller peer id (default bN)")
     quick.add_argument("--directory", type=Path, required=True)
     quick.add_argument("--pins", type=Path, help="up: an existing pins directory (default: pin --version)")
     quick.add_argument("--version", help="up: release to pin (default: the installed erebus-mcp-server version)")

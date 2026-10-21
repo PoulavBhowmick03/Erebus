@@ -99,10 +99,48 @@ def submitted(op):
     return view
 
 
+def fail(state, message):
+    save(state)
+    reply({"protocol_version": 1, "status": "error", "error": message,
+           "payment_verified": False, "delivery_verified": False}, 1)
+
+
 def negotiate(request, state):
     if request["method"] == "version":
         reply({"status": "ok", "protocol_version": 1, "service": "erebus-negotiate", "settlement_submission": False})
+    # A many-buyer seller: FAKE_PEERS names the configured peers, FAKE_CONNECTING the order in
+    # which buyers connect (each connects once), FAKE_UNCERTAIN peers whose first exchange binds
+    # the operation and then fails as uncertain delivery.
+    configured = [peer for peer in os.environ.get("FAKE_PEERS", "").split(",") if peer]
+    if request["method"] == "list_peers":
+        reply({"protocol_version": 1, "status": "ok", "config_version": 2, "peers": [
+            {"peer": peer, "enabled": True, "expired": False, "live": True, "resource": f"data.{peer}.v1",
+             "price": "70", "minimum_price": "65", "expires_at": 4102444800, "legacy_transport": False}
+            for peer in configured]})
     state["calls"].append(request["operation_ref"])
+    state.setdefault("requests", []).append({key: value for key, value in request.items() if key != "config_file"})
+    peer = None
+    if configured:
+        connecting = state.setdefault("connecting", [p for p in os.environ.get("FAKE_CONNECTING", "").split(",") if p])
+        bound = state.setdefault("bound", {})
+        ref, requested = request["operation_ref"], request.get("peer")
+        if requested is not None and requested not in configured:
+            fail(state, "negotiation peer is not configured")
+        if ref in bound and requested is not None and requested != bound[ref]:
+            fail(state, "operation is bound to another negotiation peer")
+        peer = bound.get(ref) or requested
+        if peer is None or peer not in bound.values() or bound.get(ref) != peer:
+            candidates = [p for p in connecting if p == peer] if peer else list(connecting)
+            if not candidates:
+                fail(state, "no configured peer connected before the deadline")
+            peer = candidates[0]
+            connecting.remove(peer)
+            bound[ref] = peer
+        uncertain = state.setdefault("uncertain", [p for p in os.environ.get("FAKE_UNCERTAIN", "").split(",") if p])
+        if peer in uncertain:
+            uncertain.remove(peer)
+            connecting.append(peer)
+            fail(state, "offer delivery uncertain; retain this operation and reconnect")
     if state["negotiate_failures"] > 0:
         state["negotiate_failures"] -= 1
         save(state)
@@ -111,9 +149,10 @@ def negotiate(request, state):
     save(state)
     ref = request["operation_ref"]
     reply({"protocol_version": 1, "status": "authorized", "operation_ref": ref, "deal_id": "ab" * 16,
-           "deal_commitment": "cd" * 32, "deal_nullifier": "ef" * 32, "agreement_verified": True,
+           "deal_commitment": ref[:62] + "cd", "deal_nullifier": "ef" * 32, "agreement_verified": True,
            "evidence_file": str(Path(os.environ["FAKE_STATE_ROOT"]) / "agent" / f"{ref}.0.tx"),
-           "payment_verified": False, "delivery_verified": False, "measurements_ms": {"negotiation": 5}})
+           "payment_verified": False, "delivery_verified": False, "measurements_ms": {"negotiation": 5},
+           **({"peer": peer} if peer else {})})
 
 
 def payment(request, state):

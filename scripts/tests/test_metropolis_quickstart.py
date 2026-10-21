@@ -104,7 +104,7 @@ def quick_args(world, action, **changes):
                   pool="wmon", rpc_url=None, peer_rpc_url=None, rpc_url_file=None, peer_rpc_url_file=None,
                   buyer_key_file=None, seller_key_file=None, price="1000", fund_amount="3000", resource="sample",
                   payload_file=None, port=free_port(), allow_agent_funding=False, no_wait=True, funding_timeout=0,
-                  offline=True)
+                  offline=True, name=None)
     values.update(changes)
     return SimpleNamespace(**values)
 
@@ -425,3 +425,121 @@ def test_status_reads_the_tip_of_segmented_and_legacy_history_caches(tmp_path):
     assert quick._tip(legacy) == 8
     assert quick._tip(empty) is None
     assert quick._tip(tmp_path / "missing.json") is None
+
+
+def test_add_buyer_wires_a_second_buyer_without_touching_the_service(world, natives):
+    quick.run(quick_args(world, "up"), ops())
+    directory = world.root / "qs"
+    seller = directory / "seller"
+    access = (seller / "access.json").read_bytes()
+    default = base.tree(seller / "peers" / "default")
+    added = quick.run(quick_args(world, "add-buyer", name="b2", price="900", fund_amount="2000"), ops())
+    assert added["status"] == "added" and added["peer"] == "b2" and added["price"] == "900"
+    assert (seller / "access.json").read_bytes() == access
+    assert base.tree(seller / "peers" / "default") == default
+    buyer = directory / "buyers" / "b2"
+    negotiate = json.loads((buyer / "negotiate.json").read_text())
+    assert negotiate["negotiation_transport"] == 2 and negotiate["maximum_price"] == "900"
+    assert negotiate["peer_descriptor_file"] == str(seller / "outbox" / "b2" / "seller.descriptor.json")
+    assert json.loads((seller / "peers" / "b2" / "peer.json").read_text())["minimum_price"] == "900"
+    state = json.loads((directory / quick.STATE).read_text())
+    ports = set(state["ports"].values())
+    assert state["buyers"]["b2"]["port"] not in ports and state["buyers"]["b2"]["price"] == "900"
+    assert set(json.loads((buyer / "wallet-policy.json").read_text())["allowed_methods"]) == {"notes", "sync", "status"}
+    files = directory / "agents" / "b2"
+    assert list(json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]) == ["erebus-buyer"]
+    assert "negotiate_deal()" in (files / "prompt.md").read_text()
+    env = json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]["erebus-buyer"]["env"]
+    assert env["EREBUS_NEGOTIATION_CONFIG"] == str(buyer / "negotiate.json")
+    # The next name is allocated, and a name is never reused.
+    third = quick.run(quick_args(world, "add-buyer"), ops())
+    assert third["buyer"] == "b3"
+    assert json.loads((directory / quick.STATE).read_text())["buyers"]["b3"]["port"] == state["buyers"]["b2"]["port"] + 1
+    for name in ("b2", "default", "Bad"):
+        with pytest.raises(ValueError, match="--name"):
+            quick.run(quick_args(world, "add-buyer", name=name), ops())
+    with pytest.raises(ValueError, match="cover"):
+        quick.run(quick_args(world, "add-buyer", name="b9", price="5000", fund_amount="10"), ops())
+    assert not (directory / "buyers" / "b9").exists()
+    assert "seller sends nothing" not in json.dumps(added)
+    assert not any(method in {"wrap", "deposit", "approve", "checkpoint"} for _, method in natives)
+
+
+def test_start_checkpoints_funded_added_buyers_and_status_lists_every_buyer(world, natives, monkeypatch):
+    quick.run(quick_args(world, "up"), ops())
+    quick.run(quick_args(world, "add-buyer", name="b2", price="900"), ops())
+    quick.run(quick_args(world, "add-buyer", name="b3", price="800"), ops())
+    state = json.loads((world.root / "qs" / quick.STATE).read_text())
+    unfunded = state["buyers"]["b3"]["signer"]
+    monkeypatch.setattr(init, "rpc_balance",
+                        lambda url, address, opener=None: 0 if address == unfunded and address != state["buyers"]["b2"]["signer"] else 3 * 10**18)
+    started = quick.run(quick_args(world, "start"), ops())
+    try:
+        assert started["checkpoints"]["buyer"] == 42 and started["checkpoints"]["seller"] == 42
+        assert set(started["doctor"]) == {"buyer", "seller", "b2", "b3"}
+        status = quick.run(quick_args(world, "status"), ops())
+        assert set(status["roles"]) == {"buyer", "seller", "b2", "b3"}
+        assert (status["roles"]["buyer"]["peer"], status["roles"]["b2"]["peer"]) == ("default", "b2")
+        assert status["roles"]["b2"]["price"] == "900"
+    finally:
+        quick.run(quick_args(world, "down"), ops())
+
+
+def test_renew_gives_every_buyer_matching_fresh_terms(world, natives):
+    quick.run(quick_args(world, "up"), ops())
+    quick.run(quick_args(world, "add-buyer", name="b2", price="900"), ops())
+    directory = world.root / "qs"
+    seller = directory / "seller"
+    old = {"default": json.loads((seller / "share" / "offer.json").read_text())["delivery_deadline"],
+           "b2": json.loads((seller / "outbox" / "b2" / "offer.json").read_text())["delivery_deadline"]}
+    import time
+    time.sleep(1.1)
+    result = quick.run(quick_args(world, "renew"), ops())
+    assert set(result["delivery_deadlines"]) == {"default", "b2"}
+    for peer, buyer, share in (("default", directory / "buyer", seller / "share"),
+                               ("b2", directory / "buyers" / "b2", seller / "outbox" / "b2")):
+        deadline = result["delivery_deadlines"][peer]
+        assert deadline > old[peer]
+        assert json.loads((share / "offer.json").read_text())["delivery_deadline"] == deadline
+        # The fake terms record their request: seller and buyer terms carry the same new deadline.
+        seller_terms = json.loads((seller / "peers" / peer / "service.terms").read_text())
+        buyer_terms = json.loads((buyer / "keys" / "service.terms").read_text())
+        assert seller_terms["delivery_deadline"] == buyer_terms["delivery_deadline"] == deadline
+        assert (seller / "peers" / peer / "descriptor.json").read_bytes() == next(
+            (buyer / "share").glob("*.descriptor.json")).read_bytes()
+    assert json.loads((seller / "peers" / "b2" / "descriptor.json").read_text())["expires"] == 4_000_000_000
+    assert (seller / "outbox" / "b2" / "seller.descriptor.json").read_bytes() == (
+        seller / "share" / "seller.descriptor.json").read_bytes()
+    assert not list(directory.rglob("*.renew"))
+    # The renewed peer is still recognized by a repeated connect for the same buyer.
+    repeated = init.connect(base.connect_args(world, "seller", directory=seller, peer_share=directory / "buyers/b2/share",
+                                              peer_id="b2", amount="900", resource="sample", delivery_seconds=21600,
+                                              payload_file=None, port=None))
+    assert repeated["repeated"] is True
+
+
+def test_add_buyer_on_a_usdc_pool_waits_for_gas_and_usdc_and_checkpoints_after_the_auditor(world, natives, monkeypatch):
+    quick.run(quick_args(world, "up", pool="usdc", price=None, fund_amount=None), ops())
+    added = quick.run(quick_args(world, "add-buyer", name="b2", price=None, fund_amount=None), ops())
+    directory = world.root / "qs"
+    state = json.loads((directory / quick.STATE).read_text())
+    # Per-pool defaults and requirements: four sends of gas, no wrap, and the USDC itself.
+    assert (added["price"], state["buyers"]["b2"]["fund_amount"]) == ("100000", "300000")
+    funding = added["funding"]
+    assert funding["send_at_least_mon"] == quick.mon(quick.buyer_required_wei("usdc", 300000))
+    assert (funding["send_at_least_usdc_base_units"], funding["usdc_token"]) == ("300000", state["asset"])
+    assert state["buyers"]["b2"]["buyer_required_asset"] == "300000"
+    assert "USDC base units" in (directory / "agents" / "b2" / "prompt.md").read_text()
+    signer = state["buyers"]["b2"]["signer"]
+    usdc_held = {"b2": 0}
+    monkeypatch.setattr(init, "rpc_token_balance",
+                        lambda url, token, address, opener=None: usdc_held["b2"] if address == signer else 10**9)
+    started = quick.run(quick_args(world, "start"), ops())
+    try:
+        assert next(iter(started["checkpoints"])) == "auditor"
+        assert started["checkpoints"]["b2"] == "waiting for funding"
+        usdc_held["b2"] = 300000
+        again = quick.run(quick_args(world, "start"), ops())
+        assert next(iter(again["checkpoints"])) == "auditor" and again["checkpoints"]["b2"] == 42
+    finally:
+        quick.run(quick_args(world, "down"), ops())

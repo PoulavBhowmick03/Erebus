@@ -132,37 +132,75 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
                                {"address": wallet_data.get("asset"), "signer": wallet_data.get("signer_address"),
                                 "wrapper": wallet_data.get("wrapper")})
 
-    @server.tool()
-    async def negotiate_deal(operation_ref: str | None = None, freeze_only: bool = False,
-                             wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any]:
-        """Negotiate and authorize one fixed-policy deal; never submits payment.
+    seller = settings.role == "seller"
 
-        Omit operation_ref to have one created and saved; it is returned, and a retry without one
-        resumes the same unfinished deal. While the counterparty is not connected yet, this keeps
-        listening or reconnecting for up to wait_seconds (0-900) with the same operation_ref.
-        """
+    async def negotiate(operation_ref: str | None, freeze_only: bool, wait_seconds: int,
+                        peer: str | None) -> dict[str, Any]:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= MAX_WAIT_SECONDS:
             return refused("INVALID_REQUEST", "METROPOLIS_UNAVAILABLE", f"wait_seconds must be 0-{MAX_WAIT_SECONDS}")
-        created = False
+        created, omitted = False, operation_ref is None
         if operation_ref is None:
-            operation_ref, created = refs.resolve("negotiate", None)
+            operation_ref, created = (refs.resolve_peer("negotiate", peer) if seller
+                                      else refs.resolve("negotiate", None))
         deadline = time.monotonic() + wait_seconds
         while True:
             try:
-                result = await asyncio.to_thread(seam.negotiate, operation_ref, freeze_only=freeze_only)
+                result = await asyncio.to_thread(seam.negotiate, operation_ref, freeze_only=freeze_only,
+                                                 **({"peer": peer} if peer is not None else {}))
                 break
             except MetropolisError as error:
                 reply = failure(error)
-                if reply["error"]["code"] == "PEER_UNAVAILABLE" and time.monotonic() < deadline:
+                code = reply["error"]["code"]
+                if code == "OPERATION_BOUND_TO_OTHER_PEER" and omitted and peer is not None and not created:
+                    # A resumed unbound entry was bound natively to some other buyer after a failed
+                    # call. Keep it for that buyer and resolve again for this one.
+                    refs.update(operation_ref, peer_unknown=True)
+                    operation_ref, created = refs.resolve_peer("negotiate", peer)
+                    continue
+                if code in {"PEER_UNAVAILABLE", "NO_PEER_CONNECTED"} and time.monotonic() < deadline:
                     await asyncio.sleep(2)
                     continue
                 return {**reply, "operation_ref": operation_ref, "operation_ref_created": created}
-        if settings.role == "seller" and not freeze_only:
+        if seller:
+            bound = {"peer": result["peer"], "peer_unknown": False} if "peer" in result else {}
             # A seller's deal ends at authorization; its next omitted reference is a new deal.
-            refs.update(operation_ref, done=True)
+            refs.update(operation_ref, **bound, **({} if freeze_only else {"done": True}))
         if isinstance(result.get("evidence_file"), str):
             result = {**result, "evidence_name": Path(result["evidence_file"]).name}
         return {"ok": True, "result": result, "operation_ref": operation_ref, "operation_ref_created": created}
+
+    if seller:
+        @server.tool()
+        async def negotiate_deal(operation_ref: str | None = None, peer: str | None = None, freeze_only: bool = False,
+                                 wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any]:
+            """Negotiate and authorize one fixed-policy deal with one configured buyer; never submits payment.
+
+            Deals run one at a time. The first configured buyer to connect binds the operation, and the result
+            names it as peer with its deal_commitment; call again for the next buyer. Pass peer (from
+            list_peers) to accept only that buyer. Omit operation_ref to resume this seller's unfinished deal for
+            that peer, else an unbound one, else a new one. Keeps listening for up to wait_seconds (0-900).
+            """
+            return await negotiate(operation_ref, freeze_only, wait_seconds, peer)
+
+        @server.tool()
+        async def list_peers() -> dict[str, Any]:
+            """List this seller's configured buyers: id, resource, price, and whether each can connect now."""
+            try:
+                peers = await asyncio.to_thread(seam.list_peers)
+            except MetropolisError as error:
+                return failure(error)
+            return {"ok": True, "result": {"peers": peers}}
+    else:
+        @server.tool()
+        async def negotiate_deal(operation_ref: str | None = None, freeze_only: bool = False,
+                                 wait_seconds: int = DEFAULT_WAIT_SECONDS) -> dict[str, Any]:
+            """Negotiate and authorize one fixed-policy deal; never submits payment.
+
+            Omit operation_ref to have one created and saved; it is returned, and a retry without one
+            resumes the same unfinished deal. While the counterparty is not connected yet, this keeps
+            listening or reconnecting for up to wait_seconds (0-900) with the same operation_ref.
+            """
+            return await negotiate(operation_ref, freeze_only, wait_seconds, None)
 
     if settings.role == "buyer" and settings.mode != "x402-exact":
         async def payment(operation_ref: str, method: str) -> dict[str, Any]:

@@ -572,20 +572,102 @@ def rehearsal_record(marker: dict) -> dict:
             "authorization_package_version": marker["authorization_package_version"]}
 
 
+PEER_ID = re.compile(r"[a-z0-9-]{1,32}", re.ASCII)
+# The seller's routed negotiation transport (erebus-negotiate `negotiation_transport`).
+ROUTED_TRANSPORT = 2
+PEER_LIFETIME_SECONDS = 30 * 86400
+
+
+def peer_id(args) -> str:
+    value = getattr(args, "peer_id", None) or "default"
+    if not PEER_ID.fullmatch(value):
+        raise ValueError("--peer-id must be 1-32 characters of a-z, 0-9 and -")
+    return value
+
+
+def peer_share(peer: Path) -> Path:
+    descriptors = sorted(peer.glob("*.descriptor.json"))
+    if len(descriptors) != 1 or not (peer / "identity.binding").is_file():
+        raise ValueError("the peer share must hold exactly one descriptor and identity.binding")
+    return descriptors[0]
+
+
+def private_copy(source: Path, target: Path) -> None:
+    shutil.copyfile(source, target)
+    target.chmod(0o600)
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def descriptor_expiry(descriptor: Path) -> int:
+    """The peer's own descriptor expiry when it states one; erebus-negotiate re-verifies it anyway."""
+    expires = json.loads(descriptor.read_text()).get("expires")
+    limit = int(time.time()) + PEER_LIFETIME_SECONDS
+    return min(expires, limit) if type(expires) is int else limit
+
+
+def write_peer(peers: Path, identifier: str, *, descriptor: Path, binding: Path | None, terms_writer, minimum: str,
+               lifetime: int, resource: str, legacy: bool, source: dict) -> None:
+    """Creates peers/<id> complete or not at all: a staging directory, renamed into place and synced."""
+    target = peers / identifier
+    staging = peers / f".staging-{identifier}-{os.urandom(4).hex()}"
+    staging.mkdir(mode=0o700)
+    try:
+        private_copy(descriptor, staging / "descriptor.json")
+        if binding is not None:
+            private_copy(binding, staging / "identity.binding")
+        terms_writer(staging / "service.terms")
+        private_json(staging / "peer.json", {
+            "version": 1, "id": identifier, "descriptor_file": "descriptor.json",
+            "binding_file": "identity.binding" if binding is not None else None,
+            "terms_template_file": "service.terms", "minimum_price": minimum, "max_deal_lifetime_seconds": lifetime,
+            "resource": resource, "expires_at": descriptor_expiry(descriptor), "enabled": True,
+            "legacy_transport": legacy})
+        # What connect was given, so a repeated connect for this id is recognized as the same one.
+        private_json(staging / "connect.json", {"version": 1, **source})
+        for child in staging.iterdir():
+            with child.open("rb") as stream:
+                os.fsync(stream.fileno())
+        fsync_directory(staging)
+        os.rename(staging, target)
+        fsync_directory(peers)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def seller_negotiate_v2(directory: Path, files: dict, wallet: dict, endpoint: str, maximum: str) -> dict:
+    return {"version": 2, "role": "seller", "state_root": str(directory / "state"),
+            "transport_key_file": files["transport_key_file"], "agreement_key_file": files["agreement_key_file"],
+            "discovery_key_file": files["discovery_key_file"], "local_descriptor_file": files["descriptor_file"],
+            "peers_root": str(directory / "peers"), "endpoint": endpoint, "maximum_price": maximum, "timeout_seconds": 30,
+            "seller_spend_secret_file": files["seller_spend_secret_file"], "seller_wallet_file": wallet["wallet_file"],
+            "seller_wallet_key_file": wallet["wallet_key_file"], "access_evidence_root": str(directory / "access-evidence")}
+
+
 def connect(args) -> dict:
     directory = args.directory.resolve()
     operator = json.loads((directory / "operator.json").read_text())
     bins = Path(operator["bin"])
     verify_installed(bins, release_pins_from(operator))
     peer = args.peer_share.resolve()
-    descriptors = sorted(peer.glob("*.descriptor.json"))
-    if len(descriptors) != 1 or not (peer / "identity.binding").is_file():
-        raise ValueError("the peer share must hold exactly one descriptor and identity.binding")
+    descriptor = peer_share(peer)
     role, other = operator["role"], ("seller" if operator["role"] == "buyer" else "buyer")
     args.role_checked = role
     if role == "seller" and (args.service_url is not None or args.allow_loopback_access_http):
         raise ValueError("--service-url and --allow-loopback-access-http apply to a buyer")
+    if role == "buyer" and getattr(args, "peer_id", None) is not None:
+        raise ValueError("--peer-id applies to a seller")
     require_unsigned(args.amount, "--amount")
+    if role == "seller" and (directory / "negotiate.json").exists():
+        return connect_another_buyer(args, directory, operator, bins, peer, descriptor)
+    identifier = peer_id(args) if role == "seller" else None
     namespace = f"eip155:{NAMESPACE_CHAIN}"
     offer_file = peer / "offer.json"
     if role == "seller":
@@ -607,24 +689,19 @@ def connect(args) -> dict:
     access = access_environment(args, directory, bins, peer, files) if args.service_url is not None else None
     # The buyer dials the seller: erebus-negotiate requires the buyer's endpoint to be one the seller's signed
     # descriptor advertises, and the seller's to be its own.
-    endpoint = peer_endpoint(descriptors[0]) if role == "buyer" else operator["endpoint"]
-    terms = directory / "keys" / "service.terms"
-    command(bins, "erebus-negotiate", {
-        "method": "prepare_terms", "suite_id": 2, "output": str(terms), "role": role,
-        "local_descriptor_file": files["descriptor_file"], "peer_descriptor_file": str(descriptors[0]),
-        "local_binding_file": str(directory / "keys" / "identity.binding"), "peer_binding_file": str(peer / "identity.binding"),
-        "settlement_contract": operator["settlement_contract"], "verifier_version": 2,
-        "asset": f"{namespace}/erc20:{operator['asset']}", "amount": args.amount, "resource": args.resource,
-        "unit": offer["unit"], "quantity": offer["quantity"], "fulfillment_method": offer["fulfillment_method"],
-        "fulfillment_digest": digest, "delivery_deadline": deadline}, directory)
-    maximum = json.loads((directory / "payment.json").read_text())["maximum_price"] if role == "buyer" else args.amount
-    negotiate = {
-        "version": 1, "role": role, "state_root": str(directory / "state"),
-        "transport_key_file": files["transport_key_file"], "agreement_key_file": files["agreement_key_file"],
-        "discovery_key_file": files["discovery_key_file"], "local_descriptor_file": files["descriptor_file"],
-        "peer_descriptor_file": str(descriptors[0]), "terms_template_file": str(terms), "endpoint": endpoint,
-        "maximum_price": maximum, "minimum_price": require_unsigned(args.minimum_price or args.amount, "--minimum-price"),
-        "max_deal_lifetime_seconds": args.delivery_seconds, "timeout_seconds": 30}
+    endpoint = peer_endpoint(descriptor) if role == "buyer" else operator["endpoint"]
+
+    def prepare_terms(output: Path) -> None:
+        command(bins, "erebus-negotiate", {
+            "method": "prepare_terms", "suite_id": 2, "output": str(output), "role": role,
+            "local_descriptor_file": files["descriptor_file"], "peer_descriptor_file": str(descriptor),
+            "local_binding_file": str(directory / "keys" / "identity.binding"), "peer_binding_file": str(peer / "identity.binding"),
+            "settlement_contract": operator["settlement_contract"], "verifier_version": 2,
+            "asset": f"{namespace}/erc20:{operator['asset']}", "amount": args.amount, "resource": args.resource,
+            "unit": offer["unit"], "quantity": offer["quantity"], "fulfillment_method": offer["fulfillment_method"],
+            "fulfillment_digest": digest, "delivery_deadline": deadline}, directory)
+
+    minimum = require_unsigned(args.minimum_price or args.amount, "--minimum-price")
     written = ["negotiate.json", "mcp.json"]
     environment = {"EREBUS_BACKEND": "metropolis", "EREBUS_NEGOTIATION_CONFIG": str(directory / "negotiate.json"),
                    "EREBUS_NEGOTIATION_CLI": str(bins / "erebus-negotiate")}
@@ -632,9 +709,12 @@ def connect(args) -> dict:
         wallet = json.loads((directory / "wallet.json").read_text())
         evidence = directory / "access-evidence"
         evidence.mkdir(mode=0o700)
-        negotiate.update({"seller_spend_secret_file": files["seller_spend_secret_file"],
-                          "seller_wallet_file": wallet["wallet_file"], "seller_wallet_key_file": wallet["wallet_key_file"],
-                          "access_evidence_root": str(evidence)})
+        peers = directory / "peers"
+        peers.mkdir(mode=0o700)
+        write_peer(peers, identifier, descriptor=descriptor, binding=peer / "identity.binding", terms_writer=prepare_terms,
+                   minimum=minimum, lifetime=args.delivery_seconds, resource=args.resource, legacy=False,
+                   source=connect_source(descriptor, peer, args, minimum))
+        negotiate = seller_negotiate_v2(directory, files, wallet, endpoint, args.amount)
         public = Path(files["agreement_key_file"]).with_name("agreement.public")
         pins = wallet["runtime_pins"]
         payload = directory / "payload"
@@ -652,13 +732,27 @@ def connect(args) -> dict:
                         "deposit_verifier_keccak256": pins["deposit"], "transfer_verifier_keccak256": pins["transfer"],
                         "withdraw_verifier_keccak256": pins["withdraw"], "max_concurrent_queries": 4,
                         "requests_per_second": 20}})
-        written.append("access.json")
+        written += ["access.json", f"peers/{identifier}/"]
         offer_out = directory / "share" / "offer.json"
         private_json(offer_out, offer)
         # Public: the buyer pins this service identity; the URL is the buyer's own choice (`--service-url`).
         private_json(directory / "share" / "service.json", {"version": 1, "service_id": service_id.hex(),
-                                                             "resource": args.resource, "port": args.port})
+                                                             "resource": args.resource, "port": args.port,
+                                                             "negotiation_transport": ROUTED_TRANSPORT})
     else:
+        terms = directory / "keys" / "service.terms"
+        prepare_terms(terms)
+        maximum = json.loads((directory / "payment.json").read_text())["maximum_price"]
+        negotiate = {
+            "version": 1, "role": role, "state_root": str(directory / "state"),
+            "transport_key_file": files["transport_key_file"], "agreement_key_file": files["agreement_key_file"],
+            "discovery_key_file": files["discovery_key_file"], "local_descriptor_file": files["descriptor_file"],
+            "peer_descriptor_file": str(descriptor), "terms_template_file": str(terms), "endpoint": endpoint,
+            "maximum_price": maximum, "minimum_price": minimum,
+            "max_deal_lifetime_seconds": args.delivery_seconds, "timeout_seconds": 30}
+        service = peer / "service.json"
+        if service.is_file() and json.loads(service.read_text()).get("negotiation_transport") == ROUTED_TRANSPORT:
+            negotiate["negotiation_transport"] = ROUTED_TRANSPORT
         environment.update({"EREBUS_PAYMENT_CONFIG": str(directory / "payment.json"),
                             "EREBUS_PAYMENT_CLI": str(bins / "erebus-payment")})
         if access is not None:
@@ -669,11 +763,97 @@ def connect(args) -> dict:
     private_json(directory / "mcp.json", {"mcpServers": {f"erebus-{role}": {"command": str(bins / "erebus-mcp-server"),
                                                                           "env": environment}}})
     return {"status": "connected", "role": role, "peer": other, "written": written,
+            **({"peer_id": identifier} if role == "seller" else {}),
             "next": ("start erebus-access-service with access.json, then the MCP server" if role == "seller"
                      else "add mcp.json to the agent, fund the wallet (wrap/approve/deposit with erebus-wallet), then negotiate"
                      if operator["pool"] == "wmon" else
                      "add mcp.json to the agent, send the signer the pool's asset, fund the wallet (approve/deposit with "
                      "erebus-wallet), then negotiate")}
+
+
+def connect_source(descriptor: Path, peer: Path, args, minimum: str) -> dict:
+    return {"descriptor_sha256": sha256(descriptor), "binding_sha256": sha256(peer / "identity.binding"),
+            "resource": args.resource, "amount": args.amount, "minimum_price": minimum, "unit": args.unit,
+            "quantity": args.quantity, "delivery_seconds": args.delivery_seconds}
+
+
+def migrate_seller(directory: Path, operator: dict) -> None:
+    """A version 1 seller's one buyer becomes peers/default, still allowed the version 1 handshake."""
+    config = json.loads((directory / "negotiate.json").read_text())
+    if config.get("version") != 1:
+        return
+    peers = directory / "peers"
+    peers.mkdir(mode=0o700, exist_ok=True)
+    if not (peers / "default").exists():
+        offer = json.loads((directory / "share" / "offer.json").read_text())
+        template = Path(config["terms_template_file"])
+        write_peer(peers, "default", descriptor=Path(config["peer_descriptor_file"]), binding=None,
+                   terms_writer=lambda output: private_copy(template, output), minimum=config["minimum_price"],
+                   lifetime=config["max_deal_lifetime_seconds"], resource=offer["resource"], legacy=True,
+                   source={"migrated": True})
+    wallet = json.loads((directory / "wallet.json").read_text())
+    migrated = seller_negotiate_v2(directory, operator["operator"], wallet, config["endpoint"], config["maximum_price"])
+    replace_private_json(directory / "negotiate.json", migrated)
+
+
+def connect_another_buyer(args, directory: Path, operator: dict, bins: Path, peer: Path, descriptor: Path) -> dict:
+    """Adds one buyer to a connected seller: peers/<id> and outbox/<id>, never access.json or the payload."""
+    if getattr(args, "peer_id", None) is None:
+        raise ValueError("this seller is connected; add another buyer with --peer-id")
+    identifier = peer_id(args)
+    access = json.loads((directory / "access.json").read_text())
+    if args.resource != access.get("resource"):
+        raise ValueError("this seller's access service serves another resource; a buyer added by connect buys the same one")
+    if args.payload_file is not None and sha256(args.payload_file) != sha256(Path(access["payload_file"])):
+        raise ValueError("a buyer added by connect buys the existing payload; it is never replaced")
+    if args.port is not None and args.port != access.get("port"):
+        raise ValueError("the access service keeps its port")
+    minimum = require_unsigned(args.minimum_price or args.amount, "--minimum-price")
+    source = connect_source(descriptor, peer, args, minimum)
+    peers = directory / "peers"
+    existing = peers / identifier / "connect.json"
+    if existing.is_file():
+        retained = json.loads(existing.read_text())
+        if retained != {"version": 1, **source}:
+            raise ValueError(f"peer {identifier} is already connected with different inputs; choose another --peer-id")
+        return {"status": "connected", "role": "seller", "peer": "buyer", "peer_id": identifier, "written": [],
+                "repeated": True, "next": f"send outbox/{identifier}/ to that buyer"}
+    if (peers / identifier).exists():
+        raise ValueError(f"peer {identifier} already exists; choose another --peer-id")
+    others = [json.loads(path.read_text()) for path in peers.glob("*/connect.json")] if peers.is_dir() else []
+    if any(entry.get("descriptor_sha256") == source["descriptor_sha256"] for entry in others):
+        raise ValueError("that buyer is already connected under another --peer-id")
+    migrate_seller(directory, operator)
+    share = directory / "share"
+    offer = json.loads((share / "offer.json").read_text())
+    offer = {**offer, "price": args.amount, "unit": args.unit, "quantity": args.quantity,
+             "delivery_deadline": int(time.time()) + args.delivery_seconds}
+    files = operator["operator"]
+    namespace = f"eip155:{NAMESPACE_CHAIN}"
+
+    def prepare_terms(output: Path) -> None:
+        command(bins, "erebus-negotiate", {
+            "method": "prepare_terms", "suite_id": 2, "output": str(output), "role": "seller",
+            "local_descriptor_file": files["descriptor_file"], "peer_descriptor_file": str(descriptor),
+            "local_binding_file": str(directory / "keys" / "identity.binding"), "peer_binding_file": str(peer / "identity.binding"),
+            "settlement_contract": operator["settlement_contract"], "verifier_version": 2,
+            "asset": f"{namespace}/erc20:{operator['asset']}", "amount": args.amount, "resource": args.resource,
+            "unit": offer["unit"], "quantity": offer["quantity"], "fulfillment_method": offer["fulfillment_method"],
+            "fulfillment_digest": offer["fulfillment_digest"], "delivery_deadline": offer["delivery_deadline"]}, directory)
+
+    write_peer(peers, identifier, descriptor=descriptor, binding=peer / "identity.binding", terms_writer=prepare_terms,
+               minimum=minimum, lifetime=args.delivery_seconds, resource=args.resource, legacy=False, source=source)
+    outbox = directory / "outbox"
+    outbox.mkdir(mode=0o700, exist_ok=True)
+    box = outbox / identifier
+    shutil.rmtree(box, ignore_errors=True)
+    box.mkdir(mode=0o700)
+    for source_file in sorted(share.glob("*.descriptor.json")) + [share / "identity.binding", share / "service.json"]:
+        private_copy(source_file, box / source_file.name)
+    private_json(box / "offer.json", offer)
+    return {"status": "connected", "role": "seller", "peer": "buyer", "peer_id": identifier,
+            "written": [f"peers/{identifier}/", f"outbox/{identifier}/"],
+            "next": f"send outbox/{identifier}/ to that buyer; it connects with --peer-share pointing at it"}
 
 
 def peer_endpoint(descriptor: Path) -> str:
@@ -1269,6 +1449,8 @@ def main(argv=None) -> int:
     second.add_argument("--port", type=int)
     second.add_argument("--delivery-seconds", type=int, default=21600)
     second.add_argument("--service-url", help="buyer: the seller's access URL, https://<host>/v1/access; adds retrieval to mcp.json")
+    second.add_argument("--peer-id", help="seller: this buyer's name ([a-z0-9-], at most 32); default `default`. "
+                        "A connected seller adds another buyer with a new --peer-id")
     second.add_argument("--allow-loopback-access-http", action="store_true",
                         help="buyer: accept a plain-http --service-url on a loopback host (local rehearsal only)")
     checkup = commands.add_parser("doctor")

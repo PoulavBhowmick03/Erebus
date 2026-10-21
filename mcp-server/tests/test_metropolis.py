@@ -136,7 +136,7 @@ def test_native_timeout_is_bounded(monkeypatch, tmp_path, value):
 @pytest.mark.skipif(not (BINARIES / "erebus-payment").exists(), reason="build the shielded binaries")
 @pytest.mark.parametrize("role,tools", [
     ("buyer", {"negotiate_deal", "check_settlement_funding", "settle_deal", "recover_deal"}),
-    ("seller", {"negotiate_deal"}),
+    ("seller", {"negotiate_deal", "list_peers"}),
 ])
 def test_stdio_tools_follow_the_configured_role(tmp_path, role, tools):
     state = tmp_path / "state"
@@ -152,7 +152,12 @@ def test_stdio_tools_follow_the_configured_role(tmp_path, role, tools):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 assert {tool.name for tool in (await session.list_tools()).tools} == tools
-                for name in tools:
+                if "list_peers" in tools:
+                    # Takes no reference; this placeholder configuration is refused natively.
+                    response = await session.call_tool("list_peers", {})
+                    result = response.structured_content or json.loads(response.content[0].text)
+                    assert result["ok"] is False and result["error"]["code"] == "OPERATOR_CONFIG_INVALID"
+                for name in tools - {"list_peers"}:
                     response = await session.call_tool(name, {"operation_ref": "../outside"})
                     result = response.structured_content or json.loads(response.content[0].text)
                     assert result["ok"] is False

@@ -1,7 +1,7 @@
 """Durable operation references created for agents that omit one.
 
 An agent that forgets its reference must not create a second payment or funding action by
-retrying. So a created reference is written here, fsynced, before any native call uses it, and an
+retrying. A seller with many configured buyers resolves per peer instead (`resolve_peer`). So a created reference is written here, fsynced, before any native call uses it, and an
 omitted reference resumes the newest unfinished one of the same kind and amount. A different
 amount while one is unfinished is refused; an explicit reference always bypasses this file.
 """
@@ -74,6 +74,29 @@ class OperationRefs:
                     return dict(latest)
             reference = secrets.token_hex(32)
             entries.append({"kind": kind, "ref": reference, "amount": amount, "created": int(time.time())})
+            return reference, True
+
+    def resolve_peer(self, kind: str, peer: str | None) -> tuple[str, bool]:
+        """A seller's reference for an omitted one, with many configured buyers: (ref, created).
+
+        Each unfinished entry is unbound or bound to one peer, and a seller may have several. Resume
+        the oldest unfinished entry bound to `peer` (any bound entry when `peer` is None), else the
+        oldest unbound one, else create one. Native negotiation enforces the binding itself.
+        """
+        with self._locked() as entries:
+            unfinished = [entry for entry in entries if entry["kind"] == kind and not entry.get("done")]
+            # `peer_unknown`: native negotiation refused this entry for another peer, so it is bound
+            # to some peer this journal never learned. Only a call that names no peer resumes it.
+            bound = next((entry for entry in unfinished
+                          if (entry.get("peer") is not None and (peer is None or entry["peer"] == peer))
+                          or (entry.get("peer_unknown") and peer is None)), None)
+            unbound = next((entry for entry in unfinished
+                            if entry.get("peer") is None and not entry.get("peer_unknown")), None)
+            chosen = bound or unbound
+            if chosen is not None:
+                return chosen["ref"], False
+            reference = secrets.token_hex(32)
+            entries.append({"kind": kind, "ref": reference, "amount": None, "created": int(time.time())})
             return reference, True
 
     def update(self, reference: str, **fields: Any) -> None:

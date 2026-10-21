@@ -26,6 +26,18 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
         "PEER_UNAVAILABLE", "the connection dropped; retry with the same operation_ref", True),
     "offer delivery uncertain; retain this operation and reconnect": (
         "PEER_UNAVAILABLE", "the offer may have been delivered; retry with the same operation_ref, never a new one", True),
+    # A seller with many configured buyers.
+    "no configured peer connected before the deadline": (
+        "NO_PEER_CONNECTED", "no configured buyer connected in time; retry this call with the same operation_ref "
+        "once a buyer runs its negotiate_deal", True),
+    "negotiation peer is not configured": (
+        "PEER_NOT_CONFIGURED", "that buyer is not in this seller's peer table; call list_peers, or the operator adds "
+        "it with quickstart add-buyer", False),
+    "negotiation peer is expired or disabled": (
+        "PEER_EXPIRED", "that buyer's configuration expired or was disabled; the operator renews or re-adds it", False),
+    "operation is bound to another negotiation peer": (
+        "OPERATION_BOUND_TO_OTHER_PEER", "this operation_ref already belongs to another buyer; omit operation_ref, "
+        "or pass that buyer's peer", False),
     "negotiation listener unavailable": (
         "LISTENER_UNAVAILABLE", "another process holds this participant's negotiation port; the operator must "
         "stop it before retrying", True),
@@ -42,6 +54,8 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
         "INVALID_OPERATION_REF", "pass 64 lowercase hex digits, or omit operation_ref to have one created", False),
     "operation ID must be 64 nonzero lowercase hex digits": (
         "INVALID_OPERATION_REF", "pass 64 lowercase hex digits, or omit operation_ref to have one created", False),
+    "peer must be a configured seller peer id": (
+        "PEER_NOT_CONFIGURED", "pass a peer id from list_peers ([a-z0-9-], at most 32), or omit peer", False),
     # Signing and settlement.
     "local signing failed; retain nonce and reservations": (
         "SIGNER_CLAIM_HELD", "a wallet transaction still holds the signer; call sync_wallet until nothing is "
@@ -77,6 +91,7 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
 SEAM_MESSAGES = frozenset({
     "wallet amount exceeds operator policy", "wallet action is not authorized by operator policy",
     "operation ID must be 64 nonzero lowercase hex digits",
+    "peer must be a configured seller peer id",
 })
 
 
