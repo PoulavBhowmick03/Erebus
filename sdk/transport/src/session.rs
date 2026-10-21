@@ -29,6 +29,19 @@ use crate::message::{Message, MessageError};
 /// Transport protocol version bound into the prologue.
 pub const TRANSPORT_PROTOCOL_VERSION: u16 = 1;
 
+/// Transport protocol version of a routed handshake: one responder, many configured peers.
+///
+/// The initiator announces it in clear as the whole payload of handshake message 1. Noise mixes
+/// that payload into the handshake hash, and the routed prologue starts with the same version,
+/// so removing or adding the announcement changes both sides' hash and fails at message 2.
+pub const ROUTED_TRANSPORT_PROTOCOL_VERSION: u16 = 2;
+
+/// Length of an X25519 ephemeral key, the whole of a direct (version 1) message 1.
+const EPHEMERAL_KEY_BYTES: usize = 32;
+
+/// The clear message-1 payload of a routed handshake.
+const ROUTED_HELLO: [u8; 2] = ROUTED_TRANSPORT_PROTOCOL_VERSION.to_be_bytes();
+
 /// Largest handshake message accepted. XX handshake messages are small; the bound only exists so
 /// a malicious peer cannot make us allocate an unbounded buffer.
 pub const MAX_HANDSHAKE_MESSAGE_BYTES: usize = 1024;
@@ -59,6 +72,12 @@ pub enum SessionError {
     /// The handshake hash was not the expected width.
     #[error("handshake hash was {0} bytes, expected 32")]
     UnexpectedHandshakeHash(usize),
+    /// A first handshake message announced no version this endpoint speaks.
+    #[error("handshake message does not announce a supported transport version")]
+    UnsupportedVersion,
+    /// A routed handshake's authenticated static key or descriptor digest named no peer.
+    #[error("routed handshake named no configured peer")]
+    UnknownPeer,
     /// A ciphertext envelope exceeded the wire bound.
     #[error("ciphertext is {actual} bytes, above the {max} byte bound")]
     MessageTooLarge {
@@ -100,6 +119,46 @@ pub fn prologue(
     writer.finish()
 }
 
+/// Builds the prologue of a routed handshake.
+///
+/// Only the responder's descriptor is bound here, because the responder does not know which
+/// peer is connecting until message 3. The initiator's descriptor digest travels encrypted in
+/// message 3 instead, and the responder checks it against the peer it selects.
+#[must_use]
+pub fn routed_prologue(responder_descriptor_digest: &[u8; 32]) -> Vec<u8> {
+    let mut writer = Writer::new();
+    writer.u16(ROUTED_TRANSPORT_PROTOCOL_VERSION);
+    writer.fixed(responder_descriptor_digest);
+    writer.finish()
+}
+
+/// The transport version a first handshake message announces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeVersion {
+    /// Version 1: an empty payload, both descriptor digests in the prologue.
+    Direct,
+    /// Version 2: the routed announcement, the responder digest in the prologue.
+    Routed,
+}
+
+/// Classifies a first handshake message by its exact shape, before any Noise state exists.
+///
+/// The responder needs the version to choose its prologue, which Noise fixes at build time.
+/// A message that is neither a bare ephemeral key nor an ephemeral key followed by exactly the
+/// routed announcement is rejected, so no other payload is ever read in clear.
+pub fn first_message_version(message: &[u8]) -> Result<HandshakeVersion, SessionError> {
+    match message.len() {
+        EPHEMERAL_KEY_BYTES => Ok(HandshakeVersion::Direct),
+        length
+            if length == EPHEMERAL_KEY_BYTES + ROUTED_HELLO.len()
+                && message[EPHEMERAL_KEY_BYTES..] == ROUTED_HELLO =>
+        {
+            Ok(HandshakeVersion::Routed)
+        }
+        _ => Err(SessionError::UnsupportedVersion),
+    }
+}
+
 /// The one parameter set this protocol speaks: Noise XX over X25519, ChaCha20-Poly1305, BLAKE2s.
 ///
 /// The string is a compile-time constant, so its parse cannot fail at runtime.
@@ -115,6 +174,8 @@ pub struct Handshake {
     local_role: Role,
     peer_role: Role,
     expected_peer_transport_key: [u8; 32],
+    /// Payloads of this side's next writes, in order. Empty for a direct handshake.
+    payloads: Vec<Vec<u8>>,
 }
 
 impl core::fmt::Debug for Handshake {
@@ -148,7 +209,32 @@ impl Handshake {
             local_role,
             peer_role,
             expected_peer_transport_key,
+            payloads: Vec::new(),
         })
+    }
+
+    /// Starts the initiator's side of a routed XX handshake.
+    ///
+    /// Message 1 carries the routed announcement in clear and message 3 carries
+    /// `local_descriptor_digest` encrypted, so the responder can select this peer by its
+    /// authenticated static key. The prologue binds only the responder's descriptor.
+    pub fn routed_initiator(
+        identity: &TransportIdentity,
+        local_role: Role,
+        peer_role: Role,
+        responder_descriptor_digest: &[u8; 32],
+        expected_peer_transport_key: [u8; 32],
+        local_descriptor_digest: [u8; 32],
+    ) -> Result<Self, SessionError> {
+        let mut handshake = Self::initiator(
+            identity,
+            local_role,
+            peer_role,
+            &routed_prologue(responder_descriptor_digest),
+            expected_peer_transport_key,
+        )?;
+        handshake.payloads = vec![ROUTED_HELLO.to_vec(), local_descriptor_digest.to_vec()];
+        Ok(handshake)
     }
 
     /// Starts the responder's side of an XX handshake.
@@ -170,6 +256,7 @@ impl Handshake {
             local_role,
             peer_role,
             expected_peer_transport_key,
+            payloads: Vec::new(),
         })
     }
 
@@ -190,10 +277,15 @@ impl Handshake {
         if !self.inner.is_my_turn() {
             return Err(SessionError::OutOfTurn { action: "write" });
         }
+        let payload = if self.payloads.is_empty() {
+            Vec::new()
+        } else {
+            self.payloads.remove(0)
+        };
         let mut buffer = vec![0u8; MAX_HANDSHAKE_MESSAGE_BYTES];
         let written = self
             .inner
-            .write_message(&[], &mut buffer)
+            .write_message(&payload, &mut buffer)
             .map_err(|error| SessionError::Noise(error.to_string()))?;
         buffer.truncate(written);
         Ok(buffer)
@@ -250,6 +342,139 @@ impl Handshake {
             sent_bytes: 0,
             received_bytes: 0,
         })
+    }
+}
+
+/// The responder's side of a routed XX handshake.
+///
+/// It is built from the first message, because that message's announcement selects the
+/// prologue. The peer is unknown until message 3, which proves possession of a static key and
+/// carries the peer's descriptor digest; [`RoutedResponder::finish`] then asks the caller to
+/// select the configured peer for exactly that key and digest, or rejects the connection.
+pub struct RoutedResponder {
+    inner: HandshakeState,
+    local_role: Role,
+    peer_role: Role,
+}
+
+impl core::fmt::Debug for RoutedResponder {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RoutedResponder")
+            .field("local_role", &self.local_role)
+            .field("peer_role", &self.peer_role)
+            .finish()
+    }
+}
+
+impl RoutedResponder {
+    /// Reads a routed first message under the routed prologue for this responder's descriptor.
+    pub fn new(
+        identity: &TransportIdentity,
+        local_role: Role,
+        peer_role: Role,
+        responder_descriptor_digest: &[u8; 32],
+        first_message: &[u8],
+    ) -> Result<Self, SessionError> {
+        if first_message_version(first_message)? != HandshakeVersion::Routed {
+            return Err(SessionError::UnsupportedVersion);
+        }
+        let mut inner = snow::Builder::new(noise_params())
+            .local_private_key(identity.private_key())
+            .prologue(&routed_prologue(responder_descriptor_digest))
+            .build_responder()
+            .map_err(|error| SessionError::Noise(error.to_string()))?;
+        let mut payload = vec![0u8; MAX_HANDSHAKE_MESSAGE_BYTES];
+        let read = inner
+            .read_message(first_message, &mut payload)
+            .map_err(|error| SessionError::Noise(error.to_string()))?;
+        if payload[..read] != ROUTED_HELLO {
+            return Err(SessionError::UnsupportedVersion);
+        }
+        Ok(Self {
+            inner,
+            local_role,
+            peer_role,
+        })
+    }
+
+    /// Produces handshake message 2.
+    pub fn write(&mut self) -> Result<Vec<u8>, SessionError> {
+        if !self.inner.is_my_turn() {
+            return Err(SessionError::OutOfTurn { action: "write" });
+        }
+        let mut buffer = vec![0u8; MAX_HANDSHAKE_MESSAGE_BYTES];
+        let written = self
+            .inner
+            .write_message(&[], &mut buffer)
+            .map_err(|error| SessionError::Noise(error.to_string()))?;
+        buffer.truncate(written);
+        Ok(buffer)
+    }
+
+    /// Reads message 3 and selects the peer it authenticates.
+    ///
+    /// `select` receives the authenticated remote static key and the descriptor digest the peer
+    /// sent encrypted in message 3. It must return a value only for a configured peer whose
+    /// descriptor advertises exactly that key and hashes to exactly that digest. The session
+    /// is returned with that selection; `None` rejects the connection.
+    pub fn finish<P>(
+        mut self,
+        third_message: &[u8],
+        select: impl FnOnce(&[u8; 32], &[u8; 32]) -> Option<P>,
+    ) -> Result<(Session, P), SessionError> {
+        if third_message.len() > MAX_HANDSHAKE_MESSAGE_BYTES {
+            return Err(SessionError::HandshakeTooLarge {
+                actual: third_message.len(),
+                max: MAX_HANDSHAKE_MESSAGE_BYTES,
+            });
+        }
+        if self.inner.is_my_turn() {
+            return Err(SessionError::OutOfTurn { action: "read" });
+        }
+        let mut payload = vec![0u8; MAX_HANDSHAKE_MESSAGE_BYTES];
+        let read = self
+            .inner
+            .read_message(third_message, &mut payload)
+            .map_err(|error| SessionError::Noise(error.to_string()))?;
+        if !self.inner.is_handshake_finished() {
+            return Err(SessionError::OutOfTurn { action: "finish" });
+        }
+        let digest: [u8; 32] = payload[..read]
+            .try_into()
+            .map_err(|_| SessionError::UnknownPeer)?;
+        let remote_static: [u8; 32] = self
+            .inner
+            .get_remote_static()
+            .ok_or_else(|| SessionError::Noise("handshake produced no peer static key".to_owned()))?
+            .try_into()
+            .map_err(|_| SessionError::UnknownPeer)?;
+        let selected = select(&remote_static, &digest).ok_or(SessionError::UnknownPeer)?;
+        let handshake_hash = self.inner.get_handshake_hash();
+        let session_id: [u8; 32] =
+            handshake_hash
+                .try_into()
+                .map_err(|_: core::array::TryFromSliceError| {
+                    SessionError::UnexpectedHandshakeHash(handshake_hash.len())
+                })?;
+        let inner = self
+            .inner
+            .into_transport_mode()
+            .map_err(|error| SessionError::Noise(error.to_string()))?;
+        Ok((
+            Session {
+                inner,
+                session_id,
+                remote_static,
+                local_role: self.local_role,
+                peer_role: self.peer_role,
+                sent_messages: 0,
+                received_messages: 0,
+                sent_bytes: 0,
+                received_bytes: 0,
+            },
+            selected,
+        ))
     }
 }
 
@@ -597,5 +822,167 @@ mod tests {
             matches!(initiator.finish(), Err(SessionError::PeerKeyMismatch)),
             "a peer that is not the advertised key must be rejected"
         );
+    }
+
+    /// Runs a routed handshake; `tamper` may rewrite message 1 in flight.
+    fn routed(
+        buyer: &TransportIdentity,
+        seller: &TransportIdentity,
+        seller_digest: [u8; 32],
+        buyer_digest: [u8; 32],
+    ) -> (Handshake, Vec<u8>) {
+        let mut initiator = Handshake::routed_initiator(
+            buyer,
+            Role::Buyer,
+            Role::Seller,
+            &seller_digest,
+            seller.public_key(),
+            buyer_digest,
+        )
+        .expect("routed initiator");
+        let first = initiator.write().expect("message one");
+        (initiator, first)
+    }
+
+    #[test]
+    fn a_direct_first_message_is_exactly_the_ephemeral_key() {
+        let (buyer, seller) = identities();
+        let mut initiator = Handshake::initiator(
+            &buyer,
+            Role::Buyer,
+            Role::Seller,
+            &prologue(&[1; 32], &[2; 32]),
+            seller.public_key(),
+        )
+        .expect("initiator");
+        let first = initiator.write().expect("message one");
+        assert_eq!(first.len(), EPHEMERAL_KEY_BYTES);
+        assert_eq!(first_message_version(&first), Ok(HandshakeVersion::Direct));
+        let (_, routed_first) = routed(&buyer, &seller, [2; 32], [1; 32]);
+        assert_eq!(routed_first.len(), EPHEMERAL_KEY_BYTES + 2);
+        assert_eq!(&routed_first[EPHEMERAL_KEY_BYTES..], &[0x00, 0x02]);
+        assert_eq!(
+            first_message_version(&routed_first),
+            Ok(HandshakeVersion::Routed)
+        );
+        for malformed in [
+            &routed_first[..EPHEMERAL_KEY_BYTES + 1],
+            &[routed_first.as_slice(), &[0]].concat()[..],
+            &[&routed_first[..EPHEMERAL_KEY_BYTES], &[0x00, 0x01][..]].concat()[..],
+            &routed_first[..EPHEMERAL_KEY_BYTES - 1],
+        ] {
+            assert_eq!(
+                first_message_version(malformed),
+                Err(SessionError::UnsupportedVersion)
+            );
+        }
+        assert_ne!(routed_prologue(&[2; 32]), prologue(&[1; 32], &[2; 32]));
+    }
+
+    #[test]
+    fn a_routed_handshake_selects_the_peer_by_key_and_sent_digest() {
+        let (buyer, seller) = identities();
+        let (mut initiator, first) = routed(&buyer, &seller, [0x22; 32], [0x11; 32]);
+        let mut responder =
+            RoutedResponder::new(&seller, Role::Seller, Role::Buyer, &[0x22; 32], &first)
+                .expect("responder");
+        initiator
+            .read(&responder.write().expect("two"))
+            .expect("read two");
+        let third = initiator.write().expect("three");
+        let (session, selected) = responder
+            .finish(&third, |key, digest| {
+                (key == &buyer.public_key() && digest == &[0x11; 32]).then_some("peer-a")
+            })
+            .expect("selected");
+        let initiator = initiator.finish().expect("initiator session");
+        assert_eq!(selected, "peer-a");
+        assert_eq!(session.session_id(), initiator.session_id());
+        assert_eq!(session.remote_transport_key(), buyer.public_key());
+        assert_eq!(session.peer_role(), Role::Buyer);
+    }
+
+    #[test]
+    fn a_routed_handshake_with_no_selected_peer_is_rejected() {
+        let (buyer, seller) = identities();
+        let (mut initiator, first) = routed(&buyer, &seller, [0x22; 32], [0x11; 32]);
+        let mut responder =
+            RoutedResponder::new(&seller, Role::Seller, Role::Buyer, &[0x22; 32], &first)
+                .expect("responder");
+        initiator
+            .read(&responder.write().expect("two"))
+            .expect("read two");
+        let third = initiator.write().expect("three");
+        let result = responder.finish(&third, |_, _| None::<()>);
+        assert_eq!(result.err(), Some(SessionError::UnknownPeer));
+    }
+
+    #[test]
+    fn a_routed_handshake_for_another_responder_descriptor_fails_at_message_two() {
+        let (buyer, seller) = identities();
+        let (mut initiator, first) = routed(&buyer, &seller, [0x23; 32], [0x11; 32]);
+        let mut responder =
+            RoutedResponder::new(&seller, Role::Seller, Role::Buyer, &[0x22; 32], &first)
+                .expect("responder");
+        assert!(initiator.read(&responder.write().expect("two")).is_err());
+    }
+
+    #[test]
+    fn stripping_the_announcement_downgrades_into_a_failed_handshake() {
+        let (buyer, seller) = identities();
+        let (mut initiator, first) = routed(&buyer, &seller, [0x22; 32], [0x11; 32]);
+        // An active attacker removes the clear announcement: the responder sees version 1 and
+        // uses the legacy prologue of the very same descriptors.
+        let stripped = &first[..EPHEMERAL_KEY_BYTES];
+        assert_eq!(
+            first_message_version(stripped),
+            Ok(HandshakeVersion::Direct)
+        );
+        let mut legacy = Handshake::responder(
+            &seller,
+            Role::Seller,
+            Role::Buyer,
+            &prologue(&[0x11; 32], &[0x22; 32]),
+            buyer.public_key(),
+        )
+        .expect("legacy responder");
+        legacy
+            .read(stripped)
+            .expect("legacy reads a bare ephemeral key");
+        let second = legacy.write().expect("two");
+        assert!(
+            initiator.read(&second).is_err(),
+            "the routed initiator's hash includes the announcement, so message 2 must not decrypt"
+        );
+        // Removing one byte of it is not a version at all.
+        assert_eq!(
+            RoutedResponder::new(
+                &seller,
+                Role::Seller,
+                Role::Buyer,
+                &[0x22; 32],
+                &first[..EPHEMERAL_KEY_BYTES + 1],
+            )
+            .err(),
+            Some(SessionError::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn adding_the_announcement_to_a_direct_handshake_fails_at_message_two() {
+        let (buyer, seller) = identities();
+        let mut initiator = Handshake::initiator(
+            &buyer,
+            Role::Buyer,
+            Role::Seller,
+            &prologue(&[0x11; 32], &[0x22; 32]),
+            seller.public_key(),
+        )
+        .expect("initiator");
+        let first = [initiator.write().expect("one"), ROUTED_HELLO.to_vec()].concat();
+        let mut responder =
+            RoutedResponder::new(&seller, Role::Seller, Role::Buyer, &[0x22; 32], &first)
+                .expect("responder");
+        assert!(initiator.read(&responder.write().expect("two")).is_err());
     }
 }

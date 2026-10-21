@@ -307,3 +307,367 @@ fn ciphertext_does_not_contain_offer_and_replay_closes_the_session() {
     assert_eq!(seller.receive(), Err(SocketError::Authentication));
     assert_eq!(seller.receive(), Err(SocketError::Closed));
 }
+
+/// A descriptor of `seed`'s identity valid until `expires`, so two of them differ in digest only.
+fn identity_until(seed: u8, expires: u64) -> (TransportIdentity, ServiceDescriptor) {
+    let (transport, mut descriptor) = identity(seed);
+    let signer = AuthorizationIdentity::from_bytes(&[seed; 32]).unwrap();
+    descriptor.expires = expires;
+    descriptor.sign(&signer).unwrap();
+    (transport, descriptor)
+}
+
+/// The buyer's and the routed seller's handshake results.
+type RoutedPair = (
+    Result<SocketChannel, SocketError>,
+    Result<(SocketChannel, ServiceDescriptor, &'static str), SocketError>,
+);
+
+/// Runs `seller_routed` on one end of a socket pair with peers `table` and returns its result
+/// next to the buyer's routed or direct result.
+fn routed_pair(
+    routed_buyer: bool,
+    buyer_seed: u8,
+    buyer_descriptor: ServiceDescriptor,
+    legacy: Option<ServiceDescriptor>,
+    table: Vec<(ServiceDescriptor, &'static str)>,
+    timeout: Duration,
+) -> RoutedPair {
+    let (buyer, seller) = sockets();
+    let (buyer_key, _) = identity(buyer_seed);
+    let (seller_key, seller_descriptor) = identity(2);
+    let s = seller_descriptor.clone();
+    let worker = thread::spawn(move || {
+        SocketChannel::seller_routed(
+            seller,
+            &seller_key,
+            &s,
+            NOW,
+            timeout,
+            timeout,
+            legacy.map(|descriptor| (descriptor, "legacy")),
+            |key| {
+                table
+                    .iter()
+                    .find(|(descriptor, _)| descriptor.transport_key == *key)
+                    .cloned()
+            },
+        )
+    });
+    let buyer = if routed_buyer {
+        SocketChannel::buyer_routed(
+            buyer,
+            &buyer_key,
+            &buyer_descriptor,
+            &seller_descriptor,
+            NOW,
+            timeout,
+        )
+    } else {
+        SocketChannel::buyer(
+            buyer,
+            &buyer_key,
+            &buyer_descriptor,
+            &seller_descriptor,
+            NOW,
+            timeout,
+        )
+    };
+    (buyer, worker.join().unwrap())
+}
+
+#[test]
+fn a_routed_seller_selects_each_configured_buyer_and_reports_both_digests() {
+    let (_, first) = identity(1);
+    let (_, second) = identity(3);
+    let (_, seller) = identity(2);
+    for (seed, descriptor, expected) in [(1, &first, "first"), (3, &second, "second")] {
+        let table = vec![(first.clone(), "first"), (second.clone(), "second")];
+        let (buyer, selected) = routed_pair(
+            true,
+            seed,
+            descriptor.clone(),
+            None,
+            table,
+            Duration::from_secs(2),
+        );
+        let mut buyer = buyer.unwrap();
+        let (mut channel, authenticated, tag) = selected.unwrap();
+        assert_eq!(tag, expected);
+        assert_eq!(&authenticated, descriptor);
+        let digests = [descriptor.digest().unwrap(), seller.digest().unwrap()];
+        assert_eq!(channel.descriptor_digests(), digests);
+        assert_eq!(buyer.descriptor_digests(), digests);
+        assert_eq!(buyer.session_id(), channel.session_id());
+        let offer = message(&buyer, 1, [0; 32], b"routed offer");
+        buyer.send(&offer).unwrap();
+        assert_eq!(channel.receive().unwrap(), offer);
+    }
+}
+
+#[test]
+fn a_routed_seller_rejects_an_unknown_key_and_a_stale_descriptor() {
+    let (_, configured) = identity(1);
+    let (_, stranger) = identity(4);
+    let (buyer, selected) = routed_pair(
+        true,
+        4,
+        stranger,
+        None,
+        vec![(configured.clone(), "configured")],
+        Duration::from_secs(2),
+    );
+    assert_eq!(selected.err(), Some(SocketError::Authentication));
+    // The buyer finished its side; its first use finds the connection closed.
+    if let Ok(mut buyer) = buyer {
+        assert!(buyer.receive().is_err());
+    }
+    // Same key, but the seller holds a different signed descriptor than the one the buyer
+    // presents: the digest sent in message 3 does not match the configured descriptor.
+    let (_, renewed) = identity_until(1, NOW + 2000);
+    assert_ne!(renewed.digest().unwrap(), configured.digest().unwrap());
+    let (_, selected) = routed_pair(
+        true,
+        1,
+        renewed,
+        None,
+        vec![(configured, "configured")],
+        Duration::from_secs(2),
+    );
+    assert_eq!(selected.err(), Some(SocketError::Authentication));
+}
+
+#[test]
+fn a_configured_descriptor_must_advertise_the_authenticated_key() {
+    // A table that maps the buyer's key to someone else's descriptor is refused.
+    let (_, buyer) = identity(1);
+    let (_, other) = identity(5);
+    let (buyer_key, _) = identity(1);
+    let (seller_stream, seller_key, seller) = {
+        let (b, s) = sockets();
+        let (key, descriptor) = identity(2);
+        let worker_descriptor = descriptor.clone();
+        let other = other.clone();
+        let worker = thread::spawn(move || {
+            SocketChannel::seller_routed(
+                s,
+                &key,
+                &worker_descriptor,
+                NOW,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+                None,
+                |_| Some((other, "wrong")),
+            )
+            .map(|_| ())
+        });
+        (b, worker, descriptor)
+    };
+    let _ = SocketChannel::buyer_routed(
+        seller_stream,
+        &buyer_key,
+        &buyer,
+        &seller,
+        NOW,
+        Duration::from_secs(2),
+    );
+    assert_eq!(seller_key.join().unwrap(), Err(SocketError::Authentication));
+}
+
+#[test]
+fn a_direct_buyer_is_accepted_only_as_the_legacy_peer() {
+    let (_, legacy) = identity(1);
+    let (_, seller) = identity(2);
+    let (buyer, selected) = routed_pair(
+        false,
+        1,
+        legacy.clone(),
+        Some(legacy.clone()),
+        Vec::new(),
+        Duration::from_secs(2),
+    );
+    let mut buyer = buyer.unwrap();
+    let (mut channel, authenticated, tag) = selected.unwrap();
+    assert_eq!((tag, &authenticated), ("legacy", &legacy));
+    assert_eq!(
+        channel.descriptor_digests(),
+        [legacy.digest().unwrap(), seller.digest().unwrap()]
+    );
+    let offer = message(&buyer, 1, [0; 32], b"legacy offer");
+    buyer.send(&offer).unwrap();
+    assert_eq!(channel.receive().unwrap(), offer);
+
+    // Without a legacy peer, a direct first message is refused before any reply.
+    let (buyer, selected) = routed_pair(
+        false,
+        1,
+        legacy.clone(),
+        None,
+        vec![(legacy.clone(), "routed")],
+        Duration::from_secs(2),
+    );
+    assert_eq!(selected.err(), Some(SocketError::Authentication));
+    assert!(buyer.is_err());
+
+    // A direct buyer that is not the legacy peer fails the version 1 key check.
+    let (_, other) = identity(6);
+    let (buyer, selected) = routed_pair(
+        false,
+        6,
+        other,
+        Some(legacy),
+        Vec::new(),
+        Duration::from_secs(2),
+    );
+    assert!(selected.is_err());
+    assert!(buyer.is_err());
+}
+
+#[test]
+fn a_routed_buyer_and_a_direct_seller_never_connect() {
+    let (buyer, seller) = sockets();
+    let (buyer_key, buyer_descriptor) = identity(1);
+    let (seller_key, seller_descriptor) = identity(2);
+    let (b, s) = (buyer_descriptor.clone(), seller_descriptor.clone());
+    let worker = thread::spawn(move || {
+        SocketChannel::seller(seller, &seller_key, &s, &b, NOW, Duration::from_secs(2)).map(|_| ())
+    });
+    let routed = SocketChannel::buyer_routed(
+        buyer,
+        &buyer_key,
+        &buyer_descriptor,
+        &seller_descriptor,
+        NOW,
+        Duration::from_secs(2),
+    );
+    assert!(routed.is_err());
+    let _ = worker.join().unwrap();
+}
+
+/// Forwards one connection to `target`, applying `rewrite` to the first frame only.
+fn tampering_proxy(
+    listener: TcpListener,
+    target: std::net::SocketAddr,
+    rewrite: fn(Vec<u8>) -> Vec<u8>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let (mut client, _) = listener.accept().unwrap();
+        let mut server = TcpStream::connect(target).unwrap();
+        let mut prefix = [0u8; 4];
+        client.read_exact(&mut prefix).unwrap();
+        let mut frame = vec![0u8; u32::from_be_bytes(prefix) as usize];
+        client.read_exact(&mut frame).unwrap();
+        let frame = rewrite(frame);
+        server
+            .write_all(&(frame.len() as u32).to_be_bytes())
+            .unwrap();
+        server.write_all(&frame).unwrap();
+        let (mut client_reader, mut server_writer) =
+            (client.try_clone().unwrap(), server.try_clone().unwrap());
+        let upstream = thread::spawn(move || {
+            let _ = std::io::copy(&mut client_reader, &mut server_writer);
+            let _ = server_writer.shutdown(Shutdown::Write);
+        });
+        let _ = std::io::copy(&mut server, &mut client);
+        let _ = client.shutdown(Shutdown::Write);
+        let _ = upstream.join();
+    })
+}
+
+#[test]
+fn stripping_the_routed_announcement_in_flight_fails_both_sides() {
+    let (_, buyer_descriptor) = identity(1);
+    let (seller_key, seller_descriptor) = identity(2);
+    let (buyer_key, _) = identity(1);
+    let seller_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let seller_address = seller_listener.local_addr().unwrap();
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_address = proxy_listener.local_addr().unwrap();
+    // The proxy turns the routed first message into a direct one.
+    let proxy = tampering_proxy(proxy_listener, seller_address, |mut frame| {
+        frame.truncate(32);
+        frame
+    });
+    let (legacy, s) = (buyer_descriptor.clone(), seller_descriptor.clone());
+    let seller = thread::spawn(move || {
+        let stream = seller_listener.accept().unwrap().0;
+        // Even with this very buyer configured as the legacy peer, the downgrade fails.
+        SocketChannel::seller_routed(
+            stream,
+            &seller_key,
+            &s,
+            NOW,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            Some((legacy, "legacy")),
+            |_| None,
+        )
+        .map(|_| ())
+    });
+    let buyer = SocketChannel::buyer_routed(
+        TcpStream::connect(proxy_address).unwrap(),
+        &buyer_key,
+        &buyer_descriptor,
+        &seller_descriptor,
+        NOW,
+        Duration::from_secs(2),
+    );
+    assert_eq!(buyer.err(), Some(SocketError::Authentication));
+    assert!(seller.join().unwrap().is_err());
+    proxy.join().unwrap();
+}
+
+#[test]
+fn a_silent_connection_times_out_within_the_handshake_budget() {
+    let (_, buyer_descriptor) = identity(1);
+    let (_silent, seller_stream) = sockets();
+    let (seller_key, seller_descriptor) = identity(2);
+    let started = Instant::now();
+    let result = SocketChannel::seller_routed(
+        seller_stream,
+        &seller_key,
+        &seller_descriptor,
+        NOW,
+        Duration::from_secs(30),
+        Duration::from_millis(200),
+        None,
+        |_| Some((buyer_descriptor.clone(), "never")),
+    );
+    assert_eq!(result.err(), Some(SocketError::Timeout));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn a_stalled_routed_buyer_times_out_after_message_one() {
+    use std::io::Write as _;
+    let (mut buyer, seller_stream) = sockets();
+    let (buyer_key, buyer_descriptor) = identity(1);
+    let (seller_key, seller_descriptor) = identity(2);
+    let mut handshake = Handshake::routed_initiator(
+        &buyer_key,
+        Role::Buyer,
+        Role::Seller,
+        &seller_descriptor.digest().unwrap(),
+        seller_descriptor.transport_key,
+        buyer_descriptor.digest().unwrap(),
+    )
+    .unwrap();
+    let first = handshake.write().unwrap();
+    buyer
+        .write_all(&(first.len() as u32).to_be_bytes())
+        .unwrap();
+    buyer.write_all(&first).unwrap();
+    let started = Instant::now();
+    let result = SocketChannel::seller_routed(
+        seller_stream,
+        &seller_key,
+        &seller_descriptor,
+        NOW,
+        Duration::from_secs(30),
+        Duration::from_millis(200),
+        None,
+        |_| Some((buyer_descriptor.clone(), "stalled")),
+    );
+    assert_eq!(result.err(), Some(SocketError::Timeout));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}

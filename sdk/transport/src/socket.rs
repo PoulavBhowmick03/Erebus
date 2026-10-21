@@ -19,7 +19,10 @@ use crate::{
     identity::TransportIdentity,
     limits::MAX_MESSAGE_BYTES,
     message::Message,
-    session::{prologue, Handshake, Session, MAX_HANDSHAKE_MESSAGE_BYTES},
+    session::{
+        first_message_version, prologue, Handshake, HandshakeVersion, RoutedResponder, Session,
+        MAX_HANDSHAKE_MESSAGE_BYTES,
+    },
 };
 
 /// A failed connection is never reusable, including after uncertain delivery.
@@ -86,9 +89,129 @@ impl SocketChannel {
         Self::establish(stream, identity, seller, buyer, Role::Seller, now, timeout)
     }
 
+    /// Authenticate a buyer socket with a routed (version 2) handshake.
+    ///
+    /// Use this only when the seller advertises routed transport out of band. The seller
+    /// selects this buyer by its static key and the descriptor digest sent in message 3.
+    pub fn buyer_routed(
+        stream: TcpStream,
+        identity: &TransportIdentity,
+        buyer: &ServiceDescriptor,
+        seller: &ServiceDescriptor,
+        now: u64,
+        timeout: Duration,
+    ) -> Result<Self, SocketError> {
+        let mut stream = prepare(stream, identity, buyer, seller, now, timeout)?;
+        let descriptor_digests = digests(buyer, seller)?;
+        let mut handshake = Handshake::routed_initiator(
+            identity,
+            Role::Buyer,
+            Role::Seller,
+            &descriptor_digests[1],
+            seller.transport_key,
+            descriptor_digests[0],
+        )
+        .map_err(|_| SocketError::Authentication)?;
+        let deadline = Instant::now() + timeout;
+        drive(&mut stream, &mut handshake, deadline)?;
+        Self::open(stream, handshake, timeout, descriptor_digests)
+    }
+
+    /// Authenticate an accepted seller socket against one of many configured buyers.
+    ///
+    /// A routed (version 2) first message is answered under the routed prologue, and after
+    /// message 3 `select` is asked for the configured buyer whose descriptor advertises the
+    /// authenticated static key. That descriptor must also verify at `now`, share the seller's
+    /// chain namespace, and hash to the digest the buyer sent; otherwise the connection fails.
+    ///
+    /// A direct (version 1) first message is accepted only for `legacy`, the one buyer
+    /// configured before routed transport existed, with the version 1 prologue and key check.
+    /// Without `legacy`, a direct first message fails. Either way the channel's descriptor
+    /// digests are `[buyer, seller]`, exactly as [`SocketChannel::seller`] reports them.
+    ///
+    /// The whole handshake must finish within `handshake_timeout` (at most `timeout`), so a
+    /// silent or slow connection cannot hold an accept loop; `timeout` bounds later messages.
+    #[allow(clippy::too_many_arguments)]
+    pub fn seller_routed<P>(
+        stream: TcpStream,
+        identity: &TransportIdentity,
+        seller: &ServiceDescriptor,
+        now: u64,
+        timeout: Duration,
+        handshake_timeout: Duration,
+        legacy: Option<(ServiceDescriptor, P)>,
+        select: impl FnOnce(&[u8; 32]) -> Option<(ServiceDescriptor, P)>,
+    ) -> Result<(Self, ServiceDescriptor, P), SocketError> {
+        if handshake_timeout.is_zero() {
+            return Err(SocketError::Timeout);
+        }
+        let mut stream = prepare(stream, identity, seller, seller, now, timeout)?;
+        let seller_digest = seller.digest().map_err(|_| SocketError::Configuration)?;
+        let deadline = Instant::now() + handshake_timeout.min(timeout);
+        let first = read_frame(&mut stream, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?;
+        match first_message_version(&first).map_err(|_| SocketError::Authentication)? {
+            HandshakeVersion::Direct => {
+                let (buyer, tag) = legacy.ok_or(SocketError::Authentication)?;
+                if !acceptable_peer(&buyer, seller, now) {
+                    return Err(SocketError::Configuration);
+                }
+                let descriptor_digests = digests(&buyer, seller)?;
+                let mut handshake = Handshake::responder(
+                    identity,
+                    Role::Seller,
+                    Role::Buyer,
+                    &prologue(&descriptor_digests[0], &descriptor_digests[1]),
+                    buyer.transport_key,
+                )
+                .map_err(|_| SocketError::Authentication)?;
+                handshake
+                    .read(&first)
+                    .map_err(|_| SocketError::Authentication)?;
+                drive(&mut stream, &mut handshake, deadline)?;
+                let channel = Self::open(stream, handshake, timeout, descriptor_digests)?;
+                Ok((channel, buyer, tag))
+            }
+            HandshakeVersion::Routed => {
+                let mut handshake = RoutedResponder::new(
+                    identity,
+                    Role::Seller,
+                    Role::Buyer,
+                    &seller_digest,
+                    &first,
+                )
+                .map_err(|_| SocketError::Authentication)?;
+                let second = handshake.write().map_err(|_| SocketError::Authentication)?;
+                write_frame(&mut stream, &second, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?;
+                let third = read_frame(&mut stream, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?;
+                let (session, (buyer, tag)) = handshake
+                    .finish(&third, |key, sent_digest| {
+                        let (buyer, tag) = select(key)?;
+                        let digest = buyer.digest().ok()?;
+                        (buyer.transport_key == *key
+                            && digest == *sent_digest
+                            && acceptable_peer(&buyer, seller, now))
+                        .then_some((buyer, tag))
+                    })
+                    .map_err(|_| SocketError::Authentication)?;
+                let descriptor_digests = digests(&buyer, seller)?;
+                Ok((
+                    Self {
+                        stream,
+                        session,
+                        timeout,
+                        closed: false,
+                        descriptor_digests,
+                    },
+                    buyer,
+                    tag,
+                ))
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn establish(
-        mut stream: TcpStream,
+        stream: TcpStream,
         identity: &TransportIdentity,
         local: &ServiceDescriptor,
         peer: &ServiceDescriptor,
@@ -96,32 +219,13 @@ impl SocketChannel {
         now: u64,
         timeout: Duration,
     ) -> Result<Self, SocketError> {
-        if timeout.is_zero()
-            || timeout > Duration::from_secs(300)
-            || local.verify(now).is_err()
-            || peer.verify(now).is_err()
-            || local.transport_key != identity.public_key()
-            || local.chain_namespace != peer.chain_namespace
-        {
-            return Err(SocketError::Configuration);
-        }
-        // Accepted sockets can inherit a nonblocking listener's mode on some platforms.
-        // These synchronous operations rely on blocking I/O with absolute deadlines.
-        stream
-            .set_nonblocking(false)
-            .map_err(|_| SocketError::Unavailable)?;
-        stream
-            .set_nodelay(true)
-            .map_err(|_| SocketError::Unavailable)?;
+        let mut stream = prepare(stream, identity, local, peer, now, timeout)?;
         let (buyer, seller) = if role == Role::Buyer {
             (local, peer)
         } else {
             (peer, local)
         };
-        let descriptor_digests = [
-            buyer.digest().map_err(|_| SocketError::Configuration)?,
-            seller.digest().map_err(|_| SocketError::Configuration)?,
-        ];
+        let descriptor_digests = digests(buyer, seller)?;
         let binding = prologue(&descriptor_digests[0], &descriptor_digests[1]);
         let mut handshake = if role == Role::Buyer {
             Handshake::initiator(
@@ -142,20 +246,16 @@ impl SocketChannel {
         }
         .map_err(|_| SocketError::Authentication)?;
         let deadline = Instant::now() + timeout;
-        while !handshake.is_finished() {
-            if handshake.is_my_turn() {
-                let frame = handshake.write().map_err(|_| SocketError::Authentication)?;
-                write_frame(&mut stream, &frame, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?;
-            } else {
-                handshake
-                    .read(&read_frame(
-                        &mut stream,
-                        MAX_HANDSHAKE_MESSAGE_BYTES,
-                        deadline,
-                    )?)
-                    .map_err(|_| SocketError::Authentication)?;
-            }
-        }
+        drive(&mut stream, &mut handshake, deadline)?;
+        Self::open(stream, handshake, timeout, descriptor_digests)
+    }
+
+    fn open(
+        stream: TcpStream,
+        handshake: Handshake,
+        timeout: Duration,
+        descriptor_digests: [[u8; 32]; 2],
+    ) -> Result<Self, SocketError> {
         let session = handshake
             .finish()
             .map_err(|_| SocketError::Authentication)?;
@@ -239,6 +339,68 @@ impl Drop for SocketChannel {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// Checks the configuration every handshake shares and puts the stream in blocking mode.
+fn prepare(
+    stream: TcpStream,
+    identity: &TransportIdentity,
+    local: &ServiceDescriptor,
+    peer: &ServiceDescriptor,
+    now: u64,
+    timeout: Duration,
+) -> Result<TcpStream, SocketError> {
+    if timeout.is_zero()
+        || timeout > Duration::from_secs(300)
+        || local.verify(now).is_err()
+        || local.transport_key != identity.public_key()
+        || !acceptable_peer(peer, local, now)
+    {
+        return Err(SocketError::Configuration);
+    }
+    // Accepted sockets can inherit a nonblocking listener's mode on some platforms.
+    // These synchronous operations rely on blocking I/O with absolute deadlines.
+    stream
+        .set_nonblocking(false)
+        .map_err(|_| SocketError::Unavailable)?;
+    stream
+        .set_nodelay(true)
+        .map_err(|_| SocketError::Unavailable)?;
+    Ok(stream)
+}
+
+/// A peer descriptor is usable against `local` if it verifies and shares its chain.
+fn acceptable_peer(peer: &ServiceDescriptor, local: &ServiceDescriptor, now: u64) -> bool {
+    peer.verify(now).is_ok() && peer.chain_namespace == local.chain_namespace
+}
+
+fn digests(
+    buyer: &ServiceDescriptor,
+    seller: &ServiceDescriptor,
+) -> Result<[[u8; 32]; 2], SocketError> {
+    Ok([
+        buyer.digest().map_err(|_| SocketError::Configuration)?,
+        seller.digest().map_err(|_| SocketError::Configuration)?,
+    ])
+}
+
+/// Exchanges the remaining handshake frames within one absolute deadline.
+fn drive(
+    stream: &mut TcpStream,
+    handshake: &mut Handshake,
+    deadline: Instant,
+) -> Result<(), SocketError> {
+    while !handshake.is_finished() {
+        if handshake.is_my_turn() {
+            let frame = handshake.write().map_err(|_| SocketError::Authentication)?;
+            write_frame(stream, &frame, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?;
+        } else {
+            handshake
+                .read(&read_frame(stream, MAX_HANDSHAKE_MESSAGE_BYTES, deadline)?)
+                .map_err(|_| SocketError::Authentication)?;
+        }
+    }
+    Ok(())
 }
 
 fn remaining(deadline: Instant) -> Result<Duration, SocketError> {
