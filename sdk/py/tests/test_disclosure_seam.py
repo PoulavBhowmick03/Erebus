@@ -126,3 +126,54 @@ def test_pending_requires_its_exit_code_and_payment_method(monkeypatch):
         DisclosureSeam(binary="local-rust").call(
             "verify_agreement", grant_file="grant.path", key_file="key.path", expected_issuer="public",
         )
+
+
+SCOPED = {
+    "status": "settled_before_checkpoint", "agreement_verified": True,
+    "payment_verified": False, "delivery_verified": False, "checkpoint_block": 41,
+    "next_action": "verify with a cache that starts earlier",
+}
+
+
+def verify_payment():
+    return DisclosureSeam(binary="local-rust").call(
+        "verify_payment", grant_file="grant.path", key_file="key.path",
+        expected_issuer="public", deployment={},
+    )
+
+
+def test_settled_before_checkpoint_comes_back_without_a_payment_claim(monkeypatch):
+    reply(monkeypatch, SCOPED, returncode=3)
+    response = verify_payment()
+    assert response["status"] == "settled_before_checkpoint"
+    assert response["payment_verified"] is False
+
+
+@pytest.mark.parametrize("mutation,returncode", [
+    ({"payment_verified": True}, 3), ({"checkpoint_block": True}, 3),
+    ({"checkpoint_block": -1}, 3), ({"next_action": 7}, 3), ({}, 0), ({}, 1),
+    ({"ancestry_block": 1}, 3),
+])
+def test_settled_before_checkpoint_cannot_forge_a_claim_or_its_exit_code(monkeypatch, mutation, returncode):
+    reply(monkeypatch, {**SCOPED, **mutation}, returncode=returncode)
+    with pytest.raises(DisclosureError):
+        verify_payment()
+
+
+def test_checkpoint_scope_fields_only_accompany_their_status(monkeypatch):
+    reply(monkeypatch, {"status": "ok", "agreement_verified": True, "payment_verified": True,
+                        "delivery_verified": False, "checkpoint_block": 41}, returncode=0)
+    with pytest.raises(DisclosureError, match="checkpoint scope"):
+        verify_payment()
+
+
+def test_checkpoint_capability_and_request_fields_cross_the_seam(monkeypatch):
+    reply(monkeypatch, {"status": "ok", "protocol": 1, "methods": ["version", "verify_payment", "checkpoint"]})
+    assert "checkpoint" in DisclosureSeam(binary="local-rust").call("version")["methods"]
+    calls = reply(monkeypatch, {"status": "ok", "checkpoint": "created", "checkpoint_block": 41,
+                                "history_from_block": 42, "payment_verified": False})
+    result = DisclosureSeam(binary="local-rust").call("checkpoint", deployment={"cache_root": "/c"},
+                                                      confirm_new_cache=True)
+    assert result["checkpoint"] == "created"
+    assert json.loads(calls[0][1]["input"]) == {"method": "checkpoint", "deployment": {"cache_root": "/c"},
+                                                "confirm_new_cache": True}

@@ -26,13 +26,18 @@ class DisclosureSeam:
                    "grant_file", "expires_at"},
         "verify_agreement": {"grant_file", "key_file", "expected_issuer"},
         "verify_payment": {"grant_file", "key_file", "expected_issuer", "deployment"},
+        "checkpoint": {"deployment", "confirm_new_cache"},
     }
     _public_fields = {
         "status", "protocol", "methods", "mode", "recipient_public_key", "evidence_saved",
         "grant_saved", "deal_id", "revision", "deal_commitment", "deal_nullifier", "issuer",
         "agreement_verified", "payment_verified", "delivery_verified",
         "next_log_block", "ancestry_block",
+        "checkpoint", "checkpoint_block", "checkpoint_hash", "leaf_count", "root",
+        "history_from_block", "scope", "next_action",
     }
+    # The cache's checkpoint is at or after this deal's settlement: neither paid nor unpaid.
+    _settled_before_checkpoint_exit = 3
 
     def __init__(self, binary: str | Path | None = None, timeout: int = 60) -> None:
         resolved = str(binary) if binary is not None else shutil.which("erebus-disclosure")
@@ -61,7 +66,12 @@ class DisclosureSeam:
             isinstance(response, dict) and method == "verify_payment"
             and response.get("status") == "pending" and completed.returncode == 2
         )
-        if not pending and (
+        scoped = (
+            isinstance(response, dict) and method == "verify_payment"
+            and response.get("status") == "settled_before_checkpoint"
+            and completed.returncode == self._settled_before_checkpoint_exit
+        )
+        if not pending and not scoped and (
             completed.returncode != 0 or not isinstance(response, dict)
             or response.get("status") != "ok"
         ):
@@ -79,7 +89,7 @@ class DisclosureSeam:
                 raise DisclosureError("invalid disclosure response shape")
         if method in {"verify_agreement", "verify_payment"} and (
             response.get("agreement_verified") is not True
-            or response.get("payment_verified") is not (method == "verify_payment" and not pending)
+            or response.get("payment_verified") is not (method == "verify_payment" and not pending and not scoped)
             or response.get("delivery_verified") is not False
         ):
             raise DisclosureError("invalid disclosure verification claims")
@@ -94,4 +104,12 @@ class DisclosureSeam:
             raise DisclosureError("invalid disclosure observation progress")
         if not pending and {"next_log_block", "ancestry_block"} & response.keys():
             raise DisclosureError("unexpected disclosure observation progress")
+        if scoped and (
+            type(response.get("checkpoint_block")) is not int
+            or not 0 <= response["checkpoint_block"] <= 2**64 - 1
+            or type(response.get("next_action")) is not str
+        ):
+            raise DisclosureError("invalid disclosure checkpoint scope")
+        if method == "verify_payment" and not scoped and {"checkpoint_block", "next_action"} & response.keys():
+            raise DisclosureError("unexpected disclosure checkpoint scope")
         return response
