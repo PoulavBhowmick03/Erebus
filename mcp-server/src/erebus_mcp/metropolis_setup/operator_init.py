@@ -796,6 +796,17 @@ def migrate_seller(directory: Path, operator: dict) -> None:
     replace_private_json(directory / "negotiate.json", migrated)
 
 
+def raise_seller_maximum(directory: Path, amount: str) -> bool:
+    """A version 2 seller's `maximum_price` bounds every peer's price (erebus-negotiate refuses the whole peer table
+    otherwise), so it is raised to cover `amount`. Returns whether negotiate.json changed."""
+    path = directory / "negotiate.json"
+    config = json.loads(path.read_text())
+    if config.get("version") != 2 or int(config["maximum_price"]) >= int(amount):
+        return False
+    replace_private_json(path, {**config, "maximum_price": amount})
+    return True
+
+
 def connect_another_buyer(args, directory: Path, operator: dict, bins: Path, peer: Path, descriptor: Path) -> dict:
     """Adds one buyer to a connected seller: peers/<id> and outbox/<id>, never access.json or the payload."""
     if getattr(args, "peer_id", None) is None:
@@ -816,8 +827,12 @@ def connect_another_buyer(args, directory: Path, operator: dict, bins: Path, pee
         retained = json.loads(existing.read_text())
         if retained != {"version": 1, **source}:
             raise ValueError(f"peer {identifier} is already connected with different inputs; choose another --peer-id")
-        return {"status": "connected", "role": "seller", "peer": "buyer", "peer_id": identifier, "written": [],
-                "repeated": True, "next": f"send outbox/{identifier}/ to that buyer"}
+        # Repeating the same connect also repairs a seller whose maximum_price an earlier release left below this
+        # peer's price.
+        repaired = raise_seller_maximum(directory, args.amount)
+        return {"status": "connected", "role": "seller", "peer": "buyer", "peer_id": identifier,
+                "written": ["negotiate.json"] if repaired else [], "repeated": True,
+                "next": f"send outbox/{identifier}/ to that buyer"}
     if (peers / identifier).exists():
         raise ValueError(f"peer {identifier} already exists; choose another --peer-id")
     others = [json.loads(path.read_text()) for path in peers.glob("*/connect.json")] if peers.is_dir() else []
@@ -841,6 +856,8 @@ def connect_another_buyer(args, directory: Path, operator: dict, bins: Path, pee
             "unit": offer["unit"], "quantity": offer["quantity"], "fulfillment_method": offer["fulfillment_method"],
             "fulfillment_digest": offer["fulfillment_digest"], "delivery_deadline": offer["delivery_deadline"]}, directory)
 
+    # Raised before the peer exists: a higher ceiling is harmless, a peer above it would block every negotiation.
+    raised = raise_seller_maximum(directory, args.amount)
     write_peer(peers, identifier, descriptor=descriptor, binding=peer / "identity.binding", terms_writer=prepare_terms,
                minimum=minimum, lifetime=args.delivery_seconds, resource=args.resource, legacy=False, source=source)
     outbox = directory / "outbox"
@@ -852,7 +869,7 @@ def connect_another_buyer(args, directory: Path, operator: dict, bins: Path, pee
         private_copy(source_file, box / source_file.name)
     private_json(box / "offer.json", offer)
     return {"status": "connected", "role": "seller", "peer": "buyer", "peer_id": identifier,
-            "written": [f"peers/{identifier}/", f"outbox/{identifier}/"],
+            "written": [f"peers/{identifier}/", f"outbox/{identifier}/"] + (["negotiate.json"] if raised else []),
             "next": f"send outbox/{identifier}/ to that buyer; it connects with --peer-share pointing at it"}
 
 

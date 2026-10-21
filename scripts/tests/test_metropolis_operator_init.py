@@ -1148,3 +1148,53 @@ def test_every_file_a_native_command_reads_as_a_local_input_is_owner_only(world)
         config = json.loads((world.root / role / "wallet.json").read_text())
         assert owner_only(Path(config["artifact_manifest_file"])), role
     assert owner_only(Path(json.loads((world.root / "buyer/payment.json").read_text())["manifest_file"]))
+
+
+NATIVE_NEGOTIATE = ROOT / "sdk/shielded/target/debug/erebus-negotiate"
+
+
+@pytest.mark.skipif(not NATIVE_NEGOTIATE.is_file(), reason="build sdk/shielded erebus-negotiate")
+def test_the_native_loader_accepts_the_written_peer_table_with_a_buyer_priced_above_the_first(world):
+    """The real erebus-negotiate prepares keys and terms and then loads what connect wrote, so the Python writer
+    and the native peer-table checks are tested against each other, not against a fake."""
+    import shutil
+    real = world.bins / "erebus-negotiate"
+    shutil.copyfile(NATIVE_NEGOTIATE, real)
+    real.chmod(0o755)
+    release = json.loads((world.pins / "release-manifest.json").read_text())
+    platform, = release["platforms"].values()
+    platform["binaries"]["erebus-negotiate"]["sha256"] = init.sha256(real)
+    (world.pins / "release-manifest.json").write_text(json.dumps(release))
+    for role in ("buyer", "seller"):
+        init.init(init_args(world, role))
+    init.connect(connect_args(world, "seller", amount="1000"))
+    init.connect(connect_args(world, "buyer", amount="1000"))
+    seller = world.root / "seller"
+
+    def listed() -> dict:
+        return init.command(world.bins, "erebus-negotiate",
+                            {"method": "list_peers", "config_file": str(seller / "negotiate.json")}, seller)
+    assert [(peer["peer"], peer["live"]) for peer in listed()["peers"]] == [("default", True)]
+    # A second buyer at twice the first's price: the seller's ceiling follows it.
+    second = init_second_buyer(world)
+    added = init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="2000"))
+    assert "negotiate.json" in added["written"]
+    assert json.loads((seller / "negotiate.json").read_text())["maximum_price"] == "2000"
+    peers = listed()["peers"]
+    assert {peer["peer"]: (peer["live"], peer["price"]) for peer in peers} == {
+        "default": (True, "1000"), "b2": (True, "2000")}
+    # A cheaper third buyer leaves the ceiling alone.
+    third = init_second_buyer(world, name="buyer3", port=9104)
+    init.connect(connect_args(world, "seller", peer_share=third / "share", peer_id="b3", amount="500"))
+    assert json.loads((seller / "negotiate.json").read_text())["maximum_price"] == "2000"
+    assert len(listed()["peers"]) == 3
+    # A directory written by the earlier release (ceiling below b2) is repaired by repeating b2's connect.
+    config = json.loads((seller / "negotiate.json").read_text())
+    init.replace_private_json(seller / "negotiate.json", {**config, "maximum_price": "1000"})
+    import subprocess
+    refused = subprocess.run([str(real)], input=json.dumps({"method": "list_peers",
+                             "config_file": str(seller / "negotiate.json")}), capture_output=True, text=True)
+    assert json.loads(refused.stdout)["error"] == "invalid price policy"
+    repaired = init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="2000"))
+    assert repaired["repeated"] is True and repaired["written"] == ["negotiate.json"]
+    assert len(listed()["peers"]) == 3
