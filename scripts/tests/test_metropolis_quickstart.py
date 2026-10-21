@@ -412,3 +412,16 @@ def test_default_bin_prefers_the_tool_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(quick.shutil, "which", lambda name: None)
     with pytest.raises(ValueError, match="pass --bin"):
         quick.default_bin()
+
+
+def test_status_reads_the_tip_of_segmented_and_legacy_history_caches(tmp_path):
+    manifest = tmp_path / "v4.json"
+    manifest.write_text(json.dumps({"version": 4, "tip": {"number": 72970452, "hash": "90" * 32}, "segments": []}))
+    legacy = tmp_path / "v3.json"
+    legacy.write_text(json.dumps({"version": 3, "blocks": [{"number": 7}, {"number": 8}]}))
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"version": 4, "tip": None, "segments": []}))
+    assert quick._tip(manifest) == 72970452
+    assert quick._tip(legacy) == 8
+    assert quick._tip(empty) is None
+    assert quick._tip(tmp_path / "missing.json") is None

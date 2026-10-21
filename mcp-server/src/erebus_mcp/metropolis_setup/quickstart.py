@@ -469,11 +469,18 @@ def _start_service(directory: Path, bins: Path, state: dict) -> str:
 
 
 def _tip(path: Path) -> int | None:
+    """The newest block a history cache holds: a v4 manifest's `tip`, or a legacy file's last block."""
     try:
-        blocks = json.loads(path.read_text()).get("blocks") or []
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    return blocks[-1]["number"] if blocks else None
+    if not isinstance(data, dict):
+        return None
+    tip = data.get("tip")
+    if isinstance(tip, dict) and isinstance(tip.get("number"), int):
+        return tip["number"]
+    blocks = data.get("blocks") or []
+    return blocks[-1]["number"] if blocks and isinstance(blocks[-1], dict) else None
 
 
 def _head(url: str) -> int | None:
