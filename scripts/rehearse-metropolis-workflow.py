@@ -72,6 +72,24 @@ def require(condition: bool, message: str) -> None:
         raise Failure(message)
 
 
+def checkpointed_manifest(stored: dict, checkpoint_block: int) -> bool:
+    """Whether a version-4 pool history manifest starts at `checkpoint_block + 1` from that checkpoint.
+
+    An empty cache has no segments yet; otherwise the first segment begins right after the
+    checkpoint and its recorded parent is the checkpoint block's hash.
+    """
+    checkpoint = stored.get("checkpoint") or {}
+    if stored.get("version") != 4 or checkpoint.get("block_number") != checkpoint_block:
+        return False
+    segments = stored.get("segments")
+    if not isinstance(segments, list):
+        return False
+    if not segments:
+        return stored.get("base_parent_hash") is None
+    return (segments[0].get("first") == checkpoint_block + 1
+            and stored.get("base_parent_hash") == bytes(checkpoint.get("block_hash") or []).hex())
+
+
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -673,10 +691,9 @@ class Pool:
         require(candidates, "no participant pool caches were written")
         for path, checkpoint_block in candidates:
             stored = json.loads(path.read_text())
-            first = (stored.get("blocks") or [{}])[0].get("number")
-            require(stored.get("version") == 3 and stored.get("checkpoint", {}).get("block_number") == checkpoint_block
-                    and (first is None or first == checkpoint_block + 1), f"{path.name} is not checkpointed")
-            caches[str(path.relative_to(path.parents[2]))] = {"version": 3, "checkpoint_block": checkpoint_block,
+            require(checkpointed_manifest(stored, checkpoint_block), f"{path.name} is not checkpointed")
+            first = (stored.get("segments") or [{}])[0].get("first")
+            caches[str(path.relative_to(path.parents[2]))] = {"version": 4, "checkpoint_block": checkpoint_block,
                                                               "first_scanned_block": first}
         return caches
 
@@ -782,9 +799,7 @@ class Pool:
         cache = Path(deployment["cache_root"])
         for name in ("primary", "peer"):
             stored = json.loads((cache / name / "index.json").read_text())
-            first = (stored.get("blocks") or [{}])[0].get("number")
-            require(stored.get("version") == 3 and stored.get("checkpoint", {}).get("block_number") == checkpoint_block
-                    and (first is None or first == checkpoint_block + 1), f"auditor {name} cache is not checkpointed")
+            require(checkpointed_manifest(stored, checkpoint_block), f"auditor {name} cache is not checkpointed")
         return {"agreement_verified": True, "payment_verified": True, "delivery_verified": False,
                 "wrong_issuer_refused": True, "scope": "one seller-exported grant for one deal",
                 "history_from_block": checkpoint_block + 1}
