@@ -44,6 +44,8 @@ const MAX_REQUEST: usize = 16 * 1024;
 
 #[path = "negotiate/operator.rs"]
 mod operator;
+#[path = "negotiate/peers.rs"]
+mod peers;
 
 #[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
@@ -76,31 +78,14 @@ enum Request {
         operation_ref: String,
         #[serde(default)]
         freeze_only: bool,
+        /// Seller with a version 2 configuration only: accept only this configured peer.
+        #[serde(default)]
+        peer: Option<String>,
     },
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Config {
-    version: u16,
-    role: String,
-    state_root: PathBuf,
-    transport_key_file: PathBuf,
-    agreement_key_file: PathBuf,
-    discovery_key_file: Option<PathBuf>,
-    local_descriptor_file: PathBuf,
-    peer_descriptor_file: PathBuf,
-    terms_template_file: PathBuf,
-    endpoint: SocketAddr,
-    maximum_price: String,
-    minimum_price: String,
-    max_deal_lifetime_seconds: u64,
-    timeout_seconds: u64,
-    seller_spend_secret_file: Option<PathBuf>,
-    seller_wallet_file: Option<PathBuf>,
-    seller_wallet_key_file: Option<PathBuf>,
-    #[serde(default)]
-    access_evidence_root: Option<PathBuf>,
+    /// A seller's configured negotiation peers, without key material.
+    ListPeers {
+        config_file: PathBuf,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,10 +123,14 @@ struct Record {
     buyer: Option<Vec<u8>>,
     seller: Option<Vec<u8>>,
     evidence: bool,
+    /// Version 2: the configured peer this seller operation is bound to. A version 1 record
+    /// has none and belongs to the legacy peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer: Option<String>,
 }
 impl JournalRecord for Record {
     type Id = OperationId;
-    const CURRENT_VERSION: u32 = 1;
+    const CURRENT_VERSION: u32 = 2;
     const OLDEST_READABLE_VERSION: u32 = 1;
     fn version(&self) -> u32 {
         self.version
@@ -289,18 +278,16 @@ fn check_service(
     Ok(())
 }
 
-fn connect(config: &Config, role: Role, timeout: Duration) -> Result<TcpStream, &'static str> {
-    if role == Role::Buyer {
+/// The buyer dials its seller's endpoint until the deadline.
+fn connect(endpoint: SocketAddr, timeout: Duration) -> Result<TcpStream, &'static str> {
+    {
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err("negotiation endpoint unavailable");
             }
-            match TcpStream::connect_timeout(
-                &config.endpoint,
-                remaining.min(Duration::from_millis(100)),
-            ) {
+            match TcpStream::connect_timeout(&endpoint, remaining.min(Duration::from_millis(100))) {
                 Ok(stream) => return Ok(stream),
                 Err(error)
                     if matches!(
@@ -314,30 +301,13 @@ fn connect(config: &Config, role: Role, timeout: Duration) -> Result<TcpStream, 
             }
         }
     }
-    let listener =
-        TcpListener::bind(config.endpoint).map_err(|_| "negotiation listener unavailable")?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|_| "negotiation listener unavailable")?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => return Ok(stream),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err("negotiation connection deadline exceeded");
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => return Err("negotiation listener unavailable"),
-        }
-    }
 }
 
 fn negotiate(
     config_file: &Path,
     operation: &str,
     freeze_only: bool,
+    requested_peer: Option<&str>,
 ) -> Result<Value, &'static str> {
     // Wall-clock for the whole call, so a retried operation reports only its own resumption.
     let started = Instant::now();
@@ -346,53 +316,33 @@ fn negotiate(
         .map_err(|_| "invalid operation reference")?
         .try_into()
         .map_err(|_| "invalid operation reference")?;
-    let config: Config = serde_json::from_slice(&read(config_file, MAX_REQUEST, true)?)
-        .map_err(|_| "invalid operator configuration")?;
-    if config.version != 1
-        || !(1..=300).contains(&config.timeout_seconds)
-        || !(1..=86400).contains(&config.max_deal_lifetime_seconds)
-    {
-        return Err("invalid operator configuration");
-    }
-    let role = match config.role.as_str() {
-        "buyer" => Role::Buyer,
-        "seller" => Role::Seller,
-        _ => return Err("invalid configured role"),
-    };
+    let config = peers::load_operator(&read(config_file, MAX_REQUEST, true)?, now()?)?;
+    let role = config.role;
     if role != Role::Seller && config.access_evidence_root.is_some() {
         return Err("only the seller can publish access evidence");
     }
-    let maximum = BaseUnits::new(
-        config
-            .maximum_price
-            .parse()
-            .map_err(|_| "invalid price policy")?,
-    );
-    let minimum = BaseUnits::new(
-        config
-            .minimum_price
-            .parse()
-            .map_err(|_| "invalid price policy")?,
-    );
-    let template = AgreementTerms::decode(&read(&config.terms_template_file, 4096, true)?)
-        .map_err(|_| "invalid service template")?;
-    if maximum.is_zero()
-        || minimum > maximum
-        || template.amount > maximum
-        || (role == Role::Seller && template.amount < minimum)
-    {
-        return Err("invalid price policy");
+    if requested_peer.is_some() && (role != Role::Seller || config.version != 2) {
+        return Err(peers::PEER_NOT_CONFIGURED);
     }
+    let maximum = config.maximum;
     let local = descriptor(&config.local_descriptor_file)?;
-    let remote = descriptor(&config.peer_descriptor_file)?;
     let verified_at = now()?;
     local
         .verify(verified_at)
         .map_err(|_| "local discovery descriptor is invalid or expired")?;
-    remote
-        .verify(verified_at)
-        .map_err(|_| "peer discovery descriptor is invalid or expired")?;
-    if template.suite_id == 2
+    if role == Role::Buyer {
+        config.peers[0]
+            .descriptor
+            .verify(verified_at)
+            .map_err(|_| "peer discovery descriptor is invalid or expired")?;
+    }
+    let suite_id = local.suites.first().copied().ok_or("invalid descriptor")?;
+    if config.peers.iter().any(|peer| {
+        peer.template.suite_id != suite_id || !local.suites.contains(&peer.template.suite_id)
+    }) {
+        return Err("invalid service template");
+    }
+    if suite_id == 2
         && role == Role::Seller
         && (config.seller_spend_secret_file.is_none()
             || config.seller_wallet_file.is_none()
@@ -401,12 +351,16 @@ fn negotiate(
         return Err("shielded seller requires a private payment opening and wallet");
     }
     let endpoint = format!("tcp://{}", config.endpoint);
-    let advertised = if role == Role::Buyer { &remote } else { &local };
+    let advertised = if role == Role::Buyer {
+        &config.peers[0].descriptor
+    } else {
+        &local
+    };
     if !advertised.endpoints.contains(&endpoint) {
         return Err("endpoint not present in the authenticated descriptor");
     }
     let seed = key(&config.agreement_key_file)?;
-    let discovery_seed = if template.suite_id == 1 {
+    let discovery_seed = if suite_id == 1 {
         Zeroizing::new(*seed)
     } else {
         key(config
@@ -438,17 +392,23 @@ fn negotiate(
         return Err("operation role conflicts with durable state");
     }
     let timeout = Duration::from_secs(config.timeout_seconds);
-    let stream = connect(&config, role, timeout)?;
-    let (buyer, seller) = if role == Role::Buyer {
-        (&local, &remote)
+    let (channel, peer) = if role == Role::Buyer {
+        let stream = connect(config.endpoint, timeout)?;
+        let remote = &config.peers[0].descriptor;
+        let current = now()?;
+        if config.routed {
+            SocketChannel::buyer_routed(stream, &transport, &local, remote, current, timeout)
+        } else {
+            SocketChannel::buyer(stream, &transport, &local, remote, current, timeout)
+        }
+        .map(|channel| (channel, &config.peers[0]))
     } else {
-        (&remote, &local)
-    };
-    let current = now()?;
-    let channel = if role == Role::Buyer {
-        SocketChannel::buyer(stream, &transport, buyer, seller, current, timeout)
-    } else {
-        SocketChannel::seller(stream, &transport, seller, buyer, current, timeout)
+        // The first configured peer to authenticate binds a new operation; a retained one
+        // accepts only its own peer.
+        let bound = retained.as_ref().map(|record| record.peer.as_deref());
+        let allowed = peers::allowed_peer(&config, bound, requested_peer, now()?)?;
+        let (channel, index) = peers::accept(&config, &transport, &local, allowed, timeout)?;
+        Ok((channel, &config.peers[index]))
     }
     .map_err(|error| match error {
         erebus_transport::socket::SocketError::Authentication => {
@@ -460,6 +420,17 @@ fn negotiate(
         erebus_transport::socket::SocketError::Frame => "invalid peer handshake frame",
         _ => "peer connection unavailable or timed out",
     })?;
+    let template = &peer.template;
+    let minimum = peer.minimum;
+    let lifetime = peer.lifetime;
+    let namespace = peer.namespace();
+    let remote = &peer.descriptor;
+    let (buyer, seller) = if role == Role::Buyer {
+        (&local, remote)
+    } else {
+        (remote, &local)
+    };
+    let current = now()?;
     let context = SettlementContext {
         require_local_proving: true,
         mode: template.settlement_mode,
@@ -478,11 +449,9 @@ fn negotiate(
                 .to_vec(),
         )
         .map_err(|_| "invalid shielded key")?;
-        let expires = local.expires.min(
-            current
-                .checked_add(config.max_deal_lifetime_seconds)
-                .ok_or("invalid deadline")?,
-        );
+        let expires = local
+            .expires
+            .min(current.checked_add(lifetime).ok_or("invalid deadline")?);
         let binding = AgreementKeyBinding::sign(
             &local,
             context.domain.clone(),
@@ -521,21 +490,34 @@ fn negotiate(
     .map_err(|_| "negotiation identity binding failed")?;
     let transcripts = FileTranscriptStore::open(config.state_root.join("transcripts"))
         .map_err(|_| "transcript unavailable")?;
-    let mut record = retained.unwrap_or(Record {
-        version: 1,
-        id,
-        role: role.tag(),
-        draft: Vec::new(),
-        buyer: None,
-        seller: None,
-        evidence: false,
-    });
-    let mut peer = if role == Role::Buyer {
+    let peer_id = peer.id.as_ref().map(|id| id.as_str().to_owned());
+    let mut record = match retained {
+        Some(record) => record,
+        None => {
+            let record = Record {
+                version: if peer_id.is_some() { 2 } else { 1 },
+                id,
+                role: role.tag(),
+                draft: Vec::new(),
+                buyer: None,
+                seller: None,
+                evidence: false,
+                peer: peer_id.clone(),
+            };
+            // A named peer binds the operation before its offer is checked against that
+            // peer's template, so a retry can only resume with the same peer.
+            if peer_id.is_some() {
+                store
+                    .write(&record)
+                    .map_err(|_| "agent state unavailable")?;
+            }
+            record
+        }
+    };
+    let mut session = if role == Role::Buyer {
         let draft = if record.draft.is_empty() {
             let mut terms = template.clone();
-            terms.expiry = now()?
-                .checked_add(config.max_deal_lifetime_seconds)
-                .ok_or("invalid deadline")?;
+            terms.expiry = now()?.checked_add(lifetime).ok_or("invalid deadline")?;
             let proposal = bootstrap
                 .create_proposal(terms, now()?)
                 .map_err(|_| "cannot create private proposal")?;
@@ -547,11 +529,11 @@ fn negotiate(
         } else {
             let proposal =
                 Proposal::decode(&record.draft).map_err(|_| "invalid retained proposal")?;
-            check_service(&proposal, &template, config.max_deal_lifetime_seconds)?;
+            check_service(&proposal, template, lifetime)?;
             proposal
         };
         bootstrap
-            .offer(transcripts.clone(), "agent".into(), draft, now()?)
+            .offer(transcripts.clone(), namespace.clone(), draft, now()?)
             .map_err(|error| match error {
                 erebus_transport::negotiation::peer::PeerError::Binding => {
                     "retained offer does not match authenticated identities"
@@ -563,8 +545,8 @@ fn negotiate(
             })?
     } else {
         bootstrap
-            .receive_offer(transcripts.clone(), "agent".into(), now()?, |proposal| {
-                check_service(proposal, &template, config.max_deal_lifetime_seconds)?;
+            .receive_offer(transcripts.clone(), namespace.clone(), now()?, |proposal| {
+                check_service(proposal, template, lifetime)?;
                 let bytes = proposal.encode().map_err(|_| "invalid received proposal")?;
                 if !record.draft.is_empty() && record.draft != bytes {
                     return Err("operation conflicts with retained proposal");
@@ -576,22 +558,28 @@ fn negotiate(
             })
             .map_err(|_| "offer rejected or persistence failed; retain existing state")?
     };
-    let state = peer
+    let state = session
         .synchronize(now()?)
         .map_err(|_| "transcript reconciliation failed; retain existing state")?;
     if !state.is_frozen() {
-        finish_price_negotiation(&mut peer, role, &template, minimum, maximum)?;
+        finish_price_negotiation(&mut session, role, template, minimum, maximum)?;
     }
-    let (terms, blinding, commitment) = peer
+    let (terms, blinding, commitment) = session
         .state()
         .map_err(|_| "transcript unavailable")?
         .agreement()
         .map_err(|_| "bilateral acceptance incomplete")?;
     let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreed deal")?;
+    // A version 2 seller reports which configured peer the operation is bound to.
+    let reported_peer = (role == Role::Seller && config.version == 2)
+        .then(|| peer_id.clone())
+        .flatten();
     if freeze_only {
-        return Ok(
-            json!({"protocol_version":1,"status":"frozen","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}}),
-        );
+        let mut reply = json!({"protocol_version":1,"status":"frozen","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}});
+        if let Some(peer) = &reported_peer {
+            reply["peer"] = json!(peer);
+        }
+        return Ok(reply);
     }
     if role == Role::Buyer {
         let capabilities = if terms.suite_id == 1 {
@@ -628,19 +616,22 @@ fn negotiate(
                 )
             })
             .map_err(|_| "buyer signing failed; reservation retained")?;
-        peer.send_authorization(&auth, now()?, |auth| {
-            persist_auth(&store, &mut record, auth)
-        })
-        .map_err(|_| "buyer authorization delivery uncertain; reservation retained")?;
-        peer.receive_authorization(now()?, |auth| {
-            coordinator
-                .accept_seller(operation_ref, auth)
-                .map_err(|_| "seller authorization rejected")?;
-            persist_auth(&store, &mut record, auth)
-        })
-        .map_err(|_| "seller authorization unavailable; reservation retained")?;
+        session
+            .send_authorization(&auth, now()?, |auth| {
+                persist_auth(&store, &mut record, auth)
+            })
+            .map_err(|_| "buyer authorization delivery uncertain; reservation retained")?;
+        session
+            .receive_authorization(now()?, |auth| {
+                coordinator
+                    .accept_seller(operation_ref, auth)
+                    .map_err(|_| "seller authorization rejected")?;
+                persist_auth(&store, &mut record, auth)
+            })
+            .map_err(|_| "seller authorization unavailable; reservation retained")?;
     } else {
-        peer.receive_authorization(now()?, |auth| persist_auth(&store, &mut record, auth))
+        session
+            .receive_authorization(now()?, |auth| persist_auth(&store, &mut record, auth))
             .map_err(|_| "buyer authorization unavailable")?;
         if let Some(secret) = spend_secret {
             let wallet_file = config
@@ -701,10 +692,11 @@ fn negotiate(
                 Role::Seller,
             )?
         };
-        peer.send_authorization(&auth, now()?, |auth| {
-            persist_auth(&store, &mut record, auth)
-        })
-        .map_err(|_| "seller authorization delivery uncertain; retain this operation")?;
+        session
+            .send_authorization(&auth, now()?, |auth| {
+                persist_auth(&store, &mut record, auth)
+            })
+            .map_err(|_| "seller authorization delivery uncertain; retain this operation")?;
     }
     let buyer_auth =
         Authorization::decode(record.buyer.as_deref().ok_or("buyer consent not durable")?)
@@ -723,7 +715,7 @@ fn negotiate(
         seller_auth,
         TRANSCRIPT_HASH_VERSION,
         &transcripts,
-        "agent",
+        &namespace,
     )
     .map_err(|_| "durable agreement verification failed")?;
     let encoded = evidence
@@ -741,9 +733,11 @@ fn negotiate(
         }
         publish_access_evidence(root, &commitment.to_hex(), &encoded)?;
     }
-    Ok(
-        json!({"protocol_version":1,"status":"authorized","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"agreement_verified":true,"evidence_file":store.blob_path(&record.id,0),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}}),
-    )
+    let mut reply = json!({"protocol_version":1,"status":"authorized","operation_ref":operation,"deal_id":hex::encode(terms.deal_id),"deal_commitment":commitment.to_hex(),"deal_nullifier":nullifier.to_hex(),"agreement_verified":true,"evidence_file":store.blob_path(&record.id,0),"payment_verified":false,"delivery_verified":false,"measurements_ms":{"negotiation":started.elapsed().as_millis()}});
+    if let Some(peer) = &reported_peer {
+        reply["peer"] = json!(peer);
+    }
+    Ok(reply)
 }
 
 fn publish_access_evidence(
@@ -878,7 +872,9 @@ fn main() {
                 config_file,
                 operation_ref,
                 freeze_only,
-            } => negotiate(&config_file, &operation_ref, freeze_only),
+                peer,
+            } => negotiate(&config_file, &operation_ref, freeze_only, peer.as_deref()),
+            Request::ListPeers { config_file } => peers::list(&config_file),
             Request::PrepareOperator {
                 directory,
                 role,
