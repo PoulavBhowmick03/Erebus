@@ -14,7 +14,7 @@
     operator_init.py wallet-policy --directory DIR --maximum-amount N [--allow METHOD ...]
                              [--withdrawal-recipient ADDR ...] [--replacement-fees MAX PRIORITY]
     operator_init.py auditor --pool wmon|usdc --directory NEW --bin DIR --pins DIR --deployment FILE
-                             --rpc-url URL --peer-rpc-url URL
+                             --rpc-url URL --peer-rpc-url URL [--history full|checkpoint]
     operator_init.py quickstart up|start|status|renew|down --directory DIR [--pins DIR] [...]
                              (Monad testnet buyer, seller and auditor on one machine; see quickstart.py)
 
@@ -46,7 +46,13 @@ opens (note count only), and, unless `--offline`, whether both RPC endpoints pas
 on chain 10143 and the gas signer's native balance on each.
 
 `auditor` creates an auditor key with the installed `erebus-shielded-disclosure` and renders the disclosure
-deployment config (see `disclosure_config.py`).
+deployment config (see `disclosure_config.py`). By default (`--history full`) it makes no RPC call and
+verification replays from the pool deployment, so a deal that settled before the auditor was set up (the usual
+case: the grant arrives after settlement) verifies. `--history checkpoint` is the faster opt-in for an auditor
+set up before the deals it will audit: it asks the same command to record a paired finalized checkpoint in the
+empty cache, so verification scans only later blocks and the reply reports `history_from_block`; a deal settled
+at or before the checkpoint verifies as `settled_before_checkpoint`, never as paid or unpaid. Either way
+`disclosure.json` is the same.
 
 Amounts are base units of the pool's asset. Everything is test-only, single-operator and unaudited, like the
 deployment it names.
@@ -1159,7 +1165,30 @@ def wallet_policy(args) -> dict:
             if mcp.exists() else "run connect to generate mcp.json, then re-run wallet-policy"}
 
 
+AUDITOR_HISTORY = ("checkpoint", "full")
+
+
+def auditor_checkpoint(bins: Path, directory: Path) -> dict:
+    """Start the auditor's empty cache from a paired finalized checkpoint (native, idempotent, no log reads).
+
+    The record changes which blocks the auditor scans, not what a verified payment means: a deal settled at
+    or before the checkpoint block verifies as `settled_before_checkpoint`, never as paid or unpaid.
+    """
+    deployment = json.loads((directory / "disclosure.json").read_text())
+    try:
+        reply = command(bins, "erebus-shielded-disclosure",
+                        {"method": "checkpoint", "deployment": deployment, "confirm_new_cache": True}, directory)
+    except ValueError:
+        raise ValueError("the auditor checkpoint failed: both RPC providers must answer and agree on the same "
+                         "finalized block, and the cache must hold no full history; retry, or omit --history checkpoint") from None
+    return {"checkpoint": reply["checkpoint"], "checkpoint_block": reply["checkpoint_block"],
+            "history_from_block": reply["history_from_block"]}
+
+
 def auditor(args) -> dict:
+    history = getattr(args, "history", "full")
+    if history not in AUDITOR_HISTORY:
+        raise ValueError("--history must be checkpoint or full")
     bins = args.bin.resolve()
     pinned = release_pins(args.pins.resolve(), args.pool)
     verify_installed(bins, pinned["release"])
@@ -1178,8 +1207,18 @@ def auditor(args) -> dict:
         private_json(directory / REHEARSAL_MARKER, {**rehearsal_record(rehearsal),
                                                     "labels": ["test-only", "single-operator", "unaudited", *REHEARSAL_LABELS]})
         written.append(REHEARSAL_MARKER)
-    return {"status": "auditor-ready", "directory": str(directory), "written": written,
-            **({"rehearsal": rehearsal_record(rehearsal)} if rehearsal is not None else {})}
+    result = {"status": "auditor-ready", "directory": str(directory), "written": written, "history": history,
+              **({"rehearsal": rehearsal_record(rehearsal)} if rehearsal is not None else {})}
+    if history == "checkpoint":
+        checkpoint = auditor_checkpoint(bins, directory)
+        written.append("cache/history-checkpoint.json (Rust)")
+        result.update(checkpoint_block=checkpoint["checkpoint_block"],
+                      history_from_block=checkpoint["history_from_block"],
+                      scope="deals settled at or before checkpoint_block verify as settled_before_checkpoint; "
+                            "verify those with a full-history auditor directory (the default --history full)")
+    else:
+        result["history_from_block"] = json.loads((directory / "disclosure.json").read_text())["first_block"]
+    return result
 
 
 def main(argv=None) -> int:
@@ -1258,6 +1297,11 @@ def main(argv=None) -> int:
     third.add_argument("--deployment", type=Path, required=True)
     third.add_argument("--rpc-url", required=True)
     third.add_argument("--peer-rpc-url", required=True)
+    third.add_argument("--history", choices=AUDITOR_HISTORY, default="full",
+                       help="full (default): replay from the pool deployment, no RPC at setup; verifies deals that "
+                            "settled before this auditor existed. checkpoint: faster opt-in for an auditor set up "
+                            "before its deals; scans from a paired finalized block taken now, and deals settled at "
+                            "or before it verify as settled_before_checkpoint")
     quickstart = load("quickstart")
     quickstart.add_parser(commands)
     args = parser.parse_args(argv)

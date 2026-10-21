@@ -48,7 +48,20 @@ print(json.dumps(reply)); sys.exit(0 if reply["status"] == "ok" else 1)
 '''
 FAKE_DISCLOSURE = r'''#!PYTHON
 import json, os, sys
+from pathlib import Path
 request = json.loads(sys.stdin.read())
+if request["method"] == "checkpoint":
+    root = Path(request["deployment"]["cache_root"])
+    record = root / "history-checkpoint.json"
+    if request.get("confirm_new_cache") is not True or (not record.exists() and (root / "primary").exists()):
+        print(json.dumps({"status": "error", "error": "refused"})); sys.exit(1)
+    created = "existing" if record.exists() else "created"
+    if not record.exists():
+        fd = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.write(fd, json.dumps({"version": 1, "checkpoint": {"block_number": 41}}).encode()); os.close(fd)
+    print(json.dumps({"status": "ok", "checkpoint": created, "checkpoint_block": 41, "history_from_block": 42,
+                      "payment_verified": False}))
+    sys.exit(0)
 fd = os.open(request["key_file"], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.write(fd, os.urandom(32)); os.close(fd)
 print(json.dumps({"status": "ok", "public_key": "00" * 32}))
 '''
@@ -224,6 +237,75 @@ def test_auditor_setup_uses_the_installed_keygen_and_the_strict_disclosure_schem
     config = json.loads((world.root / "auditor/disclosure.json").read_text())
     assert set(config) == rust_fields("sdk/shielded/src/bin/erebus_shielded_disclosure.rs", "struct Deployment")
     assert config["settlement_contract"] == POOLS["usdc"][0] and owner_only(world.root / "auditor/auditor.key")
+
+
+def auditor_args(world, **changes):
+    values = dict(pool="wmon", directory=world.root / "auditor", bin=world.bins, pins=world.pins,
+                  deployment=world.deployment, rpc_url="https://a.example.net/", peer_rpc_url="https://b.example.net/")
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+def recording(monkeypatch):
+    calls, real = [], init.command
+
+    def record(bins, name, request, cwd):
+        calls.append((name, request))
+        return real(bins, name, request, cwd)
+    monkeypatch.setattr(init, "command", record)
+    return calls
+
+
+def test_auditor_checkpoint_opt_in_is_a_native_checkpoint_of_its_empty_cache(world, monkeypatch):
+    calls = recording(monkeypatch)
+    result = init.auditor(auditor_args(world, history="checkpoint"))
+    directory = world.root / "auditor"
+    config = json.loads((directory / "disclosure.json").read_text())
+    assert [request["method"] for _, request in calls] == ["keygen", "checkpoint"]
+    # The checkpoint is asked of the installed Rust command with the very config it will verify with.
+    assert calls[1] == ("erebus-shielded-disclosure",
+                        {"method": "checkpoint", "deployment": config, "confirm_new_cache": True})
+    assert (directory / "cache/history-checkpoint.json").is_file()
+    assert result["history"] == "checkpoint" and result["checkpoint_block"] == 41
+    assert result["history_from_block"] == 42 and "settled_before_checkpoint" in result["scope"]
+    # The disclosure schema is unchanged by the checkpoint.
+    assert set(config) == rust_fields("sdk/shielded/src/bin/erebus_shielded_disclosure.rs", "struct Deployment")
+
+
+def test_auditor_defaults_to_full_history_and_stays_offline(world, monkeypatch):
+    # A standalone auditor is usually set up after the grant, i.e. after settlement: full history verifies it.
+    calls = recording(monkeypatch)
+    result = init.auditor(auditor_args(world))
+    assert [request["method"] for _, request in calls] == ["keygen"]
+    assert result["history"] == "full" and result["history_from_block"] == 7
+    assert not (world.root / "auditor/cache/history-checkpoint.json").exists()
+    explicit = init.auditor(auditor_args(world, directory=world.root / "explicit", history="full"))
+    assert explicit["history"] == "full" and not (world.root / "explicit/cache/history-checkpoint.json").exists()
+    with pytest.raises(ValueError, match="--history"):
+        init.auditor(auditor_args(world, directory=world.root / "a2", history="later"))
+
+
+def test_auditor_checkpoint_failure_names_the_offline_alternative(world, monkeypatch):
+    real = init.command
+
+    def refuse(bins, name, request, cwd):
+        if request["method"] == "checkpoint":
+            raise ValueError("refused")
+        return real(bins, name, request, cwd)
+    monkeypatch.setattr(init, "command", refuse)
+    with pytest.raises(ValueError, match="omit --history checkpoint"):
+        init.auditor(auditor_args(world, history="checkpoint"))
+
+
+def test_auditor_history_flag_parses(world, capsys):
+    common = ["auditor", "--pool", "wmon", "--bin", str(world.bins), "--pins", str(world.pins),
+              "--deployment", str(world.deployment), "--rpc-url", "https://a.example.net/",
+              "--peer-rpc-url", "https://b.example.net/"]
+    assert init.main([*common, "--directory", str(world.root / "default")]) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert default["history"] == "full" and "checkpoint_block" not in default
+    assert init.main([*common, "--directory", str(world.root / "opt-in"), "--history", "checkpoint"]) == 0
+    assert json.loads(capsys.readouterr().out)["checkpoint_block"] == 41
 
 
 def test_pins_downloads_over_https_from_the_release_commit_and_checks_manifests(tmp_path):

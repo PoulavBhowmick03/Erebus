@@ -164,20 +164,55 @@ def test_keyed_endpoints_come_from_files_and_are_never_reported(world, natives, 
 
 def test_start_checkpoints_then_status_and_down_manage_the_service(world, natives):
     quick.run(quick_args(world, "up"), ops())
+    assert quick.run(quick_args(world, "status"), ops())["auditor"] == {
+        "history": "not started", "checkpoint_block": None, "history_from_block": None}
     started = quick.run(quick_args(world, "start"), ops())
     try:
-        assert started["checkpoints"] == {"buyer": 42, "seller": 42} and started["access_service"] == "started"
+        assert started["checkpoints"] == {"auditor": 41, "buyer": 42, "seller": 42}
+        assert started["access_service"] == "started"
+        # The auditor's checkpoint is taken first, so it precedes every deal the participants can make.
+        order = [name for name, method in natives if method == "checkpoint"]
+        assert order == ["erebus-shielded-disclosure", "erebus-wallet", "erebus-wallet"]
+        assert (world.root / "qs/auditor/cache/history-checkpoint.json").is_file()
         access = json.loads((world.root / "qs/seller/access.json").read_text())
         assert (Path(access["state_root"]) / "history-checkpoint.json").is_file()
         again = quick.run(quick_args(world, "start"), ops())
-        assert again["checkpoints"] == {"buyer": "existing", "seller": "existing"} and again["access_service"] == "running"
+        assert again["checkpoints"] == {"auditor": "existing", "buyer": "existing", "seller": "existing"}
+        assert again["access_service"] == "running"
         status = quick.run(quick_args(world, "status"), ops())
         assert status["access_service"] == "running" and status["roles"]["buyer"]["checkpoint_block"] == 42
+        assert status["auditor"]["history"] == "checkpoint" and status["auditor"]["checkpoint_block"] == 41
+        assert status["auditor"]["history_from_block"] == 42
     finally:
         stopped = quick.run(quick_args(world, "down"), ops())
     assert stopped["access_service_was_running"] is True
     assert quick.run(quick_args(world, "status"), ops())["access_service"] == "stopped"
     assert (world.root / "qs/keys/buyer-gas.key").is_file()
+
+
+def test_start_never_narrows_an_auditor_cache_that_began_full_history(world, natives):
+    quick.run(quick_args(world, "up"), ops())
+    (world.root / "qs/auditor/cache/primary").mkdir()
+    started = quick.run(quick_args(world, "start"), ops())
+    try:
+        assert started["checkpoints"]["auditor"] == "full_history"
+        assert not (world.root / "qs/auditor/cache/history-checkpoint.json").exists()
+        assert ("erebus-shielded-disclosure", "checkpoint") not in natives
+        status = quick.run(quick_args(world, "status"), ops())["auditor"]
+        assert status["history"] == "full" and status["history_from_block"] == 7
+    finally:
+        quick.run(quick_args(world, "down"), ops())
+
+
+def test_auditor_checkpoint_failure_stops_start_before_the_participants(world, natives, monkeypatch):
+    quick.run(quick_args(world, "up"), ops())
+
+    def refuse(bins, directory):
+        raise ValueError("refused")
+    monkeypatch.setattr(init, "auditor_checkpoint", refuse)
+    with pytest.raises(ValueError, match="auditor's checkpoint failed"):
+        quick.run(quick_args(world, "start"), ops())
+    assert ("erebus-wallet", "checkpoint") not in natives
 
 
 def test_renew_reissues_descriptors_bindings_and_terms_in_place(world, natives):

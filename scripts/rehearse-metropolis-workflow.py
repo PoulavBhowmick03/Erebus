@@ -484,8 +484,13 @@ class Pool:
             replies["auditor"] = self.installed.init("auditor", "--pool", self.name, "--directory", str(auditor),
                                                      "--bin", str(self.installed.bins), "--pins", str(self.pins),
                                                      "--deployment", str(self.deployment), "--rpc-url", primary,
-                                                     "--peer-rpc-url", peer)
+                                                     "--peer-rpc-url", peer, "--history", "checkpoint")
             operators["auditor"] = auditor
+            # WS5: this auditor is set up before any deal here, so it opts in to a paired finalized checkpoint.
+            require(replies["auditor"].get("history") == "checkpoint"
+                    and isinstance(replies["auditor"].get("checkpoint_block"), int),
+                    f"auditor history checkpoint: {replies['auditor']}")
+            operators["auditor_checkpoint_block"] = replies["auditor"]["checkpoint_block"]
         check_operator_mode(replies, [json.loads((operators[role] / "operator.json").read_text())
                                      for role in ("seller", "buyer")], self.prepublication)
         self.report.setdefault("generated", {})[pair] = {
@@ -772,8 +777,17 @@ class Pool:
             "method": "verify_payment", "grant_file": str(grant), "key_file": str(auditor / "auditor.key"),
             "expected_issuer": "0x" + "11" * 32, "deployment": deployment}, auditor)
         require(wrong.get("payment_verified") is not True, "a wrong expected issuer verified")
+        # The verified payment came from caches that start after the auditor's own checkpoint.
+        checkpoint_block = operators["auditor_checkpoint_block"]
+        cache = Path(deployment["cache_root"])
+        for name in ("primary", "peer"):
+            stored = json.loads((cache / name / "index.json").read_text())
+            first = (stored.get("blocks") or [{}])[0].get("number")
+            require(stored.get("version") == 3 and stored.get("checkpoint", {}).get("block_number") == checkpoint_block
+                    and (first is None or first == checkpoint_block + 1), f"auditor {name} cache is not checkpointed")
         return {"agreement_verified": True, "payment_verified": True, "delivery_verified": False,
-                "wrong_issuer_refused": True, "scope": "one seller-exported grant for one deal"}
+                "wrong_issuer_refused": True, "scope": "one seller-exported grant for one deal",
+                "history_from_block": checkpoint_block + 1}
 
     async def timeout_deal(self, buyer: Agent, seller: Agent, operators: dict) -> dict:
         """A settlement whose subprocess times out while its broadcast is held; the reservation must survive."""

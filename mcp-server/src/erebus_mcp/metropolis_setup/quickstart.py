@@ -12,8 +12,10 @@ roles' shares wired to each other, so there is nothing to copy between machines.
 the installed `erebus-settle` (or passed in as owner-only files); Python only handles paths. It writes MCP
 configs for Claude Code, Codex and Cursor and ready-to-paste agent prompts, prints exactly what to fund,
 and waits for the buyer's balance (MON gas, plus the USDC itself on the USDC pool). `start` (run by `up`
-once funded) takes the fresh-wallet history checkpoints, runs doctor, and starts the seller's access
-service in the background.
+once funded) takes the auditor's history checkpoint first, then the fresh-wallet checkpoints, runs doctor,
+and starts the seller's access service in the background. The auditor's checkpoint precedes every deal these
+participants can make; a deal settled at or before it verifies as `settled_before_checkpoint`, never as paid
+or unpaid.
 
 Nothing here signs or sends a transaction. Agents may fund the buyer's shielded wallet only if the operator
 passed `--allow-agent-funding`, which grants the policy-capped approve and deposit tools, plus wrap on the
@@ -223,8 +225,10 @@ def up(args, ops) -> dict:
         if args.allow_agent_funding else ["status"]
     ops.wallet_policy(SimpleNamespace(directory=directory / "buyer", maximum_amount=fund, allow=allow,
                                       withdrawal_recipient=[], replacement_fees=None))
+    # Quickstart's auditor is checkpointed, but not here: `start` takes that checkpoint first, while the cache is
+    # still empty, so it precedes both participants' checkpoints and every deal they can make.
     ops.auditor(SimpleNamespace(pool=args.pool, directory=directory / "auditor", bin=bins, pins=pins,
-                                deployment=deployment, rpc_url=primary, peer_rpc_url=peer))
+                                deployment=deployment, rpc_url=primary, peer_rpc_url=peer, history="full"))
     _set_rates(ops, directory)
     asset_note = "" if args.pool == "wmon" else USDC_NOTE.format(
         fund=fund, fund_usdc=usdc(int(fund)), price_usdc=usdc(int(price)))
@@ -305,13 +309,43 @@ def _config(directory: Path, role: str, name: str = "wallet.json") -> dict:
     return json.loads((directory / role / name).read_text())
 
 
+def _auditor_cache(directory: Path) -> Path:
+    return Path(_config(directory, "auditor", "disclosure.json")["cache_root"])
+
+
+def _auditor_checkpoint(ops, bins: Path, directory: Path) -> int | str:
+    """The auditor's checkpoint, taken before either participant's so that it precedes every deal."""
+    cache = _auditor_cache(directory)
+    if not (cache / "history-checkpoint.json").is_file() and any((cache / name).exists() for name in ("primary", "peer")):
+        return "full_history"  # Verification already began from the deployment block; never narrowed.
+    try:
+        reply = ops.auditor_checkpoint(bins, directory / "auditor")
+    except ValueError:
+        raise ValueError("the auditor's checkpoint failed: both RPC providers must answer and agree on the same "
+                         "finalized block; retry `quickstart start`, or run `up` again with another --peer-rpc-url") from None
+    return "existing" if reply["checkpoint"] == "existing" else reply["checkpoint_block"]
+
+
+def _auditor_status(directory: Path) -> dict:
+    cache = _auditor_cache(directory)
+    record = cache / "history-checkpoint.json"
+    if record.is_file():
+        block = json.loads(record.read_text())["checkpoint"]["block_number"]
+        return {"history": "checkpoint", "checkpoint_block": block, "history_from_block": block + 1,
+                "scope": "deals settled at or before checkpoint_block verify as settled_before_checkpoint"}
+    started = any((cache / name).exists() for name in ("primary", "peer"))
+    first = _config(directory, "auditor", "disclosure.json")["first_block"]
+    return {"history": "full" if started else "not started", "checkpoint_block": None,
+            "history_from_block": first if started else None}
+
+
 def start(args, ops) -> dict:
-    """Checkpoint fresh participants, run doctor, and start the seller's access service."""
+    """Checkpoint the auditor, then the fresh participants, run doctor, and start the seller's access service."""
     directory = args.directory.resolve()
     state = json.loads((directory / STATE).read_text())
     bins = Path(state["bin"])
     artifacts = prefetch(SimpleNamespace(directory=directory), ops)["artifacts"]
-    checkpoints = {}
+    checkpoints = {"auditor": _auditor_checkpoint(ops, bins, directory)}
     for role in ROLES:
         wallet = _config(directory, role)
         record = Path(wallet["state_root"]) / "history-checkpoint.json"
@@ -500,8 +534,8 @@ def status(args, ops) -> dict:
         step = "run quickstart start to restart the seller's access service"
     else:
         step = "ready: run the buyer and seller agents with their agents/<role> files"
-    return {"status": "ok", "roles": roles, "access_service": service, "access_history_through": access_tip,
-            "chain_finalized": head, "rpc_hosts": state["rpc_hosts"], "next": step}
+    return {"status": "ok", "roles": roles, "auditor": _auditor_status(directory), "access_service": service,
+            "access_history_through": access_tip, "chain_finalized": head, "rpc_hosts": state["rpc_hosts"], "next": step}
 
 
 def down(args, ops) -> dict:

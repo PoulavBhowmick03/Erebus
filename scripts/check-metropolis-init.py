@@ -9,7 +9,8 @@ loopback, or a public index), then, using only installed commands:
    pins, init, connect, doctor and auditor;
 2. runs `erebus-init --metropolis pins --version P` (public HTTPS pins of a published release);
 3. for each authorized pool: init a buyer and a seller (fixture gas addresses, no key file), connect the
-   seller with a payload and the buyer from the seller's share, and set up an auditor;
+   seller with a payload and the buyer from the seller's share, and set up an auditor (the default full history;
+   with `--online`, the opt-in paired checkpoint of the auditor's cache when the package advertises it);
 4. validates every generated file with the installed commands: `erebus-wallet notes`, both MCP servers
    listing their tools, `erebus-access-service` answering `/healthz`, and the disclosure `check`;
 5. runs `doctor` (offline unless `--online`, which also reads both RPC endpoints and signer balances).
@@ -169,9 +170,17 @@ def pool_flow(bins: Path, work: Path, pins: Path, pool: str, port_base: int, onl
     reply = run(bins, work, ["--metropolis", "connect", "--directory", str(root / "buyer"), "--peer-share", str(root / "seller/share"),
                              "--resource", "dataset.snapshot.v1", "--amount", "600000"])
     require(reply.get("status") == "connected", f"{pool} buyer connect: {reply}")
+    # The default auditor replays full history and reads no RPC at setup. With --online, packages that advertise
+    # the auditor checkpoint also qualify the opt-in, which reads both RPC providers.
+    disclosure = run(bins, work, [], json.dumps({"method": "version"}), "erebus-shielded-disclosure")
+    history = (["--history", "checkpoint"]
+               if online and "checkpoint" in (disclosure.get("methods") or []) else [])
     reply = run(bins, work, ["--metropolis", "auditor", "--pool", pool, "--directory", str(root / "auditor"), "--bin", str(bins), "--pins", str(pins),
-                             "--deployment", deployment, "--rpc-url", RPC[0], "--peer-rpc-url", RPC[1]])
+                             "--deployment", deployment, "--rpc-url", RPC[0], "--peer-rpc-url", RPC[1], *history])
     require(reply.get("status") == "auditor-ready", f"{pool} auditor: {reply}")
+    if history:
+        require(reply.get("history") == history[1] and isinstance(reply.get("history_from_block"), int),
+                f"{pool} auditor history: {reply}")
     for role in ("buyer", "seller"):
         notes = run(bins, work, [], json.dumps({"method": "notes", "config_file": str(root / role / "wallet.json")}), "erebus-wallet")
         require(notes.get("status") == "ok", f"{pool} {role} wallet does not open: {notes}")
