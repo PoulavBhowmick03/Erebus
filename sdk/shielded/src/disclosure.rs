@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     index_store::IndexStore,
+    indexer::TreeCheckpoint,
     observation::{
         observe_shielded_deal_agreed, observe_shielded_deal_certified_bounded, ObservationError,
         SettlementLocation,
@@ -266,6 +267,45 @@ pub async fn verify_shielded_payment_certified(
         payment,
         certificate,
     })
+}
+
+/// Whether both configured providers show this agreement's deal consumed at a checkpoint block.
+///
+/// Only meaningful after a checkpointed index reported [`ObservationError::HistoryIncomplete`]
+/// (the deal is consumed, but no settlement event exists after the checkpoint). The pool sets
+/// `consumedDeals` once, so `true` means the deal was settled at or before the checkpoint block,
+/// which that index can never see; it is not a payment claim. `false` means the settlement should
+/// be after the checkpoint, where the index found no event: the caller must treat that as
+/// provider inconsistency, never as nonpayment.
+///
+/// Both providers must report the checkpoint block canonical and finalized and return the same
+/// value, read at exactly the checkpoint block hash; anything else is
+/// [`ObservationError::Inconsistent`]. A failed read is an error, never `false`.
+pub async fn deal_consumed_at_checkpoint(
+    agreement: &VerifiedAgreement,
+    rpc: &PoolRpc,
+    peer_rpc: &PoolRpc,
+    checkpoint: &TreeCheckpoint,
+) -> Result<bool, ObservationError> {
+    if rpc.shares_endpoint(peer_rpc) {
+        return Err(ObservationError::Context);
+    }
+    let mut agreed = None;
+    for source in [rpc, peer_rpc] {
+        if source.canonical_block_hash(checkpoint.block_number).await? != checkpoint.block_hash
+            || source.finalized_head().await?.number < checkpoint.block_number
+        {
+            return Err(ObservationError::Inconsistent);
+        }
+        let consumed = source
+            .consumed_deal_at(*agreement.nullifier.as_bytes(), checkpoint.block_hash)
+            .await?;
+        if agreed.is_some_and(|previous| previous != consumed) {
+            return Err(ObservationError::Inconsistent);
+        }
+        agreed = Some(consumed);
+    }
+    agreed.ok_or(ObservationError::Inconsistent)
 }
 
 fn erc20_address(asset: &AssetId) -> Option<[u8; 20]> {

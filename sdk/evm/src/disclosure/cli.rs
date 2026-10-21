@@ -63,6 +63,11 @@ enum Request {
         expected_issuer: String,
         deployment: Value,
     },
+    Checkpoint {
+        deployment: Value,
+        #[serde(default)]
+        confirm_new_cache: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -121,13 +126,53 @@ public-cache beside the grant). Pending verification exits 2; repeat the same re
 Output contains verification status and deal identifiers, not plaintext terms or private keys.
 No method submits transactions or generates proofs. Version-2 grants use direct suite-2 signing.
 Shielded payment verification requires the erebus-shielded-disclosure command.
+checkpoint (erebus-shielded-disclosure only, confirm_new_cache: true) records a paired finalized
+pool frontier for a new, empty shielded auditor cache; verify_payment then scans only later blocks.
+A deal settled at or before that block is reported as settled_before_checkpoint (exit 3), never
+as paid or unpaid; verify it with a cache that starts earlier.
 See docs/metropolis-operations.md for request schemas and recovery boundaries.";
 
+/// Exit status of a `settled_before_checkpoint` verification: neither paid nor unpaid here.
+pub const SETTLED_BEFORE_CHECKPOINT_EXIT: i32 = 3;
+
+/// A request to start a new auditor cache from a paired finalized checkpoint.
+pub struct CheckpointRequest {
+    /// Backend-specific trusted deployment configuration, including the cache root.
+    pub deployment: Value,
+    /// Explicit operator opt-in; a checkpoint narrows which history the cache can answer for.
+    pub confirm_new_cache: bool,
+}
+
+type Unsupported = fn(CheckpointRequest) -> std::future::Ready<Result<Value, &'static str>>;
+
 /// Runs the bounded JSON command protocol with an independent payment verifier.
+///
+/// This command has no auditor checkpoint: `checkpoint` is refused and not advertised.
 pub async fn run<F, Fut>(verify_payment: F)
 where
     F: FnOnce(PaymentRequest) -> Fut,
     Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
+{
+    run_inner(verify_payment, None::<Unsupported>).await;
+}
+
+/// [`run`] with a backend that can start a new auditor cache from a checkpoint.
+pub async fn run_with_checkpoint<F, Fut, C, CFut>(verify_payment: F, checkpoint: C)
+where
+    F: FnOnce(PaymentRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
+    C: FnOnce(CheckpointRequest) -> CFut,
+    CFut: std::future::Future<Output = Result<Value, &'static str>>,
+{
+    run_inner(verify_payment, Some(checkpoint)).await;
+}
+
+async fn run_inner<F, Fut, C, CFut>(verify_payment: F, checkpoint: Option<C>)
+where
+    F: FnOnce(PaymentRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
+    C: FnOnce(CheckpointRequest) -> CFut,
+    CFut: std::future::Future<Output = Result<Value, &'static str>>,
 {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if matches!(arguments.as_slice(), [argument] if argument == "--help") {
@@ -152,34 +197,68 @@ where
         Ok(request) => request,
         Err(_) => finish(Err("invalid request")),
     };
-    finish(handle(request, verify_payment).await);
+    finish(handle(request, verify_payment, checkpoint).await);
 }
 
 fn finish(result: Result<Value, &'static str>) -> ! {
     let failed = result.is_err();
     let response = result.unwrap_or_else(|error| json!({"status": "error", "error": error}));
-    let pending = response["status"] == "pending";
+    let code = match response["status"].as_str() {
+        Some("pending") => 2,
+        Some("settled_before_checkpoint") => SETTLED_BEFORE_CHECKPOINT_EXIT,
+        _ => i32::from(failed),
+    };
     println!("{response}");
     if std::io::stdout().flush().is_err() {
         std::process::exit(1);
     }
-    std::process::exit(if pending { 2 } else { i32::from(failed) });
+    std::process::exit(code);
 }
 
-async fn handle<F, Fut>(request: Request, verify_payment: F) -> Result<Value, &'static str>
+async fn handle<F, Fut, C, CFut>(
+    request: Request,
+    verify_payment: F,
+    checkpoint: Option<C>,
+) -> Result<Value, &'static str>
 where
     F: FnOnce(PaymentRequest) -> Fut,
     Fut: std::future::Future<Output = Result<PaymentVerification, &'static str>>,
+    C: FnOnce(CheckpointRequest) -> CFut,
+    CFut: std::future::Future<Output = Result<Value, &'static str>>,
 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock unavailable")?
         .as_secs();
     match request {
-        Request::Version => Ok(json!({
-            "status": "ok", "protocol": 1,
-            "methods": ["version", "keygen", "key_info", "select", "export", "verify_agreement", "verify_payment"],
-        })),
+        Request::Version => {
+            let mut methods = vec![
+                "version",
+                "keygen",
+                "key_info",
+                "select",
+                "export",
+                "verify_agreement",
+                "verify_payment",
+            ];
+            if checkpoint.is_some() {
+                methods.push("checkpoint");
+            }
+            Ok(json!({"status": "ok", "protocol": 1, "methods": methods}))
+        }
+        Request::Checkpoint {
+            deployment,
+            confirm_new_cache,
+        } => match checkpoint {
+            Some(checkpoint) => {
+                checkpoint(CheckpointRequest {
+                    deployment,
+                    confirm_new_cache,
+                })
+                .await
+            }
+            None => Err("checkpoint is not supported by this disclosure command"),
+        },
         Request::Keygen { key_file } => {
             let recipient = DisclosureIdentity::generate_and_store(&key_file)
                 .map_err(|_| "cannot create disclosure key")?;
@@ -333,6 +412,18 @@ where
                     }
                     Ok(response)
                 }
+                PaymentVerification::SettledBeforeCheckpoint {
+                    agreement,
+                    checkpoint_block,
+                } => {
+                    let mut response = verification_response(agreement, mode, false);
+                    response["status"] = json!("settled_before_checkpoint");
+                    response["checkpoint_block"] = json!(checkpoint_block);
+                    response["next_action"] = json!(
+                        "verify with a cache that starts earlier, e.g. a fresh cache_root without a checkpoint record"
+                    );
+                    Ok(response)
+                }
             }
         }
     }
@@ -369,6 +460,15 @@ pub enum PaymentVerification {
         next_log_block: Option<u64>,
         /// Saved ancestry checkpoint.
         ancestry_block: u64,
+    },
+    /// Authenticated agreement whose deal both providers show consumed at or before the
+    /// auditor cache's checkpoint block. This cache cannot see that settlement: it is neither
+    /// a payment claim nor evidence of nonpayment.
+    SettledBeforeCheckpoint {
+        /// Agreement identity only.
+        agreement: VerifiedAgreement,
+        /// The checkpoint block at which the deal was already consumed.
+        checkpoint_block: u64,
     },
 }
 

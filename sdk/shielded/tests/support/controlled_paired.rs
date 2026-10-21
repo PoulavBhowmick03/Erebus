@@ -63,6 +63,11 @@ enum Behavior {
         delay_count: usize,
         milliseconds: u64,
     },
+    /// Remove every `eth_getLogs` entry whose first topic is `topic` (0x-prefixed lowercase).
+    /// Models a provider that omits one event while every header and state read stays honest.
+    DropLogs {
+        topic: String,
+    },
 }
 
 #[derive(Clone)]
@@ -74,6 +79,7 @@ struct Controlled {
     requests: Arc<AtomicUsize>,
     pins: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
+    logs: Arc<AtomicUsize>,
 }
 
 struct ControlledProxy {
@@ -90,6 +96,9 @@ impl Drop for ControlledProxy {
 
 async fn forward(State(proxy): State<Controlled>, Json(request): Json<Value>) -> Response {
     proxy.requests.fetch_add(1, Ordering::SeqCst);
+    if request["method"] == "eth_getLogs" {
+        proxy.logs.fetch_add(1, Ordering::SeqCst);
+    }
     if request["method"] == "eth_sendRawTransaction" {
         proxy.sends.fetch_add(1, Ordering::SeqCst);
     }
@@ -158,6 +167,12 @@ async fn forward(State(proxy): State<Controlled>, Json(request): Json<Value>) ->
                 .await
                 .unwrap();
         }
+    } else if let Behavior::DropLogs { topic } = &behavior {
+        if request["method"] == "eth_getLogs" {
+            if let Some(logs) = response["result"].as_array_mut() {
+                logs.retain(|log| log["topics"][0].as_str() != Some(topic.as_str()));
+            }
+        }
     } else if let Behavior::PinFinalized { number } = behavior {
         if request["method"] == "eth_getBlockByNumber"
             && request["params"][0].as_str() == Some("finalized")
@@ -189,6 +204,7 @@ async fn start_proxy(upstream: String) -> ControlledProxy {
         requests: Arc::new(AtomicUsize::new(0)),
         pins: Arc::new(AtomicUsize::new(0)),
         failed: Arc::new(AtomicUsize::new(0)),
+        logs: Arc::new(AtomicUsize::new(0)),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -263,6 +279,14 @@ fn pins(proxy: &ControlledProxy) -> usize {
 
 fn failures(proxy: &ControlledProxy) -> usize {
     proxy.state.failed.load(Ordering::SeqCst)
+}
+
+fn requests(proxy: &ControlledProxy) -> usize {
+    proxy.state.requests.load(Ordering::SeqCst)
+}
+
+fn log_reads(proxy: &ControlledProxy) -> usize {
+    proxy.state.logs.load(Ordering::SeqCst)
 }
 
 /// Runs the actual payment CLI without masking its exit code.
@@ -756,6 +780,127 @@ impl Environment {
         let index = erebus_shielded_prover::index_store::IndexStore::new(path, self.index_domain())
             .unwrap();
         index.load().unwrap().tip().map(|tip| tip.number)
+    }
+
+    /// One auditor `checkpoint` request through a fresh process, with its exit code.
+    fn auditor_checkpoint(&self, deployment: &Value, confirm: bool) -> (i32, Value) {
+        let (code, response, stderr) = run_cli(
+            &self.disclosure_binary(),
+            self.root(),
+            json!({"method": "checkpoint", "deployment": deployment,
+                "confirm_new_cache": confirm}),
+            Duration::from_secs(120),
+        );
+        assert!(stderr.is_empty(), "{stderr}");
+        (code, response)
+    }
+
+    /// One auditor verification with its exit code (0 verified, 2 pending, 3 settled before
+    /// the cache's checkpoint, 1 error).
+    fn auditor_verify_code(
+        &self,
+        grant_file: &Path,
+        key_file: &Path,
+        deployment: &Value,
+    ) -> (i32, Value) {
+        let (code, response, stderr) = run_cli(
+            &self.disclosure_binary(),
+            self.root(),
+            json!({"method": "verify_payment", "grant_file": grant_file, "key_file": key_file,
+                "expected_issuer": format!("0x{}", hex::encode(
+                    self.selected().terms.seller_authorization_key.as_bytes())),
+                "deployment": deployment}),
+            Duration::from_secs(120),
+        );
+        assert!(stderr.is_empty(), "{stderr}");
+        (code, response)
+    }
+
+    /// Repeats a verification while its bounded history scan is pending; returns the first reply
+    /// that is not scan progress. An unpaid deal stays pending without progress fields.
+    fn auditor_verify_settled(
+        &self,
+        grant_file: &Path,
+        key_file: &Path,
+        deployment: &Value,
+    ) -> (i32, Value) {
+        for _ in 0..12 {
+            let (code, response) = self.auditor_verify_code(grant_file, key_file, deployment);
+            if code != 2 || response.get("next_log_block").is_none() {
+                return (code, response);
+            }
+            assert_eq!(response["status"], "pending", "{response}");
+            assert_ne!(response["payment_verified"], true, "{response}");
+        }
+        panic!("auditor verification stayed pending");
+    }
+
+    fn runtime_pins(&self) -> erebus_shielded_prover::rpc::PoolRuntimePins {
+        let config = self.config_value();
+        let digest = |key: &str| -> [u8; 32] {
+            hex::decode(config[key].as_str().unwrap().trim_start_matches("0x"))
+                .unwrap()
+                .try_into()
+                .unwrap()
+        };
+        erebus_shielded_prover::rpc::PoolRuntimePins {
+            pool: digest("runtime_keccak256"),
+            poseidon: digest("poseidon_keccak256"),
+            deposit: digest("deposit_verifier_keccak256"),
+            transfer: digest("transfer_verifier_keccak256"),
+            withdraw: digest("withdraw_verifier_keccak256"),
+        }
+    }
+
+    /// The library verification over an auditor cache root exactly as the command opens it
+    /// (with its checkpoint record, if any), repeated while the bounded scan is pending.
+    async fn auditor_certificate(
+        &self,
+        cache_root: &Path,
+    ) -> Result<
+        erebus_shielded_prover::disclosure::PaymentCertificate,
+        erebus_shielded_prover::disclosure::ShieldedDisclosureError,
+    > {
+        use erebus_shielded_prover::{
+            disclosure::ShieldedDisclosureError, index_store::IndexStore,
+            observation::ObservationError, recovery::RecoveryError,
+        };
+        let recorded =
+            erebus_shielded_prover::checkpoint::load(cache_root, self.index_domain()).unwrap();
+        let open = |name: &str| {
+            IndexStore::with_checkpoint(
+                cache_root.join(name).join("index.json"),
+                self.index_domain(),
+                recorded,
+            )
+            .unwrap()
+        };
+        let (primary_url, peer_url) = self.rpc_urls();
+        for _ in 0..12 {
+            match erebus_shielded_prover::disclosure::verify_shielded_payment_certified(
+                self.selected(),
+                &self.pool_rpc(&primary_url),
+                &open("primary"),
+                &self.pool_rpc(&peer_url),
+                &open("peer"),
+                self.runtime_pins(),
+            )
+            .await
+            {
+                Ok(certified) => return Ok(certified.certificate),
+                Err(ShieldedDisclosureError::Observation(ObservationError::Recovery(
+                    RecoveryError::HistoryPending { .. },
+                ))) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        panic!("auditor library verification stayed pending");
+    }
+
+    /// Persisted auditor cache bytes (`primary`/`peer`), for version and first-block checks.
+    fn auditor_cache_json(&self, cache_root: &Path, name: &str) -> Value {
+        serde_json::from_slice(&fs::read(cache_root.join(name).join("index.json")).unwrap())
+            .unwrap()
     }
 
     async fn settle(&self, timeout: Duration) -> (i32, Value, String) {
@@ -2149,6 +2294,353 @@ async fn auditor_catch_up_keeps_checkpoints_and_pending_is_never_absence() {
             "exhausted_checkpoints_retained": true,
             "final_verified": true,
             "send_count": sends(&environment.primary),
+        }),
+    );
+}
+
+fn deal_transferred_topic() -> String {
+    format!(
+        "0x{}",
+        hex::encode(erebus_core::suite::keccak256(&[
+            b"DealTransferred(uint256,uint256,uint256)".as_slice()
+        ]))
+    )
+}
+
+/// WS5: an auditor cache started from a paired finalized checkpoint before the deal settles.
+/// The command is explicit, idempotent without RPC, never reads logs, and refuses a cache that
+/// already holds full history or another deployment's record. An unconsumed deal reads exactly
+/// as with full history, and the later payment certifies to the same certificate. A provider
+/// that omits the settlement event fails closed as inconsistency, never as unpaid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil and generated M5 prototype artifacts; auditor history checkpoint"]
+async fn auditor_checkpoint_before_settlement_certifies_like_full_history() {
+    let environment = Environment::new().await;
+    let client = environment.deployed.client.clone();
+    let auditor = environment.root().join("auditor-checkpoint");
+    fs::create_dir(&auditor).unwrap();
+    let key_file = auditor.join("auditor.key");
+    let key_response = environment.auditor_keygen(&key_file);
+    let grant_file = auditor.join("deal.grant");
+    let (ok, exported) = environment.auditor_export(
+        &key_response["recipient_public_key"],
+        &grant_file,
+        clock() + 3600,
+    );
+    assert!(ok, "{exported}");
+    let checkpointed = auditor.join("checkpointed");
+    let full = auditor.join("full");
+    let with_checkpoint = environment.auditor_deployment(&checkpointed);
+    let with_full = environment.auditor_deployment(&full);
+    let record = checkpointed.join(erebus_shielded_prover::checkpoint::RECORD_FILE);
+
+    // Explicit opt-in: nothing is acquired or written without it.
+    let (code, refused) = environment.auditor_checkpoint(&with_checkpoint, false);
+    assert_eq!(code, 1, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("confirm_new_cache"),
+        "{refused}"
+    );
+    assert!(
+        !checkpointed.exists(),
+        "a refused checkpoint created the cache"
+    );
+
+    // Created at a paired finalized block, with zero log reads on either provider.
+    mine(&client, &environment.deployed.url, 4).await;
+    let logs = (
+        log_reads(&environment.primary),
+        log_reads(&environment.peer),
+    );
+    let (code, created) = environment.auditor_checkpoint(&with_checkpoint, true);
+    assert_eq!(code, 0, "{created}");
+    assert_eq!(created["checkpoint"], "created", "{created}");
+    assert_eq!(created["payment_verified"], false, "{created}");
+    let block = created["checkpoint_block"].as_u64().unwrap();
+    assert_eq!(created["history_from_block"], block + 1, "{created}");
+    assert_eq!(
+        (
+            log_reads(&environment.primary),
+            log_reads(&environment.peer)
+        ),
+        logs,
+        "a checkpoint must not read logs"
+    );
+    let record_bytes = fs::read(&record).unwrap();
+
+    // Idempotent: the same record, no provider request, no byte changed.
+    let before = (requests(&environment.primary), requests(&environment.peer));
+    let (code, again) = environment.auditor_checkpoint(&with_checkpoint, true);
+    assert_eq!(code, 0, "{again}");
+    assert_eq!(again["checkpoint"], "existing", "{again}");
+    assert_eq!(again["checkpoint_block"], block, "{again}");
+    assert_eq!(
+        (requests(&environment.primary), requests(&environment.peer)),
+        before,
+        "an existing record must answer without RPC"
+    );
+    assert_eq!(fs::read(&record).unwrap(), record_bytes);
+
+    // A concurrent initialization is refused.
+    let held = erebus_shielded_prover::checkpoint::InitLock::acquire(&checkpointed).unwrap();
+    let (code, busy) = environment.auditor_checkpoint(&with_checkpoint, true);
+    assert_eq!(code, 1, "{busy}");
+    assert_eq!(
+        busy["error"], "another checkpoint initialization is in progress",
+        "{busy}"
+    );
+    drop(held);
+
+    // A record bound to another deployment anchor is refused by both methods, never ignored.
+    let foreign = auditor.join("foreign");
+    fs::create_dir(&foreign).unwrap();
+    let mut foreign_domain = environment.index_domain();
+    foreign_domain.first_hash[0] ^= 1;
+    let stored =
+        erebus_shielded_prover::checkpoint::load(&checkpointed, environment.index_domain())
+            .unwrap()
+            .unwrap();
+    let lock = erebus_shielded_prover::checkpoint::InitLock::acquire(&foreign).unwrap();
+    erebus_shielded_prover::checkpoint::persist(&foreign, foreign_domain, stored, &lock).unwrap();
+    drop(lock);
+    let with_foreign = environment.auditor_deployment(&foreign);
+    let (code, refused) = environment.auditor_checkpoint(&with_foreign, true);
+    assert_eq!(code, 1, "{refused}");
+    assert_eq!(
+        refused["error"], "auditor history checkpoint record unavailable",
+        "{refused}"
+    );
+    let (code, refused) = environment.auditor_verify_code(&grant_file, &key_file, &with_foreign);
+    assert_eq!(code, 1, "{refused}");
+    assert_eq!(
+        refused["error"], "auditor history checkpoint record unavailable",
+        "{refused}"
+    );
+    assert!(!foreign.join("primary").exists() && !foreign.join("peer").exists());
+
+    // Unconsumed: the checkpointed cache answers exactly as full history does (pending, no claim).
+    let (full_code, full_unpaid) =
+        environment.auditor_verify_settled(&grant_file, &key_file, &with_full);
+    let (code, unpaid) =
+        environment.auditor_verify_settled(&grant_file, &key_file, &with_checkpoint);
+    assert_eq!((code, &unpaid), (full_code, &full_unpaid));
+    assert_eq!(unpaid["payment_verified"], false, "{unpaid}");
+
+    // A cache that already began full history is strictly stronger: it is never narrowed.
+    let (code, refused) = environment.auditor_checkpoint(&with_full, true);
+    assert_eq!(code, 1, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("auditor cache already holds full history"),
+        "{refused}"
+    );
+    assert!(!full
+        .join(erebus_shielded_prover::checkpoint::RECORD_FILE)
+        .exists());
+
+    // Settle after the checkpoint.
+    let (code, response, stderr) = environment.settle(Duration::from_secs(240)).await;
+    assert!(stderr.is_empty(), "{stderr}");
+    assert!(code == 2 && response["status"] == "pending", "{response}");
+    mine(&client, &environment.deployed.url, 4).await;
+    let paid = environment.complete_after_broadcast().await;
+    assert_eq!(paid["payment_verified"], true, "{paid}");
+
+    let (full_code, full_verified) =
+        environment.auditor_verify_settled(&grant_file, &key_file, &with_full);
+    let (code, verified) =
+        environment.auditor_verify_settled(&grant_file, &key_file, &with_checkpoint);
+    assert_eq!(full_code, 0, "{full_verified}");
+    assert_eq!(full_verified["payment_verified"], true, "{full_verified}");
+    assert_eq!((code, &verified), (full_code, &full_verified));
+    let full_certificate = environment.auditor_certificate(&full).await.unwrap();
+    let certificate = environment
+        .auditor_certificate(&checkpointed)
+        .await
+        .unwrap();
+    assert!(certificate.settlement.block_number > block);
+    assert_eq!(
+        certificate, full_certificate,
+        "checkpointed certificate differs"
+    );
+    for name in ["primary", "peer"] {
+        let cache = environment.auditor_cache_json(&checkpointed, name);
+        assert_eq!(cache["version"], 3, "{name}");
+        assert_eq!(cache["checkpoint"]["block_number"], block, "{name}");
+        assert_eq!(cache["blocks"][0]["number"], block + 1, "{name}");
+        assert_ne!(environment.auditor_cache_json(&full, name)["version"], 3);
+    }
+
+    // A provider that omits the settlement event: consumed now, not at the checkpoint, no event
+    // after it. That is inconsistency, never unpaid and never settled_before_checkpoint.
+    let omitted = auditor.join("omitted");
+    fs::create_dir(&omitted).unwrap();
+    fs::copy(
+        &record,
+        omitted.join(erebus_shielded_prover::checkpoint::RECORD_FILE),
+    )
+    .unwrap();
+    let with_omitted = environment.auditor_deployment(&omitted);
+    let topic = deal_transferred_topic();
+    arm(
+        &environment.primary,
+        Behavior::DropLogs {
+            topic: topic.clone(),
+        },
+    );
+    arm(&environment.peer, Behavior::DropLogs { topic });
+    let (code, inconsistent) =
+        environment.auditor_verify_settled(&grant_file, &key_file, &with_omitted);
+    disarm(&environment.primary);
+    disarm(&environment.peer);
+    assert_eq!(code, 1, "{inconsistent}");
+    assert!(
+        inconsistent["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("pool providers are inconsistent"),
+        "{inconsistent}"
+    );
+    assert_ne!(inconsistent["payment_verified"], true, "{inconsistent}");
+    write_evidence(
+        "auditor-checkpoint-before-settlement",
+        &json!({
+            "checkpoint_block": block,
+            "settlement_block": certificate.settlement.block_number,
+            "confirm_required": true,
+            "checkpoint_log_reads": 0,
+            "idempotent_requests": 0,
+            "foreign_record_refused": true,
+            "full_history_cache_refused": true,
+            "unconsumed_equal_to_full_history": true,
+            "certificate_equal_to_full_history": true,
+            "omitted_event_inconsistent": true,
+            "send_count": sends(&environment.primary),
+        }),
+    );
+}
+
+/// WS5: the checkpoint scope boundary. With the record at X - 1 (settlement at B + 1) the
+/// payment certifies exactly as full history; with the record at X or later the deal is
+/// `settled_before_checkpoint` (exit 3), never paid and never unpaid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil and generated M5 prototype artifacts; auditor checkpoint scope"]
+async fn auditor_checkpoint_at_or_after_settlement_is_settled_before_checkpoint() {
+    let environment = Environment::new().await;
+    let client = environment.deployed.client.clone();
+    let (code, response, stderr) = environment.settle(Duration::from_secs(240)).await;
+    assert!(stderr.is_empty(), "{stderr}");
+    assert!(code == 2 && response["status"] == "pending", "{response}");
+    mine(&client, &environment.deployed.url, 4).await;
+    let paid = environment.complete_after_broadcast().await;
+    assert_eq!(paid["payment_verified"], true, "{paid}");
+
+    let auditor = environment.root().join("auditor-scope");
+    fs::create_dir(&auditor).unwrap();
+    let key_file = auditor.join("auditor.key");
+    let key_response = environment.auditor_keygen(&key_file);
+    let grant_file = auditor.join("deal.grant");
+    let (ok, exported) = environment.auditor_export(
+        &key_response["recipient_public_key"],
+        &grant_file,
+        clock() + 3600,
+    );
+    assert!(ok, "{exported}");
+    let full = auditor.join("full");
+    let full_certificate = environment.auditor_certificate(&full).await.unwrap();
+    let settled = full_certificate.settlement.block_number;
+    let (full_code, full_verified) = environment.auditor_verify_settled(
+        &grant_file,
+        &key_file,
+        &environment.auditor_deployment(&full),
+    );
+    assert_eq!(full_code, 0, "{full_verified}");
+
+    // A checkpoint at a chosen finalized block, by clamping both providers' finalized tag.
+    let checkpoint_at = |name: &str, number: Option<u64>| {
+        let cache = auditor.join(name);
+        let deployment = environment.auditor_deployment(&cache);
+        if let Some(number) = number {
+            arm(&environment.primary, Behavior::PinFinalized { number });
+            arm(&environment.peer, Behavior::PinFinalized { number });
+        }
+        let (code, created) = environment.auditor_checkpoint(&deployment, true);
+        disarm(&environment.primary);
+        disarm(&environment.peer);
+        assert_eq!(code, 0, "{created}");
+        if let Some(number) = number {
+            assert_eq!(created["checkpoint_block"], number, "{created}");
+        }
+        (
+            cache,
+            deployment,
+            created["checkpoint_block"].as_u64().unwrap(),
+        )
+    };
+
+    // B = X - 1: the settlement is the first scanned block, and certifies like full history.
+    let (before, with_before, _) = checkpoint_at("before", Some(settled - 1));
+    let (code, verified) = environment.auditor_verify_settled(&grant_file, &key_file, &with_before);
+    assert_eq!((code, &verified), (full_code, &full_verified));
+    assert_eq!(
+        environment.auditor_certificate(&before).await.unwrap(),
+        full_certificate
+    );
+
+    // B = X and B > X: settled before the checkpoint, never paid or unpaid.
+    mine(&client, &environment.deployed.url, 6).await;
+    let mut outcomes = Vec::new();
+    for (name, number) in [("at", Some(settled)), ("after", None)] {
+        let (_, deployment, block) = checkpoint_at(name, number);
+        assert!(block >= settled, "{name}: {block} < {settled}");
+        let (code, scoped) =
+            environment.auditor_verify_settled(&grant_file, &key_file, &deployment);
+        assert_eq!(code, 3, "{name}: {scoped}");
+        assert_eq!(scoped["status"], "settled_before_checkpoint", "{scoped}");
+        assert_eq!(scoped["checkpoint_block"], block, "{scoped}");
+        assert_eq!(scoped["agreement_verified"], true, "{scoped}");
+        assert_eq!(scoped["payment_verified"], false, "{scoped}");
+        assert_eq!(scoped["delivery_verified"], false, "{scoped}");
+        assert_eq!(
+            scoped["deal_nullifier"], full_verified["deal_nullifier"],
+            "{scoped}"
+        );
+        assert!(scoped["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("starts earlier"));
+        // The library never certifies it either: incomplete history, not a payment.
+        let library = environment.auditor_certificate(&auditor.join(name)).await;
+        assert!(
+            matches!(
+                library,
+                Err(
+                    erebus_shielded_prover::disclosure::ShieldedDisclosureError::Observation(
+                        erebus_shielded_prover::observation::ObservationError::HistoryIncomplete
+                    )
+                )
+            ),
+            "{name}: {:?}",
+            library.err()
+        );
+        outcomes.push(json!({"case": name, "checkpoint_block": block, "status": scoped["status"]}));
+    }
+    assert_eq!(
+        sends(&environment.primary),
+        1,
+        "the auditor sent a transaction"
+    );
+    write_evidence(
+        "auditor-checkpoint-scope",
+        &json!({
+            "settlement_block": settled,
+            "checkpoint_before_certifies_like_full_history": true,
+            "outcomes": outcomes,
         }),
     );
 }

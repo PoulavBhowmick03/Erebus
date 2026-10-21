@@ -192,6 +192,36 @@ fn help_needs_no_configuration_or_stdin() {
 }
 
 #[test]
+fn public_bound_command_neither_advertises_nor_runs_an_auditor_checkpoint() {
+    let root = tempfile::tempdir().unwrap();
+    let (output, version) = run(root.path(), json!({"method": "version"}));
+    assert!(output.status.success(), "{version}");
+    let methods: Vec<&str> = version["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|method| method.as_str().unwrap())
+        .collect();
+    if std::env::var_os("EREBUS_TEST_DISCLOSURE_BIN").is_some() && methods.contains(&"checkpoint") {
+        // A shielded command under test advertises and implements the checkpoint itself.
+        return;
+    }
+    assert!(!methods.contains(&"checkpoint"), "{version}");
+    let cache = root.path().join("cache");
+    let (output, refused) = run(
+        root.path(),
+        json!({"method": "checkpoint", "confirm_new_cache": true,
+            "deployment": {"cache_root": cache}}),
+    );
+    assert_eq!(output.status.code(), Some(1), "{refused}");
+    assert_eq!(
+        refused["error"], "checkpoint is not supported by this disclosure command",
+        "{refused}"
+    );
+    assert!(!cache.exists());
+}
+
+#[test]
 fn keygen_preserves_existing_keys_and_key_info_recovers_the_public_key() {
     let dir = tempfile::tempdir().unwrap();
     let (output, generated) = run(
