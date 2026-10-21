@@ -2469,11 +2469,22 @@ async fn auditor_checkpoint_before_settlement_certifies_like_full_history() {
         "checkpointed certificate differs"
     );
     for name in ["primary", "peer"] {
+        // Version 4 manifest: bound to the checkpoint at `block`, first segment starting at
+        // `block + 1` and linked to the checkpoint block's hash.
         let cache = environment.auditor_cache_json(&checkpointed, name);
-        assert_eq!(cache["version"], 3, "{name}");
+        assert_eq!(cache["version"], 4, "{name}");
         assert_eq!(cache["checkpoint"]["block_number"], block, "{name}");
-        assert_eq!(cache["blocks"][0]["number"], block + 1, "{name}");
-        assert_ne!(environment.auditor_cache_json(&full, name)["version"], 3);
+        assert_eq!(cache["segments"][0]["first"], block + 1, "{name}");
+        let checkpoint_hash: Vec<u8> =
+            serde_json::from_value(cache["checkpoint"]["block_hash"].clone()).unwrap();
+        assert_eq!(
+            cache["base_parent_hash"],
+            hex::encode(checkpoint_hash),
+            "{name}"
+        );
+        let full_cache = environment.auditor_cache_json(&full, name);
+        assert_eq!(full_cache["version"], 4, "{name}");
+        assert!(full_cache["checkpoint"].is_null(), "{name}");
     }
 
     // A provider that omits the settlement event: consumed now, not at the checkpoint, no event

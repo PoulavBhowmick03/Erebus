@@ -1190,12 +1190,12 @@ impl IndexStore {
 
     fn lock(&self) -> Result<File, IndexStoreError> {
         regular_or_absent(&self.lock_path)?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&self.lock_path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        // New lock files are owner-only like the rest of the cache. An existing lock file keeps
+        // its mode: it holds no data, and older releases created it with the default umask.
+        private_create(&mut options);
+        let lock = options.open(&self.lock_path)?;
         FileExt::lock_exclusive(&lock)?;
         Ok(lock)
     }

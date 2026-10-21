@@ -969,3 +969,23 @@ fn sealed_segments_are_verified_once_per_process_and_path() {
     flip(&segment_file(&path, 7), 3);
     assert!(is_cache_error(small(&path).load()));
 }
+
+#[cfg(unix)]
+#[test]
+fn every_new_cache_file_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = saved(root.path(), "index.json", &chain(12, u64::MAX, 0));
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600);
+    assert_eq!(mode(&path.with_extension("lock")), 0o600);
+    assert_eq!(mode(&segments_dir(&path)), 0o700);
+    for file in referenced(&path) {
+        assert_eq!(mode(&segments_dir(&path).join(file)), 0o600);
+    }
+    // A load alone creates the lock file, also owner-only.
+    let fresh = root.path().join("fresh.json");
+    small(&fresh).load().unwrap();
+    assert_eq!(mode(&fresh.with_extension("lock")), 0o600);
+    assert!(!fresh.exists());
+}
