@@ -1,9 +1,10 @@
 # WS1: checkpointed history start for a fresh wallet (design note)
 
 Status: local implementation note, 2026-10-14. Base: `origin/main` `cd1447d8d50e067e79c72a3e942c459be3e755b3`.
-Storage: tested against the **current `IndexStore` on `main`** (single JSON file, 128 MiB cap). The
-segmented-store candidate (`review/metropolis-cold-history-20261014`, F1–F3 open) is **not** mixed in.
-A checkpointed index is small by construction, so WS1 does not depend on it; long-lived wallets still do.
+Storage: WS1 was tested against the single-file `IndexStore` (version 2/3, 128 MiB cap). WS5 G1
+(`feat/ws5-history-segments`) replaces it with the segmented version 4 store described in §4; a
+checkpointed index is small by construction, so WS1 never depended on it. The earlier candidate
+`review/metropolis-cold-history-20261014` is not used.
 
 ## 1. Feasibility (pool contract `contracts/evm/src/ErebusShieldedPool.sol`)
 
@@ -77,9 +78,22 @@ state root. Repeating the command with an existing matching record is idempotent
 `<state_root>/history-checkpoint.json` (version 1, owner-only, created with create-new + fsync + rename, bound to
 chain, pool and deployment anchor). Every participant binary that builds an `IndexDomain` under that state root
 loads the record. `IndexDomain` carries the checkpoint, so primary and peer caches must share it and a cache
-built for another checkpoint (or for full history) fails the existing domain-equality check. Checkpointed caches
-are written as index version 3; full-history caches are byte-identical to version 2 and older binaries reject
-version 3 instead of misreading it.
+built for another checkpoint (or for full history) fails the existing domain-equality check.
+
+Index caches are written as version 4 (WS5 G1, both full-history and checkpointed). The cache path is a manifest
+(owner-only) naming fixed-height segment files in `<cache>.segments/` (directory 0700, files 0600, created
+create-new, symbolic links refused). Segment `k` holds blocks `[base + k·65536, base + (k+1)·65536)`, `base` being
+the deployment block or the block after the checkpoint; each block is `hash ‖ events_len ‖ canonical-JSON(events)`,
+with number and parent implied and rechecked. The manifest records each segment's length, SHA-256, end root, end
+leaf count and history digest (`H_n = SHA256("erebus/pool-history/v4" ‖ H_(n-1) ‖ number ‖ hash ‖ parent ‖ events)`),
+plus its own SHA-256, the deployment/checkpoint binding and the layout. A segment is sealed (immutable) once the tip
+is 1,024 blocks past its end; a reorg into sealed history is refused, never rewritten. A save writes and syncs segment
+data first and commits only by renaming the manifest; unreferenced files are deleted afterwards and never read.
+A missing, altered or mis-hashed segment fails as a cache error, never as empty history. Loads replay every segment
+the process has not already verified for that path; sealed segments are verified once per process and their empty
+blocks are not kept in memory. Version 2/3 files still load (128 MiB read cap, legacy only) and migrate on the next
+save; an interrupted migration leaves the legacy file byte-identical. Binaries that read versions 2/3 refuse
+version 4 (it has no `blocks` field). There is no aggregate size cap.
 
 ## 5. Consumers reviewed
 
@@ -151,8 +165,8 @@ generated 3,000,000 gas limit.
   created or shared there (the harness placed it). `erebus-init --metropolis` should offer the checkpoint step.
 - **Not exercised end to end:** the USDC asset in the end-to-end and harness gates
   (acquisition and command gates used the mock ERC-20); MCP exposure (deliberately none: operator command).
-- **Long-lived wallets:** still bounded by the 128 MiB single-file store; segmented storage (separate lane, F1–F3)
-  is not part of this change.
+- **Long-lived wallets:** the 128 MiB single-file cap is removed by the segmented store (WS5 G1, §4). Memory still
+  grows with the number of pool events (leaves, nullifiers, deals and blocks that carry them), not with empty blocks.
 - **Installed/live:** native CI on the candidate and publication remain open. The live run (§6a) used published
   `erebus-init` with unpublished WS1 CLIs, so it qualifies the code path, not a release.
 - **Auditor:** WS5 adds an auditor checkpoint (`erebus-shielded-disclosure checkpoint`; opt-in `--history checkpoint` for `erebus-init --metropolis auditor`, whose default stays full history; taken first by `quickstart start`). Deals settled at or before it are `settled_before_checkpoint`; a historical `at_block` checkpoint is a follow-up.

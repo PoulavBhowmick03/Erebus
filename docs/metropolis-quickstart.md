@@ -189,10 +189,12 @@ call with the same `operation_ref`, never a new payment.
 
 ## Known limits
 
-- The history cache is one file capped at 128 MiB, about 290 bytes per block. With the access
-  service syncing continuously, that is about two days of Monad history; past it the cache refuses
-  to grow and verification stops. Segmented storage is not built yet, so a quickstart is for runs
-  of hours to a day or two, not a long-lived seller.
+- The history cache is a manifest plus segment files of 65,536 blocks each, with no size cap. A
+  mostly empty Monad block takes about 40 bytes on disk; at 3.3 blocks a second, continuous sync adds
+  about 11 MB a day, roughly 4 GB a year. A cache from an older release migrates on its first save;
+  older binaries then refuse it. A reorg more than about 1,000 blocks deep into saved history is
+  refused rather than rewritten, and a cache that fails verification must be deleted and rescanned.
+  Memory grows with pool events, not with empty blocks.
 - The quickstart auditor verifies only deals settled after its checkpoint block. A deal settled at
   or before it is reported as `settled_before_checkpoint` (never as paid or unpaid); verify that one
   with a standalone `erebus-init --metropolis auditor`, which replays from the pool deployment by

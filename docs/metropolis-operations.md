@@ -1064,8 +1064,8 @@ configs use 20, as does the quickstart, which also raises `max_concurrent_querie
 background sync uses the same budget on its own client. Monad testnet makes about 3.3 blocks per
 second and a sync costs about two reads per block per provider, so a budget under about 7 per second
 can never catch up from a gap. A sync that loses a save
-race to a request is progress, not an error. The cache stays capped at 128 MiB (about two days of
-Monad history at continuous sync). If the service runs from a checkpointed participant, place the
+race to a request is progress, not an error. The cache is segmented and has no size cap
+(about 40 bytes per empty block on disk). If the service runs from a checkpointed participant, place the
 seller wallet's `history-checkpoint.json` in the service's `state_root` before the first start.
 
 ### Configuration
@@ -2604,8 +2604,10 @@ Shielded observation also yields `HistoryPending` after each incomplete batch. R
 same `IndexStore`. The default batch is at most 1,000 new blocks. `ShieldedChain::reconcile`
 requires both chain observers and separate public index caches. It compares both finalized
 wallet histories before changing notes, accounting, or signer claims. Network budgets do not
-limit local cache replay. The shielded cache rejects files above 128 MiB. An oversized cache
-requires an index-storage change; repeated observation cannot bypass that limit.
+limit local cache replay. The shielded cache is a manifest plus 65,536-block segment
+files; only version 2/3 single-file caches keep the 128 MiB read limit, and they migrate on their
+next save. A corrupted or missing segment is an error, never empty history: delete the cache
+(the manifest and its `.segments` directory) and rescan.
 
 ### 11.7 Escalation checklist
 
