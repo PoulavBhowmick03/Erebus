@@ -447,23 +447,41 @@ fn serialized(index: &PoolIndex) -> Vec<u8> {
             chain_id: CHAIN_ID,
             pool: POOL,
             first_block: BASE,
-            first_hash: index.blocks()[0].hash,
+            first_hash: index.first_link().expect("first block").0,
         },
     )
     .expect("store");
     store.save_if_unchanged(index, None).expect("save");
-    std::fs::read(path).expect("read")
+    // The manifest names every segment by hash, and each segment file is compared too.
+    let mut bytes = std::fs::read(&path).expect("read manifest");
+    let mut segments: Vec<_> = std::fs::read_dir(path.with_extension("segments"))
+        .expect("segments")
+        .map(|entry| entry.expect("entry").path())
+        .collect();
+    segments.sort();
+    for segment in segments {
+        bytes.extend(segment.file_name().expect("name").as_encoded_bytes());
+        bytes.extend(std::fs::read(segment).expect("read segment"));
+    }
+    bytes
 }
 
 fn assert_same(left: &PoolIndex, right: &PoolIndex) {
-    assert_eq!(left.blocks(), right.blocks());
+    assert_eq!(left.tip(), right.tip());
+    assert_eq!(left.history_digest(), right.history_digest());
+    assert!(left.event_blocks().eq(right.event_blocks()));
     assert_eq!(left.root(), right.root());
     assert_eq!(left.leaves(), right.leaves());
-    assert_eq!(serialized(left), serialized(right));
+    // A sealed index (loaded from a small layout) no longer holds every block to re-save;
+    // the history digest above already covers every block and event.
+    if left.sealed_through().is_none() && right.sealed_through().is_none() {
+        assert_eq!(left.tail_blocks(), right.tail_blocks());
+        assert_eq!(serialized(left), serialized(right));
+    }
 }
 
 fn unchanged(index: &PoolIndex, before: &PoolIndex) -> bool {
-    index.blocks() == before.blocks() && index.root() == before.root()
+    index.tail_blocks() == before.tail_blocks() && index.root() == before.root()
 }
 
 #[tokio::test]
@@ -483,8 +501,7 @@ async fn concurrent_sync_matches_sequential_sync_byte_for_byte() {
     );
     assert!(sequential.leaves().len() > 100);
     assert!(sequential
-        .blocks()
-        .iter()
+        .event_blocks()
         .any(|block| block.events.len() >= 3));
     assert_same(&sequential, &concurrent);
     // Small batches cross window boundaries at different heights and must agree too.
@@ -520,9 +537,13 @@ async fn out_of_order_responses_still_apply_in_height_order() {
     let (address, shared) = serve(blocks.clone()).await;
     shared.lock().expect("mock").jitter = true;
     let index = full_sync(&rpc(address, 16), BASE + 119, 1_000).await;
-    let numbers: Vec<u64> = index.blocks().iter().map(|block| block.number).collect();
+    let numbers: Vec<u64> = index
+        .tail_blocks()
+        .iter()
+        .map(|block| block.number)
+        .collect();
     assert_eq!(numbers, (BASE..BASE + 120).collect::<Vec<_>>());
-    for (block, expected) in index.blocks().iter().zip(&blocks) {
+    for (block, expected) in index.tail_blocks().iter().zip(&blocks) {
         assert_eq!(block.hash, expected.hash);
         assert_eq!(block.parent_hash, expected.parent);
         assert_eq!(block.events.len(), expected.logs.len());
@@ -723,7 +744,7 @@ async fn a_scan_needs_about_two_requests_per_block() {
     assert_eq!(counts["eth_getBlockByNumber"], 2 * 1_000 + 1);
     // `read_block` stays a complete single-block check for its other callers.
     let block = rpc.read_block(BASE + 42).await.expect("one block");
-    assert_eq!(&block, &index.blocks()[42]);
+    assert_eq!(&block, &index.tail_blocks()[42]);
 }
 
 #[tokio::test]
@@ -826,8 +847,26 @@ async fn a_persistently_throttled_read_fails_closed_without_committing() {
     assert_eq!(shared.lock().expect("mock").counts["throttled"], 5);
 }
 
+/// Opens one cache path; the small layout makes 300 blocks cross many sealed segments.
+type Opener = fn(&std::path::Path, [u8; 32]) -> IndexStore;
+
+fn small_store_at(path: &std::path::Path, first_hash: [u8; 32]) -> IndexStore {
+    store_at(path, first_hash)
+        .with_layout(16, 8)
+        .expect("small layout")
+}
+
 #[tokio::test]
 async fn a_concurrently_advanced_shared_cache_is_continued_not_failed() {
+    concurrently_advanced(store_at).await;
+}
+
+#[tokio::test]
+async fn a_concurrently_advanced_shared_cache_is_continued_across_sealed_segments() {
+    concurrently_advanced(small_store_at).await;
+}
+
+async fn concurrently_advanced(store_at: Opener) {
     let blocks = chain(300, u64::MAX);
     let (address, shared) = serve(blocks.clone()).await;
     let dir = tempfile::tempdir().expect("temporary directory");
@@ -885,6 +924,15 @@ async fn a_concurrently_advanced_shared_cache_is_continued_not_failed() {
 
 #[tokio::test]
 async fn seeding_copies_only_a_further_verified_cache_of_the_same_history() {
+    seeding(store_at).await;
+}
+
+#[tokio::test]
+async fn seeding_copies_a_further_cache_across_sealed_segments() {
+    seeding(small_store_at).await;
+}
+
+async fn seeding(store_at: Opener) {
     let blocks = chain(150, u64::MAX);
     let (address, _shared) = serve(blocks.clone()).await;
     let dir = tempfile::tempdir().expect("temporary directory");

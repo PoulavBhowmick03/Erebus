@@ -53,7 +53,9 @@ fn every_index_write_boundary_restores_one_complete_verified_prefix() {
         restored
             .save_if_unchanged(&index, old.tip().map(|block| block.hash))
             .unwrap();
-        assert_eq!(restored.load().unwrap().blocks(), index.blocks());
+        let reloaded = restored.load().unwrap();
+        assert_eq!(reloaded.tip(), index.tip());
+        assert_eq!(reloaded.history_digest(), index.history_digest());
         fail += 1;
         if fail > boundaries {
             break;
@@ -202,7 +204,8 @@ fn version_one_cache_is_rescanned_before_deal_observation() {
         .save_if_unchanged(&index, None)
         .expect("replace cache");
     let new: Value = serde_json::from_slice(&fs::read(&path).expect("new cache")).expect("JSON");
-    assert_eq!(new["version"], 2);
+    assert_eq!(new["version"], 4);
+    assert_eq!(new["segments"].as_array().expect("segments").len(), 1);
     assert_eq!(
         store.load().expect("reload").tip().expect("tip").number,
         100

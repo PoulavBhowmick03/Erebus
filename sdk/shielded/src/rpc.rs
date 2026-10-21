@@ -1092,11 +1092,13 @@ impl PoolRpc {
             if fixed_hex::<32>(&canonical.hash)? != tip.hash {
                 // Canonical branches share one prefix. Find its boundary without one
                 // RPC per orphaned block; u64 heights need at most 64 search steps.
+                // Only the unsealed tail may be rewound.
+                let tail = staged.tail_blocks();
                 let mut low = 0;
-                let mut high = staged.blocks().len();
+                let mut high = tail.len();
                 while low < high {
                     let middle = low + (high - low) / 2;
-                    let cached = &staged.blocks()[middle];
+                    let cached = &tail[middle];
                     let canonical = self.header(cached.number).await?;
                     if fixed_hex::<32>(&canonical.hash)? == cached.hash {
                         low = middle + 1;
@@ -1104,8 +1106,17 @@ impl PoolRpc {
                         high = middle;
                     }
                 }
-                let height = staged
-                    .blocks()
+                if low == 0 {
+                    if let Some(through) = staged.sealed_through() {
+                        let sealed = staged.block(through).map(|block| block.hash);
+                        let canonical = self.header(through).await?;
+                        if Some(fixed_hex::<32>(&canonical.hash)?) != sealed {
+                            // A reorg deeper than the store's seal margin: refuse, never rewrite.
+                            return Err(IndexError::Checkpoint.into());
+                        }
+                    }
+                }
+                let height = tail
                     .get(low)
                     .ok_or(RpcError::Evidence("chain changed during prefix search"))?
                     .number;

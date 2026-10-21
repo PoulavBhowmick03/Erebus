@@ -184,17 +184,13 @@ async fn blocks(
         return Err(StatusCode::BAD_REQUEST);
     }
     let store = Arc::clone(&state.store);
-    let index = tokio::task::spawn_blocking(move || store.load())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let selected: Vec<_> = index
-        .blocks()
-        .iter()
-        .filter(|block| query.after.is_none_or(|after| block.number > after))
-        .take(query.limit)
-        .cloned()
-        .collect();
+    let limit = query.limit;
+    let after = query.after;
+    let (index, selected) =
+        tokio::task::spawn_blocking(move || store.load_with_blocks(after, limit))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     if selected
         .iter()
         .map(|block| block.events.len())

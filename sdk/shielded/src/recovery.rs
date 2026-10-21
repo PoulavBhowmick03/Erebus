@@ -154,7 +154,8 @@ async fn recover_finalized_wallet_inner(
         );
         let (index, report) = first?;
         let (peer_index, peer_report) = second?;
-        if report != peer_report || index.blocks() != peer_index.blocks() {
+        // The history digest covers every block and event of both finalized prefixes.
+        if report != peer_report || index.history_digest() != peer_index.history_digest() {
             return Err(RecoveryError::Rpc(RpcError::Evidence(
                 "RPC providers disagree on finalized wallet history",
             )));
@@ -163,7 +164,7 @@ async fn recover_finalized_wallet_inner(
     } else {
         sync_finalized_public_index_inner(rpc, index_store, max_blocks).await?
     };
-    for block in index.blocks() {
+    for block in index.event_blocks() {
         let cached: Vec<_> = block.events.iter().filter(relevant).collect();
         if cached.is_empty() {
             continue;
@@ -296,6 +297,10 @@ pub async fn sync_public_index_through(
     loop {
         let count = rpc.sync(&mut index, through, 1_000).await?;
         index_store.save_if_unchanged(&index, prior_tip)?;
+        if index.tail_blocks().len() as u64 > index_store.retained_tail_limit() {
+            // Reloading seals what the store sealed, so a long scan does not keep every block.
+            index = index_store.load()?;
+        }
         prior_tip = index.tip().map(|tip| tip.hash);
         if index
             .covered_through()
@@ -537,6 +542,6 @@ mod finalized_prefix_tests {
                 "finalized wallet history cannot regress to a lagging anchor"
             )))
         ));
-        assert_eq!(store.load().unwrap().blocks(), index.blocks());
+        assert_eq!(store.load().unwrap().tail_blocks(), index.tail_blocks());
     }
 }

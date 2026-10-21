@@ -7,11 +7,40 @@ use std::collections::{HashMap, HashSet};
 
 use erebus_core::shielded::{note_root_from_path, note_tree_parent, NOTE_TREE_DEPTH};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::wallet::{NoteConsumption, NoteInclusion, WalletError, WalletSnapshot};
 use crate::NotePath;
 
 const MAX_LEAVES: u32 = 1 << NOTE_TREE_DEPTH;
+
+/// Domain tag of the public history digest chain.
+const HISTORY_DIGEST_TAG: &[u8] = b"erebus/pool-history/v4";
+
+/// History digest before any block: the start of the chain for both deployment and checkpoint caches.
+pub const EMPTY_HISTORY_DIGEST: [u8; 32] = [0; 32];
+
+/// The one canonical byte encoding of a block's events, used by the digest and on-disk records.
+pub fn canonical_events(events: &[PoolEvent]) -> Result<Vec<u8>, IndexError> {
+    serde_json::to_vec(events).map_err(|_| IndexError::EventOrder)
+}
+
+/// `H_n = SHA256(tag || H_(n-1) || number || hash || parent || len(events) || events)`.
+///
+/// Numbers and the events length are big-endian `u64`; `events` is [`canonical_events`]. Two
+/// histories share a digest at a height only if every block and event up to it is identical.
+pub fn history_digest_step(previous: &[u8; 32], block: &PoolBlock) -> Result<[u8; 32], IndexError> {
+    let events = canonical_events(&block.events)?;
+    let mut hasher = Sha256::new();
+    hasher.update(HISTORY_DIGEST_TAG);
+    hasher.update(previous);
+    hasher.update(block.number.to_be_bytes());
+    hasher.update(block.hash);
+    hasher.update(block.parent_hash);
+    hasher.update((events.len() as u64).to_be_bytes());
+    hasher.update(&events);
+    Ok(hasher.finalize().into())
+}
 
 /// An insertion or spend event decoded from the pool's public logs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,11 +227,38 @@ pub enum IndexError {
     Wallet(#[from] WalletError),
 }
 
+/// Verified end state of a sealed history prefix, kept instead of its blocks.
+///
+/// A durable store seals history once no reorg may reach it (`IndexStore`); sealed empty blocks
+/// are then dropped from memory and only blocks with events stay available.
+#[derive(Clone)]
+struct SealedPrefix {
+    /// Last sealed block; the tail extends it.
+    block: PoolBlock,
+    /// History digest after `block`.
+    digest: [u8; 32],
+    /// Tree frontier, root and absolute leaf count after `block`.
+    filled_subtrees: [[u8; 32]; NOTE_TREE_DEPTH],
+    root: [u8; 32],
+    leaf_count: u32,
+}
+
 /// Append-only verified public tree and its canonical block history.
+///
+/// History is held as an optional sealed prefix (its end state and its blocks with events)
+/// followed by the unsealed tail of every block, empty ones included.
 #[derive(Clone)]
 pub struct PoolIndex {
     first_block: u64,
+    /// Hash and parent hash of the first verified block.
+    origin: Option<([u8; 32], [u8; 32])>,
+    sealed: Option<Box<SealedPrefix>>,
+    /// Sealed blocks that carry events, in height order.
+    sealed_events: Vec<PoolBlock>,
+    /// Every block after the sealed prefix.
     blocks: Vec<PoolBlock>,
+    /// History digest after each entry of `blocks`.
+    digests: Vec<[u8; 32]>,
     zero_hashes: [[u8; 32]; NOTE_TREE_DEPTH],
     filled_subtrees: [[u8; 32]; NOTE_TREE_DEPTH],
     leaves: Vec<[u8; 32]>,
@@ -219,7 +275,11 @@ impl PoolIndex {
         let (zero_hashes, zero) = zero_hashes()?;
         Ok(Self {
             first_block,
+            origin: None,
+            sealed: None,
+            sealed_events: Vec::new(),
             blocks: Vec::new(),
+            digests: Vec::new(),
             zero_hashes,
             filled_subtrees: zero_hashes,
             leaves: Vec::new(),
@@ -246,8 +306,7 @@ impl PoolIndex {
 
     /// Last block whose end state this index represents: the scanned tip, else the checkpoint.
     pub fn covered_through(&self) -> Option<(u64, [u8; 32])> {
-        self.blocks
-            .last()
+        self.tip()
             .map(|tip| (tip.number, tip.hash))
             .or_else(|| self.base.map(|base| (base.block_number, base.block_hash)))
     }
@@ -269,12 +328,94 @@ impl PoolIndex {
 
     /// Last verified block, if any.
     pub fn tip(&self) -> Option<&PoolBlock> {
-        self.blocks.last()
+        self.blocks
+            .last()
+            .or_else(|| self.sealed.as_ref().map(|sealed| &sealed.block))
     }
 
-    /// Verified block history in canonical order, including empty blocks.
-    pub fn blocks(&self) -> &[PoolBlock] {
+    /// Every verified block after the sealed prefix, empty ones included, in height order.
+    ///
+    /// Without a sealed prefix this is the whole verified history.
+    pub fn tail_blocks(&self) -> &[PoolBlock] {
         &self.blocks
+    }
+
+    /// Every verified block that carries pool events, sealed or not, in height order.
+    pub fn event_blocks(&self) -> impl Iterator<Item = &PoolBlock> {
+        self.sealed_events
+            .iter()
+            .chain(self.blocks.iter().filter(|block| !block.events.is_empty()))
+    }
+
+    /// Last block of the sealed prefix, if history has been sealed.
+    pub fn sealed_through(&self) -> Option<u64> {
+        self.sealed.as_ref().map(|sealed| sealed.block.number)
+    }
+
+    /// First height held in [`Self::tail_blocks`].
+    fn tail_start(&self) -> u64 {
+        self.sealed
+            .as_ref()
+            .map_or(self.first_block, |sealed| sealed.block.number + 1)
+    }
+
+    /// Verified block at one height, if this index retains it: a tail block or the last sealed one.
+    pub fn block(&self, number: u64) -> Option<&PoolBlock> {
+        if let Some(sealed) = &self.sealed {
+            if number == sealed.block.number {
+                return Some(&sealed.block);
+            }
+        }
+        let offset = usize::try_from(number.checked_sub(self.tail_start())?).ok()?;
+        self.blocks.get(offset)
+    }
+
+    /// History digest after the last verified block, or [`EMPTY_HISTORY_DIGEST`].
+    pub fn history_digest(&self) -> [u8; 32] {
+        self.digests
+            .last()
+            .copied()
+            .or_else(|| self.sealed.as_ref().map(|sealed| sealed.digest))
+            .unwrap_or(EMPTY_HISTORY_DIGEST)
+    }
+
+    /// History digest after the block at `number`, if this index retains that block.
+    pub fn history_digest_at(&self, number: u64) -> Option<[u8; 32]> {
+        if let Some(sealed) = &self.sealed {
+            if number == sealed.block.number {
+                return Some(sealed.digest);
+            }
+        }
+        let offset = usize::try_from(number.checked_sub(self.tail_start())?).ok()?;
+        self.digests.get(offset).copied()
+    }
+
+    /// Hash and parent hash of the first verified block, which anchor the history.
+    pub fn first_link(&self) -> Option<([u8; 32], [u8; 32])> {
+        self.origin
+    }
+
+    /// Seals all history through the current tip: later reorgs may not reach it.
+    ///
+    /// Empty sealed blocks are dropped from memory; blocks with events stay available through
+    /// [`Self::event_blocks`]. Every derived state (leaves, nullifiers, deals, root) is unchanged.
+    pub fn seal(&mut self) -> Result<(), IndexError> {
+        let block = self.tip().cloned().ok_or(IndexError::Checkpoint)?;
+        let digest = self.history_digest();
+        for tail in self.blocks.drain(..) {
+            if !tail.events.is_empty() {
+                self.sealed_events.push(tail);
+            }
+        }
+        self.digests.clear();
+        self.sealed = Some(Box::new(SealedPrefix {
+            block,
+            digest,
+            filled_subtrees: self.filled_subtrees,
+            root: self.root,
+            leaf_count: self.leaf_count(),
+        }));
+        Ok(())
     }
 
     /// First block whose logs this index expects to process.
@@ -415,7 +556,7 @@ impl PoolIndex {
 
     /// Checks and applies one consecutive canonical block atomically.
     pub fn apply_block(&mut self, block: PoolBlock) -> Result<(), IndexError> {
-        match self.blocks.last() {
+        match self.tip() {
             Some(previous)
                 if block.number != previous.number + 1 || block.parent_hash != previous.hash =>
             {
@@ -433,6 +574,7 @@ impl PoolIndex {
         if block.hash == [0; 32] || block.hash == block.parent_hash {
             return Err(IndexError::BlockLink);
         }
+        let digest = history_digest_step(&self.history_digest(), &block)?;
         let mut filled = self.filled_subtrees;
         let mut root = self.root;
         let mut next = self.leaf_count();
@@ -531,27 +673,81 @@ impl PoolIndex {
         self.commitments.extend(new_commitments);
         self.nullifiers.extend(new_nullifiers);
         self.deals.extend(new_deals);
+        if self.origin.is_none() {
+            self.origin = Some((block.hash, block.parent_hash));
+        }
         self.blocks.push(block);
+        self.digests.push(digest);
         Ok(())
     }
 
     /// Rewinds from a reorg height and deterministically rebuilds the remaining prefix.
+    ///
+    /// Sealed history cannot be rewound: a height at or below [`Self::sealed_through`] fails
+    /// with [`IndexError::Checkpoint`] and leaves the index unchanged.
     pub fn rewind_from(&mut self, height: u64) -> Result<(), IndexError> {
+        if self
+            .sealed_through()
+            .is_some_and(|through| height <= through)
+        {
+            return Err(IndexError::Checkpoint);
+        }
         let retained: Vec<_> = self
             .blocks
             .iter()
             .filter(|block| block.number < height)
             .cloned()
             .collect();
-        let mut rebuilt = match self.base {
-            Some(base) => Self::from_checkpoint(base)?,
-            None => Self::new(self.first_block)?,
-        };
+        let mut rebuilt = self.sealed_state()?;
         for block in retained {
             rebuilt.apply_block(block)?;
         }
         *self = rebuilt;
         Ok(())
+    }
+
+    /// This index with its tail removed: the state at the end of the sealed prefix, or the
+    /// empty starting state when nothing is sealed.
+    fn sealed_state(&self) -> Result<Self, IndexError> {
+        let Some(sealed) = &self.sealed else {
+            return match self.base {
+                Some(base) => Self::from_checkpoint(base),
+                None => Self::new(self.first_block),
+            };
+        };
+        let mut state = self.clone();
+        // Each tail event added exactly one new identity (apply_block refuses duplicates), so
+        // removing them restores the sets as they were at the seal.
+        for block in &self.blocks {
+            for event in &block.events {
+                match event {
+                    PoolEvent::Inserted { commitment, .. } => {
+                        state.commitments.remove(commitment);
+                    }
+                    PoolEvent::Consumed { nullifier, .. } => {
+                        state.nullifiers.remove(nullifier);
+                    }
+                    PoolEvent::Transferred {
+                        deal_nullifier,
+                        input_nullifier,
+                        ..
+                    } => {
+                        state.nullifiers.remove(input_nullifier);
+                        state.deals.remove(deal_nullifier);
+                    }
+                }
+            }
+        }
+        let held = sealed
+            .leaf_count
+            .checked_sub(self.leaf_offset())
+            .ok_or(IndexError::Checkpoint)?;
+        state.leaves.truncate(held as usize);
+        state.filled_subtrees = sealed.filled_subtrees;
+        state.root = sealed.root;
+        state.blocks.clear();
+        state.digests.clear();
+        Ok(state)
     }
 
     /// Rebuilds a private wallet's chain observations from verified public events.
@@ -561,7 +757,7 @@ impl PoolIndex {
     pub fn replay_wallet(&self, wallet: &mut WalletSnapshot) -> Result<(), IndexError> {
         let mut staged = wallet.clone();
         staged.rewind_from(self.first_block);
-        for block in &self.blocks {
+        for block in self.event_blocks() {
             for event in &block.events {
                 match event {
                     PoolEvent::Inserted {
