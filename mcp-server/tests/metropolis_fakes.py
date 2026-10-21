@@ -17,6 +17,7 @@ def load():
     if STATE.exists():
         return json.loads(STATE.read_text())
     return {"sends": 0, "ops": {}, "notes": [], "balance": int(os.environ.get("FAKE_BALANCE", "0")),
+            "lag": int(os.environ.get("FAKE_HISTORY_LAG", "0")),
             "allowance": 0, "negotiate_failures": int(os.environ.get("FAKE_NEGOTIATE_FAILURES", "0")),
             "settled_with_pending": None, "calls": []}
 
@@ -44,6 +45,8 @@ def wallet(request, state):
                "status", "unwrap", "withdraw", "resume", "replace"], "deposit_operation_references": True,
                "funding_operation_references": True, "paired_account_diagnostics": True}})
     if method == "sync":
+        # Each sync closes one step of a lagging history; sends refuse until it reaches the head.
+        state["lag"] = max(0, state.get("lag", 0) - 1)
         completed = []
         for op in state["ops"].values():
             if op["state"] == "submitted":
@@ -78,6 +81,10 @@ def wallet(request, state):
         if known["state"] == "completed":
             reply({"status": "ok", "result": {"kind": kind, "already_completed": True}})
         reply({"status": "ok", "result": submitted(known)})
+    if state.get("lag", 0) > 0:
+        reply({"status": "pending", "error": "verified pool history is not complete; resume sync",
+               "result": {"history_pending": True, "next_log_block": 5, "through": 7,
+                          "retry_without_new_payment": True}}, 2)
     if kind == "deposit" and state["allowance"] < int(amount):
         reply({"status": "error", "error": "deposit allowance insufficient; run approve first"}, 1)
     identity = format(len(state["ops"]) + 1, "064x")

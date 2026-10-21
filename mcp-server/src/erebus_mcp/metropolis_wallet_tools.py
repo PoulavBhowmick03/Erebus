@@ -241,6 +241,7 @@ async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRef
         plan = refs.get(operation_ref)
     deadline = time.monotonic() + wait_seconds
     steps = plan["steps"]
+    waiting: str | None = None
 
     def progress(complete: bool, **extra: Any) -> dict[str, Any]:
         view = [{"kind": step["kind"], "amount": step["amount"], "operation_ref": step["ref"], "state": step["state"]}
@@ -248,6 +249,8 @@ async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRef
         body = {"operation_ref": operation_ref, "operation_ref_created": created, "complete": complete, "steps": view, **extra}
         if complete:
             return {"ok": True, "result": body, "operation_ref": operation_ref}
+        if waiting is not None:
+            body["waiting_for"] = waiting
         return {"ok": False, "result": {"status": "pending", **body}, "operation_ref": operation_ref,
                 "next_action": f"funding is still in progress; call fund_wallet again with operation_ref {operation_ref}"}
 
@@ -268,7 +271,14 @@ async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRef
                     step["state"], step["identity"] = "submitted", identity
                 refs.update(operation_ref, steps=steps)
                 if step["state"] == "planned":
-                    await asyncio.sleep(5)
+                    if result.get("history_pending") is True:
+                        # The wallet must reach the finalized head before it sends. A send attempt scans less
+                        # than a dedicated sync, which outpaces the chain where repeated sends fall behind it.
+                        waiting = "history"
+                        await _call(wallet, "sync")
+                    else:
+                        waiting = (reply.get("error") or {}).get("code") or "pending"
+                        await asyncio.sleep(5)
                 continue
             await _call(wallet, "sync")
             if _completed(await _operations(wallet), step.get("identity")):

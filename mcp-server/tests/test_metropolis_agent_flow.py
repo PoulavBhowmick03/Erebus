@@ -114,6 +114,17 @@ def test_fund_wallet_skips_steps_already_satisfied_and_resumes_after_its_wait_ru
     session(env, script)
 
 
+def test_fund_wallet_syncs_a_lagging_history_instead_of_retrying_the_send(tmp_path):
+    env = environment(tmp_path, FAKE_HISTORY_LAG="3")
+
+    async def script(call, names):
+        funded = await call("fund_wallet", amount="300", wait_seconds=120)
+        assert funded["ok"] is True, funded
+        state = fake_state(tmp_path)
+        assert state["sends"] == 3 and state["lag"] == 0
+    session(env, script)
+
+
 USDC_TOKEN = "0x534b2f3a21130d7a60830c2df862319e593943a3"
 BUYER = "0x" + "aa" * 20
 USDC_METHODS = ("approve", "deposit", "notes", "sync", "status")
