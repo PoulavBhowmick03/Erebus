@@ -1057,13 +1057,19 @@ The configuration file must be a regular, owner-only file. The evidence director
 directory with mode `0700`.
 
 From `0.4.0` (not in earlier releases): a shielded service keeps both pool-history caches
-current in the background, in bounded 1,000-block steps, so a request after a quiet period does
-not replay the gap itself (a delivery in the 2026-10-16 WS2 live run waited about 17
-minutes for that). The shielded backend accepts `requests_per_second` (default 40; generated
-configs use 20, as does the quickstart, which also raises `max_concurrent_queries` to 16); the
-background sync uses the same budget on its own client. Monad testnet makes about 3.3 blocks per
-second and a sync costs about two reads per block per provider, so a budget under about 7 per second
-can never catch up from a gap. A sync that loses a save
+current in the background, so a request after a quiet period does not replay the gap itself (a
+delivery in the 2026-10-16 WS2 live run waited about 17 minutes for that). The shielded backend
+accepts `requests_per_second` (default 40; generated configs use 20, as does the quickstart, which
+also raises `max_concurrent_queries` to 16). That budget is per provider and is shared by requests
+and the background sync, which uses all of it while no request is in flight and none while one is.
+The two observers catch up concurrently, each in 100-block steps taken back to back while it is
+behind. A sync costs about 1.1 reads per block (one header per block, plus one log query and one
+recheck per 100 blocks), so at 20 per second each observer catches up at about 14 blocks per second
+against Monad testnet's 3.3 (measured locally at 30 ms provider latency); a budget under about 4 per
+second can never catch up from a gap. A request that needs a cache the background is stepping waits
+for that one step, about five seconds at 20 per second. A provider's JSON-RPC throttling errors
+(`-32005`, `-32007`, `-32090`) are retried with backoff and then reported as rate limiting, like
+HTTP 429. A sync that loses a save
 race to a request is progress, not an error. The cache is segmented and has no size cap
 (about 40 bytes per empty block on disk). If the service runs from a checkpointed participant, place the
 seller wallet's `history-checkpoint.json` in the service's `state_root` before the first start.

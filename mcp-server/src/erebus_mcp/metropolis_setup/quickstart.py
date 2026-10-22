@@ -47,8 +47,9 @@ from types import SimpleNamespace
 DEFAULT_RPC_URL = "https://testnet-rpc.monad.xyz"
 DEFAULT_PEER_RPC_URL = "https://rpc.ankr.com/monad_testnet"
 FAUCET_URL = "https://faucet.monad.xyz"
-# Monad testnet makes about 3.3 blocks per second and a history sync needs about two reads per block per
-# provider; 20 per second catches up from a gap and stays under the official endpoint's 50 per IP.
+# Monad testnet makes about 3.3 blocks per second and a history sync needs about 1.1 reads per block per
+# provider; 20 per second catches up from a gap (about 14 blocks per second) and stays under the official
+# endpoint's 50 per IP.
 REQUESTS_PER_SECOND = 20
 ACCESS_CONCURRENT_READS = 16
 # Monad charges the full gas limit: measured about 0.31 MON per transaction at the generated 3,000,000 gas
