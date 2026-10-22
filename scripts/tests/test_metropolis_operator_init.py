@@ -1198,3 +1198,84 @@ def test_the_native_loader_accepts_the_written_peer_table_with_a_buyer_priced_ab
     repaired = init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="2000"))
     assert repaired["repeated"] is True and repaired["written"] == ["negotiate.json"]
     assert len(listed()["peers"]) == 3
+
+
+NATIVE_ACCESS = ROOT / "sdk/shielded/target/debug/erebus-access"
+
+
+def free_port() -> int:
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def install_native(world, *names):
+    import shutil
+    release = json.loads((world.pins / "release-manifest.json").read_text())
+    platform, = release["platforms"].values()
+    for name in names:
+        real = world.bins / name
+        shutil.copyfile(ROOT / "sdk/shielded/target/debug" / name, real)
+        real.chmod(0o755)
+        platform["binaries"][name]["sha256"] = init.sha256(real)
+    (world.pins / "release-manifest.json").write_text(json.dumps(release))
+
+
+def native(binary: Path, request: dict) -> dict:
+    import subprocess
+    completed = subprocess.run([str(binary)], input=json.dumps(request), capture_output=True, text=True, timeout=120)
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.skipif(not (NATIVE_NEGOTIATE.is_file() and NATIVE_ACCESS.is_file()), reason="build sdk/shielded binaries")
+def test_written_configs_negotiate_two_buyers_whose_evidence_passes_the_retrieval_profile(world):
+    """Real writer -> real negotiation -> real erebus-access: each buyer's evidence passes the client's snapshot
+    profile and reaches the network. Only the operation record (not evidence) is refused as a profile."""
+    import subprocess
+    install_native(world, "erebus-negotiate", "erebus-access")
+    seller_port = free_port()
+    init.init(init_args(world, "seller", endpoint=f"127.0.0.1:{seller_port}"))
+    init.init(init_args(world, "buyer", maximum_price="5000"))
+    init.connect(connect_args(world, "seller", amount="1000"))
+    init.connect(connect_args(world, "buyer", amount="1000"))
+    second = world.root / "buyer2"
+    init.init(init_args(world, "buyer", directory=second, endpoint="127.0.0.1:9103", maximum_price="5000"))
+    init.connect(connect_args(world, "seller", peer_share=second / "share", peer_id="b2", amount="2000"))
+    init.connect(connect_args(world, "buyer", directory=second, peer_share=world.root / "seller" / "outbox" / "b2",
+                              amount="2000"))
+    seller = world.root / "seller"
+    negotiate = world.bins / "erebus-negotiate"
+
+    def run(config: Path, operation: str) -> subprocess.Popen:
+        process = subprocess.Popen([str(negotiate)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True)
+        process.stdin.write(json.dumps({"method": "negotiate", "config_file": str(config), "operation_ref": operation}))
+        process.stdin.close()
+        return process
+
+    service = json.loads((seller / "share" / "service.json").read_text())
+    for buyer, peer, operation in ((world.root / "buyer", "default", "a1" * 32), (second, "b2", "b2" * 32)):
+        selling = run(seller / "negotiate.json", "5" + operation[1:])
+        buying = run(buyer / "negotiate.json", operation)
+        bought = json.loads(buying.stdout.read())
+        sold = json.loads(selling.stdout.read())
+        buying.wait(timeout=120)
+        selling.wait(timeout=120)
+        assert bought["status"] == "authorized" and sold["status"] == "authorized", (bought, sold)
+        assert sold["peer"] == peer and sold["deal_commitment"] == bought["deal_commitment"]
+        # The seller published the access evidence its service reads.
+        assert (seller / "access-evidence" / f"{sold['deal_commitment']}.evidence").is_file()
+        files = json.loads((buyer / "operator.json").read_text())["operator"]
+        cache = world.root / f"cache-{peer}"
+        cache.mkdir(mode=0o700)
+        request = {"method": "retrieve", "buyer_key_file": files["agreement_key_file"],
+                   "service_url": f"http://127.0.0.1:{free_port()}/v1/access", "service_id": service["service_id"],
+                   "cache_root": str(cache), "allow_loopback_http": True}
+        # The evidence blob passes every client profile check; only the closed endpoint fails.
+        reached = native(NATIVE_ACCESS, {**request, "evidence_file": bought["evidence_file"]})
+        assert reached["error"].startswith("access service unavailable"), reached
+        # The operation record next to it is not evidence: that, and only that, is a profile refusal.
+        record = Path(bought["evidence_file"]).with_name(f"{operation}.json")
+        refused = native(NATIVE_ACCESS, {**request, "evidence_file": str(record)})
+        assert refused["error"] == "agreement does not support this retrieval profile"
