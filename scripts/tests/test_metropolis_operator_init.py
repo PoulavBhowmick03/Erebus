@@ -185,7 +185,7 @@ def test_full_setup_writes_exactly_the_strict_rust_schemas(world):
     assert wallet["artifact_manifest_authorization"]["publisher"] == "0x" + "cd" * 20
     assert payment["withdraw_verifier_keccak256"] == "0x" + PIN and payment["transaction_key_file"] is None
     assert len(payment["buyer_key_hex"]) == 128
-    environment = json.loads((buyer / "mcp.json").read_text())["mcpServers"]["erebus-buyer"]["env"]
+    environment = json.loads((buyer / "mcp.json").read_text())["mcpServers"]["erebus-monad-buyer"]["env"]
     assert environment["EREBUS_BACKEND"] == "metropolis" and environment["EREBUS_PAYMENT_CONFIG"].endswith("payment.json")
     assert sorted(p.name for p in (seller / "share").iterdir()) == ["identity.binding", "offer.json", "seller.descriptor.json",
                                                                     "service.json"]
@@ -471,7 +471,7 @@ def test_wallet_policy_defaults_to_reads_and_adds_the_wallet_to_mcp_settings(wor
     policy = json.loads((world.root / "buyer/wallet-policy.json").read_text())
     assert policy == {"version": 1, "maximum_amount": "1000", "allowed_methods": ["notes", "sync"], "withdrawal_recipients": []}
     assert result["funding_enabled"] == [] and owner_only(world.root / "buyer/wallet-policy.json")
-    environment = json.loads((world.root / "buyer/mcp.json").read_text())["mcpServers"]["erebus-buyer"]["env"]
+    environment = json.loads((world.root / "buyer/mcp.json").read_text())["mcpServers"]["erebus-monad-buyer"]["env"]
     assert environment["EREBUS_WALLET_POLICY"].endswith("wallet-policy.json") and environment["EREBUS_WALLET_CLI"].endswith("erebus-wallet")
     assert environment["EREBUS_BACKEND"] == "metropolis" and owner_only(world.root / "buyer/mcp.json")
     init.wallet_policy(policy_args(world, allow=["deposit", "wrap"], maximum_amount="5"))
@@ -1047,7 +1047,7 @@ def test_buyer_retrieval_settings_come_from_the_sellers_share_and_require_tls_or
     with pytest.raises(ValueError, match="apply to a buyer"):
         init.connect(connect_args(world, "seller", service_url="https://x.example.net/v1/access"))
     init.connect(connect_args(world, "buyer", service_url="http://127.0.0.1:18732/v1/access", allow_loopback_access_http=True))
-    environment = json.loads((world.root / "buyer/mcp.json").read_text())["mcpServers"]["erebus-buyer"]["env"]
+    environment = json.loads((world.root / "buyer/mcp.json").read_text())["mcpServers"]["erebus-monad-buyer"]["env"]
     buyer = json.loads((world.root / "buyer/operator.json").read_text())
     assert environment["EREBUS_ACCESS_SERVICE_ID"] == service["service_id"]
     assert environment["EREBUS_ACCESS_BUYER_KEY_FILE"] == buyer["operator"]["agreement_key_file"]

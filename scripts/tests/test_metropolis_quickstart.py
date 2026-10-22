@@ -127,8 +127,8 @@ def test_up_connects_both_roles_writes_agent_files_and_never_sends(world, native
     for role in ("buyer", "seller"):
         files = directory / "agents" / role
         claude = json.loads((files / "claude-code.mcp.json").read_text())
-        assert list(claude["mcpServers"]) == [f"erebus-{role}"]
-        assert f"[mcp_servers.erebus-{role}]" in (files / "codex.config.toml").read_text()
+        assert list(claude["mcpServers"]) == [f"erebus-monad-{role}"]
+        assert f"[mcp_servers.erebus-monad-{role}]" in (files / "codex.config.toml").read_text()
         assert base.owner_only(files / "prompt.md") and base.owner_only(directory / "keys" / f"{role}-gas.key")
     assert "fund_wallet" in (directory / "agents/buyer/prompt.md").read_text()
     assert "retrieve_service_access(operation_ref" in (directory / "agents/buyer/prompt.md").read_text()
@@ -447,9 +447,9 @@ def test_add_buyer_wires_a_second_buyer_without_touching_the_service(world, nati
     assert state["buyers"]["b2"]["port"] not in ports and state["buyers"]["b2"]["price"] == "900"
     assert set(json.loads((buyer / "wallet-policy.json").read_text())["allowed_methods"]) == {"notes", "sync", "status"}
     files = directory / "agents" / "b2"
-    assert list(json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]) == ["erebus-buyer"]
+    assert list(json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]) == ["erebus-monad-buyer"]
     assert "negotiate_deal()" in (files / "prompt.md").read_text()
-    env = json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]["erebus-buyer"]["env"]
+    env = json.loads((files / "claude-code.mcp.json").read_text())["mcpServers"]["erebus-monad-buyer"]["env"]
     assert env["EREBUS_NEGOTIATION_CONFIG"] == str(buyer / "negotiate.json")
     # The next name is allocated, and a name is never reused.
     third = quick.run(quick_args(world, "add-buyer"), ops())
@@ -543,3 +543,45 @@ def test_add_buyer_on_a_usdc_pool_waits_for_gas_and_usdc_and_checkpoints_after_t
         assert next(iter(again["checkpoints"])) == "auditor" and again["checkpoints"]["b2"] == 42
     finally:
         quick.run(quick_args(world, "down"), ops())
+
+
+def test_monad_and_starknet_quickstarts_run_side_by_side_from_one_install(world, natives):
+    """Sibling directories, disjoint server names and env files, and each refuses the other's directory."""
+    from erebus_mcp.onboarding import load_config_file
+    from erebus_mcp.starknet_setup import quickstart as starknet
+
+    quick.run(quick_args(world, "up"), ops())
+    monad_dir, starknet_dir = (world.root / "qs").resolve(), (world.root / "sn").resolve()
+    server = world.bins / "erebus-settle"
+
+    def starknet_args(action, directory=starknet_dir, *extra):
+        return starknet.build_parser().parse_args(
+            ["quickstart", action, "--directory", str(directory), "--server-command", str(server),
+             "--cli", str(server), *extra])
+
+    assert starknet.run(starknet_args("up", starknet_dir, "--mock"), starknet.Deps())["status"] == "ready"
+    with pytest.raises(ValueError, match="Starknet quickstart"):
+        quick.run(quick_args(world, "up", directory=starknet_dir), ops())
+    with pytest.raises(ValueError, match="Starknet quickstart"):
+        quick.run(quick_args(world, "status", directory=starknet_dir), ops())
+    with pytest.raises(ValueError, match="Monad quickstart"):
+        starknet.run(starknet_args("up", monad_dir, "--mock"), starknet.Deps())
+    assert quick.run(quick_args(world, "status"), ops())["status"] == "ok"
+    assert starknet.run(starknet_args("status"), starknet.Deps())["status"] == "ok"
+
+    def names(directory):
+        return {name for role in ("buyer", "seller")
+                for name in json.loads((directory / "agents" / role / "claude-code.mcp.json").read_text())["mcpServers"]}
+
+    assert names(monad_dir) == {"erebus-monad-buyer", "erebus-monad-seller"}
+    assert names(starknet_dir) == {"erebus-starknet-buyer", "erebus-starknet-seller"}
+    # The legacy single-identity Starknet names stay free for existing registrations.
+    assert not (names(monad_dir) | names(starknet_dir)) & {"erebus", "erebus-buyer", "erebus-seller"}
+    for role in ("buyer", "seller"):
+        monad_env = json.loads((monad_dir / "agents" / role / "claude-code.mcp.json").read_text())
+        (entry,) = monad_env["mcpServers"].values()
+        assert not any(value.startswith(str(starknet_dir)) for value in entry["env"].values())
+        values: dict[str, str] = {}
+        load_config_file(starknet_dir / role / "mcp.env", values)
+        assert not any(value.startswith(str(monad_dir)) for value in values.values())
+        assert Path(values["EREBUS_MOCK_STORE_PATH"]).is_relative_to(starknet_dir)

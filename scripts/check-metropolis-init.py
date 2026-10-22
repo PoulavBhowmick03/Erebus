@@ -184,7 +184,7 @@ def pool_flow(bins: Path, work: Path, pins: Path, pool: str, port_base: int, onl
     for role in ("buyer", "seller"):
         notes = run(bins, work, [], json.dumps({"method": "notes", "config_file": str(root / role / "wallet.json")}), "erebus-wallet")
         require(notes.get("status") == "ok", f"{pool} {role} wallet does not open: {notes}")
-        probe = subprocess.run([str(bins / "python"), "-I", "-c", MCP_PROBE, str(root / role / "mcp.json"), f"erebus-{role}", str(work / "home")],
+        probe = subprocess.run([str(bins / "python"), "-I", "-c", MCP_PROBE, str(root / role / "mcp.json"), next(iter(json.load(open(root / role / "mcp.json"))["mcpServers"])), str(work / "home")],
                                capture_output=True, text=True, timeout=120)
         tools = json.loads(probe.stdout.strip().splitlines()[-1]) if probe.returncode == 0 else []
         require("negotiate_deal" in tools and (role == "seller" or "settle_deal" in tools), f"{pool} {role} MCP tools: {tools} {probe.stderr[-300:]}")
