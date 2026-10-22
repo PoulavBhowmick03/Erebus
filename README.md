@@ -19,6 +19,7 @@ It is experimental and unaudited. Don't put value you care about through it.
 | Pool | StarkWare's STRK20 privacy pool | Erebus's own shielded pools for WMON and USDC |
 | Release | `v0.3.0` | `0.4.0.dev2026101801` (prerelease) |
 | Guide | [docs/setup.md](./docs/setup.md) | [docs/metropolis-install.md](./docs/metropolis-install.md) |
+| Quickstart | [docs/starknet-quickstart.md](./docs/starknet-quickstart.md) (unreleased) | [docs/metropolis-quickstart.md](./docs/metropolis-quickstart.md) |
 
 The agent side is the same on both: negotiate, authorize one agreement, settle once, recover by
 watching the chain instead of paying again, and disclose one deal.
@@ -67,6 +68,10 @@ claude mcp add erebus \
   --env EREBUS_SETTLEMENT_ROLE=both \
   -- erebus-mcp-server
 ```
+
+`erebus-init --starknet quickstart up` sets up a mainnet buyer and seller together, with one
+confirmation and a `--max-strk` cap, beside the Monad quickstart from the same install; see the
+[Starknet quickstart](./docs/starknet-quickstart.md). It is in no published release yet.
 
 ## Evidence
 

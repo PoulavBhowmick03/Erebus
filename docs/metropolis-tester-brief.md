@@ -70,7 +70,7 @@ Follow the [quickstart](metropolis-quickstart.md). In short:
   the service is suspended with it. Keep the machine awake for the whole run
   (the [demo notes](../demo.md) say the same).
 - **Wait for the MCP server.** In interactive Claude Code, wait until `/mcp` lists the server
-  (`erebus-buyer` or `erebus-seller`) as connected before pasting the prompt.
+  (`erebus-monad-buyer` or `erebus-monad-seller`; releases up to `0.4.0.dev2026101801` say `erebus-buyer` or `erebus-seller`) as connected before pasting the prompt.
 - **ankr returns HTTP 429.** The default peer RPC is ankr's free endpoint, which throttles under
   load. Tools back off and retry, and a persistent 429 shows as `RATE_LIMITED`. Wait and retry.
 - **Descriptors expire in 30 days.** If you come back later and see `DESCRIPTOR_EXPIRED`, run

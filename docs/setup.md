@@ -70,14 +70,22 @@ erebus-init --config ~/.config/erebus/buyer.env \
 # seller / payee
 erebus-init --config ~/.config/erebus/seller.env \
   --network mainnet --new --role payee \
-  --deposit 0 --writes 1 --yes --wait 0
+  --deposit 0.01 --writes 2 --yes --wait 0
 ```
 
 `--wait 0` returns immediately with a `funding_required` status: a fresh address and the
 exact target amount (shield deposit + live pool fee + an estimated gas reserve). Sizing
 notes, in brief — full detail in [onboarding.md](./onboarding.md#both-sides-of-a-negotiation):
-the payee needs an allowance too, sized for **its own** writes (its channel-open and its
-counter), not the deal price — a payee that never pays still submits transactions.
+
+- **A new address must shield once, so the seller's deposit is positive.** The first shield
+  is what registers the pool identity; `--deposit 0` on a new address stops with
+  `deposit_required`. A small deposit such as `0.01` STRK is enough.
+- **The seller needs two writes:** its channel-open and its counter. Its allowance is sized
+  for **its own** writes, not the deal price — a payee that never pays still submits
+  transactions. The buyer's three are open, propose and settle.
+
+To set up both identities with one command and one confirmation, see
+[starknet-quickstart.md](./starknet-quickstart.md).
 
 ## 3. Fund both addresses
 
@@ -93,7 +101,8 @@ erebus-init --config ~/.config/erebus/seller.env --resume --yes --wait 300
 ```
 
 Each polls for up to five minutes through approve → proving-depth wait → shield → `doctor`,
-and prints `ready` when done. If it times out before funding lands on-chain, rerun the exact
+and prints `Ready` when done, with a `claude_command` that registers the server under its
+role's name (`erebus-buyer` for a payer, `erebus-seller` for a payee, `erebus` for `both`). If it times out before funding lands on-chain, rerun the exact
 same command — the operation ID and state survive the restart, so this is a resume, not a
 retry from scratch.
 

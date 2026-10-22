@@ -121,9 +121,16 @@ erebus/agents/seller/{claude-code.mcp.json, codex.config.toml, cursor.mcp.json, 
 Each agent sees only its own role's server. Start the seller first, and paste each agent its own
 `prompt.md`.
 
+The servers are named `erebus-monad-buyer` and `erebus-monad-seller` (each added buyer's is also
+`erebus-monad-buyer`). Releases up to `0.4.0.dev2026101801` named them `erebus-buyer` and
+`erebus-seller`, which clash with the single-identity Starknet registrations in
+[setup.md](./setup.md); configs those releases wrote keep their old name.
+A Starknet mainnet buyer and seller can run beside this quickstart from the same install, in a
+sibling directory: see the [Starknet quickstart](./starknet-quickstart.md).
+
 - **Claude Code:** `claude --mcp-config erebus/agents/buyer/claude-code.mcp.json`. In interactive
   mode Claude Code may send your first prompt before the MCP server has connected. Wait until
-  `/mcp` lists `erebus-buyer` as connected before pasting the prompt, or run non-interactively with
+  `/mcp` lists `erebus-monad-buyer` as connected before pasting the prompt, or run non-interactively with
   `claude -p "$(cat erebus/agents/buyer/prompt.md)" --mcp-config erebus/agents/buyer/claude-code.mcp.json`.
 - **Codex:** merge `codex.config.toml` into `~/.codex/config.toml` (one role per Codex profile).
 - **Cursor:** copy `cursor.mcp.json` to the project's `.cursor/mcp.json`.
