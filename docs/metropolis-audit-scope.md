@@ -107,7 +107,7 @@ says "proposed requirements", so its tables are targets, not verified guarantees
 
 ## 5. Known limits and accepted risks
 
-From the docs as of `cbd6567`. "On main" marks WS5 work merged after release `0.4.0.dev2026101801` and not yet published; "in progress" marks work not on main.
+From the docs as of the WS5 merge. "On main" marks WS5 work merged after release `0.4.0.dev2026101801` and not yet published; "in progress" marks work not on main.
 
 | Limit | Source | Status |
 |---|---|---|
@@ -118,7 +118,8 @@ From the docs as of `cbd6567`. "On main" marks WS5 work merged after release `0.
 | History cache was one file capped at 128 MiB (about two days of continuous sync) | WS1 design §4 | segmented append-only history **on main** (`5428c55`); about 40 bytes per block, no cap; a reorg deeper than about 1,000 blocks into saved history is refused |
 | Auditor payment verification replayed from the deployment block | operations §6 | auditor checkpoint **on main** (`6252273`); deals settled at or before the checkpoint report `settled_before_checkpoint`; see the trust statement in operations §6 |
 | USDC has issuer/admin powers | roadmap | USDC quickstart end to end **on main** (`0ea1c80`), verified live with two deals |
-| One seller serves the one buyer it was connected to | quickstart "Known limits", roadmap D3 | many-buyer sellers **in progress** (branch `feat/ws5-many-buyers`; review focus: transport v2 routed handshake, uniform access refusal) |
+| One seller served the one buyer it was connected to | roadmap D3 | many-buyer sellers **on main** (`quickstart add-buyer`, routed v2 handshake, per-buyer state); negotiation is sequential; review focus: transport v2 routed handshake, uniform access refusal and its residual timing difference |
+| A provider can answer `eth_getLogs` from a different fork than its headers; a withdrawal leaves the commitment root unchanged, so a log set missing a withdrawal can pass one provider's scan | independent review of `sdk/shielded/src/rpc.rs` scan (2026-10-22) | open; paired providers make it require agreement on the omission; predates WS5 |
 | Paired providers are a trust assumption, not a state proof | checkpoint design §2 | accepted |
 | Delivery is not guaranteed by settlement; no escrow or fair exchange | threat model §6 | accepted |
 | Signed permission stays usable until expiry or settlement; no onchain cancellation | threat model §4 | accepted |
