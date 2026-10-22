@@ -333,3 +333,17 @@ def test_rpc_identifies_itself(monkeypatch):
 
     assert setup.rpc("https://rpc.invalid", "starknet_blockNumber", []) == "0x1"
     assert captured.get("user-agent")
+
+
+def test_run_returns_status_without_printing_and_honours_a_confirmed_allowance(fake, tmp_path, capsys):
+    options = setup.parser().parse_args(arguments(tmp_path) + ["--yes"])
+    options.max_allowance = 1
+    status, details = setup.run(options)
+    assert status == "authorization_required" and details["confirmed_allowance"] == "1"
+    assert capsys.readouterr().out == ""
+    assert not fake.writes
+
+
+def test_ready_hint_names_the_server_by_role(fake, tmp_path, capsys):
+    assert setup.main(arguments(tmp_path) + ["--role", "payer", "--yes"]) == 0
+    assert result(capsys)["claude_command"].startswith("claude mcp add erebus-buyer -- ")

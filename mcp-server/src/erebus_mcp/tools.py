@@ -32,8 +32,9 @@ from erebus_mcp.interface import (
     SettlementErrorCode,
     ViewingKeyGrant,
 )
-from erebus_mcp.intent import IntentConflict, IntentStore
+from erebus_mcp.intent import _ID_PATTERN, IntentConflict, IntentStore
 from erebus_mcp.spending import SpendGuard
+from erebus_mcp.write_budget import WriteBudget
 
 
 #: Poll interval. Writes take about 20 s, and each read needs one RPC round-trip per note.
@@ -134,6 +135,7 @@ def register_tools(
     intent_store: IntentStore,
     backend: str,
     network: str,
+    write_budget: WriteBudget | None = None,
 ) -> None:
     """Registers the tools against one identity-bound client.
 
@@ -148,6 +150,10 @@ def register_tools(
     `backend` ("mock" or "seam") and `network` are stamped onto every tool result,
     success or failure, so a model cannot mistake a mock run for a live one, or one
     network for another, from the transcript alone (roadmap 9.2).
+
+    `write_budget` caps how many charged writes this identity may start
+    (`EREBUS_MAX_WRITES`). It is claimed before the caller intent is recorded, so a
+    refused write leaves no intent record and never reaches the seam.
     """
 
     spending_flow_lock = asyncio.Lock()
@@ -179,9 +185,21 @@ def register_tools(
         persist before the call, resolve once it has returned to this process. `_call`
         already returning — `ok` true or a caught `ErebusError` — is itself proof this
         process did not crash; only a killed process leaves the record on disk."""
+        if write_budget is not None:
+            if not isinstance(operation_id, str) or _ID_PATTERN.fullmatch(operation_id) is None:
+                coro.close()
+                return _error(
+                    SettlementErrorCode.INVALID_REQUEST,
+                    "operation ID must be `op_` followed by 64 lowercase hexadecimal characters",
+                )
+            denial = write_budget.claim(operation_id, tool)
+            if denial is not None:
+                coro.close()
+                return _error(SettlementErrorCode.SPENDING_LIMIT_EXCEEDED, denial)
         try:
             operation_id = intent_store.begin(tool, params, operation_id)
         except IntentConflict as error:
+            coro.close()
             return _error(SettlementErrorCode.INVALID_REQUEST, str(error))
         try:
             outcome = await _call(coro)

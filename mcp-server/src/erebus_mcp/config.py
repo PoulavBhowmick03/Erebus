@@ -101,6 +101,9 @@ class ServerConfig:
     #: Base directory for durable caller-intent records. Scoped
     #: per identity for the same reason spending state is; see `_intent_state_dir`.
     intent_state_dir: Path = field(default_factory=lambda: Path("/tmp/erebus-intent-state"))
+    #: Lifetime cap on charged writes this identity may start (``EREBUS_MAX_WRITES``).
+    #: ``None`` means no cap. Counted per operation id in ``intent_state_dir``.
+    max_writes: int | None = None
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -147,6 +150,7 @@ class ServerConfig:
             spending_limits=_spending_limits(),
             spending_state_path=_spending_state_path(address, seam),
             intent_state_dir=_intent_state_dir(address, seam),
+            max_writes=_max_writes(),
         )
 
 
@@ -245,6 +249,12 @@ def _network_settings() -> tuple[str, str, str]:
     identified = identify_network(chain_id, pool_address)
     if identified is not None:
         return identified.value, chain_id, pool_address
+    if _flag("EREBUS_REQUIRE_CANONICAL_NETWORK"):
+        raise ConfigError(
+            "EREBUS_REQUIRE_CANONICAL_NETWORK is set and STARKNET_CHAIN_ID/POOL_ADDRESS "
+            "name no canonical network; set EREBUS_NETWORK to sepolia or mainnet and "
+            "remove the overrides"
+        )
     return "custom", chain_id, pool_address
 
 
@@ -345,6 +355,19 @@ def _intent_state_dir(address: str, seam: SeamSettings | None) -> Path:
     if seam is not None:
         return seam.state_dir
     return Path(f"/tmp/erebus-intent-state-{_slug(address)}")
+
+
+def _max_writes() -> int | None:
+    raw = os.environ.get("EREBUS_MAX_WRITES", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"EREBUS_MAX_WRITES must be a positive integer, got {raw!r}") from exc
+    if value <= 0:
+        raise ConfigError(f"EREBUS_MAX_WRITES must be a positive integer, got {raw!r}")
+    return value
 
 
 def _slug(value: str) -> str:

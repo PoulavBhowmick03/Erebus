@@ -760,7 +760,7 @@ def connect(args) -> dict:
             environment.update(access)
             written.append("access-cache/")
     private_json(directory / "negotiate.json", negotiate)
-    private_json(directory / "mcp.json", {"mcpServers": {f"erebus-{role}": {"command": str(bins / "erebus-mcp-server"),
+    private_json(directory / "mcp.json", {"mcpServers": {f"erebus-monad-{role}": {"command": str(bins / "erebus-mcp-server"),
                                                                           "env": environment}}})
     return {"status": "connected", "role": role, "peer": other, "written": written,
             **({"peer_id": identifier} if role == "seller" else {}),

@@ -241,6 +241,12 @@ def init_main(argv: Sequence[str] | None = None) -> int:
 
         arguments.remove("--metropolis")
         return main(arguments)
+    if "--starknet" in arguments:
+        # Starknet mainnet quickstart (buyer + seller); never shares a directory with Monad's.
+        from erebus_mcp.starknet_setup.quickstart import main as starknet_main
+
+        arguments.remove("--starknet")
+        return starknet_main(arguments)
 
     from erebus_mcp.setup import main
 

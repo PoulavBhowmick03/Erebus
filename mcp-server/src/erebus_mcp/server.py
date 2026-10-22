@@ -50,6 +50,7 @@ from erebus_mcp.mock_client import MockErebusClient
 from erebus_mcp.seam_client import SeamErebusClient
 from erebus_mcp.spending import SpendGuard
 from erebus_mcp.tools import register_tools
+from erebus_mcp.write_budget import WriteBudget, budget_path
 
 logger = logging.getLogger("erebus_mcp")
 
@@ -166,8 +167,17 @@ def build_server() -> MCPServer:
     # whether it is talking to a real chain, and which one. "mock" has no chain to report;
     # canonical seam configurations use a friendly name, and unknown deployments say custom.
     network = config.seam.network if config.seam is not None else "mock"
+    # EREBUS_MAX_WRITES: a lifetime cap on charged writes, checked before intent is recorded.
+    write_budget = WriteBudget(budget_path(config.intent_state_dir), config.max_writes)
     register_tools(
-        server, client, config.settlement_role, spend_guard, intent_store, config.backend, network
+        server,
+        client,
+        config.settlement_role,
+        spend_guard,
+        intent_store,
+        config.backend,
+        network,
+        write_budget,
     )
     return server
 

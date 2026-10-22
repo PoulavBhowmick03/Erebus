@@ -244,7 +244,7 @@ def up(args, ops) -> dict:
         fund=fund, fund_usdc=usdc(int(fund)), price_usdc=usdc(int(price)))
     files = []
     for role, prompt in (("buyer", BUYER_PROMPT), ("seller", SELLER_PROMPT)):
-        files += _agent_files(directory, role, prompt.format(server=f"erebus-{role}", fund=fund, asset_note=asset_note))
+        files += _agent_files(directory, role, prompt.format(server=f"erebus-monad-{role}", fund=fund, asset_note=asset_note))
     required = buyer_required_wei(args.pool, int(fund))
     transactions = BUYER_TRANSACTIONS[args.pool]
     state = {"version": 1, "pool": args.pool, "bin": str(bins), "ports": ports, "price": price, "fund_amount": fund,
@@ -759,7 +759,7 @@ def add_buyer(args, ops) -> dict:
     pool = state["pool"]
     asset_note = "" if pool == "wmon" else USDC_NOTE.format(
         fund=fund, fund_usdc=usdc(int(fund)), price_usdc=usdc(int(price)))
-    files = _agent_files(directory, name, BUYER_PROMPT.format(server="erebus-buyer", fund=fund, asset_note=asset_note),
+    files = _agent_files(directory, name, BUYER_PROMPT.format(server="erebus-monad-buyer", fund=fund, asset_note=asset_note),
                          operator=target)
     required = buyer_required_wei(pool, int(fund))
     transactions = BUYER_TRANSACTIONS[pool]
@@ -783,7 +783,13 @@ def add_buyer(args, ops) -> dict:
                     "seller agent's negotiate_deal loop serves it in turn"}
 
 
+STARKNET_STATE = "starknet-quickstart.json"  # erebus_mcp.starknet_setup.quickstart.STATE
+
+
 def run(args, ops) -> dict:
+    if (args.directory.resolve() / STARKNET_STATE).exists():
+        raise ValueError("this directory holds a Starknet quickstart (starknet-quickstart.json); use "
+                         "erebus-init --starknet quickstart there, and a new directory for the Monad quickstart")
     return {"up": up, "start": start, "status": status, "down": down, "renew": renew,
             "prefetch": prefetch, "add-buyer": add_buyer}[args.action](args, ops)
 

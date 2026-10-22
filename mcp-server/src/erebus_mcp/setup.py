@@ -240,36 +240,66 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def default_seam_factory(config: SeamConfig | None = None) -> Seam:
+    """The installed binding: ``EREBUS_CLI`` when set, else ``erebus-cli`` from PATH/install."""
+    return Seam(config, binary=os.environ.get("EREBUS_CLI"))
+
+
+def is_interactive(options: argparse.Namespace) -> bool:
+    return sys.stdin.isatty() and not (options.json or options.non_interactive)
+
+
+def config_target(options: argparse.Namespace) -> Path:
+    return (options.config or default_config_path()).expanduser().absolute()
+
+
 def main(argv: list[str] | None = None) -> int:
     options = parser().parse_args(argv)
-    interactive = sys.stdin.isatty() and not (options.json or options.non_interactive)
+    target = config_target(options)
+    resume_command = f"erebus-init --config {shlex.quote(str(target))} --resume"
+    status, details = run(options)
+    body = {"status": status, **details}
+    if status != "ready":
+        body["resume"] = resume_command
+    if options.json:
+        print(json.dumps(body))
+    else:
+        print(status.replace("_", " ").capitalize())
+        for key, value in body.items():
+            if key != "status":
+                print(
+                    f"  {key}: {json.dumps(value) if isinstance(value, (dict, list)) else value}"
+                )
+    return 0 if status in {"ready", "accounts"} else 2
+
+
+def run(
+    options: argparse.Namespace, seam_factory: Any = None
+) -> tuple[str, dict[str, Any]]:
+    """Advance one identity's setup and return ``(status, details)`` without printing them.
+
+    ``seam_factory(config)`` builds the binding: ``config`` is ``None`` for account
+    provisioning and a ``SeamConfig`` for the identity's own calls. Callers such as the
+    Starknet quickstart may also set two attributes the CLI parser never sets:
+    ``extra_values`` (more protected config entries for a new identity) and
+    ``max_allowance`` (base units; refuse a plan whose allowance grew past what was confirmed).
+    """
+    factory = seam_factory or default_seam_factory
+    interactive = is_interactive(options)
     wait_seconds = (
         options.wait if options.wait is not None else (300 if interactive else 0)
     )
-    target = (options.config or default_config_path()).expanduser().absolute()
-    resume_command = f"erebus-init --config {shlex.quote(str(target))} --resume"
+    target = config_target(options)
 
-    def report(status: str, **details: Any) -> int:
-        body = {"status": status, **details}
-        if status != "ready":
-            body["resume"] = resume_command
-        if options.json:
-            print(json.dumps(body))
-        else:
-            print(status.replace("_", " ").capitalize())
-            for key, value in body.items():
-                if key != "status":
-                    print(
-                        f"  {key}: {json.dumps(value) if isinstance(value, (dict, list)) else value}"
-                    )
-        return 0 if status in {"ready", "accounts"} else 2
+    def report(status: str, **details: Any) -> tuple[str, dict[str, Any]]:
+        return status, details
 
     try:
         if not 1 <= options.writes < 2**32:
             raise OnboardingError("--writes must be between 1 and 4294967295")
         if wait_seconds < 0:
             raise OnboardingError("--wait must be nonnegative")
-        seam = Seam(binary=os.environ.get("EREBUS_CLI"))
+        seam = factory(None)
         if options.list_accounts:
             return report(
                 "accounts", accounts=discover(seam, options.accounts_file, target)
@@ -438,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
                         config=str(target),
                         command=f"erebus-mcp-server --config {shlex.quote(str(target))}",
                     )
+                values.update(getattr(options, "extra_values", None) or {})
                 rpc_url = (
                     options.rpc_url
                     or values.get("STARKNET_RPC_URL")
@@ -515,7 +546,8 @@ def main(argv: list[str] | None = None) -> int:
                     seam,
                     options,
                     interactive,
-                    lambda status, **details: (status, details),
+                    report,
+                    factory,
                 )
                 if (
                     status
@@ -535,7 +567,55 @@ def main(argv: list[str] | None = None) -> int:
         return report("setup_error", message=str(exc))
 
 
-def advance(state, manifest_path, target, seam, options, interactive, report):
+def plan_budget(
+    *,
+    deposit: int,
+    writes: int,
+    fee_per_write: int,
+    gas_reserve_per_write: int,
+    deployed: bool,
+    current_allowance: int,
+) -> dict[str, int]:
+    """Size one identity's allowance and public-STRK target from Rust's live inspection.
+
+    The allowance pays the shield deposit plus the pool fee for every charged write (the
+    shield is one). Gas is reserved per transaction: every charged write, plus a deployment
+    and an approval when they are still needed. Gas is an estimate, never a quote.
+    """
+    count = writes + bool(deposit)
+    allowance = deposit + fee_per_write * count
+    extra_transactions = int(not deployed) + int(current_allowance < allowance)
+    required = allowance + gas_reserve_per_write * (count + extra_transactions)
+    return {
+        "charged_writes": count,
+        "allowance": allowance,
+        "transactions": count + extra_transactions,
+        "required": required,
+    }
+
+
+def recover_operation(configured: Any, record: dict[str, Any], finding: dict[str, Any]):
+    """Finish one interrupted write under its original operation ID.
+
+    Returns ``("done", result)`` or ``("operation_pending", detail)``. Never starts a write.
+    """
+    if finding["outcome"] == "unknown":
+        return "operation_pending", finding
+    result = configured.resume_operation(record["id"])
+    kind = result.get("result")
+    if kind in {"rebuilt", "recovered_proof"}:
+        return "done", result["operation_result"]
+    if kind == "already_complete" and result.get("transaction_hash"):
+        return "done", {"tx_hash": result["transaction_hash"]}
+    return "operation_pending", result
+
+
+def ready_server_name(role: str) -> str:
+    """The MCP registration name the ready hint suggests, distinct per side of a deal."""
+    return {"payer": "erebus-buyer", "payee": "erebus-seller"}.get(role, "erebus")
+
+
+def advance(state, manifest_path, target, seam, options, interactive, report, factory=None):
     network, values = state["network"], state["values"]
     preset = network_preset(network)
     directory = Path(state["directory"])
@@ -617,7 +697,7 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
     for key in ("STARKSCAN_API_KEY",):
         if values.get(key):
             os.environ[key] = values[key]
-    configured = Seam(
+    configured = (factory or default_seam_factory)(
         SeamConfig.for_network(
             network,
             rpc_url=values["STARKNET_RPC_URL"],
@@ -628,7 +708,6 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
             state_dir=values["EREBUS_STATE_DIR"],
             token=STRK,
         ),
-        binary=os.environ.get("EREBUS_CLI"),
     )
     # Read outcomes before budgeting: a crash after shield must not request its deposit again.
     findings = configured.reconcile() if state["operations"] else []
@@ -641,18 +720,19 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
             "deposit_required",
             message="An unregistered identity needs a first shield. Start a setup with a positive --deposit.",
         )
-    count = state["writes"] + bool(deposit)
-    allowance = deposit + int(inspection["fee_per_write"]) * count
+    budget = plan_budget(
+        deposit=deposit,
+        writes=state["writes"],
+        fee_per_write=int(inspection["fee_per_write"]),
+        gas_reserve_per_write=int(inspection["gas_reserve_per_write"]),
+        deployed=bool(deployment["deployed"]),
+        current_allowance=int(inspection["allowance"]),
+    )
+    allowance, required = budget["allowance"], budget["required"]
     if allowance >= 2**128:
         raise OnboardingError(
             "planned allowance exceeds the supported amount; reduce --deposit or --writes"
         )
-    extra_transactions = int(not deployment["deployed"]) + int(
-        int(inspection["allowance"]) < allowance
-    )
-    required = allowance + int(inspection["gas_reserve_per_write"]) * (
-        count + extra_transactions
-    )
     plan = {
         "network": network,
         "address": values["AGENT_ADDRESS"],
@@ -671,6 +751,14 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
             "funding_required",
             **plan,
             shortfall=str(required - int(inspection["public_balance"])),
+        )
+    confirmed = getattr(options, "max_allowance", None)
+    if confirmed is not None and allowance > int(confirmed):
+        return report(
+            "authorization_required",
+            **plan,
+            confirmed_allowance=str(confirmed),
+            message="The live plan's allowance is above the confirmed one (the pool fee may have risen); confirm again.",
         )
     if not options.yes:
         if not interactive:
@@ -722,19 +810,10 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
             continue
         finding = known.get(record["id"])
         if finding:
-            if finding["outcome"] == "unknown":
+            outcome, completed = recover_operation(configured, record, finding)
+            if outcome != "done":
                 return report(
-                    "operation_pending", operation_id=record["id"], detail=finding
-                )
-            result = configured.resume_operation(record["id"])
-            kind = result.get("result")
-            if kind in {"rebuilt", "recovered_proof"}:
-                completed = result["operation_result"]
-            elif kind == "already_complete" and result.get("transaction_hash"):
-                completed = {"tx_hash": result["transaction_hash"]}
-            else:
-                return report(
-                    "operation_pending", operation_id=record["id"], detail=result
+                    "operation_pending", operation_id=record["id"], detail=completed
                 )
             record["result"] = completed
             state["done"].append(step)
@@ -802,5 +881,5 @@ def advance(state, manifest_path, target, seam, options, interactive, report):
         config=str(target),
         address=values["AGENT_ADDRESS"],
         command=f"erebus-mcp-server --config {shlex.quote(str(target))}",
-        claude_command=f"claude mcp add erebus -- erebus-mcp-server --config {shlex.quote(str(target))}",
+        claude_command=f"claude mcp add {ready_server_name(values.get('EREBUS_SETTLEMENT_ROLE', ''))} -- erebus-mcp-server --config {shlex.quote(str(target))}",
     )
