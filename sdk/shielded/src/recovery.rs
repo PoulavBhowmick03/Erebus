@@ -407,6 +407,57 @@ async fn sync_public_index_step_locked(
     Ok((index, report))
 }
 
+/// Blocks one background catch-up step reads: about 100 header reads, one `eth_getLogs`, and a
+/// few identity and state checks, so a request that needs the same cache waits at most one short
+/// step (about five seconds at 20 requests per second) for its lock.
+pub const BACKGROUND_STEP_BLOCKS: u64 = 100;
+
+/// Keeps one verified history cache at its provider's head, forever, in bounded steps.
+///
+/// While the cache is behind, steps run back to back with no pause, so catch-up is bounded by the
+/// provider's request budget rather than by a fixed rate: at about one request per block it
+/// clearly outpaces a chain making a few blocks per second. It yields entirely while `busy()`
+/// reports a request in flight (requests read through the same budget and sync the cache
+/// themselves) and whenever a request holds the cache's step lock. At the head it rechecks every
+/// few seconds. Errors are passed to `failed` and retried after a pause; they never change what
+/// a request may accept.
+pub async fn keep_history_current(
+    rpc: &PoolRpc,
+    index_store: &IndexStore,
+    busy: impl Fn() -> bool,
+    mut failed: impl FnMut(&RecoveryError),
+) {
+    use std::time::Duration;
+    loop {
+        if busy() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+        let outcome = match rpc.head().await {
+            Ok(head) => {
+                sync_public_index_step_when_idle(rpc, index_store, head, BACKGROUND_STEP_BLOCKS)
+                    .await
+            }
+            Err(error) => Err(error.into()),
+        };
+        let pause = match outcome {
+            // At the head.
+            Ok(Some(_)) => Duration::from_secs(5),
+            // A request is stepping this cache now.
+            Ok(None) => Duration::from_millis(250),
+            // Behind: take the next step at once.
+            Err(RecoveryError::HistoryPending { .. }) => Duration::ZERO,
+            Err(error) => {
+                failed(&error);
+                Duration::from_secs(10)
+            }
+        };
+        if !pause.is_zero() {
+            tokio::time::sleep(pause).await;
+        }
+    }
+}
+
 fn step_lock(path: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<
         std::sync::Mutex<

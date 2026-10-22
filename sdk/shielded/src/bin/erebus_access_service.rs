@@ -81,6 +81,9 @@ struct ResourceEntry {
     legacy_issuance: bool,
 }
 
+/// Requests the service answers at once; more are told to retry (429).
+const MAX_IN_FLIGHT: usize = 16;
+
 /// Most snapshot resources one service may serve.
 const MAX_RESOURCES: usize = 64;
 
@@ -184,7 +187,7 @@ enum Backend {
         withdraw_verifier_keccak256: String,
         #[serde(default = "default_log_concurrency")]
         max_concurrent_queries: u64,
-        /// Per-provider request budget for verification reads; background sync uses half.
+        /// Per-provider request budget, shared by verification reads and background sync.
         #[serde(default)]
         requests_per_second: Option<u32>,
     },
@@ -283,6 +286,8 @@ async fn run() -> Result<(), &'static str> {
         }
     }
     check_profile(&config)?;
+    // Requests in flight across both routes; background history sync yields while any are.
+    let slots = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
     let seller = KeyBytes::new(config.seller_key).map_err(|_| "invalid seller identity")?;
     let policy = |resource: &str, payload_file: &Path| {
         Ok::<_, &'static str>(AccessPolicy {
@@ -488,15 +493,40 @@ async fn run() -> Result<(), &'static str> {
                     .map_err(|_| "invalid pool history")
             };
             // Keep both histories current between requests, so a first delivery after a
-            // quiet period does not replay the gap inside the request.
-            let background = (rate / 2).max(1);
-            tokio::spawn(keep_history_current([
-                (observer(&rpc_url, background)?, store("pool-history.json")?),
-                (
-                    observer(&peer_rpc_url, background)?,
-                    store("pool-peer-history.json")?,
-                ),
-            ]));
+            // quiet period does not replay the gap inside the request. Each observer catches
+            // up on its own task, through its provider's one request budget (shared with the
+            // request path), and yields while any request is in flight.
+            for (slot, (source, name)) in [
+                (rpc.sharing_budget(), "pool-history.json"),
+                (peer_rpc.sharing_budget(), "pool-peer-history.json"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let history = store(name)?;
+                let requests = Arc::clone(&slots);
+                tokio::spawn(async move {
+                    let mut reported = None::<std::time::Instant>;
+                    erebus_shielded_prover::recovery::keep_history_current(
+                        &source,
+                        &history,
+                        || requests.available_permits() < MAX_IN_FLIGHT,
+                        |error| {
+                            // Public diagnostics only (no URL or key is part of these errors),
+                            // once a minute per provider, so a stalled sync is visible.
+                            if reported.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) {
+                                eprintln!(
+                                    "{}",
+                                    json!({"event":"history_sync_failed","observer":if slot == 0 { "primary" } else { "peer" },
+                                        "error":error.to_string()})
+                                );
+                                reported = Some(std::time::Instant::now());
+                            }
+                        },
+                    )
+                    .await;
+                });
+            }
             Some(AccessBackend::Shielded {
                 rpc: Box::new(rpc),
                 peer_rpc: Box::new(peer_rpc),
@@ -526,7 +556,7 @@ async fn run() -> Result<(), &'static str> {
                 backend: backend.map(Arc::new),
                 facilitator,
                 evidence_root: config.evidence_root,
-                slots: Arc::new(Semaphore::new(16)),
+                slots: Arc::clone(&slots),
             }),
         (Profile::Metered, None) => {
             let backend = backend.ok_or("metered access requires the shielded backend")?;
@@ -555,7 +585,14 @@ async fn run() -> Result<(), &'static str> {
                 deployment,
             )
             .map_err(|_| "metered policy or storage unavailable")?;
-            MeteredService::new(issuer, Arc::new(backend), feed, config.evidence_root, 16).router()
+            MeteredService::with_slots(
+                issuer,
+                Arc::new(backend),
+                feed,
+                config.evidence_root,
+                Arc::clone(&slots),
+            )
+            .router()
         }
         _ => return Err("invalid access profile"),
     };
@@ -745,46 +782,4 @@ fn error(failure: AccessError, paid: bool) -> (StatusCode, HeaderMap, Json<Value
             json!({"status":if paid {"paid_but_undelivered"} else if failure==AccessError::Pending {"payment_pending"} else {"unavailable"},"payment_verified":paid,"delivery_verified":false,"retry_without_payment":true,"error":failure.to_string()}),
         ),
     )
-}
-
-/// Advances each verified history cache toward the head in bounded steps, forever.
-///
-/// The request path syncs the same caches; whichever save loses the race is reported as
-/// pending and its verified progress is not lost. Failures are retried after a pause and
-/// never change what a request may accept.
-async fn keep_history_current(pairs: [(PoolRpc, IndexStore); 2]) {
-    let mut reported = [None::<std::time::Instant>; 2];
-    loop {
-        let mut behind = false;
-        for (slot, (rpc, store)) in pairs.iter().enumerate() {
-            // Short steps that yield to requests: a request never waits behind a long scan.
-            let outcome = match rpc.head().await {
-                Ok(head) => erebus_shielded_prover::recovery::sync_public_index_step_when_idle(
-                    rpc, store, head, 200,
-                )
-                .await
-                .map(|_| ()),
-                Err(error) => Err(error.into()),
-            };
-            match outcome {
-                Ok(()) => {}
-                Err(erebus_shielded_prover::recovery::RecoveryError::HistoryPending { .. }) => {
-                    behind = true;
-                }
-                // Public diagnostics only (no URL or key is part of these errors), once a
-                // minute per provider, so a stalled sync is visible in the service log.
-                Err(error) => {
-                    if reported[slot].is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) {
-                        eprintln!(
-                            "{}",
-                            json!({"event":"history_sync_failed","observer":if slot == 0 { "primary" } else { "peer" },
-                                "error":error.to_string()})
-                        );
-                        reported[slot] = Some(std::time::Instant::now());
-                    }
-                }
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(if behind { 1 } else { 10 })).await;
-    }
 }

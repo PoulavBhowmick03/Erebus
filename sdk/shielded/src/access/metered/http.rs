@@ -120,12 +120,30 @@ where
         evidence_root: impl Into<PathBuf>,
         concurrency: usize,
     ) -> Self {
+        Self::with_slots(
+            issuer,
+            certifier,
+            source,
+            evidence_root,
+            Arc::new(Semaphore::new(concurrency)),
+        )
+    }
+
+    /// [`Self::new`] answering from shared request `slots`, so another task (such as background
+    /// history sync) can see when requests are in flight.
+    pub fn with_slots(
+        issuer: MeteredIssuer,
+        certifier: Arc<C>,
+        source: S,
+        evidence_root: impl Into<PathBuf>,
+        slots: Arc<Semaphore>,
+    ) -> Self {
         Self {
             issuer: Arc::new(issuer),
             certifier,
             source: Arc::new(source),
             evidence_root: evidence_root.into(),
-            slots: Arc::new(Semaphore::new(concurrency)),
+            slots,
             buyers: Arc::new(BuyerLimiter::default()),
         }
     }

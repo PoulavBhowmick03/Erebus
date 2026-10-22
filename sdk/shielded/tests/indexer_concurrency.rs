@@ -726,7 +726,7 @@ async fn logs_for_the_wrong_block_or_order_are_rejected() {
 }
 
 #[tokio::test]
-async fn a_scan_needs_about_two_requests_per_block() {
+async fn a_scan_needs_about_one_request_per_block() {
     let (address, shared) = serve(chain(1_000, u64::MAX)).await;
     let rpc = rpc(address, 8);
     let mut index = PoolIndex::new(BASE).expect("index");
@@ -736,12 +736,12 @@ async fn a_scan_needs_about_two_requests_per_block() {
     );
     let counts = shared.lock().expect("mock").counts.clone();
     let total: usize = counts.values().sum();
-    // Before: eth_chainId, header, one-block eth_getLogs, and header again for every block.
-    assert!(total * 100 <= 1_000 * 205, "{counts:?}");
+    // One header per block, one eth_getLogs and one post-logs header per 100-block window.
+    assert!(total * 100 <= 1_000 * 103, "{counts:?}");
     // Check identity before reading and again before committing staged history.
     assert_eq!(counts["eth_chainId"], 2);
     assert_eq!(counts["eth_getLogs"], 10);
-    assert_eq!(counts["eth_getBlockByNumber"], 2 * 1_000 + 1);
+    assert_eq!(counts["eth_getBlockByNumber"], 1_000 + 10 + 1);
     // `read_block` stays a complete single-block check for its other callers.
     let block = rpc.read_block(BASE + 42).await.expect("one block");
     assert_eq!(&block, &index.tail_blocks()[42]);
@@ -961,4 +961,90 @@ async fn seeding(store_at: Opener) {
         other.seed_from(&wallet),
         Err(erebus_shielded_prover::index_store::IndexStoreError::Domain)
     ));
+}
+
+/// The access service's background catch-up at the quickstart budget (20 requests per second per
+/// provider) on a provider answering every read in 30 ms. Monad makes about 3.3 blocks a second;
+/// catch-up must clearly outpace that.
+#[tokio::test(flavor = "multi_thread")]
+async fn background_catch_up_outpaces_the_chain_at_twenty_requests_per_second() {
+    use erebus_shielded_prover::recovery::keep_history_current;
+    const BLOCKS: u64 = 300;
+    let blocks = chain(BLOCKS, u64::MAX);
+    let first_hash = blocks[0].hash;
+    let (address, shared) = serve(blocks).await;
+    shared.lock().expect("mock").slow = Some(Duration::from_millis(30));
+    let rpc = PoolRpc::new(&format!("http://{address}"), CHAIN_ID, POOL)
+        .expect("rpc")
+        .with_max_concurrent_reads(16)
+        .expect("concurrency")
+        .with_max_requests_per_second(20)
+        .expect("rate");
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("history.json");
+    let started = Instant::now();
+    let task = {
+        let store = store_at(&path, first_hash);
+        tokio::spawn(async move {
+            keep_history_current(&rpc, &store, || false, |error| panic!("{error}")).await;
+        })
+    };
+    let reader = store_at(&path, first_hash);
+    let target = BASE + BLOCKS - 1;
+    loop {
+        let tip = reader.load().expect("load").tip().map(|tip| tip.number);
+        if tip == Some(target) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "stalled at {tip:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    task.abort();
+    let requests: usize = shared.lock().expect("mock").counts.values().sum();
+    let rate = BLOCKS as f64 / elapsed;
+    eprintln!(
+        "catch-up: {BLOCKS} blocks in {elapsed:.1} s = {rate:.1} blocks/s, {requests} requests \
+         ({:.2} per block)",
+        requests as f64 / BLOCKS as f64
+    );
+    assert!(rate >= 10.0, "{rate:.1} blocks/s");
+    assert!(
+        requests as f64 <= BLOCKS as f64 * 1.15,
+        "{requests} requests"
+    );
+}
+
+/// While a request is in flight the background takes no step and sends nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn background_catch_up_yields_while_a_request_is_in_flight() {
+    use erebus_shielded_prover::recovery::keep_history_current;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let blocks = chain(200, u64::MAX);
+    let first_hash = blocks[0].hash;
+    let (address, shared) = serve(blocks).await;
+    let busy = Arc::new(AtomicBool::new(true));
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("history.json");
+    let task = {
+        let store = store_at(&path, first_hash);
+        let rpc = rpc(address, 8);
+        let busy = Arc::clone(&busy);
+        tokio::spawn(async move {
+            keep_history_current(&rpc, &store, || busy.load(Ordering::SeqCst), |_| {}).await;
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(shared.lock().expect("mock").counts.is_empty());
+    busy.store(false, Ordering::SeqCst);
+    let reader = store_at(&path, first_hash);
+    let started = Instant::now();
+    while reader.load().expect("load").tip().map(|tip| tip.number) != Some(BASE + 199) {
+        assert!(started.elapsed() < Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    task.abort();
 }

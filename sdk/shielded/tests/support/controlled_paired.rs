@@ -2775,12 +2775,27 @@ async fn slow_access_history_outlives_thirty_seconds_without_recharging() {
     let verified = environment.complete_after_broadcast().await;
     assert_eq!(verified["payment_verified"], true, "{verified}");
 
+    // More history than one bounded service scan, so the first request stays pending with a
+    // stored checkpoint before the slow read. It is mined before the service starts.
+    mine(&client, &environment.deployed.url, 2200).await;
+    // The service's background catch-up outpaces the chain: its first 100-block steps already
+    // hold this early payment, and with both caches holding it the service certifies the cached
+    // payment from its finalized prefix and delivers at once. Stall the peer observer's first
+    // log read for 35 s, so the first request finds the peer cache without the payment and has
+    // to make its own bounded scan, which is what this test exercises.
+    arm(
+        &environment.peer,
+        Behavior::DelayReads {
+            method: "eth_getLogs",
+            calls: Arc::new(AtomicUsize::new(0)),
+            delay_at: 1,
+            delay_count: 1,
+            milliseconds: 35_000,
+        },
+    );
     let service_dir = environment.root().join("slow-service");
     let (_service, url, _config, _port) = environment.start_access_service(&service_dir).await;
     let state_root = service_dir.join("access-state");
-    // More history than one bounded service scan, so the first request stays pending with a
-    // stored checkpoint before the slow read.
-    mine(&client, &environment.deployed.url, 2200).await;
     let selected = environment.selected();
     let request = environment.access_request(&selected, [42; 32], [45; 32], clock() + 295);
     let patient = reqwest::Client::builder()
