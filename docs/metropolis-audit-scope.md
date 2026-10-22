@@ -11,7 +11,7 @@ Each statement points at the file it comes from. Where we infer, we say so.
 
 | | |
 |---|---|
-| Source | `main` at `9907611` |
+| Source | `main` at `cbd6567` (WS5 segmented history, auditor checkpoint and USDC quickstart landed after the release) |
 | Release | `0.4.0.dev2026101801`, built from `main` `8a2f97b`, native qualification run `39197664018` (macOS arm64, Linux x86_64), published 2026-10-19 ([roadmap](metropolis-roadmap.md), WS4) |
 | Deployment record | [`contracts/evm/deployments/monad-testnet-shielded-v2.json`](../contracts/evm/deployments/monad-testnet-shielded-v2.json) |
 | Record `manifest_sha256` | `268bf1abe34d738859a20d5db8cee96a30fd4dbb4b2e25b8b5b9da7084d59a4a` |
@@ -107,7 +107,7 @@ says "proposed requirements", so its tables are targets, not verified guarantees
 
 ## 5. Known limits and accepted risks
 
-From the docs as of `9907611`. "In progress" marks WS5 work that is not in the release.
+From the docs as of `cbd6567`. "On main" marks WS5 work merged after release `0.4.0.dev2026101801` and not yet published; "in progress" marks work not on main.
 
 | Limit | Source | Status |
 |---|---|---|
@@ -115,10 +115,10 @@ From the docs as of `9907611`. "In progress" marks WS5 work that is not in the r
 | Public-bound and x402 payments expose accepted terms and parties | README, threat model §2 | by design |
 | Gas sender, timing, deposits and withdrawals are public; small anonymity set | README, roadmap "Privacy and Asset Boundary" | accepted |
 | Private transfers are self-submitted; no stealth addresses or shielded-relayer guarantee | roadmap "Privacy and Asset Boundary" | accepted; live relayer loop still being completed (JUDGES.md) |
-| History cache is one file capped at 128 MiB (about two days of continuous sync) | quickstart "Known limits" | segmented history **in progress** |
-| Auditor payment verification replays from the deployment block | quickstart "Known limits" | auditor checkpoint **in progress** |
-| `--pool usdc` exists; USDC has issuer/admin powers | quickstart, roadmap | USDC end to end **in progress** |
-| One seller serves the one buyer it was connected to | quickstart "Known limits", roadmap D3 | many-buyer sellers **in progress** |
+| History cache was one file capped at 128 MiB (about two days of continuous sync) | WS1 design §4 | segmented append-only history **on main** (`5428c55`); about 40 bytes per block, no cap; a reorg deeper than about 1,000 blocks into saved history is refused |
+| Auditor payment verification replayed from the deployment block | operations §6 | auditor checkpoint **on main** (`6252273`); deals settled at or before the checkpoint report `settled_before_checkpoint`; see the trust statement in operations §6 |
+| USDC has issuer/admin powers | roadmap | USDC quickstart end to end **on main** (`0ea1c80`), verified live with two deals |
+| One seller serves the one buyer it was connected to | quickstart "Known limits", roadmap D3 | many-buyer sellers **in progress** (branch `feat/ws5-many-buyers`; review focus: transport v2 routed handshake, uniform access refusal) |
 | Paired providers are a trust assumption, not a state proof | checkpoint design §2 | accepted |
 | Delivery is not guaranteed by settlement; no escrow or fair exchange | threat model §6 | accepted |
 | Signed permission stays usable until expiry or settlement; no onchain cancellation | threat model §4 | accepted |
