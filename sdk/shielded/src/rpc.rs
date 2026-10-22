@@ -20,7 +20,8 @@ pub enum RpcError {
     /// The endpoint did not return a well-formed successful response.
     #[error("pool RPC request failed during {0}")]
     Request(&'static str),
-    /// The endpoint still answered HTTP 429 after every bounded backoff.
+    /// The endpoint still answered HTTP 429, or a JSON-RPC rate-limit error, after every
+    /// bounded backoff.
     #[error("pool RPC provider rate limited {0}")]
     RateLimited(&'static str),
     /// A log or block header disagrees with its deployment or canonical block.
@@ -29,6 +30,18 @@ pub enum RpcError {
     /// Public events failed local tree or order verification.
     #[error(transparent)]
     Index(#[from] IndexError),
+}
+
+/// JSON-RPC error codes providers use for throttling inside an HTTP 200 response: `-32005`
+/// (limit exceeded, EIP-1474), `-32007` (request rate exceeded), and `-32090` (ankr's "call
+/// rate limit exhausted"). They are retried like HTTP 429 and reported as rate limiting.
+const RATE_LIMIT_CODES: [i64; 3] = [-32005, -32007, -32090];
+
+fn rate_limit_error(error: &serde_json::Value) -> bool {
+    error
+        .get("code")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|code| RATE_LIMIT_CODES.contains(&code))
 }
 
 #[derive(Deserialize)]
@@ -202,10 +215,26 @@ pub struct PoolRpc {
     chain_id: u64,
     pool: [u8; 20],
     max_concurrent_reads: usize,
-    pacer: RequestPacer,
+    pacer: std::sync::Arc<RequestPacer>,
 }
 
 impl PoolRpc {
+    /// Another source for the same endpoint that shares this one's request-rate budget.
+    ///
+    /// Reads through either source are paced together, so a background sync and the request
+    /// path never exceed the endpoint's configured rate between them.
+    #[must_use]
+    pub fn sharing_budget(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            client: self.client.clone(),
+            chain_id: self.chain_id,
+            pool: self.pool,
+            max_concurrent_reads: self.max_concurrent_reads,
+            pacer: std::sync::Arc::clone(&self.pacer),
+        }
+    }
+
     /// Reads the pool and its four dependency runtime hashes at one canonical block.
     ///
     /// This reports the code the provider serves, for deployment review and local test setup.
@@ -383,7 +412,7 @@ impl PoolRpc {
             chain_id,
             pool,
             max_concurrent_reads: DEFAULT_MAX_CONCURRENT_READS as usize,
-            pacer: RequestPacer::new(DEFAULT_MAX_REQUESTS_PER_SECOND),
+            pacer: std::sync::Arc::new(RequestPacer::new(DEFAULT_MAX_REQUESTS_PER_SECOND)),
         })
     }
 
@@ -404,7 +433,7 @@ impl PoolRpc {
         if rate == 0 {
             return Err(RpcError::Configuration);
         }
-        self.pacer = RequestPacer::new(rate);
+        self.pacer = std::sync::Arc::new(RequestPacer::new(rate));
         Ok(self)
     }
 
@@ -467,7 +496,14 @@ impl PoolRpc {
                 .json()
                 .await
                 .map_err(|_| RpcError::Request(method))?;
-            if decoded.error.is_some() {
+            if let Some(error) = &decoded.error {
+                if rate_limit_error(error) {
+                    if read_only && attempt < 4 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
+                        continue;
+                    }
+                    return Err(RpcError::RateLimited(method));
+                }
                 return Err(RpcError::Request(method));
             }
             return decoded.result.ok_or(RpcError::Request(method));
@@ -1005,11 +1041,14 @@ impl PoolRpc {
 
     /// Fetches the pool logs of `from..=to` and checks each against its canonical header.
     ///
-    /// Every block's header is read before the ranged `eth_getLogs` and again after it, and
-    /// each hash must be unchanged. Every log must name a block in the range, that block's
-    /// pre-read hash, and the pool, and must arrive in (block, log index) order. Parent-hash
-    /// continuity is checked by [`PoolIndex::apply_block`] as the caller applies the blocks in
-    /// order. The range never exceeds [`MAX_LOG_BLOCK_RANGE`].
+    /// Every block's header is read before the ranged `eth_getLogs`, and the pre-read headers
+    /// must form one parent-hash chain. After the logs, the range's last header is read again
+    /// and its hash must be unchanged: a block hash commits to its parent, so an unchanged last
+    /// hash over a linked chain means no block in the range changed while the logs were read.
+    /// Every log must name a block in the range, that block's pre-read hash, and the pool, and
+    /// must arrive in (block, log index) order. Continuity with the cached tip is checked by
+    /// [`PoolIndex::apply_block`] as the caller applies the blocks in order. The range never
+    /// exceeds [`MAX_LOG_BLOCK_RANGE`].
     async fn read_range(&self, from: u64, to: u64) -> Result<Vec<PoolBlock>, RpcError> {
         if from > to || to - from >= MAX_LOG_BLOCK_RANGE {
             return Err(RpcError::Configuration);
@@ -1022,6 +1061,13 @@ impl PoolRpc {
                 parent_hash: fixed_hex::<32>(&header.parent_hash)?,
                 events: Vec::new(),
             });
+        }
+        // One chain, not a mix of two branches read while the provider reorganized.
+        if blocks
+            .windows(2)
+            .any(|pair| pair[1].parent_hash != pair[0].hash)
+        {
+            return Err(RpcError::Evidence("block changed while logs were read"));
         }
         let topics = [
             event_topic("NoteInserted(uint256,uint256,uint256)"),
@@ -1056,14 +1102,11 @@ impl PoolRpc {
             last = Some(position);
             block.events.push(decode_log(&log, &topics)?);
         }
-        let after = self.headers(from, to).await?;
-        if after.len() != blocks.len() {
-            return Err(RpcError::Evidence("wrong block count"));
-        }
-        for (block, header) in blocks.iter().zip(&after) {
-            if fixed_hex::<32>(&header.hash)? != block.hash {
-                return Err(RpcError::Evidence("block changed while logs were read"));
-            }
+        let last = blocks
+            .last()
+            .ok_or(RpcError::Evidence("wrong block count"))?;
+        if fixed_hex::<32>(&self.header(to).await?.hash)? != last.hash {
+            return Err(RpcError::Evidence("block changed while logs were read"));
         }
         Ok(blocks)
     }
@@ -1358,6 +1401,30 @@ mod tests {
         ] {
             let (rpc, calls, server) = retry_rpc(99, status, payload).await;
             assert!(rpc.check_chain().await.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            server.abort();
+        }
+        // Throttling inside an HTTP 200: retried like 429, then reported as rate limiting.
+        for code in [-32090, -32005, -32007] {
+            let throttled = json!({"jsonrpc":"2.0","id":1,"error":{"code":code,
+                "message":"Too many requests, reason: call rate limit exhausted, retry in 10m0s"}});
+            let (rpc, calls, server) = retry_rpc(0, 200, throttled.clone()).await;
+            assert!(
+                matches!(
+                    rpc.check_chain().await,
+                    Err(RpcError::RateLimited("eth_chainId"))
+                ),
+                "{code}"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 5, "{code}");
+            server.abort();
+            // A write is classified but never retried.
+            let (rpc, calls, server) = retry_rpc(0, 200, throttled).await;
+            assert!(matches!(
+                rpc.call::<String>("eth_sendRawTransaction", json!([]))
+                    .await,
+                Err(RpcError::RateLimited("eth_sendRawTransaction"))
+            ));
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             server.abort();
         }
