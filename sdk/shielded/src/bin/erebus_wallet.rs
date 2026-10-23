@@ -23,13 +23,15 @@ use erebus_evm::{
 use erebus_shielded_prover::{
     artifacts::{ArtifactRelease, InstallOptions, ManifestAuthorization},
     checkpoint,
+    gas_policy::{self, GasPolicy},
     index_store::{IndexDomain, IndexStore},
     indexer::TreeCheckpoint,
     operations::{
         parse_address, parse_digest32, parse_field, prepare_approve_request, prepare_deposit,
         prepare_unwrap, prepare_withdraw, prepare_wrap, reconcile_finalized_operations,
         reconcile_operations, replace_wallet_call, resume_wallet_call, submit_wallet_call,
-        OperationContext, OperationStore, WalletOperationState, WalletSubmissionState,
+        submit_wallet_call_with_policy, OperationContext, OperationError, OperationStore,
+        WalletOperationState, WalletSubmissionState,
     },
     recovery::{recover_finalized_wallet_agreed_bounded, RecoveryError},
     rpc::{PoolDependencyPins, PoolIdentity, PoolRpc, PoolRuntimePins, MAX_CONCURRENT_READS},
@@ -1046,6 +1048,19 @@ fn submission_error(error: erebus_shielded_prover::operations::OperationError) -
     ) {
         return Failure::Pending("signer lane is busy; run sync and retry");
     }
+    if matches!(error, OperationError::PlanAboveCap { .. }) {
+        return Failure::Error(
+            "retained plan exceeds the configured gas cap; operator action required; nothing was sent",
+        );
+    }
+    if matches!(error, OperationError::GasEstimate) {
+        return Failure::Error(
+            "gas estimate failed; the call would revert or the provider failed; nothing was signed",
+        );
+    }
+    if matches!(error, OperationError::GasLimit { .. }) {
+        return Failure::Error("gas estimate exceeds the method gas limit; nothing was signed");
+    }
     Failure::Error("submission failed; retained state is preserved")
 }
 
@@ -1062,20 +1077,36 @@ fn submission_failure(
     }
 }
 
+/// The method's gas policy: its fixed limit, with the configured `gas_limit` as the cap for a
+/// claim saved before per-method limits.
+fn gas(prepared: &Prepared, limit: u64) -> GasPolicy {
+    GasPolicy {
+        limit,
+        legacy_cap: prepared.config.gas_limit,
+    }
+}
+
 async fn sync(prepared: &Prepared) -> Result<Value, Failure> {
+    sync_session(prepared).await.map(|(value, _)| value)
+}
+
+/// Syncs and returns the primary chain it authenticated, so a send in the same process signs
+/// and broadcasts through that chain instead of authenticating the deployment a third time.
+async fn sync_session(prepared: &Prepared) -> Result<(Value, EvmChain), Failure> {
     // Authenticate before applying pool history or finalized receipts to durable wallet state.
-    let chain = connect_chain(
-        prepared,
-        &prepared.config.rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
-    let peer_chain = connect_chain(
-        prepared,
-        &prepared.config.peer_rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
+    // The two providers authenticate independently, so both run together.
+    let (chain, peer_chain) = tokio::try_join!(
+        connect_chain(
+            prepared,
+            &prepared.config.rpc_url,
+            prepared.config.timeout_seconds,
+        ),
+        connect_chain(
+            prepared,
+            &prepared.config.peer_rpc_url,
+            prepared.config.timeout_seconds,
+        )
+    )?;
     // Keep every header check and the per-source rate cap; use the existing bounded read fanout.
     let rpc = PoolRpc::with_timeout(
         &prepared.config.rpc_url,
@@ -1151,12 +1182,19 @@ async fn sync(prepared: &Prepared) -> Result<Value, Failure> {
     let completed = reconcile_operations(&wallet, &operations, now()?)
         .map_err(|_| Failure::Error("operation reconciliation failed"))?;
     let journal = signer_journal(prepared)?;
-    if let Ok(nonce) = chain
-        .verified_finalized_nonce_agreed(&peer_chain, prepared.signer)
-        .await
+    // Without a claim there is nothing to release, so the paired finalized-nonce reads are skipped.
+    if journal
+        .claim_nonce()
+        .map_err(|_| Failure::Error("signer journal unavailable"))?
+        .is_some()
     {
-        // NotConsumed means the claimed nonce is not yet finalized; the lane stays held.
-        let _ = journal.release(&nonce);
+        if let Ok(nonce) = chain
+            .verified_finalized_nonce_agreed(&peer_chain, prepared.signer)
+            .await
+        {
+            // NotConsumed means the claimed nonce is not yet finalized; the lane stays held.
+            let _ = journal.release(&nonce);
+        }
     }
     let nonce_released = journal
         .claim_nonce()
@@ -1185,7 +1223,7 @@ async fn sync(prepared: &Prepared) -> Result<Value, Failure> {
     if migration_required {
         return Err(Failure::PendingResult(value));
     }
-    Ok(value)
+    Ok((value, chain))
 }
 
 fn retain_action(
@@ -1218,7 +1256,7 @@ async fn approve(
     amount: u128,
     reference: Option<[u8; 32]>,
 ) -> Result<Value, Failure> {
-    sync(prepared).await?;
+    let (_, chain) = sync_session(prepared).await?;
     let operations = operations(prepared)?;
     let mut request = reference
         .map(|reference| retain_action(prepared, b"approve", amount, reference))
@@ -1238,15 +1276,9 @@ async fn approve(
             .bind(prepared_call.identity)
             .map_err(Failure::Error)?;
     }
-    let chain = connect_chain(
-        prepared,
-        &prepared.config.rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
     let journal = signer_journal(prepared)?;
     let key = transaction_key(prepared)?;
-    let submission = submit_wallet_call(
+    let submission = submit_wallet_call_with_policy(
         &chain,
         &journal,
         &operations,
@@ -1254,7 +1286,7 @@ async fn approve(
         &prepared_call,
         &key,
         prepared.fees,
-        prepared.config.gas_limit,
+        gas(prepared, gas_policy::APPROVE_GAS_LIMIT),
         now()?,
         false,
     )
@@ -1302,6 +1334,31 @@ async fn allowance(
     ))
 }
 
+/// Reads one ERC-20 `balanceOf(owner)` word at the latest block.
+async fn token_balance(
+    chain: &EvmChain,
+    token: [u8; 20],
+    owner: [u8; 20],
+) -> Result<u128, Failure> {
+    let mut data = vec![0x70, 0xa0, 0x82, 0x31];
+    data.extend_from_slice(&address_word(owner));
+    let result = chain
+        .call(token, &data)
+        .await
+        .map_err(|_| Failure::Error("asset balance read failed"))?;
+    let word: [u8; 32] = result
+        .get(..32)
+        .and_then(|word| word.try_into().ok())
+        .ok_or(Failure::Error("asset balance read failed"))?;
+    if word[..16].iter().any(|byte| *byte != 0) {
+        // Above u128: certainly enough for any representable amount.
+        return Ok(u128::MAX);
+    }
+    let mut low = [0u8; 16];
+    low.copy_from_slice(&word[16..]);
+    Ok(u128::from_be_bytes(low))
+}
+
 fn address_word(address: [u8; 20]) -> [u8; 32] {
     let mut word = [0u8; 32];
     word[12..].copy_from_slice(&address);
@@ -1314,7 +1371,7 @@ async fn wrap_or_unwrap(
     operation_ref: [u8; 32],
     wrap: bool,
 ) -> Result<Value, Failure> {
-    sync(prepared).await?;
+    let (_, chain) = sync_session(prepared).await?;
     let wrapper = wrapper(prepared)?;
     let mut request = retain_action(
         prepared,
@@ -1346,12 +1403,6 @@ async fn wrap_or_unwrap(
     request
         .bind(prepared_call.identity)
         .map_err(Failure::Error)?;
-    let chain = connect_chain(
-        prepared,
-        &prepared.config.rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
     if wrap {
         let balance = chain
             .gas_payer_balance(prepared.signer)
@@ -1363,7 +1414,7 @@ async fn wrap_or_unwrap(
     }
     let journal = signer_journal(prepared)?;
     let key = transaction_key(prepared)?;
-    let submission = submit_wallet_call(
+    let submission = submit_wallet_call_with_policy(
         &chain,
         &journal,
         &operations,
@@ -1371,7 +1422,14 @@ async fn wrap_or_unwrap(
         &prepared_call,
         &key,
         prepared.fees,
-        prepared.config.gas_limit,
+        gas(
+            prepared,
+            if wrap {
+                gas_policy::WRAP_GAS_LIMIT
+            } else {
+                gas_policy::UNWRAP_GAS_LIMIT
+            },
+        ),
         now()?,
         false,
     )
@@ -1402,7 +1460,7 @@ async fn deposit(
 ) -> Result<Value, Failure> {
     // Refresh verified inclusion and release a finalized signer-lane claim from a prior
     // operation before preparing a new one. This never sends a transaction.
-    sync(prepared).await?;
+    let (_, chain) = sync_session(prepared).await?;
     let wallet = wallet(prepared)?;
     let operations = operations(prepared)?;
     let owner = agreement_key(prepared)?;
@@ -1467,18 +1525,18 @@ async fn deposit(
             ));
         }
     }
-    let chain = connect_chain(
-        prepared,
-        &prepared.config.rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
     let journal = signer_journal(prepared)?;
     let key = transaction_key(prepared)?;
     let available = allowance(&chain, prepared.asset, prepared.signer, prepared.pool).await?;
     if available < amount {
         return Err(Failure::Error(
             "deposit allowance insufficient; run approve first",
+        ));
+    }
+    // A wrap or transfer that is not visible yet refuses here, before any proof or claim.
+    if token_balance(&chain, prepared.asset, prepared.signer).await? < amount {
+        return Err(Failure::Error(
+            "deposit asset balance insufficient; wrap or fund the asset first",
         ));
     }
     let release = release(prepared)?;
@@ -1506,7 +1564,7 @@ async fn deposit(
             .bind(prepared_call.commitment)
             .map_err(Failure::Error)?;
     }
-    let submission = submit_wallet_call(
+    let submission = submit_wallet_call_with_policy(
         &chain,
         &journal,
         &operations,
@@ -1514,7 +1572,7 @@ async fn deposit(
         &prepared_call,
         &key,
         prepared.fees,
-        prepared.config.gas_limit,
+        gas(prepared, gas_policy::DEPOSIT_GAS_LIMIT),
         now()?,
         false,
     )
@@ -1540,7 +1598,7 @@ async fn withdraw(
     commitment: [u8; 32],
     recipient: [u8; 20],
 ) -> Result<Value, Failure> {
-    sync(prepared).await?;
+    let (_, chain) = sync_session(prepared).await?;
     let wallet = wallet(prepared)?;
     let operations = operations(prepared)?;
     let primary = index_store(prepared, "primary.json")?;
@@ -1567,12 +1625,6 @@ async fn withdraw(
     )
     .await
     .map_err(|_| Failure::Error("withdrawal preparation failed; no funds were sent"))?;
-    let chain = connect_chain(
-        prepared,
-        &prepared.config.rpc_url,
-        prepared.config.timeout_seconds,
-    )
-    .await?;
     let journal = signer_journal(prepared)?;
     let key = transaction_key(prepared)?;
     let submission = submit_wallet_call(

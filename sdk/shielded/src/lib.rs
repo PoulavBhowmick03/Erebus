@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod chain;
 pub mod checkpoint;
 pub mod disclosure;
+pub mod gas_policy;
 pub mod index_store;
 pub mod indexer;
 pub mod observation;

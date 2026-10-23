@@ -33,6 +33,7 @@ use serde_json::Value;
 use crate::{
     artifacts::{ArtifactRelease, CircuitKind, InstallOptions, InstalledProvingError},
     build_deposit_witness, build_withdraw_witness,
+    gas_policy::GasPolicy,
     indexer::PoolIndex,
     wallet::{OwnedNote, WalletDomain, WalletError, WalletStore},
     LocalProof, ProverError,
@@ -113,6 +114,28 @@ pub enum OperationError {
     /// A legacy record carries no call expectations and cannot be reconstructed safely.
     #[error("legacy wallet operation lacks call expectations; reconcile it manually")]
     Migration,
+    /// A retained signed plan or saved claim uses a gas limit above the configured cap. Nothing
+    /// was sent; the signed bytes and the nonce claim are kept for an operator decision.
+    #[error("retained plan gas limit {saved} exceeds the configured cap {cap}")]
+    PlanAboveCap {
+        /// Gas limit of the saved plan.
+        saved: u64,
+        /// The configured legacy cap.
+        cap: u64,
+    },
+    /// The exact call could not be estimated: it would revert at the latest block, or the
+    /// provider failed. No nonce claim was written and nothing was signed.
+    #[error("gas estimate of the exact call failed")]
+    GasEstimate,
+    /// The call's estimate plus margin exceeds the method's gas limit. No nonce claim was
+    /// written and nothing was signed.
+    #[error("gas estimate {estimate} exceeds the method limit {limit} with margin")]
+    GasLimit {
+        /// The live `eth_estimateGas` of the exact call.
+        estimate: u64,
+        /// The method's operator gas limit.
+        limit: u64,
+    },
 }
 
 impl From<erebus_journal::StoreError<WalletOperationId>> for OperationError {
@@ -1296,6 +1319,108 @@ pub async fn submit_wallet_call(
     now: u64,
     resume: bool,
 ) -> Result<WalletSubmission, OperationError> {
+    submit_with_gas(
+        chain,
+        journal,
+        operations,
+        domain,
+        prepared,
+        key,
+        fees,
+        Gas::Fixed(gas_limit),
+        now,
+        resume,
+    )
+    .await
+}
+
+/// Sends a prepared wallet call at most once, at its method's gas limit.
+///
+/// Identical to [`submit_wallet_call`] except for the gas limit of a new claim: an existing
+/// claim for this exact call resumes at its saved limit when the policy admits it (a legacy
+/// plan within the cap); otherwise the exact call, with its value, is estimated first and
+/// refused with [`OperationError::GasLimit`] before any claim is written or byte is signed.
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_wallet_call_with_policy(
+    chain: &EvmChain,
+    journal: &SignerJournal,
+    operations: &OperationStore,
+    domain: &DeploymentDomain,
+    prepared: &PreparedWalletCall,
+    key: &TransactionKey,
+    fees: Eip1559Fees,
+    policy: GasPolicy,
+    now: u64,
+    resume: bool,
+) -> Result<WalletSubmission, OperationError> {
+    submit_with_gas(
+        chain,
+        journal,
+        operations,
+        domain,
+        prepared,
+        key,
+        fees,
+        Gas::Policy(policy),
+        now,
+        resume,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum Gas {
+    Fixed(u64),
+    Policy(GasPolicy),
+}
+
+/// The gas limit a new or resumed claim for this exact call uses. Reads the journal and, only
+/// without a saved claim, one estimate. Writes nothing.
+pub async fn planned_gas_limit(
+    chain: &EvmChain,
+    journal: &SignerJournal,
+    stub: &PreparedSettlement,
+    target: [u8; 20],
+    calldata: &[u8],
+    value: u128,
+    policy: GasPolicy,
+) -> Result<u64, OperationError> {
+    if let Some(plan) = journal.resume_call(chain.deployment(), stub, target, calldata)? {
+        let saved = plan.params().gas_limit;
+        if !policy.resumes(saved) {
+            return Err(OperationError::PlanAboveCap {
+                saved,
+                cap: policy.legacy_cap,
+            });
+        }
+        return Ok(saved);
+    }
+    let estimate = chain
+        .estimate_call_gas_with_value(journal.account_address(), target, calldata, value)
+        .await
+        .map_err(|_| OperationError::GasEstimate)?;
+    if !policy.admits(estimate) {
+        return Err(OperationError::GasLimit {
+            estimate,
+            limit: policy.limit,
+        });
+    }
+    Ok(policy.limit)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_with_gas(
+    chain: &EvmChain,
+    journal: &SignerJournal,
+    operations: &OperationStore,
+    domain: &DeploymentDomain,
+    prepared: &PreparedWalletCall,
+    key: &TransactionKey,
+    fees: Eip1559Fees,
+    gas: Gas,
+    now: u64,
+    resume: bool,
+) -> Result<WalletSubmission, OperationError> {
     chain.deployment().matches_domain(domain)?;
     let Some(operation) = operations.get(&prepared.identity)? else {
         return Err(OperationError::Conflict);
@@ -1334,6 +1459,16 @@ pub async fn submit_wallet_call(
             });
         }
         let plan = SigningPlan::decode(&retained.plan).map_err(|_| OperationError::Journal)?;
+        // Signed bytes saved under an older, larger gas limit are only sent when the policy still
+        // admits that limit. Otherwise the bytes and the claim stay exactly as they are.
+        if let Gas::Policy(policy) = gas {
+            if !policy.resumes(plan.params().gas_limit) {
+                return Err(OperationError::PlanAboveCap {
+                    saved: plan.params().gas_limit,
+                    cap: policy.legacy_cap,
+                });
+            }
+        }
         let target = prepared.target;
         let result = chain
             .broadcast_call(&plan, &retained.raw, target, &prepared.calldata)
@@ -1366,6 +1501,21 @@ pub async fn submit_wallet_call(
     }
     let stub = operation_stub(domain, prepared);
     let target = prepared.target;
+    let gas_limit = match gas {
+        Gas::Fixed(limit) => limit,
+        Gas::Policy(policy) => {
+            planned_gas_limit(
+                chain,
+                journal,
+                &stub,
+                target,
+                &prepared.calldata,
+                prepared.value,
+                policy,
+            )
+            .await?
+        }
+    };
     let plan = chain
         .reserve_nonce_for_call_with_value(
             journal,
@@ -2507,5 +2657,125 @@ mod tests {
                 .identity,
             first.identity
         );
+    }
+}
+
+#[cfg(test)]
+mod gas_policy_resume_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A node that answers chain ID and counts every other request; it must see no send.
+    async fn node() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        use axum::{extract::State, routing::post, Json, Router};
+        let calls = Arc::new(AtomicUsize::new(0));
+        async fn answer(
+            State(calls): State<Arc<AtomicUsize>>,
+            Json(request): Json<Value>,
+        ) -> Json<Value> {
+            if request["method"] == "eth_chainId" {
+                return Json(
+                    serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":"0x7a69"}),
+                );
+            }
+            calls.fetch_add(1, Ordering::SeqCst);
+            Json(serde_json::json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000}}))
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/", post(answer))
+            .with_state(calls.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, calls, task)
+    }
+
+    #[tokio::test]
+    async fn a_retained_signed_plan_above_the_cap_is_never_broadcast_and_stays_retained() {
+        let (url, calls, _task) = node().await;
+        let pool = [0x11; 20];
+        let asset = [0x22; 20];
+        let key = TransactionKey::from_bytes(&[7; 32]).unwrap();
+        let address = erebus_core::ids::AddressBytes::new(pool.to_vec()).unwrap();
+        let namespace = erebus_core::ids::ChainNamespace::parse("eip155:31337").unwrap();
+        let domain = DeploymentDomain {
+            namespace: namespace.clone(),
+            settlement_contract: Some(address.clone()),
+            pool: Some(address),
+            verifier_version: 2,
+        };
+        let chain = EvmChain::connect(
+            erebus_evm::deployment::EvmDeployment::new(namespace, pool, 2, url).unwrap(),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let operations = OperationStore::open(root.path().join("ops")).unwrap();
+        let journal =
+            SignerJournal::open(root.path().join("signer"), 31337, key.address()).unwrap();
+        let prepared =
+            prepare_approve_request(&operations, 31337, pool, asset, 10, Some([3; 32]), 1).unwrap();
+        // A pre-upgrade process claimed and signed at 5,000,000, then stopped before sending.
+        let fees = Eip1559Fees::new(300_000_000_000, 2_000_000_000).unwrap();
+        let plan = journal
+            .reserve_call_with_value(
+                chain.deployment(),
+                &operation_stub(&domain, &prepared),
+                asset,
+                &prepared.calldata,
+                0,
+                4,
+                fees,
+                5_000_000,
+            )
+            .unwrap();
+        let raw = plan
+            .sign_call(31337, asset, prepared.calldata.clone(), &key)
+            .unwrap()
+            .raw()
+            .to_vec();
+        operations
+            .record_signed(&prepared.identity, &plan.encode(), &raw, 2)
+            .unwrap();
+        let refused = submit_wallet_call_with_policy(
+            &chain,
+            &journal,
+            &operations,
+            &domain,
+            &prepared,
+            &key,
+            fees,
+            GasPolicy {
+                limit: crate::gas_policy::APPROVE_GAS_LIMIT,
+                legacy_cap: 3_000_000,
+            },
+            3,
+            false,
+        )
+        .await;
+        assert!(matches!(
+            refused,
+            Err(OperationError::PlanAboveCap {
+                saved: 5_000_000,
+                cap: 3_000_000
+            })
+        ));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "nothing may be sent or read"
+        );
+        let retained = operations
+            .retained_bytes(&prepared.identity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.raw, raw);
+        assert_eq!(retained.plan, plan.encode());
+        assert_eq!(journal.claim_nonce().unwrap(), Some(4));
+        let operation = operations.get(&prepared.identity).unwrap().unwrap();
+        assert!(operation.attempts().is_empty());
     }
 }

@@ -1956,8 +1956,10 @@ async fn exhausted_read_retries_after_consumption_never_revive_the_spent_note() 
     assert!(stderr.is_empty(), "{stderr}");
     assert_eq!(code, 1, "exhausted retries must fail closed: {response}");
     assert_eq!(response["status"], "error", "{response}");
+    // Wallet recovery reads new finalized history before observation (WS6), so it is the read
+    // that exhausts its retries; either paired reader must fail closed the same way.
     assert_eq!(
-        response["error"], "paired pool evidence unavailable; retain reservations",
+        response["error"], "paired finalized wallet recovery failed; retain reservations",
         "{response}"
     );
     assert_ne!(response["payment_verified"], true, "{response}");
@@ -1973,7 +1975,10 @@ async fn exhausted_read_retries_after_consumption_never_revive_the_spent_note() 
         primary_before,
         "exhausted retries must retain the wallet prefix"
     );
-    assert_eq!(environment.wallet_prefix_tip("wallet-peer"), peer_before);
+    // The healthy peer's paired scan runs alongside the failing primary and may persist its own
+    // verified finalized progress (as a wallet sync always could); it never rewinds, and no wallet
+    // state changes without both providers agreeing.
+    assert!(environment.wallet_prefix_tip("wallet-peer") >= peer_before);
     let snapshot = environment.deployed.wallet.snapshot().unwrap();
     assert!(
         snapshot.spendable(&spent).is_none(),
@@ -3352,4 +3357,175 @@ async fn primary_pending_does_not_permanently_mask_peer_read_failure() {
             "send_count": sends(&environment.primary),
         }),
     );
+}
+
+/// WS6 review M2: a claim saved under an older, larger gas limit resumes at that limit, so the
+/// up-front funding check must use that limit, not the settle limit for new plans. With funds
+/// above 3,010,000 x max_fee but below 5,000,000 x max_fee the settlement is refused as
+/// `funding_required` before signing or broadcast, the claim stays, and once funded it is sent
+/// at its saved limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil and generated M5 prototype artifacts; resumed larger legacy plan"]
+async fn a_resumed_larger_legacy_plan_is_funded_at_its_own_limit_before_any_send() {
+    use erebus_evm::chain::{Eip1559Fees, EvmChain, SignerJournal};
+    let environment = Environment::new().await;
+    let client = environment.deployed.client.clone();
+    let url = environment.deployed.url.clone();
+    // The operator's legacy cap admits the pre-upgrade 5,000,000 plan.
+    let mut config = environment.config_value();
+    config["gas_limit"] = json!(5_000_000u64);
+    std::fs::write(&environment.config, serde_json::to_vec(&config).unwrap()).unwrap();
+    let signer_text = config["signer_address"].as_str().unwrap().to_owned();
+    let signer: [u8; 20] = hex::decode(signer_text.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let max_fee: u128 = config["max_fee_per_gas"].as_str().unwrap().parse().unwrap();
+    let fees = Eip1559Fees::new(
+        max_fee,
+        config["max_priority_fee_per_gas"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let journal = SignerJournal::open(
+        config["signer_journal_root"].as_str().unwrap(),
+        31337,
+        signer,
+    )
+    .unwrap();
+    let selected = environment.selected();
+    let deployment = erebus_evm::deployment::EvmDeployment::new(
+        selected.terms.domain.namespace.clone(),
+        environment.pool(),
+        selected.terms.domain.verifier_version,
+        url.clone(),
+    )
+    .unwrap();
+
+    // 1. Another operation holds the lane: settle proves, then refuses before any claim.
+    let other = erebus_core::settlement::PreparedSettlement {
+        operation_ref: [0x77; 32],
+        deal_commitment: erebus_core::commitment::DealCommitment::from_bytes([0x77; 32]),
+        deal_nullifier: erebus_core::commitment::DealNullifier::from_bytes([0x77; 32]),
+        domain: selected.terms.domain.clone(),
+        mode: SettlementMode::Shielded,
+        required_guarantees: selected.terms.required_guarantees,
+        backend_evidence: vec![1],
+    };
+    journal
+        .reserve_call_with_value(
+            &deployment,
+            &other,
+            environment.pool(),
+            &[1],
+            0,
+            0,
+            fees,
+            3_000_000,
+        )
+        .unwrap();
+    let (code, response, _) = environment.settle(Duration::from_secs(240)).await;
+    assert_eq!(code, 1, "{response}");
+    assert_eq!(
+        response["error"], "signer lane is busy; sync the wallet and retry",
+        "{response}"
+    );
+    assert_eq!(sends(&environment.primary) + sends(&environment.peer), 0);
+
+    // 2. That operation's nonce is consumed and released; then a pre-upgrade process claims
+    // this operation's prepared call at 5,000,000 and stops before signing.
+    rpc(&client, &url, "anvil_setNonce", json!([signer_text, "0x1"])).await;
+    mine(&client, &url, 4).await;
+    let observer = EvmChain::connect(deployment.clone(), Duration::from_secs(10))
+        .await
+        .unwrap();
+    let finalized = observer.verified_finalized_nonce(signer).await.unwrap();
+    journal.release(&finalized).unwrap();
+    let coordinator = Coordinator::open(
+        environment.deployed.buyer_root.join("state/coordinator"),
+        selected.terms.buyer_authorization_key.clone(),
+        SettlementContext {
+            domain: selected.terms.domain.clone(),
+            asset: selected.terms.asset.clone(),
+            suite_id: 2,
+            mode: SettlementMode::Shielded,
+            required_guarantees: selected.terms.required_guarantees,
+            require_local_proving: true,
+        },
+        &SettlementContext {
+            domain: selected.terms.domain.clone(),
+            asset: selected.terms.asset.clone(),
+            suite_id: 2,
+            mode: SettlementMode::Shielded,
+            required_guarantees: selected.terms.required_guarantees,
+            require_local_proving: true,
+        },
+        &erebus_shielded_prover::preparation::capabilities(),
+        SpendingPolicy {
+            per_deal_max: BaseUnits::new(75),
+            allowed_assets: [selected.terms.asset.clone()].into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let prepared = coordinator.prepared_settlement(OPERATION).unwrap();
+    drop(coordinator);
+    journal
+        .reserve_call_with_value(
+            &deployment,
+            &prepared,
+            environment.pool(),
+            &prepared.backend_evidence,
+            0,
+            1,
+            fees,
+            5_000_000,
+        )
+        .unwrap();
+
+    // 3. Funds cover a new 3,010,000 plan but not this 5,000,000 one: refused before signing.
+    let between = 4_000_000u128 * max_fee;
+    rpc(
+        &client,
+        &url,
+        "anvil_setBalance",
+        json!([signer_text, format!("0x{between:x}")]),
+    )
+    .await;
+    mine(&client, &url, 2).await;
+    let (code, response, _) = environment.settle(Duration::from_secs(240)).await;
+    assert_eq!(code, 2, "{response}");
+    assert_eq!(response["status"], "funding_required", "{response}");
+    assert_eq!(
+        response["funding"]["signer_shortfall"],
+        (5_000_000u128 * max_fee - between).to_string(),
+        "{response}"
+    );
+    assert_eq!(response["submitted_this_call"], false, "{response}");
+    assert_eq!(sends(&environment.primary) + sends(&environment.peer), 0);
+    assert_eq!(
+        journal.claim_nonce().unwrap(),
+        Some(1),
+        "the claim must be kept"
+    );
+
+    // 4. Funded at its own limit, the saved plan is signed and sent at 5,000,000.
+    let enough = 6_000_000u128 * max_fee;
+    rpc(
+        &client,
+        &url,
+        "anvil_setBalance",
+        json!([signer_text, format!("0x{enough:x}")]),
+    )
+    .await;
+    mine(&client, &url, 2).await;
+    let (code, response, _) = environment.settle(Duration::from_secs(240)).await;
+    assert!(code == 0 || code == 2, "{response}");
+    assert_eq!(response["submitted_this_call"], true, "{response}");
+    let hash = response["transaction_hash"].as_str().unwrap().to_owned();
+    let sent = rpc(&client, &url, "eth_getTransactionByHash", json!([hash])).await;
+    assert_eq!(sent["gas"], "0x4c4b40", "{sent}");
 }

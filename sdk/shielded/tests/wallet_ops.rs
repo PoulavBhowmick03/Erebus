@@ -21,6 +21,7 @@ use std::{
 };
 
 use axum::{extract::State, Router};
+use erebus_core::ids::{AddressBytes, ChainNamespace};
 use erebus_core::shielded_auth::derive_key;
 use erebus_evm::chain::TransactionKey;
 use erebus_shielded_prover::rpc::PoolRpc;
@@ -409,6 +410,10 @@ async fn wait_for_chain(client: &reqwest::Client, url: &str) {
     panic!("anvil did not start");
 }
 
+/// A send whose exact call would revert is refused at its estimate, before any claim (WS6).
+const ESTIMATE_REFUSED: &str =
+    "gas estimate failed; the call would revert or the provider failed; nothing was signed";
+
 async fn mine(client: &reqwest::Client, url: &str) {
     rpc(client, url, "anvil_mine", json!(["0x2"])).await;
 }
@@ -644,8 +649,9 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
     );
     assert_eq!(diagnostic.1["result"]["account"]["allowance"], "1000");
 
-    // 2. A fee-on-transfer deposit proves, broadcasts, and reverts in the pool. Only a
-    // finalized canonical receipt may reconcile it back to a retryable plan.
+    // 2. A fee-on-transfer deposit would revert in the pool. The exact call is estimated before
+    // any nonce claim (WS6), so it is refused there: nothing is signed or sent and the lane stays
+    // free. (Finalized-revert reconciliation stays covered by the wrap and unwrap revert cases.)
     let enable_fee = encode_call(&FEE_ON_TRANSFER_SELECTOR, &[word(&1u128.to_be_bytes())]);
     let fee = rpc(
         &client,
@@ -657,7 +663,7 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
     assert!(fee["result"].is_string(), "setFeeOnTransfer failed: {fee}");
     mine(&client, &url).await;
 
-    let failed = finish(spawn(
+    let refused = finish(spawn(
         &wallet_bin,
         root.path(),
         request(
@@ -666,38 +672,33 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
         ),
     ));
     assert!(
-        failed.0,
-        "reverting deposit was not submitted: {} (exit {})",
-        failed.1, failed.2
+        !refused.0 && refused.1["error"] == ESTIMATE_REFUSED,
+        "a reverting deposit must be refused at the estimate: {refused:?}"
     );
-    let promised = failed.1["result"]["commitment"]
+    let synced = finish(spawn(&wallet_bin, root.path(), request("sync", json!({}))));
+    assert!(synced.0, "{synced:?}");
+    assert_eq!(
+        synced.1["result"]["nonce_released"], true,
+        "no claim was written"
+    );
+    assert!(synced.1["result"]["pending"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|operation| operation["kind"] != "deposit"
+            || (operation["state"] == "planned"
+                && operation["retained"] == false
+                && operation["attempts"].as_array().unwrap().is_empty())));
+    // The proved note opening was persisted before the refusal and is reused by the retry.
+    let promised = synced.1["result"]["pending"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|operation| operation["kind"] == "deposit")
+        .expect("the planned deposit stays retryable")["identity"]
         .as_str()
         .unwrap()
         .to_owned();
-    let reverted = sync_until(&wallet_bin, root.path(), &config_path, |value| {
-        let reverted_plan = value["result"]["reverted"]
-            .as_array()
-            .is_some_and(|operations| {
-                operations
-                    .iter()
-                    .any(|operation| operation["kind"] == "deposit")
-            });
-        let retryable = value["result"]["pending"]
-            .as_array()
-            .is_some_and(|operations| {
-                operations.iter().any(|operation| {
-                    operation["kind"] == "deposit"
-                        && operation["state"] == "planned"
-                        && operation["retained"] == false
-                })
-            });
-        reverted_plan && retryable
-    })
-    .await;
-    assert!(
-        reverted.0,
-        "finalized revert was never reconciled: {reverted:?}"
-    );
 
     // 3. Clear the token restriction and retry; the same note opening is reused.
     let disable_fee = encode_call(&FEE_ON_TRANSFER_SELECTOR, &[word(&0u128.to_be_bytes())]);
@@ -882,6 +883,18 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
     // The first broadcast response is dropped: the operation must stay unknown, then be
     // completed by observation with exactly one onchain execution.
     let wmon = deployment["wmon"].as_str().unwrap().to_owned();
+    // Live WMON has a nonzero supply (and no totalSupply slot at all); a first-ever wrap into this
+    // mock would also pay a zero-to-nonzero totalSupply write and exceed the 65,000 wrap limit.
+    // Seed the mock's supply from the Anvil account so the wrap is priced like a live one.
+    let seeded = rpc(
+        &client,
+        &url,
+        "eth_sendTransaction",
+        json!([{"from": ANVIL_ACCOUNT, "to": wmon, "data": "0xd0e30db0", "value": "0x1", "gas": "0x100000"}]),
+    )
+    .await;
+    assert!(seeded["result"].is_string(), "seed wrap failed: {seeded}");
+    mine(&client, &url).await;
     let marked = client
         .post(format!("{proxy_url}/drop-next"))
         .send()
@@ -1034,17 +1047,12 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
     );
 
     // 7. A wrapper that fails the native payout reverts the whole unwrap; the burn rolls back
-    // and only the finalized receipt may return the operation to a retryable plan.
-    let enable = encode_call(&FAIL_PAYOUT_SELECTOR, &[word(&1u128.to_be_bytes())]);
-    let fee = rpc(
-        &client,
-        &url,
-        "eth_sendTransaction",
-        json!([{"from": ANVIL_ACCOUNT, "to": wmon, "data": enable, "gas": "0x100000"}]),
-    )
-    .await;
-    assert!(fee["result"].is_string(), "setFailPayout failed: {fee}");
-    mine(&client, &url).await;
+    // and only the finalized receipt may return the operation to a retryable plan. A send that
+    // would revert at estimate time is refused before signing (WS6), so the failure is switched
+    // on after the unwrap's estimate and broadcast: mining pauses, the unwrap enters the mempool,
+    // and a higher-tip setFailPayout is ordered ahead of it in the next block.
+    rpc(&client, &url, "evm_setIntervalMining", json!([0])).await;
+    rpc(&client, &url, "evm_setAutomine", json!([false])).await;
     let failed_unwrap = finish(spawn(
         &wallet_bin,
         root.path(),
@@ -1058,6 +1066,19 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
         "failed-payout unwrap was not submitted: {} (exit {})",
         failed_unwrap.1, failed_unwrap.2
     );
+    let enable = encode_call(&FAIL_PAYOUT_SELECTOR, &[word(&1u128.to_be_bytes())]);
+    let fee = rpc(
+        &client,
+        &url,
+        "eth_sendTransaction",
+        json!([{"from": ANVIL_ACCOUNT, "to": wmon, "data": enable, "gas": "0x100000",
+            "maxFeePerGas": "0x2540be400", "maxPriorityFeePerGas": "0x2540be400"}]),
+    )
+    .await;
+    assert!(fee["result"].is_string(), "setFailPayout failed: {fee}");
+    rpc(&client, &url, "evm_mine", json!([])).await;
+    rpc(&client, &url, "evm_setIntervalMining", json!([1])).await;
+    mine(&client, &url).await;
     let failed_sync = sync_until(&wallet_bin, root.path(), &config_path, |value| {
         operation_reverted(value, "unwrap")
     })
@@ -1106,7 +1127,8 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
     );
     assert_eq!(token_balance(&client, &url, &wmon, &signer_hex).await, 5);
 
-    // 9. Unwrapping more than the wrapper balance reverts and stays retryable.
+    // 9. Unwrapping more than the wrapper balance would revert: refused at the estimate, before
+    // any claim or signature, and nothing is sent.
     let too_much = finish(spawn(
         &wallet_bin,
         root.path(),
@@ -1116,21 +1138,12 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
         ),
     ));
     assert!(
-        too_much.0,
-        "over-unwrap was not submitted: {} (exit {})",
-        too_much.1, too_much.2
-    );
-    let too_much_sync = sync_until(&wallet_bin, root.path(), &config_path, |value| {
-        operation_reverted(value, "unwrap")
-    })
-    .await;
-    assert!(
-        too_much_sync.0,
-        "over-unwrap never reconciled: {too_much_sync:?}"
+        !too_much.0 && too_much.1["error"] == ESTIMATE_REFUSED,
+        "over-unwrap must be refused at the estimate: {too_much:?}"
     );
     assert_eq!(token_balance(&client, &url, &wmon, &signer_hex).await, 5);
 
-    // 10. A wrong wrapper target reverts on unknown calldata and never completes.
+    // 10. A wrong wrapper target would revert on unknown calldata: refused at the estimate.
     let bad_config = root.path().join("wallet-wrong-wrapper.json");
     private(
         &bad_config,
@@ -1156,17 +1169,8 @@ async fn installed_wallet_deposits_random_notes_and_withdraws_one() {
         json!({"method":"wrap","config_file":bad_config,"amount":"1","operation_ref":"d1".repeat(32)}),
     ));
     assert!(
-        wrong.0,
-        "wrong-wrapper wrap was not submitted: {} (exit {})",
-        wrong.1, wrong.2
-    );
-    let wrong_sync = sync_until(&wallet_bin, root.path(), &bad_config, |value| {
-        operation_reverted(value, "wrap")
-    })
-    .await;
-    assert!(
-        wrong_sync.0,
-        "wrong-wrapper wrap never reconciled: {wrong_sync:?}"
+        !wrong.0 && wrong.1["error"] == ESTIMATE_REFUSED,
+        "a wrong-wrapper wrap must be refused at the estimate: {wrong:?}"
     );
 
     // 10b. A config pointing at a foreign pool fails closed before any operation is created.
@@ -2773,4 +2777,361 @@ async fn fresh_wallet_from_checkpoint_matches_full_history_through_spends_and_un
             "full_history_wallet_requests_primary_first_sync": full_methods,
         })
     );
+}
+
+// ---- WS6: read count and serial depth of a caught-up sync ---------------------------------------
+
+/// One proxied request: its method and when it started and finished, relative to the proxy start.
+#[derive(Clone, Debug)]
+struct Timed {
+    method: String,
+    start: Duration,
+    end: Duration,
+}
+
+/// Forwards to `upstream` after a fixed injected latency and records every request's span.
+async fn latency_proxy(
+    upstream: String,
+    latency: Duration,
+) -> (String, Arc<std::sync::Mutex<Vec<Timed>>>) {
+    use axum::{extract::State as AxumState, routing::post as axum_post};
+    #[derive(Clone)]
+    struct LatencyState {
+        upstream: String,
+        client: reqwest::Client,
+        latency: Duration,
+        origin: Instant,
+        spans: Arc<std::sync::Mutex<Vec<Timed>>>,
+    }
+    async fn forward(AxumState(state): AxumState<LatencyState>, body: String) -> String {
+        let start = state.origin.elapsed();
+        let method = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|request| request["method"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "batch".to_owned());
+        tokio::time::sleep(state.latency).await;
+        let reply = state
+            .client
+            .post(&state.upstream)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let end = state.origin.elapsed();
+        state
+            .spans
+            .lock()
+            .unwrap()
+            .push(Timed { method, start, end });
+        reply
+    }
+    let spans = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let state = LatencyState {
+        upstream,
+        client: reqwest::Client::new(),
+        latency,
+        origin: Instant::now(),
+        spans: spans.clone(),
+    };
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/", axum_post(forward))
+                .with_state(state),
+        )
+        .await
+        .unwrap();
+    });
+    (url, spans)
+}
+
+/// Longest chain of requests where each starts only after the previous one finished: the number
+/// of injected latencies a run pays end to end, whatever its total read count.
+fn serial_depth(spans: &[Timed]) -> usize {
+    let mut spans = spans.to_vec();
+    spans.sort_by_key(|span| span.start);
+    let mut depth = vec![1usize; spans.len()];
+    for current in 0..spans.len() {
+        for earlier in 0..current {
+            if spans[earlier].end <= spans[current].start {
+                depth[current] = depth[current].max(depth[earlier] + 1);
+            }
+        }
+    }
+    depth.into_iter().max().unwrap_or(0)
+}
+
+/// A caught-up `erebus-wallet sync` through two providers with 25 ms injected latency each.
+/// Every check still runs (deployment and dependency authentication, paired finalized recovery,
+/// receipt reconciliation); the reads only overlap. Without a signer claim the paired
+/// finalized-nonce reads are skipped; with a claim they run and release a consumed nonce.
+///
+/// Measured on this fixture (2026-10-22): before WS6 a caught-up sync without a claim made 145
+/// reads at a serial depth of 110 (two of them nonce reads); after, 117 reads at depth 48. Set
+/// `WS6_SYNC_REPORT=1` to print a run's numbers; `EREBUS_TEST_INSTALLED_BIN_DIR` measures another build.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil, Node and generated M5 prototype artifacts; local WS6 read budget"]
+async fn caught_up_sync_has_a_bounded_read_count_and_serial_depth() {
+    const LATENCY: Duration = Duration::from_millis(25);
+    let chain = history_chain("erc20", 1, 20).await;
+    let (primary, primary_spans) = latency_proxy(chain.url.clone(), LATENCY).await;
+    let (peer, peer_spans) = latency_proxy(chain.url.clone(), LATENCY).await;
+    let wallet_bin = native_binary("erebus-wallet", env!("CARGO_BIN_EXE_erebus-wallet"));
+    let root = tempfile::tempdir().unwrap();
+    let config = checkpoint_config(&chain, root.path(), &primary, &peer, "erc20");
+    let run = |request: Value| finish(spawn(&wallet_bin, root.path(), request));
+    let head =
+        quantity(&rpc(&chain.client, &chain.url, "eth_blockNumber", json!([])).await["result"])
+            .unwrap();
+    chain.wait_finalized_past(head).await;
+    let created =
+        run(json!({"method":"checkpoint","config_file":config,"confirm_fresh_wallet":true}));
+    assert!(created.0, "{created:?}");
+    let caught_up = sync_until(&wallet_bin, root.path(), &config, |value| {
+        value["result"]["nonce_released"] == true
+    })
+    .await;
+    assert!(caught_up.0, "{caught_up:?}");
+
+    let measure = |label: &str| {
+        let spans: Vec<Timed> = primary_spans
+            .lock()
+            .unwrap()
+            .drain(..)
+            .chain(peer_spans.lock().unwrap().drain(..))
+            .collect();
+        let nonce_reads = spans
+            .iter()
+            .filter(|span| span.method == "eth_getTransactionCount")
+            .count();
+        let (reads, depth) = (spans.len(), serial_depth(&spans));
+        if std::env::var_os("WS6_SYNC_REPORT").is_some() {
+            let mut methods = std::collections::BTreeMap::<String, usize>::new();
+            for span in &spans {
+                *methods.entry(span.method.clone()).or_default() += 1;
+            }
+            eprintln!("WS6 caught-up sync {label}: reads={reads} serial_depth={depth} methods={methods:?}");
+        }
+        (reads, depth, nonce_reads)
+    };
+    measure("warm-up");
+
+    // No claim: nothing to release, so no nonce reads at all.
+    let started = Instant::now();
+    let synced = run(json!({"method":"sync","config_file":config}));
+    let elapsed = started.elapsed();
+    assert!(
+        synced.0 && synced.1["result"]["nonce_released"] == true,
+        "{synced:?}"
+    );
+    let (reads, depth, nonce_reads) = measure("without claim");
+    assert_eq!(
+        nonce_reads, 0,
+        "a sync without a claim must not read nonces"
+    );
+    assert!(reads <= 130, "caught-up sync made {reads} reads");
+    assert!(depth <= 60, "caught-up sync serial depth {depth}");
+    if std::env::var_os("WS6_SYNC_REPORT").is_some() {
+        eprintln!("WS6 caught-up sync wall time {elapsed:?}");
+    }
+
+    // A claim on an already consumed nonce: the paired nonce reads run and release it.
+    let signer = signer_of(&config);
+    let set = rpc(
+        &chain.client,
+        &chain.url,
+        "anvil_setNonce",
+        json!([signer, "0x5"]),
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+    let latest =
+        quantity(&rpc(&chain.client, &chain.url, "eth_blockNumber", json!([])).await["result"])
+            .unwrap();
+    chain.wait_finalized_past(latest + 1).await;
+    let sender: [u8; 20] = hex::decode(signer.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let journal = erebus_evm::chain::SignerJournal::open(
+        root.path().join("state/signer-journal"),
+        31337,
+        sender,
+    )
+    .unwrap();
+    let pool = AddressBytes::new(chain.pool.to_vec()).unwrap();
+    let domain = erebus_core::domain::DeploymentDomain {
+        namespace: ChainNamespace::parse("eip155:31337").unwrap(),
+        settlement_contract: Some(pool.clone()),
+        pool: Some(pool),
+        verifier_version: 2,
+    };
+    let deployment = erebus_evm::deployment::EvmDeployment::new(
+        ChainNamespace::parse("eip155:31337").unwrap(),
+        chain.pool,
+        2,
+        chain.url.clone(),
+    )
+    .unwrap();
+    let stub = erebus_core::settlement::PreparedSettlement {
+        operation_ref: [0x42; 32],
+        deal_commitment: erebus_core::commitment::DealCommitment::from_bytes([0x42; 32]),
+        deal_nullifier: erebus_core::commitment::DealNullifier::from_bytes([0x42; 32]),
+        domain,
+        mode: erebus_core::terms::SettlementMode::Shielded,
+        required_guarantees: erebus_core::terms::GuaranteeSet::from_bits(
+            erebus_core::shielded::SHIELDED_GUARANTEES,
+        )
+        .unwrap(),
+        backend_evidence: vec![1],
+    };
+    journal
+        .reserve_call_with_value(
+            &deployment,
+            &stub,
+            chain.pool,
+            &[1],
+            0,
+            2,
+            erebus_evm::chain::Eip1559Fees::new(1_000_000_000, 100_000_000).unwrap(),
+            3_000_000,
+        )
+        .unwrap();
+    assert_eq!(journal.claim_nonce().unwrap(), Some(2));
+    let released = run(json!({"method":"sync","config_file":config}));
+    assert!(
+        released.0 && released.1["result"]["nonce_released"] == true,
+        "{released:?}"
+    );
+    let (_, _, nonce_reads) = measure("with claim");
+    assert!(
+        nonce_reads >= 2,
+        "a claim must be checked at both providers"
+    );
+    assert_eq!(journal.claim_nonce().unwrap(), None);
+}
+
+/// Deposit gas across consecutive leaf indices: each insert writes a different set of
+/// `filledSubtrees` slots, so the estimate moves with the index. Every deposit's estimate at its
+/// parent block, plus the 5% margin, must fit under the deposit method's limit; the spread is
+/// printed for the WS6 report.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Anvil, Node and generated M5 prototype artifacts; local WS6 gas measurement"]
+async fn deposit_estimates_across_consecutive_leaves_fit_the_method_limit() {
+    use erebus_shielded_prover::gas_policy::DEPOSIT_GAS_LIMIT;
+    const DEPOSITS: usize = 6;
+    const NOTE: u128 = 1_000_000_000_000_000;
+    let chain = history_chain("wmon", 1, 0).await;
+    let (primary, _) = latency_proxy(chain.url.clone(), Duration::ZERO).await;
+    let (peer, _) = latency_proxy(chain.url.clone(), Duration::ZERO).await;
+    let wallet_bin = native_binary("erebus-wallet", env!("CARGO_BIN_EXE_erebus-wallet"));
+    let root = tempfile::tempdir().unwrap();
+    let config = checkpoint_config(&chain, root.path(), &primary, &peer, "wmon");
+    let signer = signer_of(&config);
+    rpc(
+        &chain.client,
+        &chain.url,
+        "anvil_setBalance",
+        json!([signer, "0x56bc75e2d63100000"]),
+    )
+    .await;
+    let run = |request: Value| finish(spawn(&wallet_bin, root.path(), request));
+    let total = (NOTE * DEPOSITS as u128).to_string();
+    let call = |method: &str, extra: Value| {
+        let mut value = json!({"method": method, "config_file": config});
+        for (key, entry) in extra.as_object().unwrap() {
+            value_insert(&mut value, key, entry.clone());
+        }
+        value
+    };
+    for (kind, reference) in [("wrap", "91"), ("approve", "92")] {
+        let sent = run(call(
+            kind,
+            json!({"amount": total, "operation_ref": reference.repeat(32)}),
+        ));
+        assert!(sent.0, "{kind}: {sent:?}");
+        let done = sync_until(&wallet_bin, root.path(), &config, |value| {
+            operation_completed(value, kind)
+        })
+        .await;
+        assert!(done.0, "{done:?}");
+    }
+    let mut estimates = Vec::new();
+    for index in 0..DEPOSITS {
+        let reference = format!("{:02x}", 0xa0 + index).repeat(32);
+        let sent = run(call(
+            "deposit",
+            json!({"amount": NOTE.to_string(), "operation_ref": reference}),
+        ));
+        assert!(sent.0, "deposit {index}: {sent:?}");
+        let commitment = sent.1["result"]["commitment"].as_str().unwrap().to_owned();
+        let done = sync_until(&wallet_bin, root.path(), &config, |value| {
+            operation_identity_completed(value, &commitment)
+        })
+        .await;
+        assert!(done.0, "{done:?}");
+        let operation = done.1["result"]["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|operation| operation["identity"] == commitment)
+            .unwrap()
+            .clone();
+        let hash = format!(
+            "0x{}",
+            operation["attempts"][0]["tx_hash"].as_str().unwrap()
+        );
+        let tx = rpc(
+            &chain.client,
+            &chain.url,
+            "eth_getTransactionByHash",
+            json!([hash]),
+        )
+        .await;
+        let receipt = rpc(
+            &chain.client,
+            &chain.url,
+            "eth_getTransactionReceipt",
+            json!([hash]),
+        )
+        .await;
+        let block = quantity(&receipt["result"]["blockNumber"]).unwrap();
+        let limit = quantity(&tx["result"]["gas"]).unwrap();
+        assert_eq!(
+            limit, DEPOSIT_GAS_LIMIT,
+            "deposits sign at the deposit limit"
+        );
+        let estimate = rpc(
+            &chain.client,
+            &chain.url,
+            "eth_estimateGas",
+            json!([{"from": tx["result"]["from"], "to": tx["result"]["to"], "input": tx["result"]["input"]},
+                format!("0x{:x}", block - 1)]),
+        )
+        .await;
+        let estimate = quantity(&estimate["result"]).unwrap();
+        let used = quantity(&receipt["result"]["gasUsed"]).unwrap();
+        eprintln!(
+            "WS6 deposit leaf {}: estimate at parent {estimate}, used {used}",
+            index + 2
+        );
+        assert!(estimate * 105 <= DEPOSIT_GAS_LIMIT * 100, "{estimate}");
+        estimates.push(estimate);
+    }
+    let (low, high) = (
+        *estimates.iter().min().unwrap(),
+        *estimates.iter().max().unwrap(),
+    );
+    eprintln!(
+        "WS6 deposit estimate spread over {DEPOSITS} consecutive leaves: {low}..{high} ({:.2}%)",
+        (high - low) as f64 * 100.0 / low as f64
+    );
+    assert!((high - low) * 10 <= low, "spread exceeds 10%");
 }

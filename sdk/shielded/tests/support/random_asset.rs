@@ -144,6 +144,28 @@ async fn workflow(native: bool) {
         .await;
         assert!(result.0, "{result:?}");
     } else {
+        // WS6: a deposit whose asset balance is not visible yet refuses before proving or any
+        // claim, even with the allowance already in place.
+        let result = wallet_call("buyer", "approve", json!({"amount":"150"}));
+        assert!(result.0, "{result:?}");
+        let result = sync_until(&wallet, root.path(), &wallet_configs["buyer"], |v| {
+            operation_completed(v, "approve")
+        })
+        .await;
+        assert!(result.0, "{result:?}");
+        let before = sends.load(Ordering::SeqCst);
+        let refused = wallet_call(
+            "buyer",
+            "deposit",
+            json!({"amount":"150","operation_ref":"52".repeat(32)}),
+        );
+        assert!(
+            !refused.0
+                && refused.1["error"]
+                    == "deposit asset balance insufficient; wrap or fund the asset first",
+            "{refused:?}"
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), before);
         let owner: [u8; 20] = hex::decode(signers["buyer"].trim_start_matches("0x"))
             .unwrap()
             .try_into()
@@ -162,14 +184,21 @@ async fn workflow(native: bool) {
             150
         );
     }
-    let result = wallet_call("buyer", "approve", json!({"amount":"150"}));
-    assert!(result.0, "{result:?}");
-    let result = sync_until(&wallet, root.path(), &wallet_configs["buyer"], |v| {
-        operation_completed(v, "approve")
-    })
-    .await;
-    assert!(result.0, "{result:?}");
-    let result = wallet_call("buyer", "deposit", json!({"amount":"150"}));
+    if native {
+        let result = wallet_call("buyer", "approve", json!({"amount":"150"}));
+        assert!(result.0, "{result:?}");
+        let result = sync_until(&wallet, root.path(), &wallet_configs["buyer"], |v| {
+            operation_completed(v, "approve")
+        })
+        .await;
+        assert!(result.0, "{result:?}");
+    }
+    let deposit_ref = if native { "53" } else { "52" }.repeat(32);
+    let result = wallet_call(
+        "buyer",
+        "deposit",
+        json!({"amount":"150","operation_ref":deposit_ref}),
+    );
     assert!(result.0, "{result:?}");
     let result = sync_until(&wallet, root.path(), &wallet_configs["buyer"], |v| {
         operation_completed(v, "deposit")
@@ -246,6 +275,9 @@ async fn workflow(native: bool) {
             "{settle:?}"
         );
         assert_eq!(settle.1["submitted_this_call"], true, "{settle:?}");
+        let estimate = settle.1["funding"]["estimated_gas"].as_u64().unwrap();
+        eprintln!("WS6 settle estimate native={native}: {estimate}");
+        assert!(estimate * 105 <= erebus_shielded_prover::gas_policy::SETTLE_GAS_LIMIT * 100);
         let deadline = Instant::now() + Duration::from_secs(90);
         loop {
             let recovered = finish(spawn(

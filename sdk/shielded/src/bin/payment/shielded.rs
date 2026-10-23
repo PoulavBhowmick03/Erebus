@@ -2,9 +2,11 @@
 
 use super::*;
 use erebus_core::settlement::PreparedSettlement;
+use erebus_evm::chain::NonceError;
 use erebus_shielded_prover::{
     artifacts::{ArtifactRelease, CircuitKind, InstallOptions, MAX_MANIFEST_BYTES},
     chain::ShieldedChain,
+    gas_policy::{GasPolicy, SETTLE_GAS_LIMIT},
     index_store::{IndexDomain, IndexStore},
     observation::{observe_shielded_deal_agreed_bounded, ObservationError},
     preparation::{capabilities, prepare_coordinated_transfer, validate_prepared},
@@ -136,9 +138,12 @@ pub(super) async fn run(
         amount(&config.max_priority_fee_per_gas)?,
     )
     .map_err(|_| "invalid fee caps")?;
-    let gas_budget = (config.gas_limit as u128)
-        .checked_mul(fees.max_fee_per_gas())
-        .ok_or("gas budget overflow")?;
+    // A new settlement signs at the settle method's limit (the configured gas_limit is the cap for
+    // a plan saved before per-method limits); the funding check below uses the effective limit.
+    let gas_policy = GasPolicy {
+        limit: SETTLE_GAS_LIMIT,
+        legacy_cap: config.gas_limit,
+    };
     let runtime = digest(&config.runtime_keccak256)?;
     let first_hash = digest(&config.first_hash)?;
     let pins = PoolDependencyPins {
@@ -255,47 +260,18 @@ pub(super) async fn run(
         .map_err(|_| "pool checkpoint unavailable")
     };
     // Wallet recovery shares the wallet's own finalized-only caches, so a buyer replays pool
-    // history once. Observation also tracks the non-final head and keeps its own caches, which
-    // start from the wallet's verified progress whenever they are behind it.
+    // history once. It runs first; observation, which also tracks the non-final head and keeps
+    // its own caches, then starts from the wallet's just-verified progress, so the new finalized
+    // blocks are scanned once, not once per cache. Seeding copies verified caches and adds no
+    // trust; observation keeps all of its own anchor and finality checks.
     let wallet_primary = index("wallet-index", "primary.json")?;
     let wallet_peer = index("wallet-index", "peer.json")?;
     let primary_index = index("payment-observation", "shielded-primary.json")?;
     let peer_index = index("payment-observation", "shielded-peer.json")?;
-    for (observation, wallet) in [
-        (&primary_index, &wallet_primary),
-        (&peer_index, &wallet_peer),
-    ] {
-        observation
-            .seed_from(wallet)
-            .map_err(|_| "pool history caches unavailable")?;
-    }
     let (_, revisions) = coordinator
         .recorded_deal(operation)
         .map_err(|_| "durable revisions unavailable")?;
     let nullifier = deal_nullifier(&terms).map_err(|_| "invalid agreement")?;
-    let started = Instant::now();
-    let evidence = match observe_shielded_deal_agreed_bounded(
-        &rpc,
-        &primary_index,
-        &peer_rpc,
-        &peer_index,
-        &context,
-        &nullifier,
-        &revisions,
-        config.max_scan_blocks,
-    )
-    .await
-    {
-        Ok(evidence) => evidence,
-        Err(ObservationError::Recovery(error)) if pending(&mut response, &error) => {
-            return Ok(response)
-        }
-        Err(error) if error.is_rate_limited() => {
-            return Err("RPC provider rate limited; retain reservations and retry later")
-        }
-        Err(_) => return Err("paired pool evidence unavailable; retain reservations"),
-    };
-    response["measurements_ms"]["observation"] = json!(started.elapsed().as_millis());
     let wallet_key = read(&config.wallet_key_file, 32)?;
     let wallet = WalletStore::new(
         &config.wallet_file,
@@ -327,6 +303,37 @@ pub(super) async fn run(
         }
         Err(_) => return Err("paired finalized wallet recovery failed; retain reservations"),
     }
+    for (observation, wallet) in [
+        (&primary_index, &wallet_primary),
+        (&peer_index, &wallet_peer),
+    ] {
+        observation
+            .seed_from(wallet)
+            .map_err(|_| "pool history caches unavailable")?;
+    }
+    let started = Instant::now();
+    let evidence = match observe_shielded_deal_agreed_bounded(
+        &rpc,
+        &primary_index,
+        &peer_rpc,
+        &peer_index,
+        &context,
+        &nullifier,
+        &revisions,
+        config.max_scan_blocks,
+    )
+    .await
+    {
+        Ok(evidence) => evidence,
+        Err(ObservationError::Recovery(error)) if pending(&mut response, &error) => {
+            return Ok(response)
+        }
+        Err(error) if error.is_rate_limited() => {
+            return Err("RPC provider rate limited; retain reservations and retry later")
+        }
+        Err(_) => return Err("paired pool evidence unavailable; retain reservations"),
+    };
+    response["measurements_ms"]["observation"] = json!(started.elapsed().as_millis());
     let assessment = coordinator
         .reconcile(operation, &evidence, clock()?)
         .map_err(|_| "reconciliation failed; retain reservations")?;
@@ -348,12 +355,17 @@ pub(super) async fn run(
             response["status"] = json!("ok");
             response["payment_verified"] = json!(winning.to_hex() == response["deal_commitment"]);
             response["winning_commitment"] = json!(winning.to_hex());
-            response["nonce_cleanup_pending"] = json!(match chain
-                .evm()
-                .verified_finalized_nonce_agreed(peer.evm(), signer)
-                .await
-            {
-                Ok(nonce) => journal.release(&nonce).is_err(),
+            // Without a claim there is nothing to release: skip the paired finalized-nonce reads.
+            response["nonce_cleanup_pending"] = json!(match journal.claim_nonce() {
+                Ok(None) => false,
+                Ok(Some(_)) => match chain
+                    .evm()
+                    .verified_finalized_nonce_agreed(peer.evm(), signer)
+                    .await
+                {
+                    Ok(nonce) => journal.release(&nonce).is_err(),
+                    Err(_) => true,
+                },
                 Err(_) => true,
             });
             return Ok(response);
@@ -395,6 +407,22 @@ pub(super) async fn run(
     ) {
         return Err("operation is not ready for payment");
     }
+    // The gas this settlement will actually sign or send at: a plan already saved for it (a
+    // coordinator-retained signed transaction, or the signer journal's claim for its prepared
+    // call) keeps its own limit; only a new plan uses the settle limit. Funding is checked
+    // against that limit, so a resumed larger legacy plan is never sent underfunded.
+    let effective_limit = if config.relay.is_some() {
+        SETTLE_GAS_LIMIT
+    } else {
+        match saved_gas_limit(&coordinator, &journal, chain.evm(), operation)? {
+            Some(saved) if gas_policy.resumes(saved) => saved,
+            Some(_) => return Err("configured signing policy differs from durable plan"),
+            None => SETTLE_GAS_LIMIT,
+        }
+    };
+    let gas_budget = (effective_limit as u128)
+        .checked_mul(fees.max_fee_per_gas())
+        .ok_or("gas budget overflow")?;
     let started = Instant::now();
     let balance = chain
         .evm()
@@ -525,10 +553,28 @@ pub(super) async fn run(
         .await
         .map_err(|_| "pool call estimate failed; retain reservations")?;
     response["funding"]["estimated_gas"] = json!(gas);
-    if gas > config.gas_limit {
-        response["status"] = json!("funding_required");
-        return Ok(response);
-    }
+    // A claim already saved for this exact call (including one from before per-method limits)
+    // resumes at its own limit within the cap. Otherwise the estimate plus margin must fit under
+    // the settle limit, or this refuses before any claim is written or byte is signed.
+    let gas_limit = match journal.resume_call(
+        chain.evm().deployment(),
+        &prepared,
+        chain.evm().deployment().settlement_contract,
+        &prepared.backend_evidence,
+    ) {
+        Ok(Some(plan)) if gas_policy.resumes(plan.params().gas_limit) => plan.params().gas_limit,
+        Ok(Some(_)) => return Err("configured signing policy differs from durable plan"),
+        Ok(None) => {
+            if !gas_policy.admits(gas) {
+                response["funding"]["gas_limit_sufficient"] = json!(false);
+                response["status"] = json!("funding_required");
+                return Ok(response);
+            }
+            gas_policy.limit
+        }
+        Err(NonceError::Busy) => return Err("signer lane is busy; sync the wallet and retry"),
+        Err(_) => return Err("gas-payer nonce journal unavailable"),
+    };
     let started = Instant::now();
     if coordinator
         .signed_transaction(operation)
@@ -571,10 +617,15 @@ pub(super) async fn run(
                 &key,
                 clock()?,
                 fees,
-                config.gas_limit,
+                gas_limit,
             )
             .await
-            .map_err(|_| "local signing failed; retain nonce and reservations")?;
+            .map_err(|error| match error {
+                erebus_shielded_prover::chain::ShieldedChainError::Nonce(NonceError::Busy) => {
+                    "signer lane is busy; sync the wallet and retry"
+                }
+                _ => "local signing failed; retain nonce and reservations",
+            })?;
     }
     let signed = coordinator
         .signed_transaction(operation)
@@ -583,7 +634,7 @@ pub(super) async fn run(
     let plan = SigningPlan::decode(signed.plan()).map_err(|_| "invalid durable signing plan")?;
     if plan.sender() != signer
         || plan.params().fees != fees
-        || plan.params().gas_limit != config.gas_limit
+        || !gas_policy.resumes(plan.params().gas_limit)
     {
         return Err("configured signing policy differs from durable plan");
     }
@@ -614,6 +665,37 @@ pub(super) async fn run(
     response["stage"] = json!(format!("{:?}", submitted.stage));
     response["broadcast_attempts"] = json!(submitted.broadcast_attempts);
     Ok(response)
+}
+
+/// The gas limit of a plan already saved for this operation: the coordinator's signed
+/// transaction, or else the signer journal's claim for its prepared call. `None` for a new plan.
+fn saved_gas_limit(
+    coordinator: &Coordinator,
+    journal: &SignerJournal,
+    chain: &EvmChain,
+    operation: [u8; 32],
+) -> Result<Option<u64>, &'static str> {
+    if let Some(signed) = coordinator
+        .signed_transaction(operation)
+        .map_err(|_| "signed state unavailable")?
+    {
+        let plan =
+            SigningPlan::decode(signed.plan()).map_err(|_| "invalid durable signing plan")?;
+        return Ok(Some(plan.params().gas_limit));
+    }
+    let Ok(prepared) = coordinator.prepared_settlement(operation) else {
+        return Ok(None);
+    };
+    match journal.resume_call(
+        chain.deployment(),
+        &prepared,
+        chain.deployment().settlement_contract,
+        &prepared.backend_evidence,
+    ) {
+        Ok(plan) => Ok(plan.map(|plan| plan.params().gas_limit)),
+        Err(NonceError::Busy) => Ok(None),
+        Err(_) => Err("gas-payer nonce journal unavailable"),
+    }
 }
 
 fn validate_read_rates(primary: Option<u32>, peer: Option<u32>) -> Result<(), &'static str> {
