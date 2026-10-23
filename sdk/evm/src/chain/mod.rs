@@ -6,6 +6,7 @@
 //! Supported submission uses the coordinator-backed broadcast path. Operator reconciliation
 //! requires paired finalized evidence; signer claims release only from verified consumed nonces.
 
+mod estimate;
 mod nonce;
 mod observation;
 mod plan;

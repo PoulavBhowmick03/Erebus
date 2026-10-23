@@ -220,25 +220,48 @@ impl EvmChain {
         if finalized.number.to::<u64>() < first_block {
             return Err(EvmError::FinalityUnavailable);
         }
-        let first = self.canonical_block(first_block).await?;
+        // The same reads as one at a time, issued together: they are independent, and every
+        // anchor is still rechecked after all of them. At most three are in flight per chain.
+        let parent = async {
+            match first_block.checked_sub(1) {
+                Some(number) => self.canonical_block(number).await.map(Some),
+                None => Ok(None),
+            }
+        };
+        let (first, parent) = tokio::try_join!(self.canonical_block(first_block), parent)?;
         if first.hash.0 != first_hash {
             return Err(EvmError::DeploymentMismatch);
         }
-        for block in [&first, &finalized] {
-            let code = self.runtime_at(block.hash).await?;
+        let parent_code = async {
+            match &parent {
+                Some(parent) => self.runtime_at(parent.hash).await.map(Some),
+                None => Ok(None),
+            }
+        };
+        let (first_code, finalized_code, parent_code) = tokio::try_join!(
+            self.runtime_at(first.hash),
+            self.runtime_at(finalized.hash),
+            parent_code
+        )?;
+        for code in [first_code, finalized_code] {
             if code.is_empty() || keccak256(code).0 != expected_runtime_hash {
                 return Err(EvmError::DeploymentMismatch);
             }
         }
-        if first_block != 0 {
-            let parent = self.canonical_block(first_block - 1).await?;
-            if !self.runtime_at(parent.hash).await?.is_empty() {
-                return Err(EvmError::DeploymentMismatch);
-            }
-            self.recheck_block(&parent).await?;
+        if parent_code.is_some_and(|code| !code.is_empty()) {
+            return Err(EvmError::DeploymentMismatch);
         }
-        self.recheck_block(&first).await?;
-        self.recheck_block(&finalized).await?;
+        let parent_recheck = async {
+            match &parent {
+                Some(parent) => self.recheck_block(parent).await,
+                None => Ok(()),
+            }
+        };
+        tokio::try_join!(
+            parent_recheck,
+            self.recheck_block(&first),
+            self.recheck_block(&finalized)
+        )?;
         self.check_chain().await?;
         Ok(finalized.anchor())
     }
@@ -253,18 +276,30 @@ impl EvmChain {
         first_hash: [u8; 32],
     ) -> Result<BlockRef, EvmError> {
         let (finalized, _) = self.common_observation_blocks(peer).await?;
-        for chain in [self, peer] {
-            let authenticated = chain
-                .authenticate_deployment_runtime(expected_runtime_hash, first_block, first_hash)
-                .await?;
-            if authenticated.number < finalized.number.to::<u64>()
-                || keccak256(chain.runtime_at(finalized.hash).await?).0 != expected_runtime_hash
-            {
-                return Err(EvmError::DeploymentMismatch);
-            }
-            chain.recheck_block(&finalized).await?;
-        }
+        // Each provider authenticates independently; the two run together.
+        tokio::try_join!(
+            self.authenticate_at_shared(&finalized, expected_runtime_hash, first_block, first_hash),
+            peer.authenticate_at_shared(&finalized, expected_runtime_hash, first_block, first_hash)
+        )?;
         Ok(finalized.anchor())
+    }
+
+    async fn authenticate_at_shared(
+        &self,
+        finalized: &Block,
+        expected_runtime_hash: [u8; 32],
+        first_block: u64,
+        first_hash: [u8; 32],
+    ) -> Result<(), EvmError> {
+        let authenticated = self
+            .authenticate_deployment_runtime(expected_runtime_hash, first_block, first_hash)
+            .await?;
+        if authenticated.number < finalized.number.to::<u64>()
+            || keccak256(self.runtime_at(finalized.hash).await?).0 != expected_runtime_hash
+        {
+            return Err(EvmError::DeploymentMismatch);
+        }
+        self.recheck_block(finalized).await
     }
 
     async fn common_observation_blocks(&self, peer: &Self) -> Result<(Block, Block), EvmError> {
