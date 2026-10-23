@@ -247,7 +247,8 @@ EREBUS_PAYMENT_CONFIG=/absolute/payment.json \
 ```
 
 The negotiation configuration's `role` selects the tools. A buyer gets `negotiate_deal`,
-`check_settlement_funding`, `settle_deal`, and `recover_deal`; a seller gets `negotiate_deal`
+`check_settlement_funding` (optional: `settle_deal` runs the same note and gas checks before it
+proves), `settle_deal`, and `recover_deal`; a seller gets `negotiate_deal`
 only and refuses a payment configuration. With a wallet policy, a buyer also gets the wallet tools
 the operator allowed (`wallet_notes`, `sync_wallet`, `wallet_status`, `wrap_wallet`,
 `approve_wallet`, `deposit_wallet`, and `fund_wallet`).

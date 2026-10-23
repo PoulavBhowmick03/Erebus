@@ -10,9 +10,11 @@ rest: fund a private note, negotiate, settle, verify the payment and retrieve wh
 
 ## What you need
 
-- macOS arm64 or Linux x86_64, `uv`, and about 2.15 testnet MON for the buyer (1.83 MON plus 0.3
-  testnet USDC with `--pool usdc`, see below). The amount is printed for you: Monad charges the full
-  gas limit, measured at about 0.31 MON per transaction, and each send needs 0.9 MON free up front.
+- macOS arm64 or Linux x86_64, `uv`, and about 1.44 testnet MON for the buyer (1.43 MON plus 0.3
+  testnet USDC with `--pool usdc`, see below). The amount is printed for you as measured-price
+  guidance: Monad charges the full gas limit, so each send is sized by its own limit (wrap and
+  approve 65,000, deposit 2,100,000, settle 3,010,000) at the measured 102 gwei, and a settlement
+  needs its limit times the 300 gwei fee cap (0.903 MON) free before it is signed.
   The seller needs none for this flow.
 - Testnet MON from the faucet, <https://faucet.monad.xyz>. Nothing here automates the faucet.
 - Two agents that speak MCP: Claude Code, Codex or Cursor.
@@ -45,7 +47,7 @@ their shares wired together, sets conservative RPC rate limits, and prints:
 ```json
 "funding": {
   "faucet": "https://faucet.monad.xyz",
-  "buyer":  {"address": "0x…", "send_at_least_mon": "2.143", "why": "5 transactions at about 0.310 MON each …"},
+  "buyer":  {"address": "0x…", "send_at_least_mon": "1.440", "why": "measured-price guidance: gas limits wrap 65,000, …"},
   "seller": {"address": "0x…", "send_at_least_mon": "0", "why": "the seller sends nothing in this flow …"}
 }
 ```
@@ -91,7 +93,7 @@ Circle USDC. Amounts are base units of that token:
 | `--price` default | `1000000000000000` (0.001 WMON) | `100000` (0.1 USDC) |
 | `--fund-amount` default | `3000000000000000` (0.003 WMON) | `300000` (0.3 USDC) |
 | Buyer transactions | 5: wrap, approve, deposit, two for settlement | 4: approve, deposit, two for settlement |
-| Buyer MON | (5 − 1) × 0.31 + 0.9 + 0.003 wrapped = 2.143 | (4 − 1) × 0.31 + 0.9 = 1.830 |
+| Buyer MON | 5.24M gas × 102 gwei + 0.903 + 0.003 wrapped = 1.440 | 5.175M gas × 102 gwei + 0.903 = 1.431 |
 | Buyer asset | none: `fund_wallet` wraps MON | at least `--fund-amount` USDC base units, sent to the buyer address |
 
 There is no wrap on this pool, so the buyer must hold the USDC it deposits. This repository does not
@@ -99,7 +101,7 @@ document a faucet for this token: send testnet USDC to the buyer address yoursel
 amounts:
 
 ```json
-"buyer": {"address": "0x…", "send_at_least_mon": "1.830", "why": "4 transactions at about 0.310 MON each …",
+"buyer": {"address": "0x…", "send_at_least_mon": "1.431", "why": "measured-price guidance: gas limits approve 65,000, …",
           "usdc_token": "0x534b2f3a21130d7a60830c2df862319e593943a3",
           "send_at_least_usdc_base_units": "300000", "send_at_least_usdc": "0.300000", "also": "…"}
 ```
@@ -128,8 +130,9 @@ Each agent sees only its own role's server. Start the seller first, and paste ea
 - **Codex:** merge `codex.config.toml` into `~/.codex/config.toml` (one role per Codex profile).
 - **Cursor:** copy `cursor.mcp.json` to the project's `.cursor/mcp.json`.
 
-The buyer's flow is: `fund_wallet` → `negotiate_deal` → `check_settlement_funding` →
-`settle_deal` → `recover_deal` → `retrieve_service_access(operation_ref=…)`. The seller loops:
+The buyer's flow is: `fund_wallet` → `negotiate_deal` → `settle_deal` → `recover_deal` →
+`retrieve_service_access(operation_ref=…)`. `check_settlement_funding` stays available but is
+optional: `settle_deal` checks the note and gas itself before it proves or signs. The seller loops:
 `negotiate_deal(wait_seconds=600)`, report the returned `peer` and `deal_commitment`, and call it
 again for the next buyer. `list_peers` shows which buyers the seller is configured for.
 
@@ -139,11 +142,13 @@ What the agents can rely on:
   anything is sent, and returns it. Retrying without one resumes the same unfinished action instead
   of sending another; a different amount while one is unfinished is refused.
 - **`fund_wallet(amount)`** wraps (WMON pool only) and approves only if needed, deposits, and waits
-  until the note is spendable. If its wait runs out, call it again with the returned `operation_ref`;
+  until the note is spendable. Each step starts once the previous one is submitted; a step that
+  sees the previous one not yet final syncs once and retries under the same reference. If its wait runs out, call it again with the returned `operation_ref`;
   finished steps never repeat.
 - **The seller waits.** `negotiate_deal(wait_seconds=N)` keeps listening up to N seconds (0–900).
-- **Settlement waits for the wallet.** `settle_deal` syncs first, so a deposit that is not yet
-  final no longer causes `local signing failed`.
+- **Settlement checks the wallet itself.** `settle_deal` does not sync first. If a wallet
+  transaction still holds the signer or the funded note, it syncs once and retries once, then
+  returns a retryable `WALLET_OPERATION_PENDING` or `SIGNER_CLAIM_HELD`.
 - **Retrieval by deal.** `retrieve_service_access(operation_ref=…)`; `negotiate_deal` also returns
   `evidence_name`.
 - **Errors say what to do.** Every failure has a stable `code`, the native `native_error`, a
@@ -202,13 +207,16 @@ and omits the native text (only the listed messages are forwarded, so private de
 | `DESCRIPTOR_EXPIRED` | `local discovery descriptor is invalid or expired`; `peer discovery descriptor is invalid or expired` | `quickstart renew` (keys and funds kept); on separate machines re-run `init` and `connect` and share the new descriptor. | no |
 | `OPERATOR_CONFIG_INVALID` | `invalid operator configuration` | The operator must fix the config (for example `timeout_seconds` above 300). | no |
 | `INVALID_OPERATION_REF` | `invalid operation reference`; `operation ID must be 64 nonzero lowercase hex digits` | Pass 64 lowercase hex digits, or omit it. | no |
-| `SIGNER_CLAIM_HELD` | `local signing failed; retain nonce and reservations` | A wallet transaction is not final yet: `sync_wallet` until nothing is pending, then retry. | yes |
+| `SIGNER_CLAIM_HELD` | `local signing failed; retain nonce and reservations`; `signer lane is busy; sync the wallet and retry` | A wallet transaction is not final yet: `sync_wallet` until nothing is pending, then retry. | yes |
 | `RATE_LIMITED` | `RPC provider rate limited; …` | A provider kept answering HTTP 429 after backoff. Wait and retry; the operator can lower `rpc_requests_per_second`. | yes |
 | `PROVIDER_UNAVAILABLE` | `paired deployment authentication failed`; `paired pool evidence unavailable; …`; `paired … wallet recovery failed …` | The two providers could not give agreeing evidence. Retry later, or change endpoints with `erebus-init --metropolis endpoints`. | yes |
 | `POLICY_REFUSED` | `wallet amount exceeds operator policy`; `wallet action is not authorized by operator policy` | The operator's policy refuses it; use a smaller amount or ask the operator. | no |
 | `ALLOWANCE_REQUIRED` | `deposit allowance insufficient; run approve first` | Approve, wait until it completes, then deposit (`fund_wallet` does this). | yes |
+| `BALANCE_REQUIRED` | `deposit asset balance insufficient; wrap or fund the asset first` | The wrap or transfer is not visible yet: `sync_wallet`, then deposit with the same reference (`fund_wallet` does this). | yes |
+| `GAS_ESTIMATE_FAILED` | `gas estimate failed; the call would revert or the provider failed; nothing was signed` | The call would revert now (often an earlier step not visible yet) or a provider failed; nothing was signed. `sync_wallet`, then retry with the same reference. | yes |
+| `GAS_LIMIT_EXCEEDED` | `gas estimate exceeds the method gas limit; nothing was signed` | The call's estimate plus 5% exceeds the operator's per-method gas limit; nothing was signed. The operator reviews the limit. | no |
 | `OPERATION_IN_PROGRESS` | `another deposit is retained; …`, or an omitted reference with a different amount | Finish the returned `operation_ref` first. | yes |
-| `WALLET_OPERATION_PENDING` | (settlement waited 5 minutes for the wallet) | `sync_wallet` until nothing is pending, then retry `settle_deal`. | yes |
+| `WALLET_OPERATION_PENDING` | (settlement synced once and retried once while a wallet transaction was pending) | `sync_wallet` until nothing is pending, then retry `settle_deal`. | yes |
 | `FUNDS_REQUIRED` | (`fund_wallet` when the signer holds less than `amount`) | On the USDC pool, send the buyer address the error's `shortfall` (base units of `asset`); on WMON, send WMON or allow wrap. | yes |
 
 A `pending` result is not an error: history or settlement is still catching up. Repeat the same
