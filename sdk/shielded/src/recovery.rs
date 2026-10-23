@@ -5,12 +5,17 @@
 
 use std::collections::HashSet;
 
+use futures_util::stream::{self, TryStreamExt};
+
 use crate::{
     index_store::{IndexStore, IndexStoreError},
-    indexer::{IndexError, PoolEvent, PoolIndex},
+    indexer::{IndexError, PoolBlock, PoolEvent, PoolIndex},
     rpc::{PoolRpc, RpcError},
     wallet::{WalletError, WalletStore},
 };
+
+/// Wallet-event block re-reads kept in flight per provider during finalized recovery.
+const WALLET_EVENT_REREADS: usize = crate::rpc::DEFAULT_MAX_CONCURRENT_READS as usize;
 
 /// A confirmed-prefix recovery step failed.
 #[derive(Debug, thiserror::Error)]
@@ -164,38 +169,59 @@ async fn recover_finalized_wallet_inner(
     } else {
         sync_finalized_public_index_inner(rpc, index_store, max_blocks).await?
     };
-    for block in index.event_blocks() {
-        let cached: Vec<_> = block.events.iter().filter(relevant).collect();
-        if cached.is_empty() {
-            continue;
-        }
-        let canonical = rpc.read_block(block.number).await?;
-        if canonical.hash != block.hash
-            || canonical.events.iter().filter(relevant).collect::<Vec<_>>() != cached
-        {
-            return Err(RecoveryError::Rpc(RpcError::Evidence(
-                "cached wallet events differ from canonical pool logs",
-            )));
-        }
-        if let Some((peer_rpc, _)) = peer {
-            let canonical = peer_rpc.read_block(block.number).await?;
-            if canonical.hash != block.hash
-                || canonical.events.iter().filter(relevant).collect::<Vec<_>>() != cached
-            {
-                return Err(RecoveryError::Rpc(RpcError::Evidence(
+    // Re-read every block holding one of this wallet's events from each provider. The reads are
+    // independent: each provider's run concurrently (bounded), and the two providers together.
+    // Every block is still compared in full, and both anchors are rechecked afterwards.
+    let wallet_blocks: Vec<_> = index
+        .event_blocks()
+        .map(|block| {
+            (
+                block,
+                block.events.iter().filter(relevant).collect::<Vec<_>>(),
+            )
+        })
+        .filter(|(_, cached)| !cached.is_empty())
+        .collect();
+    let peer_reread = async {
+        match peer {
+            Some((peer_rpc, _)) => {
+                reread_wallet_blocks(
+                    peer_rpc,
+                    &wallet_blocks,
+                    &relevant,
                     "peer wallet events differ from canonical pool logs",
-                )));
+                )
+                .await
             }
+            None => Ok(()),
         }
-    }
-    if let Some((peer_rpc, _)) = peer {
-        if peer_rpc.canonical_block_hash(report.through).await? != report.block_hash {
-            return Err(RecoveryError::Rpc(RpcError::Evidence(
-                "peer finalized wallet anchor changed during recovery",
-            )));
+    };
+    tokio::try_join!(
+        reread_wallet_blocks(
+            rpc,
+            &wallet_blocks,
+            &relevant,
+            "cached wallet events differ from canonical pool logs"
+        ),
+        peer_reread
+    )?;
+    let peer_anchor = async {
+        match peer {
+            Some((peer_rpc, _)) => peer_rpc
+                .canonical_block_hash(report.through)
+                .await
+                .map(Some),
+            None => Ok(None),
         }
+    };
+    let (anchor, peer_anchor) =
+        tokio::try_join!(rpc.canonical_block_hash(report.through), peer_anchor)?;
+    if peer_anchor.is_some_and(|hash| hash != report.block_hash) {
+        return Err(RecoveryError::Rpc(RpcError::Evidence(
+            "peer finalized wallet anchor changed during recovery",
+        )));
     }
-    if rpc.canonical_block_hash(report.through).await? != report.block_hash {
+    if anchor != report.block_hash {
         return Err(RecoveryError::Rpc(RpcError::Evidence(
             "finalized wallet anchor changed during recovery",
         )));
@@ -216,6 +242,27 @@ async fn recover_finalized_wallet_inner(
             .map_err(|_| WalletError::Note("finalized public event replay"))
     })?;
     Ok(report)
+}
+
+/// Re-reads each cached wallet-event block from one provider, bounded concurrently, and
+/// requires the canonical hash and this wallet's events to match the cache exactly.
+async fn reread_wallet_blocks(
+    source: &PoolRpc,
+    blocks: &[(&PoolBlock, Vec<&PoolEvent>)],
+    relevant: &(dyn Fn(&&PoolEvent) -> bool + Sync),
+    differs: &'static str,
+) -> Result<(), RecoveryError> {
+    stream::iter(blocks.iter().map(Ok::<_, RecoveryError>))
+        .try_for_each_concurrent(WALLET_EVENT_REREADS, |(block, cached)| async move {
+            let canonical = source.read_block(block.number).await?;
+            if canonical.hash != block.hash
+                || canonical.events.iter().filter(relevant).collect::<Vec<_>>() != *cached
+            {
+                return Err(RecoveryError::Rpc(RpcError::Evidence(differs)));
+            }
+            Ok(())
+        })
+        .await
 }
 
 /// Public evidence after a wallet recovery scan. No note openings are included.

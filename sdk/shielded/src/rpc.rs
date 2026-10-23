@@ -243,29 +243,32 @@ impl PoolRpc {
     pub async fn runtime_pins_at(&self, block_hash: [u8; 32]) -> Result<PoolRuntimePins, RpcError> {
         self.check_chain().await?;
         let block = canonical_block(block_hash);
-        let pool = self.code_hash_at(self.pool, &block).await?;
-        let mut dependencies = [[0u8; 32]; 4];
-        for (position, signature) in [
-            "poseidonTwo()",
-            "depositVerifier()",
-            "transferVerifier()",
-            "withdrawVerifier()",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let address: String = self.call("eth_call", serde_json::json!([
-                {"to":format!("0x{}", hex::encode(self.pool)),"data":format!("0x{}",hex::encode(&Keccak256::digest(signature.as_bytes())[..4]))}, block
-            ])).await?;
-            let word = fixed_hex::<32>(&address)?;
-            if word[..12] != [0; 12] || word[12..] == [0; 20] {
-                return Err(RpcError::Evidence("invalid immutable pool dependency"));
+        // The pool's code and each dependency's (getter, then code) chain are independent reads,
+        // so all five run together: at most five in flight, still under this source's pacer.
+        let dependency = |signature: &'static str| {
+            let block = &block;
+            async move {
+                let address: String = self.call("eth_call", serde_json::json!([
+                    {"to":format!("0x{}", hex::encode(self.pool)),"data":format!("0x{}",hex::encode(&Keccak256::digest(signature.as_bytes())[..4]))}, block
+                ])).await?;
+                let word = fixed_hex::<32>(&address)?;
+                if word[..12] != [0; 12] || word[12..] == [0; 20] {
+                    return Err(RpcError::Evidence("invalid immutable pool dependency"));
+                }
+                let address: [u8; 20] = word[12..]
+                    .try_into()
+                    .map_err(|_| RpcError::Evidence("invalid immutable pool dependency"))?;
+                self.code_hash_at(address, block).await
             }
-            let address: [u8; 20] = word[12..]
-                .try_into()
-                .map_err(|_| RpcError::Evidence("invalid immutable pool dependency"))?;
-            dependencies[position] = self.code_hash_at(address, &block).await?;
-        }
+        };
+        let (pool, poseidon, deposit, transfer, withdraw) = tokio::try_join!(
+            self.code_hash_at(self.pool, &block),
+            dependency("poseidonTwo()"),
+            dependency("depositVerifier()"),
+            dependency("transferVerifier()"),
+            dependency("withdrawVerifier()"),
+        )?;
+        let dependencies = [poseidon, deposit, transfer, withdraw];
         self.check_chain().await?;
         Ok(PoolRuntimePins {
             pool,
@@ -765,17 +768,64 @@ impl PoolRpc {
         if anchor.number < domain.first_block {
             return Err(RpcError::Evidence("account anchor predates deployment"));
         }
-        let mut agreed = None;
-        for rpc in [self, peer] {
-            for hash in [domain.first_hash, anchor.hash] {
-                rpc.authenticate_runtime_at(hash, pins).await?;
-                if rpc.pool_identity_at(hash).await? != expected {
-                    return Err(RpcError::Evidence(
-                        "account diagnostic pool identity differs",
-                    ));
-                }
+        // Both providers' reads are independent and run together; each compares only after all
+        // of its own reads, and both anchors are rechecked afterwards exactly as before.
+        let (first, second) = tokio::try_join!(
+            self.account_state_at(domain, expected, pins, owner, anchor),
+            peer.account_state_at(domain, expected, pins, owner, anchor),
+        )?;
+        if first != second {
+            return Err(RpcError::Evidence(
+                "RPC providers disagree on account diagnostics",
+            ));
+        }
+        tokio::try_join!(
+            self.recheck_account_anchors(domain, anchor),
+            peer.recheck_account_anchors(domain, anchor),
+        )?;
+        Ok(first)
+    }
+
+    /// One provider's account diagnostics at `anchor`: pinned runtimes and pool identity at the
+    /// deployment block and the anchor, then the owner's balances and allowance at the anchor.
+    async fn account_state_at(
+        &self,
+        domain: crate::index_store::IndexDomain,
+        expected: PoolIdentity,
+        pins: PoolRuntimePins,
+        owner: [u8; 20],
+        anchor: PoolFinalizedBlock,
+    ) -> Result<PoolAccountState, RpcError> {
+        let identity_at = |hash: [u8; 32]| async move {
+            let ((), identity) = tokio::try_join!(
+                self.authenticate_runtime_at(hash, pins),
+                self.pool_identity_at(hash)
+            )?;
+            if identity != expected {
+                return Err(RpcError::Evidence(
+                    "account diagnostic pool identity differs",
+                ));
             }
-            let native: String = rpc
+            Ok(())
+        };
+        let mut balance = Keccak256::digest(b"balanceOf(address)")[..4].to_vec();
+        let mut owner_word = [0u8; 32];
+        owner_word[12..].copy_from_slice(&owner);
+        balance.extend_from_slice(&owner_word);
+        let mut allowance = Keccak256::digest(b"allowance(address,address)")[..4].to_vec();
+        allowance.extend_from_slice(&owner_word);
+        let mut pool_word = [0u8; 32];
+        pool_word[12..].copy_from_slice(&self.pool);
+        allowance.extend_from_slice(&pool_word);
+        let word = |data: Vec<u8>| async move {
+            let result: String = self.call("eth_call", serde_json::json!([
+                {"to":format!("0x{}",hex::encode(expected.asset)), "data":format!("0x{}",hex::encode(data))},
+                canonical_block(anchor.hash)
+            ])).await?;
+            fixed_hex::<32>(&result)
+        };
+        let native = async {
+            let native: String = self
                 .call(
                     "eth_getBalance",
                     serde_json::json!([
@@ -784,50 +834,41 @@ impl PoolRpc {
                     ]),
                 )
                 .await?;
-            let mut balance = Keccak256::digest(b"balanceOf(address)")[..4].to_vec();
-            let mut owner_word = [0u8; 32];
-            owner_word[12..].copy_from_slice(&owner);
-            balance.extend_from_slice(&owner_word);
-            let mut allowance = Keccak256::digest(b"allowance(address,address)")[..4].to_vec();
-            allowance.extend_from_slice(&owner_word);
-            let mut pool_word = [0u8; 32];
-            pool_word[12..].copy_from_slice(&self.pool);
-            allowance.extend_from_slice(&pool_word);
-            let word = |data: Vec<u8>| async move {
-                let result: String = rpc.call("eth_call", serde_json::json!([
-                    {"to":format!("0x{}",hex::encode(expected.asset)), "data":format!("0x{}",hex::encode(data))},
-                    canonical_block(anchor.hash)
-                ])).await?;
-                fixed_hex::<32>(&result)
-            };
-            let state = PoolAccountState {
-                anchor,
-                native_balance: quantity_word(&native)?,
-                asset_balance: word(balance).await?,
-                allowance: word(allowance).await?,
-            };
-            if agreed.is_some_and(|old| old != state) {
-                return Err(RpcError::Evidence(
-                    "RPC providers disagree on account diagnostics",
-                ));
-            }
-            agreed = Some(state);
+            quantity_word(&native)
+        };
+        let ((), (), native_balance, asset_balance, allowance) = tokio::try_join!(
+            identity_at(domain.first_hash),
+            identity_at(anchor.hash),
+            native,
+            word(balance),
+            word(allowance),
+        )?;
+        Ok(PoolAccountState {
+            anchor,
+            native_balance,
+            asset_balance,
+            allowance,
+        })
+    }
+
+    /// Rechecks the deployment block and the account anchor, and that finality has not regressed.
+    async fn recheck_account_anchors(
+        &self,
+        domain: crate::index_store::IndexDomain,
+        anchor: PoolFinalizedBlock,
+    ) -> Result<(), RpcError> {
+        let (deployment, anchored, finalized) = tokio::try_join!(
+            self.canonical_block_hash(domain.first_block),
+            self.canonical_block_hash(anchor.number),
+            self.finalized_head(),
+        )?;
+        if deployment != domain.first_hash || anchored != anchor.hash {
+            return Err(RpcError::Evidence("account diagnostic anchor changed"));
         }
-        for rpc in [self, peer] {
-            for (number, hash) in [
-                (domain.first_block, domain.first_hash),
-                (anchor.number, anchor.hash),
-            ] {
-                if rpc.canonical_block_hash(number).await? != hash {
-                    return Err(RpcError::Evidence("account diagnostic anchor changed"));
-                }
-            }
-            if rpc.finalized_head().await?.number < anchor.number {
-                return Err(RpcError::Evidence("account diagnostic finality regressed"));
-            }
-            rpc.check_chain().await?;
+        if finalized.number < anchor.number {
+            return Err(RpcError::Evidence("account diagnostic finality regressed"));
         }
-        agreed.ok_or(RpcError::Evidence("account diagnostics unavailable"))
+        self.check_chain().await
     }
 
     /// Reads the pool's frontier at one finalized block that both providers agree on.
