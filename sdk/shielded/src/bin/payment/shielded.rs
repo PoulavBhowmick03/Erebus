@@ -556,24 +556,33 @@ pub(super) async fn run(
     // A claim already saved for this exact call (including one from before per-method limits)
     // resumes at its own limit within the cap. Otherwise the estimate plus margin must fit under
     // the settle limit, or this refuses before any claim is written or byte is signed.
-    let gas_limit = match journal.resume_call(
-        chain.evm().deployment(),
-        &prepared,
-        chain.evm().deployment().settlement_contract,
-        &prepared.backend_evidence,
-    ) {
-        Ok(Some(plan)) if gas_policy.resumes(plan.params().gas_limit) => plan.params().gas_limit,
-        Ok(Some(_)) => return Err("configured signing policy differs from durable plan"),
-        Ok(None) => {
-            if !gas_policy.admits(gas) {
+    // Signing must use exactly the limit funding was checked against: a claim that appeared or
+    // changed since (another process outside this driver's lock) refuses, retryably.
+    let signed_already = coordinator
+        .signed_transaction(operation)
+        .map_err(|_| "signed state unavailable")?
+        .is_some();
+    let gas_limit = if signed_already {
+        effective_limit
+    } else {
+        let saved = match journal.resume_call(
+            chain.evm().deployment(),
+            &prepared,
+            chain.evm().deployment().settlement_contract,
+            &prepared.backend_evidence,
+        ) {
+            Ok(plan) => plan.map(|plan| plan.params().gas_limit),
+            Err(NonceError::Busy) => return Err("signer lane is busy; sync the wallet and retry"),
+            Err(_) => return Err("gas-payer nonce journal unavailable"),
+        };
+        match signing_gas_limit(saved, effective_limit, gas_policy, gas)? {
+            Some(limit) => limit,
+            None => {
                 response["funding"]["gas_limit_sufficient"] = json!(false);
                 response["status"] = json!("funding_required");
                 return Ok(response);
             }
-            gas_policy.limit
         }
-        Err(NonceError::Busy) => return Err("signer lane is busy; sync the wallet and retry"),
-        Err(_) => return Err("gas-payer nonce journal unavailable"),
     };
     let started = Instant::now();
     if coordinator
@@ -638,6 +647,9 @@ pub(super) async fn run(
     {
         return Err("configured signing policy differs from durable plan");
     }
+    if plan.params().gas_limit != gas_limit {
+        return Err(FUNDING_CHANGED);
+    }
     plan.validate_call(chain_id, pool, &prepared.backend_evidence, signed.raw())
         .map_err(|_| "durable transaction differs from agreement")?;
     response["transaction_hash"] = json!(format!(
@@ -665,6 +677,32 @@ pub(super) async fn run(
     response["stage"] = json!(format!("{:?}", submitted.stage));
     response["broadcast_attempts"] = json!(submitted.broadcast_attempts);
     Ok(response)
+}
+
+const FUNDING_CHANGED: &str =
+    "signer plan changed after the funding check; nothing was signed; retry the same operation_ref";
+
+/// The limit to sign at, given the claim saved for this call (if any), the limit funding was
+/// checked against, and the live estimate. `Ok(None)` means the estimate does not fit a new plan
+/// (funding_required). A limit other than the funded one refuses retryably, before signing.
+fn signing_gas_limit(
+    saved: Option<u64>,
+    funded: u64,
+    policy: GasPolicy,
+    estimate: u64,
+) -> Result<Option<u64>, &'static str> {
+    let limit = match saved {
+        Some(saved) if !policy.resumes(saved) => {
+            return Err("configured signing policy differs from durable plan")
+        }
+        Some(saved) => saved,
+        None if !policy.admits(estimate) => return Ok(None),
+        None => policy.limit,
+    };
+    if limit != funded {
+        return Err(FUNDING_CHANGED);
+    }
+    Ok(Some(limit))
 }
 
 /// The gas limit of a plan already saved for this operation: the coordinator's signed
@@ -705,6 +743,54 @@ fn validate_read_rates(primary: Option<u32>, peer: Option<u32>) -> Result<(), &'
         return Err("invalid shielded RPC read rate");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod signing_gas_tests {
+    use super::*;
+
+    const POLICY: GasPolicy = GasPolicy {
+        limit: SETTLE_GAS_LIMIT,
+        legacy_cap: 5_000_000,
+    };
+
+    #[test]
+    fn signing_uses_exactly_the_funded_limit() {
+        // New plan, funded at the settle limit.
+        assert_eq!(
+            signing_gas_limit(None, SETTLE_GAS_LIMIT, POLICY, 2_733_865),
+            Ok(Some(SETTLE_GAS_LIMIT))
+        );
+        // A saved legacy plan funded at its own limit.
+        assert_eq!(
+            signing_gas_limit(Some(5_000_000), 5_000_000, POLICY, 2_733_865),
+            Ok(Some(5_000_000))
+        );
+        // An estimate that does not fit a new plan is funding_required.
+        assert_eq!(
+            signing_gas_limit(None, SETTLE_GAS_LIMIT, POLICY, 2_900_000),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_claim_that_changed_after_the_funding_check_refuses_before_signing() {
+        // Funded for a new 3,010,000 plan, but a 5,000,000 claim appeared before signing.
+        assert_eq!(
+            signing_gas_limit(Some(5_000_000), SETTLE_GAS_LIMIT, POLICY, 2_733_865),
+            Err(FUNDING_CHANGED)
+        );
+        // Funded for a saved 5,000,000 plan that is gone by signing time.
+        assert_eq!(
+            signing_gas_limit(None, 5_000_000, POLICY, 2_733_865),
+            Err(FUNDING_CHANGED)
+        );
+        // Above the cap is the durable-policy refusal, not a funding change.
+        assert_eq!(
+            signing_gas_limit(Some(6_000_000), 6_000_000, POLICY, 1),
+            Err("configured signing policy differs from durable plan")
+        );
+    }
 }
 
 #[cfg(test)]

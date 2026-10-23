@@ -1574,6 +1574,61 @@ pub async fn resume_wallet_call(
     identity: &[u8; 32],
     now: u64,
 ) -> Result<WalletSubmission, OperationError> {
+    resume_with_gas(chain, operations, identity, None, now).await
+}
+
+/// [`resume_wallet_call`] that first requires the retained plan's gas limit to be the
+/// operation's method limit or within `legacy_cap`. An over-cap plan is refused before any
+/// attempt is recorded or byte is sent.
+pub async fn resume_wallet_call_with_policy(
+    chain: &EvmChain,
+    operations: &OperationStore,
+    identity: &[u8; 32],
+    legacy_cap: u64,
+    now: u64,
+) -> Result<WalletSubmission, OperationError> {
+    resume_with_gas(chain, operations, identity, Some(legacy_cap), now).await
+}
+
+/// The gas policy of one wallet method: its fixed limit (withdrawals still sign at the
+/// configured cap) with `legacy_cap` for plans saved before per-method limits.
+#[must_use]
+pub fn method_gas_policy(kind: WalletOperationKind, legacy_cap: u64) -> GasPolicy {
+    use crate::gas_policy::{
+        APPROVE_GAS_LIMIT, DEPOSIT_GAS_LIMIT, UNWRAP_GAS_LIMIT, WRAP_GAS_LIMIT,
+    };
+    let limit = match kind {
+        WalletOperationKind::Approve => APPROVE_GAS_LIMIT,
+        WalletOperationKind::Wrap => WRAP_GAS_LIMIT,
+        WalletOperationKind::Unwrap => UNWRAP_GAS_LIMIT,
+        WalletOperationKind::Deposit => DEPOSIT_GAS_LIMIT,
+        WalletOperationKind::Withdraw => legacy_cap,
+    };
+    GasPolicy { limit, legacy_cap }
+}
+
+/// Refuses a saved plan whose gas limit the operation's policy does not admit. Writes nothing.
+fn admit_saved_limit(
+    legacy_cap: Option<u64>,
+    kind: WalletOperationKind,
+    saved: u64,
+) -> Result<(), OperationError> {
+    match legacy_cap.map(|cap| method_gas_policy(kind, cap)) {
+        Some(policy) if !policy.resumes(saved) => Err(OperationError::PlanAboveCap {
+            saved,
+            cap: policy.legacy_cap,
+        }),
+        _ => Ok(()),
+    }
+}
+
+async fn resume_with_gas(
+    chain: &EvmChain,
+    operations: &OperationStore,
+    identity: &[u8; 32],
+    legacy_cap: Option<u64>,
+    now: u64,
+) -> Result<WalletSubmission, OperationError> {
     let operation = operations.get(identity)?.ok_or(OperationError::Conflict)?;
     if operation.state == WalletOperationState::Completed {
         return Err(OperationError::Conflict);
@@ -1582,6 +1637,7 @@ pub async fn resume_wallet_call(
         return Err(OperationError::Conflict);
     };
     let plan = SigningPlan::decode(&retained.plan)?;
+    admit_saved_limit(legacy_cap, operation.kind, plan.params().gas_limit)?;
     let signed = SignedTransaction::from_raw(&retained.raw)?;
     let target = signed.to();
     if signed.sender() != plan.sender() || target == [0; 20] {
@@ -1624,6 +1680,42 @@ pub async fn replace_wallet_call(
     fees: Option<Eip1559Fees>,
     now: u64,
 ) -> Result<WalletSubmission, OperationError> {
+    replace_with_gas(chain, operations, identity, key, fees, None, now).await
+}
+
+/// [`replace_wallet_call`] that first requires the retained plan's gas limit (which a
+/// replacement keeps) to be the operation's method limit or within `legacy_cap`; an over-cap
+/// plan is refused before any new bytes or attempts are persisted.
+pub async fn replace_wallet_call_with_policy(
+    chain: &EvmChain,
+    operations: &OperationStore,
+    identity: &[u8; 32],
+    key: &TransactionKey,
+    fees: Option<Eip1559Fees>,
+    legacy_cap: u64,
+    now: u64,
+) -> Result<WalletSubmission, OperationError> {
+    replace_with_gas(
+        chain,
+        operations,
+        identity,
+        key,
+        fees,
+        Some(legacy_cap),
+        now,
+    )
+    .await
+}
+
+async fn replace_with_gas(
+    chain: &EvmChain,
+    operations: &OperationStore,
+    identity: &[u8; 32],
+    key: &TransactionKey,
+    fees: Option<Eip1559Fees>,
+    legacy_cap: Option<u64>,
+    now: u64,
+) -> Result<WalletSubmission, OperationError> {
     let operation = operations.get(identity)?.ok_or(OperationError::Conflict)?;
     if operation.state == WalletOperationState::Completed {
         return Ok(WalletSubmission {
@@ -1635,6 +1727,12 @@ pub async fn replace_wallet_call(
         return Err(OperationError::Shape("no signed transaction to replace"));
     };
     let previous = SignedTransaction::from_raw(&retained.raw)?;
+    admit_saved_limit(legacy_cap, operation.kind, previous.params().gas_limit)?;
+    admit_saved_limit(
+        legacy_cap,
+        operation.kind,
+        SigningPlan::decode(&retained.plan)?.params().gas_limit,
+    )?;
     let next_fees = match fees {
         Some(fees) => fees,
         None => previous.params().fees.replacement_floor()?,
@@ -2692,9 +2790,25 @@ mod gas_policy_resume_tests {
         (url, calls, task)
     }
 
-    #[tokio::test]
-    async fn a_retained_signed_plan_above_the_cap_is_never_broadcast_and_stays_retained() {
-        let (url, calls, _task) = node().await;
+    struct Retained {
+        chain: EvmChain,
+        operations: OperationStore,
+        journal: SignerJournal,
+        domain: DeploymentDomain,
+        prepared: PreparedWalletCall,
+        key: TransactionKey,
+        fees: Eip1559Fees,
+        plan: SigningPlan,
+        raw: Vec<u8>,
+        calls: Arc<AtomicUsize>,
+        _task: tokio::task::JoinHandle<()>,
+        _root: tempfile::TempDir,
+    }
+
+    /// An approval a pre-upgrade process claimed and signed at `gas_limit`, then stopped
+    /// before sending: the signed bytes and the claim are retained, no attempt is recorded.
+    async fn retained(gas_limit: u64) -> Retained {
+        let (url, calls, task) = node().await;
         let pool = [0x11; 20];
         let asset = [0x22; 20];
         let key = TransactionKey::from_bytes(&[7; 32]).unwrap();
@@ -2718,7 +2832,6 @@ mod gas_policy_resume_tests {
             SignerJournal::open(root.path().join("signer"), 31337, key.address()).unwrap();
         let prepared =
             prepare_approve_request(&operations, 31337, pool, asset, 10, Some([3; 32]), 1).unwrap();
-        // A pre-upgrade process claimed and signed at 5,000,000, then stopped before sending.
         let fees = Eip1559Fees::new(300_000_000_000, 2_000_000_000).unwrap();
         let plan = journal
             .reserve_call_with_value(
@@ -2729,7 +2842,7 @@ mod gas_policy_resume_tests {
                 0,
                 4,
                 fees,
-                5_000_000,
+                gas_limit,
             )
             .unwrap();
         let raw = plan
@@ -2740,14 +2853,65 @@ mod gas_policy_resume_tests {
         operations
             .record_signed(&prepared.identity, &plan.encode(), &raw, 2)
             .unwrap();
-        let refused = submit_wallet_call_with_policy(
-            &chain,
-            &journal,
-            &operations,
-            &domain,
-            &prepared,
-            &key,
+        Retained {
+            chain,
+            operations,
+            journal,
+            domain,
+            prepared,
+            key,
             fees,
+            plan,
+            raw,
+            calls,
+            _task: task,
+            _root: root,
+        }
+    }
+
+    fn assert_untouched(state: &Retained) {
+        assert_eq!(
+            state.calls.load(Ordering::SeqCst),
+            0,
+            "only the chain ID may be read"
+        );
+        let retained = state
+            .operations
+            .retained_bytes(&state.prepared.identity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.raw, state.raw);
+        assert_eq!(retained.plan, state.plan.encode());
+        assert_eq!(state.journal.claim_nonce().unwrap(), Some(4));
+        let operation = state
+            .operations
+            .get(&state.prepared.identity)
+            .unwrap()
+            .unwrap();
+        assert!(operation.attempts().is_empty());
+    }
+
+    fn over_cap<T>(result: Result<T, OperationError>) -> bool {
+        matches!(
+            result,
+            Err(OperationError::PlanAboveCap {
+                saved: 5_000_000,
+                cap: 3_000_000
+            })
+        )
+    }
+
+    #[tokio::test]
+    async fn a_retained_signed_plan_above_the_cap_is_never_broadcast_and_stays_retained() {
+        let state = retained(5_000_000).await;
+        let refused = submit_wallet_call_with_policy(
+            &state.chain,
+            &state.journal,
+            &state.operations,
+            &state.domain,
+            &state.prepared,
+            &state.key,
+            state.fees,
             GasPolicy {
                 limit: crate::gas_policy::APPROVE_GAS_LIMIT,
                 legacy_cap: 3_000_000,
@@ -2756,26 +2920,56 @@ mod gas_policy_resume_tests {
             false,
         )
         .await;
-        assert!(matches!(
-            refused,
-            Err(OperationError::PlanAboveCap {
-                saved: 5_000_000,
-                cap: 3_000_000
-            })
-        ));
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            0,
-            "nothing may be sent or read"
-        );
-        let retained = operations
-            .retained_bytes(&prepared.identity)
-            .unwrap()
-            .unwrap();
-        assert_eq!(retained.raw, raw);
-        assert_eq!(retained.plan, plan.encode());
-        assert_eq!(journal.claim_nonce().unwrap(), Some(4));
-        let operation = operations.get(&prepared.identity).unwrap().unwrap();
-        assert!(operation.attempts().is_empty());
+        assert!(over_cap(refused));
+        assert_untouched(&state);
+    }
+
+    #[tokio::test]
+    async fn an_explicit_resume_of_an_over_cap_plan_records_and_sends_nothing() {
+        let state = retained(5_000_000).await;
+        let refused = resume_wallet_call_with_policy(
+            &state.chain,
+            &state.operations,
+            &state.prepared.identity,
+            3_000_000,
+            3,
+        )
+        .await;
+        assert!(over_cap(refused));
+        assert_untouched(&state);
+    }
+
+    #[tokio::test]
+    async fn a_replacement_of_an_over_cap_plan_persists_no_new_bytes_or_attempt() {
+        let state = retained(5_000_000).await;
+        let refused = replace_wallet_call_with_policy(
+            &state.chain,
+            &state.operations,
+            &state.prepared.identity,
+            &state.key,
+            None,
+            3_000_000,
+            3,
+        )
+        .await;
+        assert!(over_cap(refused));
+        assert_untouched(&state);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_plan_within_the_cap_still_resumes() {
+        let state = retained(3_000_000).await;
+        let resumed = resume_wallet_call_with_policy(
+            &state.chain,
+            &state.operations,
+            &state.prepared.identity,
+            3_000_000,
+            3,
+        )
+        .await
+        .unwrap();
+        // The mock node rejects the send; what matters is that it was attempted.
+        assert_eq!(resumed.state(), WalletSubmissionState::Rejected);
+        assert!(state.calls.load(Ordering::SeqCst) >= 1);
     }
 }

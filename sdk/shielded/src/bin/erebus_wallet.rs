@@ -29,9 +29,9 @@ use erebus_shielded_prover::{
     operations::{
         parse_address, parse_digest32, parse_field, prepare_approve_request, prepare_deposit,
         prepare_unwrap, prepare_withdraw, prepare_wrap, reconcile_finalized_operations,
-        reconcile_operations, replace_wallet_call, resume_wallet_call, submit_wallet_call,
-        submit_wallet_call_with_policy, OperationContext, OperationError, OperationStore,
-        WalletOperationState, WalletSubmissionState,
+        reconcile_operations, replace_wallet_call_with_policy, resume_wallet_call_with_policy,
+        submit_wallet_call, submit_wallet_call_with_policy, OperationContext, OperationError,
+        OperationStore, WalletOperationState, WalletSubmissionState,
     },
     recovery::{recover_finalized_wallet_agreed_bounded, RecoveryError},
     rpc::{PoolDependencyPins, PoolIdentity, PoolRpc, PoolRuntimePins, MAX_CONCURRENT_READS},
@@ -1670,9 +1670,17 @@ async fn replace(
     )
     .await?;
     let key = transaction_key(prepared)?;
-    let submission = replace_wallet_call(&chain, &operations, &identity, &key, fees, now()?)
-        .await
-        .map_err(|_| Failure::Error("replacement failed; retained state is preserved"))?;
+    let submission = replace_wallet_call_with_policy(
+        &chain,
+        &operations,
+        &identity,
+        &key,
+        fees,
+        prepared.config.gas_limit,
+        now()?,
+    )
+    .await
+    .map_err(|_| Failure::Error("replacement failed; retained state is preserved"))?;
     if submission.state() == WalletSubmissionState::Completed {
         return Ok(json!({"identity": hex::encode(identity), "already_completed": true}));
     }
@@ -1694,9 +1702,15 @@ async fn resume(prepared: &Prepared, identity: [u8; 32]) -> Result<Value, Failur
         prepared.config.timeout_seconds,
     )
     .await?;
-    let submission = resume_wallet_call(&chain, &operations, &identity, now()?)
-        .await
-        .map_err(|_| Failure::Error("retained operation is unavailable or completed"))?;
+    let submission = resume_wallet_call_with_policy(
+        &chain,
+        &operations,
+        &identity,
+        prepared.config.gas_limit,
+        now()?,
+    )
+    .await
+    .map_err(|_| Failure::Error("retained operation is unavailable or completed"))?;
     if submission.state() == WalletSubmissionState::Completed {
         return Ok(json!({"identity": hex::encode(identity), "already_completed": true}));
     }
