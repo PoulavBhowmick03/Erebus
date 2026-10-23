@@ -1461,13 +1461,19 @@ async fn submit_with_gas(
         let plan = SigningPlan::decode(&retained.plan).map_err(|_| OperationError::Journal)?;
         // Signed bytes saved under an older, larger gas limit are only sent when the policy still
         // admits that limit. Otherwise the bytes and the claim stay exactly as they are.
-        if let Gas::Policy(policy) = gas {
-            if !policy.resumes(plan.params().gas_limit) {
+        let saved = plan.params().gas_limit;
+        match gas {
+            Gas::Policy(policy) if !policy.resumes(saved) => {
                 return Err(OperationError::PlanAboveCap {
-                    saved: plan.params().gas_limit,
+                    saved,
                     cap: policy.legacy_cap,
                 });
             }
+            // A fixed-limit caller (withdraw) never sends retained bytes above its own limit.
+            Gas::Fixed(limit) if saved > limit => {
+                return Err(OperationError::PlanAboveCap { saved, cap: limit });
+            }
+            _ => {}
         }
         let target = prepared.target;
         let result = chain
@@ -2954,6 +2960,48 @@ mod gas_policy_resume_tests {
         .await;
         assert!(over_cap(refused));
         assert_untouched(&state);
+    }
+
+    #[tokio::test]
+    async fn a_fixed_limit_caller_never_sends_retained_bytes_above_its_limit() {
+        let state = retained(5_000_000).await;
+        let refused = submit_wallet_call(
+            &state.chain,
+            &state.journal,
+            &state.operations,
+            &state.domain,
+            &state.prepared,
+            &state.key,
+            state.fees,
+            3_000_000,
+            3,
+            false,
+        )
+        .await;
+        assert!(over_cap(refused));
+        assert_untouched(&state);
+    }
+
+    #[tokio::test]
+    async fn a_fixed_limit_caller_still_sends_retained_bytes_within_its_limit() {
+        let state = retained(3_000_000).await;
+        let sent = submit_wallet_call(
+            &state.chain,
+            &state.journal,
+            &state.operations,
+            &state.domain,
+            &state.prepared,
+            &state.key,
+            state.fees,
+            3_000_000,
+            3,
+            false,
+        )
+        .await
+        .unwrap();
+        // The mock node rejects the send; what matters is that it was attempted.
+        assert_eq!(sent.state(), WalletSubmissionState::Rejected);
+        assert!(state.calls.load(Ordering::SeqCst) >= 1);
     }
 
     #[tokio::test]
