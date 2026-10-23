@@ -36,6 +36,8 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 BUYER_TOOLS = {"negotiate_deal", "check_settlement_funding", "settle_deal", "recover_deal"}
 SELLER_TOOLS = {"negotiate_deal"}
+# A many-buyer seller also lists its configured peers (read-only).
+MULTI_PEER_SELLER_TOOLS = SELLER_TOOLS | {"list_peers"}
 ACCESS_TOOL = "retrieve_service_access"
 X402_BUYER_TOOLS = {"negotiate_deal", ACCESS_TOOL}
 
@@ -64,7 +66,10 @@ async def drive_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str
                      poll_seconds: float = 1.0, max_polls: int = 120, deliver: bool = False,
                      sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
                      clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
-    """Negotiate on both sides at once, settle at most once, observe until finalized, then deliver."""
+    """Negotiate on both sides at once, settle at most once, observe until finalized, then deliver.
+
+    There is no separate funding call: settle_deal refuses with funding_required, before anything is
+    signed, when the note or gas is not there."""
     buyer_deal, seller_deal = await asyncio.gather(_call(buyer, "negotiate_deal", operation_ref),
                                                    _call(seller, "negotiate_deal", operation_ref))
     if not (buyer_deal.get("ok") and seller_deal.get("ok")):
@@ -78,15 +83,14 @@ async def drive_deal(buyer: ToolSession, seller: ToolSession, operation_ref: str
                            "seller": seller_deal["result"]["measurements_ms"]["negotiation"]},
         "settle_calls": 0, "recover_calls": 0,
     }
-    funding = await _call(buyer, "check_settlement_funding", operation_ref)
-    if not funding.get("ok"):
-        raise HarnessError("buyer is not funded for this deal")
-
+    # settle_deal checks the funded note and gas itself before proving; check_settlement_funding is optional.
     submitted = clock()
     settled = await _call(buyer, "settle_deal", operation_ref)
     record["settle_calls"] = 1
     record["settlement"] = settled.get("result")
     outcome = settled.get("result") or {}
+    if outcome.get("status") == "funding_required" and not outcome.get("submitted_this_call"):
+        raise HarnessError("buyer is not funded for this deal")
     first_inclusion: float | None = None
 
     def note_inclusion(candidate: dict[str, Any]) -> None:
@@ -216,7 +220,7 @@ def server_params(python: str, negotiation_config: str, *, payment_config: str |
 @asynccontextmanager
 async def connect_participants(
     buyer_params: StdioServerParameters, seller_params: StdioServerParameters, *,
-    buyer_allowed: tuple[set[str], ...], seller_allowed: tuple[set[str], ...] = (SELLER_TOOLS,),
+    buyer_allowed: tuple[set[str], ...], seller_allowed: tuple[set[str], ...] = (SELLER_TOOLS, MULTI_PEER_SELLER_TOOLS),
 ) -> AsyncIterator[tuple[tuple[ClientSession, set[str]], tuple[ClientSession, set[str]]]]:
     """Open both participants' MCP servers and fail closed on any unexpected tool surface."""
     async with AsyncExitStack() as stack:

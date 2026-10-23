@@ -47,7 +47,7 @@ def run(buyer, seller, **options):
 
 
 def test_lost_broadcast_is_recovered_by_observation_without_a_second_settle():
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")],
+    buyer = Session(negotiate_deal=[deal()],
                     settle_deal=[payment("pending", submitted_this_call=True)],
                     recover_deal=[{"ok": False, "error": {"code": "METROPOLIS_UNAVAILABLE"}}, payment("pending"), FINAL])
     record = run(buyer, Session(negotiate_deal=[deal()]))
@@ -57,7 +57,7 @@ def test_lost_broadcast_is_recovered_by_observation_without_a_second_settle():
 
 
 def test_immediate_finality_needs_no_recovery():
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[FINAL])
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[FINAL])
     assert run(buyer, Session(negotiate_deal=[deal()]))["recover_calls"] == 0
 
 
@@ -68,15 +68,21 @@ def test_mismatched_deals_never_reach_payment():
     assert buyer.calls == ["negotiate_deal"]
 
 
-def test_unfunded_buyer_does_not_settle():
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("funding_required")])
+def test_unfunded_buyer_stops_at_the_settle_refusal_without_a_funding_call_or_recovery():
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[payment("funding_required", submitted_this_call=False)])
     with pytest.raises(HarnessError, match="funded"):
         run(buyer, Session(negotiate_deal=[deal()]))
-    assert "settle_deal" not in buyer.calls
+    assert buyer.calls == ["negotiate_deal", "settle_deal"]
+
+
+def test_a_funded_buyer_settles_without_check_settlement_funding():
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[FINAL])
+    run(buyer, Session(negotiate_deal=[deal()]))
+    assert "check_settlement_funding" not in buyer.calls
 
 
 def test_polling_budget_stops_without_paying_again():
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")],
+    buyer = Session(negotiate_deal=[deal()],
                     settle_deal=[payment("pending")], recover_deal=[payment("pending")] * 2)
     with pytest.raises(HarnessError, match="polling budget"):
         run(buyer, Session(negotiate_deal=[deal()]), max_polls=2)
@@ -85,13 +91,13 @@ def test_polling_budget_stops_without_paying_again():
 
 def test_finality_for_another_deal_is_rejected():
     other = payment("ok", True, stage="Finalized", winning_commitment="11" * 32)
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[other])
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[other])
     with pytest.raises(HarnessError, match="does not match"):
         run(buyer, Session(negotiate_deal=[deal()]))
 
 
 def test_latency_uses_local_clock_not_chain_timestamp_distance():
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[payment("pending")],
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[payment("pending")],
                     recover_deal=[FINAL])
     record = run(buyer, Session(negotiate_deal=[deal()]))
     assert record["latency_s"] == {"first_inclusion_after": 1, "payment_verified_after": 2}
@@ -103,7 +109,7 @@ def test_latency_uses_local_clock_not_chain_timestamp_distance():
 
 def test_failed_delivery_is_retried_by_retrieval_never_by_paying():
     unavailable = {"ok": False, "error": {"code": "ACCESS_UNAVAILABLE", "retry_without_payment": True}}
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[FINAL],
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[FINAL],
                     retrieve_service_access=[unavailable, unavailable, RETRIEVED])
     record = run(buyer, Session(negotiate_deal=[deal()]), deliver=True)
     assert record["delivery"] == {"attempts": 3, "resource_sha256": "ef" * 32, "resource_bytes": 37}
@@ -114,7 +120,7 @@ def test_failed_delivery_is_retried_by_retrieval_never_by_paying():
 
 def test_unverified_resource_is_not_accepted():
     bad = {"ok": True, "result": {"status": "retrieved", "result": {"resource_verified": False}}}
-    buyer = Session(negotiate_deal=[deal()], check_settlement_funding=[payment("ready")], settle_deal=[FINAL],
+    buyer = Session(negotiate_deal=[deal()], settle_deal=[FINAL],
                     retrieve_service_access=[bad])
     with pytest.raises(HarnessError, match="verification"):
         run(buyer, Session(negotiate_deal=[deal()]), deliver=True)

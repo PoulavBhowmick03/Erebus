@@ -17,8 +17,18 @@ from mcp.server import MCPServer
 from erebus_mcp.config import ConfigError
 from erebus_mcp.metropolis_errors import failure as classified
 from erebus_mcp.metropolis_errors import refused
-from erebus_mcp.metropolis_wallet_tools import DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, _register_wallet_tools, _settled_wallet
+from erebus_mcp.metropolis_wallet_tools import (CATEGORY, DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, _call, _inner,
+                                                _register_wallet_tools)
 from erebus_mcp.operation_refs import OperationRefs
+
+
+def _wallet_held(reply: dict[str, Any]) -> bool:
+    """A payment refusal that a wallet transaction still in flight explains: it holds the signer's nonce
+    lane, or the note it funds is not spendable yet. Anything else is returned as it is."""
+    if "error" in reply:
+        return reply["error"].get("code") == "SIGNER_CLAIM_HELD"
+    result = reply.get("result") or {}
+    return result.get("status") == "funding_required" and (result.get("funding") or {}).get("funded_note_available") is False
 
 
 def _operator_file(value: str | None) -> tuple[str, dict[str, Any]]:
@@ -203,28 +213,46 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
             return await negotiate(operation_ref, freeze_only, wait_seconds, None)
 
     if settings.role == "buyer" and settings.mode != "x402-exact":
-        async def payment(operation_ref: str, method: str) -> dict[str, Any]:
-            if method in {"funding", "settle"} and wallet is not None:
-                # A deposit or other wallet transaction that is not final yet still holds the
-                # signer; settle only after the wallet has caught up and released it.
-                held = await _settled_wallet(wallet, settings.timeout)
-                if held is not None:
-                    return {**held, "operation_ref": operation_ref}
-            if method in {"settle", "observe"}:
-                refs.update(operation_ref, done=True)
+        async def native_payment(operation_ref: str, method: str) -> dict[str, Any]:
             try:
                 response = await asyncio.to_thread(seam.payment, operation_ref, method=method)
             except MetropolisError as error:
                 return {**failure(error), "operation_ref": operation_ref}
-            reply = {"ok": response["status"] in {"ok", "ready"}, "result": response, "operation_ref": operation_ref}
+            return {"ok": response["status"] in {"ok", "ready"}, "result": response, "operation_ref": operation_ref}
+
+        async def payment(operation_ref: str, method: str) -> dict[str, Any]:
+            if method in {"settle", "observe"}:
+                refs.update(operation_ref, done=True)
+            # Settle and funding check spendable notes and gas natively before any proof, so there is no
+            # wallet pre-sync. Only when a wallet transaction still holds the signer or the funded note:
+            # one sync, one retry, then the retryable refusal.
+            reply = await native_payment(operation_ref, method)
+            if method in {"funding", "settle"} and wallet is not None and _wallet_held(reply):
+                pending = _inner(await _call(wallet, "sync")).get("pending") or []
+                reply = await native_payment(operation_ref, method)
+                if _wallet_held(reply) and pending:
+                    return {**refused("WALLET_OPERATION_PENDING", CATEGORY,
+                                      "a wallet transaction is not final yet; call sync_wallet until nothing is "
+                                      "pending, then retry with the same operation_ref", pending=pending),
+                            "operation_ref": operation_ref}
+            if "error" in reply:
+                return reply
+            response = reply["result"]
             if response["status"] == "pending":
                 reply["next_action"] = ("history or settlement is still pending; repeat this call with the same "
                                         "operation_ref, never a new payment")
+            elif response["status"] == "funding_required":
+                reply["next_action"] = ("nothing was signed or sent: the funded note or gas is not available yet; fund "
+                                        "the wallet (fund_wallet, or ask the operator), then repeat this call with the "
+                                        "same operation_ref")
             return reply
 
         @server.tool()
         async def check_settlement_funding(operation_ref: str) -> dict[str, Any]:
-            """Check funding for an authorized deal without signing or submitting."""
+            """Optional: check funding for an authorized deal without signing or submitting.
+
+            settle_deal runs the same note and gas checks before it proves, so a funded buyer can settle directly.
+            """
             return await payment(operation_ref, "funding")
 
         if settings.submission_mode == "sponsored":
@@ -236,7 +264,11 @@ def build_metropolis_server(settings: MetropolisSettings | None = None) -> MCPSe
         else:
             @server.tool()
             async def settle_deal(operation_ref: str) -> dict[str, Any]:
-                """Sync the wallet, then prepare, prove if shielded, and submit at most one automatic broadcast."""
+                """Check note and gas funding, prove if shielded, and submit at most one automatic broadcast.
+
+                A wallet transaction that still holds the signer gets one sync and one retry; otherwise this
+                returns a retryable refusal and nothing is signed.
+                """
                 async with writes:
                     return await payment(operation_ref, "settle")
 

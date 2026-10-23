@@ -119,7 +119,7 @@ def test_up_connects_both_roles_writes_agent_files_and_never_sends(world, native
     assert result["status"] == "created" and result["agent_funding"] is False
     assert result["rpc_hosts"] == ["testnet-rpc.monad.xyz", "rpc.ankr.com"]
     funding = result["funding"]
-    assert funding["buyer"]["address"] == "0x" + "aa" * 20 and funding["buyer"]["send_at_least_mon"] == quick.mon(4 * quick.MEASURED_COST_PER_TRANSACTION + quick.SEND_HEADROOM + 3000)
+    assert funding["buyer"]["address"] == "0x" + "aa" * 20 and funding["buyer"]["send_at_least_mon"] == quick.mon(quick.buyer_required_wei("wmon", 3000))
     assert funding["seller"]["send_at_least_mon"] == "0" and funding["faucet"].startswith("https://")
     # The roles are wired to each other's share directories; nothing was copied by hand.
     buyer = json.loads((directory / "buyer/negotiate.json").read_text())
@@ -292,19 +292,20 @@ def test_pool_defaults_are_in_each_pools_base_units(world, natives):
     assert json.loads((world.root / "u2" / quick.STATE).read_text())["fund_amount"] == "21"
 
 
-def test_usdc_funding_needs_four_transactions_of_gas_and_the_usdc_itself(world, natives):
+def test_usdc_funding_needs_its_sends_gas_limits_and_the_usdc_itself(world, natives):
     result = quick.run(quick_args(world, "up", pool="usdc", price=None, fund_amount=None, allow_agent_funding=True), ops())
     buyer = result["funding"]["buyer"]
-    # Approve, deposit, two settlements: no wrap, and no note value sent as MON.
-    assert quick.BUYER_TRANSACTIONS["usdc"] == 4
-    assert quick.buyer_required_wei("usdc", 300000) == 3 * 31 * 10**16 + 9 * 10**17
-    assert buyer["send_at_least_mon"] == "1.830" and buyer["why"].startswith("4 transactions at about 0.310 MON")
+    # Approve, deposit and a settlement at their own limits and the measured price, plus a settlement's
+    # limit x max fee free for the next deal: no wrap, and no note value sent as MON.
+    assert quick.BUYER_SENDS["usdc"] == ("approve", "deposit", "settle")
+    assert quick.buyer_required_wei("usdc", 300000) == (65_000 + 2_100_000 + 3_010_000) * 102 * 10**9 + 3_010_000 * 300 * 10**9
+    assert buyer["send_at_least_mon"] == "1.431" and buyer["why"].startswith("measured-price guidance")
     assert "wrapped" not in buyer["why"]
     assert (buyer["send_at_least_usdc_base_units"], buyer["send_at_least_usdc"], buyer["usdc_token"]) == (
         "300000", "0.300000", USDC_TOKEN)
     assert "300000 base units (0.300000 USDC)" in buyer["also"]
     state = json.loads((world.root / "qs" / quick.STATE).read_text())
-    assert state["buyer_required_wei"] == str(183 * 10**16)
+    assert state["buyer_required_wei"] == str(quick.buyer_required_wei("usdc", 300000))
     assert (state["asset"], state["buyer_required_asset"]) == (USDC_TOKEN, "300000")
     policy = json.loads((world.root / "qs/buyer/wallet-policy.json").read_text())
     assert set(policy["allowed_methods"]) == {"notes", "sync", "status", "approve", "deposit"}
@@ -319,14 +320,26 @@ def test_wmon_funding_and_prompt_are_unchanged(world, natives):
     result = quick.run(quick_args(world, "up", price=None, fund_amount=None), ops())
     buyer = result["funding"]["buyer"]
     fund = 3 * 10**15
-    assert quick.BUYER_TRANSACTIONS["wmon"] == 5
-    assert buyer["send_at_least_mon"] == quick.mon(4 * quick.MEASURED_COST_PER_TRANSACTION + quick.SEND_HEADROOM + fund)
+    assert quick.BUYER_SENDS["wmon"] == ("wrap", "approve", "deposit", "settle")
+    # WS6 target: below 1.6 MON (was 2.143); 5.24M gas at 102 gwei + 0.903 + 0.003 wrapped.
+    assert quick.buyer_required_wei("wmon", fund) == 5_240_000 * 102 * 10**9 + 3_010_000 * 300 * 10**9 + fund
+    assert buyer["send_at_least_mon"] == "1.440"
     assert set(buyer) == {"address", "send_at_least_mon", "why"} and buyer["why"].endswith("MON wrapped into the shielded note")
     state = json.loads((world.root / "qs" / quick.STATE).read_text())
     assert "asset" not in state and "buyer_required_asset" not in state
     prompt = (world.root / "qs/agents/buyer/prompt.md").read_text()
     assert "USDC" not in prompt and "{asset_note}" not in prompt
     assert ("ask the operator to fund the wallet instead.)\n2. Call negotiate_deal()" in prompt)
+    # settle_deal checks funding itself; the prompt no longer requires check_settlement_funding.
+    assert "check_settlement_funding" not in prompt and "3. Call settle_deal(operation_ref)" in prompt
+
+
+def test_quickstart_gas_constants_match_the_operator_policy_and_native_limits():
+    native = (ROOT / "sdk/shielded/src/gas_policy.rs").read_text()
+    for name, kind in (("WRAP", "wrap"), ("APPROVE", "approve"), ("DEPOSIT", "deposit"), ("SETTLE", "settle")):
+        assert f"pub const {name}_GAS_LIMIT: u64 = {quick.GAS_LIMITS[kind]:_};" in native, name
+    text = (ROOT / "mcp-server/src/erebus_mcp/metropolis_setup/operator_init.py").read_text()
+    assert f'"max_fee_per_gas": "{quick.MAX_FEE_PER_GAS}"' in text
 
 
 def test_funding_waits_for_both_mon_gas_and_usdc(world, natives, monkeypatch):
@@ -361,7 +374,7 @@ def test_status_reports_the_usdc_balance_and_what_is_left_to_fund(world, natives
     status = quick.run(quick_args(world, "status", offline=False), ops())
     assert status["roles"]["buyer"]["balance_usdc_base_units"] == "300000"
     assert status["roles"]["seller"]["balance_usdc_base_units"] == "0"
-    assert status["next"] == ("fund the buyer with at least 1.830 MON and 300000 base units (0.300000 USDC) of "
+    assert status["next"] == ("fund the buyer with at least 1.431 MON and 300000 base units (0.300000 USDC) of "
                               "testnet USDC, then run quickstart start")
     quick.run(quick_args(world, "up", directory=world.root / "w"), ops())
     wmon = quick.run(quick_args(world, "status", directory=world.root / "w", offline=False), ops())

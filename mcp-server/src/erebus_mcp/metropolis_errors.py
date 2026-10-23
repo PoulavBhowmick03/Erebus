@@ -60,6 +60,16 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
     "local signing failed; retain nonce and reservations": (
         "SIGNER_CLAIM_HELD", "a wallet transaction still holds the signer; call sync_wallet until nothing is "
         "pending, then retry settle_deal with the same operation_ref", True),
+    "signer lane is busy; sync the wallet and retry": (
+        "SIGNER_CLAIM_HELD", "a wallet transaction still holds the signer; call sync_wallet until nothing is "
+        "pending, then retry settle_deal with the same operation_ref", True),
+    "gas estimate failed; the call would revert or the provider failed; nothing was signed": (
+        "GAS_ESTIMATE_FAILED", "the exact call could not be estimated (it would revert now, for example while an "
+        "earlier step is not visible yet, or a provider failed); nothing was signed; sync_wallet, then retry with "
+        "the same operation_ref", True),
+    "gas estimate exceeds the method gas limit; nothing was signed": (
+        "GAS_LIMIT_EXCEEDED", "the call needs more gas than the operator's per-method limit allows; nothing was "
+        "signed or sent; the operator must review the limit", False),
     # Providers.
     "RPC provider rate limited; retain reservations and retry later": (
         "RATE_LIMITED", "an RPC provider is throttling; wait, then retry with the same operation_ref", True),
@@ -83,6 +93,9 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
     "deposit allowance insufficient; run approve first": (
         "ALLOWANCE_REQUIRED", "approve at least this amount, wait until it completes, then deposit with the same "
         "operation_ref", True),
+    "deposit asset balance insufficient; wrap or fund the asset first": (
+        "BALANCE_REQUIRED", "the signer does not hold this much of the pool asset yet; wait until the wrap or "
+        "transfer completes (sync_wallet), then deposit with the same operation_ref", True),
     "another deposit is retained; resume its original identity": (
         "OPERATION_IN_PROGRESS", "an earlier deposit is still retained; sync_wallet until it completes", True),
 }

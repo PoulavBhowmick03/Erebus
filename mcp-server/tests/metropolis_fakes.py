@@ -2,11 +2,19 @@
 
 They speak the native JSON envelopes the seam validates, keep state in FAKE_STATE, and count
 every simulated broadcast, so tests can prove the MCP layer never sends twice. Operations finish
-after two syncs, like a transaction that needs a few blocks to become final.
+after two syncs, like a transaction that needs a few blocks to become final. Like the native
+wallet, every send first runs its own sync step, then refuses while an earlier transaction still
+holds the signer lane; settlement refuses the same way, or reports the funded note missing while
+a deposit is in flight.
+
+FAKE_CRASH_AFTER=<kind> kills the calling MCP server right after that kind's first broadcast, the
+way a crash after the send but before the server saved anything would. FAKE_HIDDEN_BALANCE=<n>
+makes the first n deposits refuse as if the wrapped balance were not visible yet.
 """
 
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -34,6 +42,28 @@ def reply(value, code=0):
     sys.exit(code)
 
 
+def finality_step(state):
+    """One sync's worth of progress: submitted operations finish after two of these."""
+    completed = []
+    for op in state["ops"].values():
+        if op["state"] == "submitted":
+            op["polls"] += 1
+            if op["polls"] >= 2:
+                op["state"] = "completed"
+                completed.append(op["identity"])
+                amount = int(op["amount"])
+                if op["kind"] == "wrap":
+                    state["balance"] += amount
+                elif op["kind"] == "approve":
+                    state["allowance"] = amount
+                elif op["kind"] == "deposit":
+                    state["balance"] -= amount
+                    state["allowance"] -= amount
+                    state["notes"].append({"commitment": op["identity"], "amount": op["amount"], "included": True,
+                                           "consumed": False, "reserved": False})
+    return completed
+
+
 def operations(state):
     return [{"identity": op["identity"], "kind": op["kind"], "state": op["state"]} for op in state["ops"].values()]
 
@@ -44,26 +74,11 @@ def wallet(request, state):
         reply({"status": "ok", "result": {"protocol": 1, "methods": ["approve", "wrap", "deposit", "notes", "sync",
                "status", "unwrap", "withdraw", "resume", "replace"], "deposit_operation_references": True,
                "funding_operation_references": True, "paired_account_diagnostics": True}})
+    state.setdefault("wallet_calls", []).append(method)
     if method == "sync":
         # Each sync closes one step of a lagging history; sends refuse until it reaches the head.
         state["lag"] = max(0, state.get("lag", 0) - 1)
-        completed = []
-        for op in state["ops"].values():
-            if op["state"] == "submitted":
-                op["polls"] += 1
-                if op["polls"] >= 2:
-                    op["state"] = "completed"
-                    completed.append(op["identity"])
-                    amount = int(op["amount"])
-                    if op["kind"] == "wrap":
-                        state["balance"] += amount
-                    elif op["kind"] == "approve":
-                        state["allowance"] = amount
-                    elif op["kind"] == "deposit":
-                        state["balance"] -= amount
-                        state["allowance"] -= amount
-                        state["notes"].append({"commitment": op["identity"], "amount": op["amount"], "included": True,
-                                               "consumed": False, "reserved": False})
+        completed = finality_step(state)
         save(state)
         pending = [op["identity"] for op in state["ops"].values() if op["state"] == "submitted"]
         reply({"status": "ok", "result": {"completed": completed, "pending": pending, "operations": operations(state),
@@ -82,16 +97,34 @@ def wallet(request, state):
             reply({"status": "ok", "result": {"kind": kind, "already_completed": True}})
         reply({"status": "ok", "result": submitted(known)})
     if state.get("lag", 0) > 0:
+        save(state)
         reply({"status": "pending", "error": "verified pool history is not complete; resume sync",
                "result": {"history_pending": True, "next_log_block": 5, "through": 7,
                           "retry_without_new_payment": True}}, 2)
+    # The send's own sync first. Like the native deposit, the allowance and balance prechecks come
+    # before the signer lane (one unresolved transaction at a time) is claimed.
+    finality_step(state)
     if kind == "deposit" and state["allowance"] < int(amount):
+        save(state)
         reply({"status": "error", "error": "deposit allowance insufficient; run approve first"}, 1)
+    hidden = int(os.environ.get("FAKE_HIDDEN_BALANCE", "0"))
+    if kind == "deposit" and (state["balance"] < int(amount) or state.get("balance_refusals", 0) < hidden):
+        state["balance_refusals"] = state.get("balance_refusals", 0) + 1
+        save(state)
+        reply({"status": "error", "error": "deposit asset balance insufficient; wrap or fund the asset first"}, 1)
+    if any(op["state"] == "submitted" for op in state["ops"].values()):
+        state["busy_refusals"] = state.get("busy_refusals", 0) + 1
+        save(state)
+        reply({"status": "pending", "error": "signer lane is busy; run sync and retry"}, 2)
     identity = format(len(state["ops"]) + 1, "064x")
     op = {"kind": kind, "amount": amount, "identity": identity, "state": "submitted", "polls": 0}
     state["ops"][ref] = op
     state["sends"] += 1
     save(state)
+    if os.environ.get("FAKE_CRASH_AFTER") == kind and not state.get("crashed"):
+        state["crashed"] = True
+        save(state)
+        os.kill(os.getppid(), signal.SIGKILL)
     reply({"status": "ok", "result": submitted(op)})
 
 
@@ -166,7 +199,19 @@ def payment(request, state):
     if request["method"] == "version":
         reply({"status": "ok", "protocol_version": 1, "service": "erebus-payment",
                "modes": ["public-bound", "shielded"], "automatic_rebroadcast": False})
-    pending = [op["identity"] for op in state["ops"].values() if op["state"] == "submitted"]
+    state.setdefault("payment_calls", []).append(request["method"])
+    pending = [op for op in state["ops"].values() if op["state"] == "submitted"]
+    if request["method"] in {"funding", "settle"} and any(op["kind"] == "deposit" for op in pending):
+        # The deposit's note is not spendable yet: refused before anything is proved or signed.
+        save(state)
+        reply({"status": "funding_required", "mode": "shielded", "agreement_verified": True,
+               "payment_verified": False, "delivery_verified": False, "operation_ref": request["operation_ref"],
+               "deal_commitment": "cd" * 32, "deal_nullifier": "ef" * 32, "submitted_this_call": False,
+               "retry_without_new_payment": True, "measurements_ms": {},
+               "funding": {"funded_note_available": False, "signer_shortfall": "0"}}, 2)
+    if request["method"] == "settle" and pending:
+        fail(state, "signer lane is busy; sync the wallet and retry")
+    pending = [op["identity"] for op in pending]
     settle = request["method"] == "settle"
     if settle:
         state["settled_with_pending"] = pending

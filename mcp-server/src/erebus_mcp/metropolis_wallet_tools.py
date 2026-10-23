@@ -51,23 +51,6 @@ def _completed(operations: list[dict[str, Any]], identity: str | None) -> bool:
         operation.get("identity") == identity and operation.get("state") == "completed" for operation in operations)
 
 
-async def _settled_wallet(wallet: MetropolisWallet, timeout: int) -> dict[str, Any] | None:
-    """Sync until no wallet transaction is pending; a failure if it does not settle in time."""
-    deadline = time.monotonic() + min(timeout, 300)
-    while True:
-        reply = await _call(wallet, "sync")
-        if "error" in reply and reply["error"]["code"] not in {CATEGORY}:
-            return reply
-        pending = _inner(reply).get("pending") or []
-        if reply.get("ok") and not pending:
-            return None
-        if time.monotonic() >= deadline:
-            return refused("WALLET_OPERATION_PENDING", CATEGORY,
-                           "a wallet transaction is not final yet; call sync_wallet until nothing is pending, then "
-                           "retry with the same operation_ref", pending=pending)
-        await asyncio.sleep(5)
-
-
 def _register_wallet_tools(server: MCPServer, wallet: MetropolisWallet, methods: list[str],
                            refs: OperationRefs, writes: asyncio.Lock, asset: dict[str, Any] | None = None) -> None:
     """`asset` describes the configured pool asset: its `address`, `signer`, and whether it has a native
@@ -173,9 +156,10 @@ def _register_wallet_tools(server: MCPServer, wallet: MetropolisWallet, methods:
                               wait_seconds: int = FUND_WAIT_SECONDS) -> dict[str, Any]:
             """Fund one spendable shielded note: wrap if needed (WMON only), approve if needed, deposit, then sync.
 
-            Each step is an ordinary policy-capped wallet action under its own saved reference, and
-            each waits until it is final before the next. If wait_seconds (0-900) runs out, call this
-            again with the returned operation_ref: finished steps are never repeated.
+            Each step is an ordinary policy-capped wallet action under its own saved reference. The next
+            step starts once the previous one is submitted; the flow then waits until every step is final
+            and the note is spendable. If wait_seconds (0-900) runs out, call this again with the returned
+            operation_ref: submitted or finished steps are never repeated.
             """
             if type(wait_seconds) is not int or not 0 <= wait_seconds <= MAX_WAIT_SECONDS:
                 return refused("INVALID_REQUEST", CATEGORY, f"wait_seconds must be 0-{MAX_WAIT_SECONDS}")
@@ -255,47 +239,48 @@ async def _fund(wallet: MetropolisWallet, methods: list[str], refs: OperationRef
                 "next_action": f"funding is still in progress; call fund_wallet again with operation_ref {operation_ref}"}
 
     for step in steps:
-        while step["state"] != "completed":
+        # Start each step as soon as the previous one is submitted: the next send's own sync completes
+        # finalized steps and releases the signer. A refusal that only means "not final or visible yet"
+        # (signer busy, history behind, allowance or balance not visible) gets one sync, then a retry
+        # with the same reference. Nothing here sends a step twice: each retry reuses its reference.
+        while step["state"] == "planned":
             if time.monotonic() >= deadline:
                 return progress(False)
-            if step["state"] == "planned":
-                reply = await _call(wallet, step["kind"], amount=step["amount"], operation_ref=step["ref"])
-                result = _inner(reply)
-                if "error" in reply:
-                    if not reply["error"].get("retry_same_operation_ref"):
-                        return {**progress(False), "error": reply["error"]}
-                elif result.get("already_completed") is True:
-                    step["state"] = "completed"
-                elif reply.get("ok"):
-                    identity = result.get("identity") or result.get("commitment")
-                    step["state"], step["identity"] = "submitted", identity
-                refs.update(operation_ref, steps=steps)
-                if step["state"] == "planned":
-                    if result.get("history_pending") is True:
-                        # The wallet must reach the finalized head before it sends. A send attempt scans less
-                        # than a dedicated sync, which outpaces the chain where repeated sends fall behind it.
-                        waiting = "history"
-                        await _call(wallet, "sync")
-                    else:
-                        waiting = (reply.get("error") or {}).get("code") or "pending"
-                        await asyncio.sleep(5)
-                continue
-            await _call(wallet, "sync")
-            if _completed(await _operations(wallet), step.get("identity")):
+            reply = await _call(wallet, step["kind"], amount=step["amount"], operation_ref=step["ref"])
+            result = _inner(reply)
+            if "error" in reply and not reply["error"].get("retry_same_operation_ref"):
+                return {**progress(False), "error": reply["error"]}
+            if result.get("already_completed") is True:
                 step["state"] = "completed"
-                refs.update(operation_ref, steps=steps)
-            else:
-                await asyncio.sleep(5)
-    # The deposit is final; wait until its note is spendable so settlement can use it.
+            elif reply.get("ok"):
+                step["state"], step["identity"] = "submitted", result.get("identity") or result.get("commitment")
+            refs.update(operation_ref, steps=steps)
+            if step["state"] == "planned":
+                waiting = ("history" if result.get("history_pending") is True
+                           else (reply.get("error") or {}).get("code") or "pending")
+                if not (await _call(wallet, "sync")).get("ok"):
+                    await asyncio.sleep(1)
+    # Every step is submitted. One sync settles the lane; then wait until each step is final and the
+    # deposit's note is spendable so settlement can use it.
     deposit = steps[-1].get("identity")
+    await _call(wallet, "sync")
     while True:
-        notes = _inner(await _call(wallet, "notes")).get("notes") or []
+        listed = _inner(await _call(wallet, "notes"))
+        operations = listed.get("operations") if isinstance(listed.get("operations"), list) else []
+        changed = False
+        for step in steps:
+            if step["state"] == "submitted" and _completed(operations, step.get("identity")):
+                step["state"], changed = "completed", True
+        if changed:
+            refs.update(operation_ref, steps=steps)
+        notes = listed.get("notes") or []
         spendable = [note for note in notes if note.get("commitment") == deposit and note.get("included") is True
                      and note.get("consumed") is False and not note.get("reserved")]
-        if spendable or deposit is None:
+        if all(step["state"] == "completed" for step in steps) and (spendable or deposit is None):
             refs.update(operation_ref, done=True)
             return progress(True, spendable_commitment=deposit)
         if time.monotonic() >= deadline:
+            waiting = "finality"
             return progress(False)
+        await asyncio.sleep(2)
         await _call(wallet, "sync")
-        await asyncio.sleep(5)

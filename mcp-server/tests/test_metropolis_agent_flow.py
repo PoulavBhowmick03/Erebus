@@ -125,6 +125,69 @@ def test_fund_wallet_syncs_a_lagging_history_instead_of_retrying_the_send(tmp_pa
     session(env, script)
 
 
+def test_fund_wallet_starts_each_step_once_the_previous_is_submitted(tmp_path):
+    env = environment(tmp_path)
+
+    async def script(call, names):
+        funded = await call("fund_wallet", amount="300", wait_seconds=120)
+        assert funded["ok"] is True, funded
+        state = fake_state(tmp_path)
+        assert state["sends"] == 3
+        # Approve was tried while the wrap still held the signer (busy), and the deposit while the approval
+        # was not visible yet (allowance): each synced once and retried under the same reference. No step
+        # waited for the previous one's finality before its first attempt.
+        assert state["busy_refusals"] == 1
+        sends = [call for call in state["wallet_calls"] if call in {"wrap", "approve", "deposit"}]
+        assert sends == ["wrap", "approve", "approve", "deposit", "deposit"]
+        assert [op["kind"] for op in state["ops"].values()] == ["wrap", "approve", "deposit"]
+    session(env, script)
+
+
+def test_fund_wallet_syncs_and_retries_a_deposit_whose_balance_is_not_visible_yet(tmp_path):
+    env = environment(tmp_path, FAKE_HIDDEN_BALANCE="2")
+
+    async def script(call, names):
+        funded = await call("fund_wallet", amount="300", wait_seconds=120)
+        assert funded["ok"] is True, funded
+        state = fake_state(tmp_path)
+        assert state["balance_refusals"] == 2 and state["sends"] == 3
+        assert all(step["state"] == "completed" for step in funded["result"]["steps"])
+    session(env, script)
+
+
+@pytest.mark.parametrize("kind", ["wrap", "approve", "deposit"])
+def test_fund_wallet_resumes_after_the_server_crashes_right_after_each_send(tmp_path, kind):
+    env = environment(tmp_path, FAKE_CRASH_AFTER=kind)
+
+    async def crashing(call, names):
+        try:
+            await asyncio.wait_for(call("fund_wallet", amount="300", wait_seconds=120), 60)
+        except Exception:  # the server died mid-call; the client sees the closed stream
+            return "crashed"
+        return "survived"
+
+    try:
+        outcome = session(env, crashing)
+    except BaseException:  # noqa: BLE001 - the stdio session may surface the dead server on exit
+        outcome = "crashed"
+    assert outcome == "crashed"
+    state = fake_state(tmp_path)
+    assert state["crashed"] is True and state["ops"][next(iter(state["ops"]))]["kind"] == "wrap"
+    sent_before = state["sends"]
+
+    async def resumed(call, names):
+        # The omitted reference resolves to the unfinished funding saved before the crash.
+        return await call("fund_wallet", amount="300", wait_seconds=120)
+
+    result = session(env, resumed)
+    assert result["ok"] is True, result
+    assert result["result"]["operation_ref_created"] is False
+    state = fake_state(tmp_path)
+    # The step sent before the crash is never sent again; only the remaining steps are.
+    assert state["sends"] == 3 and sent_before == ["wrap", "approve", "deposit"].index(kind) + 1
+    assert [op["kind"] for op in state["ops"].values()] == ["wrap", "approve", "deposit"]
+
+
 USDC_TOKEN = "0x534b2f3a21130d7a60830c2df862319e593943a3"
 BUYER = "0x" + "aa" * 20
 USDC_METHODS = ("approve", "deposit", "notes", "sync", "status")
@@ -252,19 +315,87 @@ def test_the_seller_waits_for_the_buyer_with_one_reference_and_returns_the_evide
     session(env, script)
 
 
-def test_settlement_waits_for_pending_wallet_transactions_to_finish(tmp_path):
+def test_settlement_does_not_sync_the_wallet_first(tmp_path):
+    env = environment(tmp_path)
+
+    async def script(call, names):
+        deal = await call("negotiate_deal")
+        settled = await call("settle_deal", operation_ref=deal["operation_ref"])
+        assert settled["result"]["stage"] == "Submitted", settled
+        state = fake_state(tmp_path)
+        assert state.get("wallet_calls", []) == [] and state["payment_calls"] == ["settle"]
+        assert state["sends"] == 1
+        # The settled deal is finished; the next omitted negotiation reference is a new deal.
+        assert (await call("negotiate_deal"))["operation_ref"] != deal["operation_ref"]
+    session(env, script)
+
+
+def test_a_held_signer_gets_one_sync_and_one_retry_then_settles(tmp_path):
     env = environment(tmp_path)
 
     async def script(call, names):
         await call("wrap_wallet", amount="100")
-        assert fake_state(tmp_path)["ops"] and any(
-            op["state"] == "submitted" for op in fake_state(tmp_path)["ops"].values())
+        await call("sync_wallet")  # the wrap is one sync away from final
         deal = await call("negotiate_deal")
         settled = await call("settle_deal", operation_ref=deal["operation_ref"])
-        assert settled["result"]["stage"] == "Submitted"
-        assert fake_state(tmp_path)["settled_with_pending"] == []
-        # The settled deal is finished; the next omitted negotiation reference is a new deal.
-        assert (await call("negotiate_deal"))["operation_ref"] != deal["operation_ref"]
+        assert settled["result"]["stage"] == "Submitted", settled
+        state = fake_state(tmp_path)
+        assert state["payment_calls"] == ["settle", "settle"]
+        assert state["wallet_calls"][-1] == "sync" and state["wallet_calls"].count("sync") == 2
+        assert state["settled_with_pending"] == [] and state["sends"] == 2
+    session(env, script)
+
+
+def test_a_still_held_signer_returns_the_retryable_refusal_after_one_retry(tmp_path):
+    env = environment(tmp_path)
+
+    async def script(call, names):
+        await call("wrap_wallet", amount="100")
+        deal = await call("negotiate_deal")
+        held = await call("settle_deal", operation_ref=deal["operation_ref"])
+        assert held["ok"] is False and held["error"]["code"] == "WALLET_OPERATION_PENDING", held
+        assert held["error"]["retry_same_operation_ref"] is True and held["operation_ref"] == deal["operation_ref"]
+        state = fake_state(tmp_path)
+        assert state["payment_calls"] == ["settle", "settle"] and state["wallet_calls"].count("sync") == 1
+        assert state["sends"] == 1  # only the wrap; nothing was settled
+        # The agent syncs as told and retries the same reference.
+        await call("sync_wallet")
+        settled = await call("settle_deal", operation_ref=deal["operation_ref"])
+        assert settled["result"]["stage"] == "Submitted" and fake_state(tmp_path)["sends"] == 2
+    session(env, script)
+
+
+def test_a_deposit_in_flight_reports_the_note_held_then_settles_after_one_sync(tmp_path):
+    env = environment(tmp_path, FAKE_BALANCE="500")
+
+    async def script(call, names):
+        await call("approve_wallet", amount="100")
+        await call("sync_wallet")
+        await call("sync_wallet")
+        await call("deposit_wallet", amount="100")
+        await call("sync_wallet")
+        deal = await call("negotiate_deal")
+        settled = await call("settle_deal", operation_ref=deal["operation_ref"])
+        assert settled["result"]["stage"] == "Submitted", settled
+        assert fake_state(tmp_path)["payment_calls"] == ["settle", "settle"]
+    session(env, script)
+
+
+def test_an_unfunded_buyer_gets_funding_required_with_a_next_action_and_nothing_sent(tmp_path):
+    env = environment(tmp_path, FAKE_BALANCE="500")
+
+    async def script(call, names):
+        await call("approve_wallet", amount="100")
+        await call("sync_wallet")
+        await call("sync_wallet")
+        await call("deposit_wallet", amount="100")
+        deal = await call("negotiate_deal")
+        # The deposit needs two more syncs: one sync and one retry are not enough.
+        held = await call("settle_deal", operation_ref=deal["operation_ref"])
+        assert held["error"]["code"] == "WALLET_OPERATION_PENDING", held
+        checked = await call("check_settlement_funding", operation_ref=deal["operation_ref"])
+        assert checked["ok"] is True and checked["result"]["status"] == "ready", checked
+        assert fake_state(tmp_path)["sends"] == 2
     session(env, script)
 
 

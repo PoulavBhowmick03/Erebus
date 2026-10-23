@@ -52,14 +52,18 @@ FAUCET_URL = "https://faucet.monad.xyz"
 # endpoint's 50 per IP.
 REQUESTS_PER_SECOND = 20
 ACCESS_CONCURRENT_READS = 16
-# Monad charges the full gas limit: measured about 0.31 MON per transaction at the generated 3,000,000 gas
-# limit (2026-10-15/16 live runs). Every send also needs gas_limit x max_fee (0.9 MON) available up front.
+# Monad charges the full gas limit, so each send costs its per-method limit at the gas price. These mirror the
+# native operator policy (sdk/shielded/src/gas_policy.rs): each sits above the measured estimate plus 5%
+# (wrap 51k, approve 53k, deposit 1.89M, settle 2.73M on Monad testnet, 2026-10-22).
 MON = 10**18
-MEASURED_COST_PER_TRANSACTION = 31 * 10**16
-SEND_HEADROOM = 9 * 10**17
-# WMON: wrap, approve and deposit once, then two settlements. USDC: the buyer already holds the asset, so
-# there is no wrap.
-BUYER_TRANSACTIONS = {"wmon": 5, "usdc": 4}
+GAS_LIMITS = {"wrap": 65_000, "approve": 65_000, "deposit": 2_100_000, "settle": 3_010_000}
+# Measured effective gas price on Monad testnet (2026-10-22); guidance only, the chain decides the price.
+MEASURED_GAS_PRICE = 102 * 10**9
+# The generated max_fee_per_gas (operator_init.GAS): a send needs its limit x max_fee free before it is signed.
+MAX_FEE_PER_GAS = 300 * 10**9
+# The buyer's own funding sends and its first settlement. USDC: the buyer already holds the asset, no wrap.
+BUYER_SENDS = {"wmon": ("wrap", "approve", "deposit", "settle"), "usdc": ("approve", "deposit", "settle")}
+SETTLE_HEADROOM = GAS_LIMITS["settle"] * MAX_FEE_PER_GAS
 # Defaults in each pool's base units: WMON has 18 decimals, the deployed testnet USDC 6, so the WMON defaults
 # (0.001 / 0.003 WMON) would be 1,000,000,000 / 3,000,000,000 USDC. USDC: 0.1 USDC price, 0.3 USDC note.
 POOL_DEFAULTS = {"wmon": {"price": str(10**15), "fund_amount": str(3 * 10**15)},
@@ -80,10 +84,18 @@ def usdc(value: int) -> str:
 
 
 def buyer_required_wei(pool: str, fund: int) -> int:
-    """MON the buyer's gas address needs: every send but the last is spent, and the last needs SEND_HEADROOM
-    free, which already covers its own cost. Wrapping (WMON only) also sends the note's value as MON."""
-    return ((BUYER_TRANSACTIONS[pool] - 1) * MEASURED_COST_PER_TRANSACTION + SEND_HEADROOM
-            + (fund if pool == "wmon" else 0))
+    """MON the buyer's gas address needs, as measured-price guidance: the funding sends and the first settlement
+    at their per-method limits and the measured gas price, plus a settlement's limit x max_fee still free for the
+    next deal. Wrapping (WMON only) also sends the note's value as MON."""
+    sends = sum(GAS_LIMITS[kind] for kind in BUYER_SENDS[pool]) * MEASURED_GAS_PRICE
+    return sends + SETTLE_HEADROOM + (fund if pool == "wmon" else 0)
+
+
+def funding_why(pool: str, fund: int) -> str:
+    sends = ", ".join(f"{kind} {GAS_LIMITS[kind]:,}" for kind in BUYER_SENDS[pool])
+    return (f"measured-price guidance: gas limits {sends} at about {MEASURED_GAS_PRICE // 10**9} gwei "
+            f"(Monad charges the full gas limit), plus {mon(SETTLE_HEADROOM)} MON (settle limit x max fee) free for "
+            "the next settlement" + (f", and {mon(fund)} MON wrapped into the shielded note" if pool == "wmon" else ""))
 
 
 def _endpoint(value: str | None, file: Path | None, default: str) -> str:
@@ -154,10 +166,11 @@ BUYER_PROMPT = """You are the buyer agent for an Erebus private deal on Monad te
    pending status, call fund_wallet again with the operation_ref it returned until it reports complete.
    (Without operator-granted funding tools, ask the operator to fund the wallet instead.)
 {asset_note}2. Call negotiate_deal() with no operation_ref. Keep the operation_ref it returns for every later call.
-3. Call check_settlement_funding(operation_ref). Repeat it while its status is pending.
-4. Call settle_deal(operation_ref) once. A pending reply is normal; never settle a deal twice.
-5. Call recover_deal(operation_ref) until payment_verified is true.
-6. Call retrieve_service_access(operation_ref=...) until the resource is verified, and report its hash.
+3. Call settle_deal(operation_ref). It checks the note and gas itself first: if it returns funding_required or a
+   retryable error, nothing was sent; follow its next_action and call settle_deal again with the same
+   operation_ref. Once it has submitted (submitted_this_call or a pending stage), never settle that deal again.
+4. Call recover_deal(operation_ref) until payment_verified is true.
+5. Call retrieve_service_access(operation_ref=...) until the resource is verified, and report its hash.
 
 On any error, follow the error's next_action. Reuse the same operation_ref whenever
 retry_same_operation_ref is true; never start a new payment because something is pending.
@@ -246,7 +259,6 @@ def up(args, ops) -> dict:
     for role, prompt in (("buyer", BUYER_PROMPT), ("seller", SELLER_PROMPT)):
         files += _agent_files(directory, role, prompt.format(server=f"erebus-{role}", fund=fund, asset_note=asset_note))
     required = buyer_required_wei(args.pool, int(fund))
-    transactions = BUYER_TRANSACTIONS[args.pool]
     state = {"version": 1, "pool": args.pool, "bin": str(bins), "ports": ports, "price": price, "fund_amount": fund,
              "pins": str(pins), "deployment": str(deployment), "buyers": {},
              "resource": args.resource, "agent_funding": bool(args.allow_agent_funding),
@@ -260,9 +272,7 @@ def up(args, ops) -> dict:
     funding = {
         "faucet": FAUCET_URL,
         "buyer": {"address": signers["buyer"][0], "send_at_least_mon": mon(required),
-                  "why": f"{transactions} transactions at about {mon(MEASURED_COST_PER_TRANSACTION)} MON each "
-                         f"(Monad charges the full gas limit), with {mon(SEND_HEADROOM)} MON free at each send"
-                         + (f", and {mon(int(fund))} MON wrapped into the shielded note" if args.pool == "wmon" else "")},
+                  "why": funding_why(args.pool, int(fund))},
         "seller": {"address": signers["seller"][0], "send_at_least_mon": "0",
                    "why": "the seller sends nothing in this flow; fund it later only to withdraw earnings"},
     }
@@ -762,7 +772,6 @@ def add_buyer(args, ops) -> dict:
     files = _agent_files(directory, name, BUYER_PROMPT.format(server="erebus-buyer", fund=fund, asset_note=asset_note),
                          operator=target)
     required = buyer_required_wei(pool, int(fund))
-    transactions = BUYER_TRANSACTIONS[pool]
     buyers[name] = {"port": port, "price": price, "fund_amount": fund, "signer": signer,
                     "buyer_required_wei": str(required), "agent_funding": bool(args.allow_agent_funding),
                     "created": int(time.time())}
@@ -771,8 +780,7 @@ def add_buyer(args, ops) -> dict:
         buyers[name]["buyer_required_asset"] = fund
     ops.replace_private_json(directory / STATE, state)
     funding = {"address": signer, "send_at_least_mon": mon(required), "faucet": FAUCET_URL,
-               "why": f"{transactions} transactions at about {mon(MEASURED_COST_PER_TRANSACTION)} MON each"
-                      + (f", and {mon(int(fund))} MON wrapped into the shielded note" if pool == "wmon" else "")}
+               "why": funding_why(pool, int(fund))}
     if pool != "wmon":
         funding.update(usdc_token=state["asset"], send_at_least_usdc_base_units=fund, send_at_least_usdc=usdc(int(fund)),
                        also=f"send at least {fund} base units ({usdc(int(fund))} USDC) of testnet USDC, token "
