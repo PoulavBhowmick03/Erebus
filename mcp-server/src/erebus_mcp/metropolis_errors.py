@@ -67,6 +67,12 @@ _KNOWN: dict[str, tuple[str, str, bool]] = {
         "GAS_ESTIMATE_FAILED", "the exact call could not be estimated (it would revert now, for example while an "
         "earlier step is not visible yet, or a provider failed); nothing was signed; sync_wallet, then retry with "
         "the same operation_ref", True),
+    "signer plan changed after the funding check; nothing was signed; retry the same operation_ref": (
+        "SIGNER_PLAN_CHANGED", "the signer's saved plan changed after funding was checked; nothing was signed; "
+        "retry settle_deal with the same operation_ref so funding is checked again", True),
+    "retained plan exceeds the configured gas cap; operator action required; nothing was sent": (
+        "PLAN_ABOVE_GAS_CAP", "a transaction signed before an upgrade uses a gas limit above the configured cap; "
+        "nothing was sent and it is kept; the operator must decide (raise gas_limit or resolve it manually)", False),
     "gas estimate exceeds the method gas limit; nothing was signed": (
         "GAS_LIMIT_EXCEEDED", "the call needs more gas than the operator's per-method limit allows; nothing was "
         "signed or sent; the operator must review the limit", False),

@@ -214,6 +214,8 @@ and omits the native text (only the listed messages are forwarded, so private de
 | `ALLOWANCE_REQUIRED` | `deposit allowance insufficient; run approve first` | Approve, wait until it completes, then deposit (`fund_wallet` does this). | yes |
 | `BALANCE_REQUIRED` | `deposit asset balance insufficient; wrap or fund the asset first` | The wrap or transfer is not visible yet: `sync_wallet`, then deposit with the same reference (`fund_wallet` does this). | yes |
 | `GAS_ESTIMATE_FAILED` | `gas estimate failed; the call would revert or the provider failed; nothing was signed` | The call would revert now (often an earlier step not visible yet) or a provider failed; nothing was signed. `sync_wallet`, then retry with the same reference. | yes |
+| `SIGNER_PLAN_CHANGED` | `signer plan changed after the funding check; …` | Another process changed the signer's saved plan between the funding check and signing; nothing was signed. Retry with the same reference. | yes |
+| `PLAN_ABOVE_GAS_CAP` | `retained plan exceeds the configured gas cap; …` | A transaction signed before an upgrade exceeds the configured `gas_limit`; it is kept and not sent. The operator decides. | no |
 | `GAS_LIMIT_EXCEEDED` | `gas estimate exceeds the method gas limit; nothing was signed` | The call's estimate plus 5% exceeds the operator's per-method gas limit; nothing was signed. The operator reviews the limit. | no |
 | `OPERATION_IN_PROGRESS` | `another deposit is retained; …`, or an omitted reference with a different amount | Finish the returned `operation_ref` first. | yes |
 | `WALLET_OPERATION_PENDING` | (settlement synced once and retried once while a wallet transaction was pending) | `sync_wallet` until nothing is pending, then retry `settle_deal`. | yes |
